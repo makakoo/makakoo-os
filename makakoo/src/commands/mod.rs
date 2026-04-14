@@ -1,0 +1,88 @@
+//! Subcommand dispatch.
+//!
+//! The `dispatch` function consumes a parsed [`Commands`] variant and
+//! runs the matching command module. Each handler returns an exit code
+//! (0 on success, nonzero on any "expected" failure like a missing
+//! subsystem). Unexpected failures propagate as `anyhow::Error` and
+//! `main.rs` prints them via `output::print_error`.
+
+pub mod buddy;
+pub mod dream;
+pub mod mcp;
+pub mod nursery;
+pub mod promotions;
+pub mod query;
+pub mod sancho;
+pub mod search;
+pub mod skill;
+pub mod version;
+
+use crate::cli::Commands;
+use crate::context::CliContext;
+
+/// Dispatch a parsed [`Commands`] to its command module. Returns the
+/// exit code `main` should forward to the OS.
+pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
+    match cmd {
+        Commands::Mcp { args } => mcp::run(args),
+        Commands::Search { query, limit } => search::run(ctx, &query, limit).await,
+        Commands::Query {
+            question,
+            top_k,
+            model,
+        } => query::run(ctx, &question, top_k, &model).await,
+        Commands::Sancho { cmd } => sancho::run(ctx, cmd).await,
+        Commands::Buddy { cmd } => buddy::run(ctx, cmd),
+        Commands::Nursery { cmd } => nursery::run(ctx, cmd),
+        Commands::Dream => dream::run(ctx).await,
+        Commands::Promotions { threshold, limit } => {
+            promotions::run(ctx, threshold, limit)
+        }
+        Commands::Skill { name, args } => skill::run(&name, &args),
+        Commands::Version => version::run(),
+        Commands::Daemon { cmd } => {
+            crate::daemon::dispatch(cmd).await?;
+            Ok(0)
+        }
+        Commands::Infect { global, dry_run } => {
+            let report = crate::infect::run(global, dry_run).await?;
+            print!("{}", report.human_summary());
+            Ok(if report.error_count() == 0 { 0 } else { 1 })
+        }
+        Commands::Secret { cmd } => dispatch_secret(cmd),
+    }
+}
+
+fn dispatch_secret(cmd: crate::cli::SecretCmd) -> anyhow::Result<i32> {
+    use crate::cli::SecretCmd;
+    use crate::secrets::SecretsStore;
+    match cmd {
+        SecretCmd::Set { key } => {
+            // Read value from stdin so it never touches shell history.
+            use std::io::{BufRead, Write};
+            let stdin = std::io::stdin();
+            let mut stderr = std::io::stderr();
+            let _ = write!(stderr, "value for {key}: ");
+            let _ = stderr.flush();
+            let mut line = String::new();
+            stdin.lock().read_line(&mut line)?;
+            let value = line.trim_end_matches(['\n', '\r']).to_string();
+            if value.is_empty() {
+                anyhow::bail!("refusing to store empty value");
+            }
+            SecretsStore::set(&key, &value)?;
+            println!("stored {key} in keyring");
+            Ok(0)
+        }
+        SecretCmd::Get { key } => {
+            let v = SecretsStore::get(&key)?;
+            println!("{v}");
+            Ok(0)
+        }
+        SecretCmd::Delete { key } => {
+            SecretsStore::delete(&key)?;
+            println!("deleted {key} from keyring");
+            Ok(0)
+        }
+    }
+}
