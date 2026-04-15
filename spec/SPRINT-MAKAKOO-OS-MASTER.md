@@ -562,7 +562,7 @@ risks, test suite. Phases can run in parallel where dependencies allow.
 **Goal:** lock all architectural decisions in writing. No code.
 
 **Deliverables:**
-1. `spec/ARCHITECTURE.md` v2.0 with all 15 decisions fully expanded
+1. `spec/ARCHITECTURE.md` v2.1 with all 21 decisions (D1-D21) fully expanded
 2. `spec/PARASITE.md` — infection mechanics, reversibility, host detection
 3. `spec/PLUGIN_MANIFEST.md` — full plugin.toml schema with 6 worked examples
 4. `spec/CAPABILITIES.md` — verb vocabulary + Unix socket enforcement design
@@ -951,7 +951,7 @@ closes. No rollback is "hope it works."
 
 Sebastian approved v1.1 on 2026-04-15:
 
-1. **20 locked decisions (D1-D20)** — approved as written in sections 3.1-3.7
+1. **21 locked decisions (D1-D21)** — approved as written in sections 3.1-3.8
 2. **Time budget** — 4-5 weeks for Phases A-I, optional 2-3 days for Phase J (Redox)
 3. **Windows tier** — first-class at v0.1, slip to v0.2 only if Dev Mode /
    CI blockers become unavoidable (reviewed at Gate 5)

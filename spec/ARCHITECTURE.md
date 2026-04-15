@@ -5,7 +5,7 @@
 
 **What this doc is FOR:** locking every load-bearing architectural decision on paper so we don't rebuild later. Every decision here has a rationale, and most have a paragraph on "what would force a rebuild if reversed." If a decision is in this doc, it's permanent.
 
-**Reading order:** section 0 is the mission (Harvey the Genie). Sections 1-3 establish the mental model (parasite, shared state, filesystem-first). Section 4 names every load-bearing decision (20 decisions total). Section 5 is the concrete file layout. Sections 6-8 are the install, plugin, and capability models. Section 9 is the Redox compatibility story. Section 10 is the migration plan from today's state.
+**Reading order:** section 0 is the mission (Harvey the Genie). Sections 1-3 establish the mental model (parasite, shared state, filesystem-first). Section 4 names every load-bearing decision (21 decisions total, D1-D21). Section 5 is the concrete file layout. Sections 6-8 are the install, plugin, and capability models. Section 9 is the Redox compatibility story. Section 10 is the migration plan from today's state.
 
 **What changed in v2.0 vs v0.1:**
 - Reframed from "AI OS" to "Harvey the Genie" (Makakoo is the lamp)
