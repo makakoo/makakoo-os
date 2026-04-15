@@ -78,114 +78,103 @@ pub fn default_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
     );
 
     // ─────────────────────────────────────────────────────────────
-    // Legacy subprocess tasks (ported from crontab 2026-04-15)
-    // These wrap existing Python scripts until they're rewritten in
-    // native Rust. Each matches its original crontab cadence.
+    // Optional subprocess tasks (Python workshop on top of Rust core)
+    //
+    // These wrap Python scripts that live in the sibling harvey-os
+    // tree and under agents/. None of them are required for the Rust
+    // daemon to boot — each registration checks `script.exists()`
+    // first and is silently skipped if missing. That way a fresh
+    // public install of makakoo-os runs cleanly with just the 8
+    // native Rust tasks, and upgrading to a full-fat install (cloning
+    // harvey-os alongside) lights up the extra tasks automatically on
+    // next daemon restart. Ported from crontab 2026-04-15; graceful
+    // degrade added 2026-04-15 as part of the GYM supercenter work.
     // ─────────────────────────────────────────────────────────────
     let python = "/usr/local/opt/python@3.11/bin/python3.11".to_string();
 
-    // switchAILocal watchdog — was every 5 min in crontab
-    reg.register(
-        Arc::new(SubprocessHandler::new(
-            "switchailocal_watchdog",
-            python.clone(),
+    let switchailocal_script = ctx.home.join("harvey-os/core/watchdogs/switchailocal_watchdog.py");
+    if switchailocal_script.exists() {
+        reg.register(
+            Arc::new(SubprocessHandler::new(
+                "switchailocal_watchdog",
+                python.clone(),
+                vec![
+                    "-u".to_string(),
+                    switchailocal_script.to_string_lossy().into_owned(),
+                ],
+            )),
+            vec![Arc::new(TimeGate::new(Duration::from_secs(5 * 60)))],
+        );
+    }
+
+    let pg_script = ctx.home.join("agents/pg-watchdog/pg_watchdog.py");
+    if pg_script.exists() {
+        reg.register(
+            Arc::new(SubprocessHandler::new(
+                "pg_watchdog",
+                python.clone(),
+                vec!["-u".to_string(), pg_script.to_string_lossy().into_owned()],
+            )),
+            vec![Arc::new(TimeGate::new(Duration::from_secs(15 * 60)))],
+        );
+    }
+
+    let hn_script = ctx.home.join("harvey-os/agents/hackernews/hn_monitor.py");
+    if hn_script.exists() {
+        reg.register(
+            Arc::new(SubprocessHandler::new(
+                "hackernews_monitor",
+                python.clone(),
+                vec!["-u".to_string(), hn_script.to_string_lossy().into_owned()],
+            )),
+            vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
+        );
+    }
+
+    // Harvey's Mascot GYM — 5 layers, all through one dispatch shim.
+    // Register all five iff the shim exists; otherwise skip the whole
+    // GYM. A partial GYM is worse than no GYM.
+    let gym_shim_path = ctx.home.join("harvey-os/bin/run-sancho-task.py");
+    if gym_shim_path.exists() {
+        let gym_shim = gym_shim_path.to_string_lossy().into_owned();
+
+        reg.register(
+            Arc::new(SanchoSubprocess::gym("gym_classify", &python, &gym_shim)),
+            vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
+        );
+
+        reg.register(
+            Arc::new(SanchoSubprocess::gym("gym_hypothesize", &python, &gym_shim)),
             vec![
-                "-u".to_string(),
-                ctx.home
-                    .join("harvey-os/core/watchdogs/switchailocal_watchdog.py")
-                    .to_string_lossy()
-                    .into_owned(),
+                Arc::new(TimeGate::new(Duration::from_secs(84600))),
+                Arc::new(ActiveHoursGate::new(1, 4)),
             ],
-        )),
-        vec![Arc::new(TimeGate::new(Duration::from_secs(5 * 60)))],
-    );
+        );
 
-    // Postgres cluster watchdog — was every 15 min
-    reg.register(
-        Arc::new(SubprocessHandler::new(
-            "pg_watchdog",
-            python.clone(),
+        reg.register(
+            Arc::new(SanchoSubprocess::gym("gym_lope_gate", &python, &gym_shim)),
             vec![
-                "-u".to_string(),
-                ctx.home
-                    .join("agents/pg-watchdog/pg_watchdog.py")
-                    .to_string_lossy()
-                    .into_owned(),
+                Arc::new(TimeGate::new(Duration::from_secs(84600))),
+                Arc::new(ActiveHoursGate::new(3, 6)),
             ],
-        )),
-        vec![Arc::new(TimeGate::new(Duration::from_secs(15 * 60)))],
-    );
+        );
 
-    // HackerNews monitor — was every hour at :05
-    reg.register(
-        Arc::new(SubprocessHandler::new(
-            "hackernews_monitor",
-            python.clone(),
+        reg.register(
+            Arc::new(SanchoSubprocess::gym("gym_morning_report", &python, &gym_shim)),
             vec![
-                "-u".to_string(),
-                ctx.home
-                    .join("harvey-os/agents/hackernews/hn_monitor.py")
-                    .to_string_lossy()
-                    .into_owned(),
+                Arc::new(TimeGate::new(Duration::from_secs(84600))),
+                Arc::new(ActiveHoursGate::new(6, 9)),
             ],
-        )),
-        vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
-    );
+        );
 
-    // ─────────────────────────────────────────────────────────────
-    // Harvey's Mascot GYM — 5 layers (2026-04-15 supercenter reopen)
-    // All five layers route through the Python dispatch shim because
-    // the GYM codebase is Python-first. Rust owns the schedule; Python
-    // owns the work. Same SubprocessHandler pattern used above.
-    // ─────────────────────────────────────────────────────────────
-    let gym_shim = ctx
-        .home
-        .join("harvey-os/bin/run-sancho-task.py")
-        .to_string_lossy()
-        .into_owned();
-
-    // gym_classify — hourly error cluster refresh (Layer 2)
-    reg.register(
-        Arc::new(SanchoSubprocess::gym("gym_classify", &python, &gym_shim)),
-        vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
-    );
-
-    // gym_hypothesize — nightly (23.5h) hypothesis generation (Layer 3)
-    // active 01:00-04:00 so it overlaps Sebastian's sleep window
-    reg.register(
-        Arc::new(SanchoSubprocess::gym("gym_hypothesize", &python, &gym_shim)),
-        vec![
-            Arc::new(TimeGate::new(Duration::from_secs(84600))),
-            Arc::new(ActiveHoursGate::new(1, 4)),
-        ],
-    );
-
-    // gym_lope_gate — nightly lope validation (Layer 4)
-    reg.register(
-        Arc::new(SanchoSubprocess::gym("gym_lope_gate", &python, &gym_shim)),
-        vec![
-            Arc::new(TimeGate::new(Duration::from_secs(84600))),
-            Arc::new(ActiveHoursGate::new(3, 6)),
-        ],
-    );
-
-    // gym_morning_report — daily Brain journal rollup (Layer 4b)
-    reg.register(
-        Arc::new(SanchoSubprocess::gym("gym_morning_report", &python, &gym_shim)),
-        vec![
-            Arc::new(TimeGate::new(Duration::from_secs(84600))),
-            Arc::new(ActiveHoursGate::new(6, 9)),
-        ],
-    );
-
-    // gym_weekly_report — 7-day rollup + blocklist refresh (Level 2 supercenter)
-    reg.register(
-        Arc::new(SanchoSubprocess::gym("gym_weekly_report", &python, &gym_shim)),
-        vec![
-            Arc::new(TimeGate::new(Duration::from_secs(7 * 86400))),
-            Arc::new(ActiveHoursGate::new(8, 11)),
-        ],
-    );
+        reg.register(
+            Arc::new(SanchoSubprocess::gym("gym_weekly_report", &python, &gym_shim)),
+            vec![
+                Arc::new(TimeGate::new(Duration::from_secs(7 * 86400))),
+                Arc::new(ActiveHoursGate::new(8, 11)),
+            ],
+        );
+    }
 
     reg
 }
@@ -218,22 +207,69 @@ mod tests {
     use crate::superbrain::store::SuperbrainStore;
     use tempfile::TempDir;
 
-    #[test]
-    fn default_registry_has_sixteen_tasks() {
-        let dir = TempDir::new().unwrap();
-        let store = Arc::new(SuperbrainStore::open(&dir.path().join("b.db")).unwrap());
-        let bus = PersistentEventBus::open(&dir.path().join("bus.db")).unwrap();
+    fn make_ctx(home: &std::path::Path) -> Arc<SanchoContext> {
+        let store = Arc::new(SuperbrainStore::open(&home.join("b.db")).unwrap());
+        let bus = PersistentEventBus::open(&home.join("bus.db")).unwrap();
         let llm = Arc::new(LlmClient::new());
         let emb = Arc::new(EmbeddingClient::new());
-        let ctx = Arc::new(SanchoContext::new(
-            store,
-            bus,
-            llm,
-            emb,
-            dir.path().to_path_buf(),
-        ));
-        let reg = default_registry(ctx);
-        // 8 native Rust handlers + 3 legacy subprocess handlers + 5 gym tasks = 16
-        assert_eq!(reg.len(), 16);
+        Arc::new(SanchoContext::new(store, bus, llm, emb, home.to_path_buf()))
+    }
+
+    #[test]
+    fn fresh_install_registers_only_native_tasks() {
+        // No harvey-os/, no agents/. Graceful degrade: only the 8 native
+        // Rust handlers should register. This is what a fresh public
+        // install of makakoo-os looks like.
+        let dir = TempDir::new().unwrap();
+        let reg = default_registry(make_ctx(dir.path()));
+        assert_eq!(
+            reg.len(),
+            8,
+            "fresh install with no Python scripts should yield exactly 8 native tasks"
+        );
+    }
+
+    #[test]
+    fn full_install_registers_sixteen_tasks() {
+        // Seed the expected script paths as empty stub files. With all
+        // 4 optional scripts present, we get the full 16-task surface:
+        // 8 native + 3 watchdogs + 5 gym.
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let touch = |rel: &str| {
+            let p = home.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"#!/usr/bin/env python3\n").unwrap();
+        };
+        touch("harvey-os/core/watchdogs/switchailocal_watchdog.py");
+        touch("agents/pg-watchdog/pg_watchdog.py");
+        touch("harvey-os/agents/hackernews/hn_monitor.py");
+        touch("harvey-os/bin/run-sancho-task.py");
+
+        let reg = default_registry(make_ctx(home));
+        assert_eq!(
+            reg.len(),
+            16,
+            "full install with all Python scripts present should yield 16 tasks"
+        );
+    }
+
+    #[test]
+    fn partial_install_gym_skipped_when_shim_missing() {
+        // Watchdogs present but the GYM dispatch shim is not.
+        // Expect 8 native + 3 watchdogs = 11, with no gym_* at all.
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let touch = |rel: &str| {
+            let p = home.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"#!/usr/bin/env python3\n").unwrap();
+        };
+        touch("harvey-os/core/watchdogs/switchailocal_watchdog.py");
+        touch("agents/pg-watchdog/pg_watchdog.py");
+        touch("harvey-os/agents/hackernews/hn_monitor.py");
+
+        let reg = default_registry(make_ctx(home));
+        assert_eq!(reg.len(), 11);
     }
 }
