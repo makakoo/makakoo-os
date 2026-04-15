@@ -65,13 +65,13 @@ It runs today as userland on macOS, Linux, and Windows. The Rust kernel is desig
 
 ## 2. The parasite model
 
-Makakoo infects existing AI CLIs, IDEs, and shells instead of providing its own UI. The host's UI becomes Makakoo's UI. The host's LLM becomes Makakoo's agent. The host's keyboard becomes Makakoo's input.
+Makakoo infects existing AI CLIs, IDEs, and shells instead of providing its own UI. The host's UI becomes Makakoo's UI. The host's LLM becomes Makakoo's agent. The host's keyboard becomes Makakoo's input. Shared state is symlinked (macOS/Linux native; Windows requires Developer Mode per D9).
 
 **Biological analogue.** Ophiocordyceps unilateralis (the "zombie fungus"), Toxoplasma gondii, Leucochloridium, the jewel wasp — all examples of host manipulation. The parasite doesn't replace the host; it hijacks the host's existing machinery to do the parasite's bidding. The host keeps functioning; it just functions in service of a different intent.
 
 **Infection mechanics (literal list of what we do to a host):**
 1. Write a **Bootstrap Block** into the host's global instructions file. This is a plain-text block between sentinel markers (`<!-- MAKAKOO-INFECT:START v7 -->` and `<!-- MAKAKOO-INFECT:END -->`) that tells the host LLM what Makakoo is and how to behave.
-2. **Symlink** (or on Windows, copy-sync) the host's memory directory to `$MAKAKOO_HOME/data/auto-memory/`. Every host now reads and writes the same memory store.
+2. **Symlink** the host's memory directory to `$MAKAKOO_HOME/data/auto-memory/` (macOS/Linux native; Windows requires Developer Mode per D9 — no copy-sync fallback). Every host now reads and writes the same memory store.
 3. **Symlink** the host's skills directory to `$MAKAKOO_HOME/skills-shared/`. Every host has access to the same 200+ skills.
 4. **Register** the Makakoo MCP server in the host's MCP config, so every host has access to the same 41+ tools in-process.
 5. On first invocation, the host LLM loads the Bootstrap Block, sees it is now Makakoo (or whatever persona the user named it), and behaves accordingly.
@@ -98,11 +98,11 @@ Every infected host reads and writes the same shared state:
 
 **Source of truth:** the filesystem. SQLite is a cache. `rm -rf superbrain.db` and the daemon regenerates it from the markdown. Matches the Logseq philosophy and makes Redox port trivial (Redox has a filesystem; porting over complex databases is where Redox ports die).
 
-## 4. The 20 locked architectural decisions
+## 4. The 21 locked architectural decisions
 
 These are the decisions that MUST be correct on paper before any code moves. Each one has a rationale and a "what would force a rebuild if reversed" clause. The full expansion with implementation details lives in `SPRINT-MAKAKOO-OS-MASTER.md` section 3; this section is the canonical summary.
 
-The 20 decisions are grouped into 7 categories:
+The 21 decisions are grouped into 8 categories:
 
 ### 4.1 Kernel
 
@@ -128,7 +128,7 @@ The 20 decisions are grouped into 7 categories:
 
 **D9. Shared state is symlink-based on macOS/Linux; on Windows, install requires Developer Mode (symlinks enabled).** **No copy-sync fallback.** Copy-sync is a different data model with its own consistency problems and silently violates "filesystem-first." Windows Dev Mode has been available since Win10 1703 (2017) and is a one-click toggle in Settings → For Developers. Install script checks for it and refuses to proceed otherwise with a clear error pointing at the toggle.
 
-**D10. Cross-OS path handling via `$MAKAKOO_HOME` env var.** `PlatformAdapter::default_home()` resolves to `~/MAKAKOO` on macOS, `~/.local/share/makakoo` on Linux (XDG), `%LOCALAPPDATA%\Makakoo` on Windows. Every piece of code references `$MAKAKOO_HOME`, never a hardcoded path. The runtime (`~/.makakoo/`) is separated from the source repo (`~/makakoo-os/`) cleanly — apt vs /etc model.
+**D10. Cross-OS path handling via `$MAKAKOO_HOME` env var.** `PlatformAdapter::default_home()` resolves to `~/.makakoo` on macOS, `~/.local/share/makakoo` on Linux (XDG), `%LOCALAPPDATA%\Makakoo` on Windows. Every piece of code references `$MAKAKOO_HOME`, never a hardcoded path. The runtime (`~/.makakoo/` on macOS/Linux, `%LOCALAPPDATA%\Makakoo\` on Windows) is separated from the source repo (`~/makakoo-os/`) cleanly — apt vs /etc model. **Sebastian's transition note:** existing install at `~/MAKAKOO` becomes a compatibility symlink to `~/.makakoo/` during Phase H so launchd plists and shell paths keep working. New installs have no `~/MAKAKOO` at all.
 
 ### 4.4 Security
 
@@ -158,13 +158,17 @@ These five decisions make Harvey feel like a living companion rather than a plug
 
 **D19. Host-scoped persona fragments.** Same Harvey, different register per host. Manifests can declare `[infect.fragments] default`, `claude`, `cursor`, `gemini`, etc. Kernel selects the right fragment based on which host is being infected.
 
-**D20. Cross-body session handoff via daemon context stash.** SANCHO task `session_watcher` polls infected hosts' session dirs every 60s. When a session closes, extracts last 10 exchanges + current task focus + any `harvey remember` flags, writes to `$MAKAKOO_HOME/state/session-handoff/`. Next host-open includes the most recent unread stash in the rendered Bootstrap Block. 24-hour TTL.
+**D20. Cross-body session handoff — manual in v0.1, passive in v0.2.** v0.1 ships `harvey remember <text>` CLI command that writes a free-text note to `$MAKAKOO_HOME/state/session-handoff/current.md`. Next Bootstrap Block render includes a "just before this, you were: <text>" line. 24h TTL. v0.2 adds passive transcript watching via per-host parsers (deferred because ~1 week of work, 1 day per CLI × 7 CLIs). Manual primitive is a cheap escape hatch that doesn't block the passive upgrade.
 
-### 4.8 Cross-cutting
+### 4.8 Event bus
 
-The original v0.1 section 4 also listed three cross-cutting decisions that remain valid but are subsumed under D1-D20:
+**D21. Event bus: in-process `tokio::sync::broadcast` + filesystem journal.** Required for D18 (journal-threshold detection triggers re-render), D20 manual handoff (stash update triggers refresh), GYM flywheel (error capture → classifier), and watchdog alerts. In-process Rust subscribers use `tokio::sync::broadcast` (capacity 1024, drop-oldest). Plugin subscribers use per-subscriber Unix sockets at `$MAKAKOO_HOME/run/events/<name>.sock`. Events persisted to `$MAKAKOO_HOME/state/events.jsonl` for replay. At-most-once delivery; plugins needing exactly-once poll the journal. Topics are namespaced strings (`brain.journal.written`, `gym.error.captured`, etc.). Redox-compatible because broadcast is pure Rust std + ring buffer; sockets map to Redox `chan:`.
 
-- **No TUI/GUI/web UI in kernel** — any UI ships as a plugin. Consequence of D4 (plugins are manifest-driven) + D8 (CLI is the only user surface).
+### 4.9 Cross-cutting
+
+The original v0.1 section 4 also listed three cross-cutting decisions that remain valid but are subsumed under D1-D21:
+
+- **No TUI/GUI/web UI in kernel** — any UI ships as a plugin. Consequence of D4 (plugins are manifest-driven) + D5 (subprocess model — plugin UIs run in their own process).
 - **Umbrella install command** — `makakoo install` does the full first-run flow. Consequence of D6 + D15 + D16.
 - **Cross-OS from day one** — every decision checked against 4 targets. Consequence of D1 + D2 + D9 + D10.
 
@@ -177,7 +181,7 @@ The original v0.1 section 4 also listed three cross-cutting decisions that remai
 ├── LICENSE
 │
 ├── crates/                          ◄── THE RUST KERNEL (stable, Redox-compat)
-│   ├── core/                        Brain, Memory, Superbrain, LLM, EventBus, Embeddings
+│   ├── core/                        Brain (fs + lightweight FTS), Memory, LLM client, EventBus (D21)
 │   ├── mcp/                         MCP JSON-RPC gateway + tool registry
 │   ├── daemon/                      SANCHO scheduler, plugin loader, capability enforcement, lifecycle
 │   ├── cli/                         `makakoo` bin — setup, install, infect, plugin, distro, ...
@@ -305,7 +309,7 @@ makakoo install                                        # core distro + daemon + 
      a. Backup the host's global instructions file to $MAKAKOO_HOME/infect/backups/<host>/<timestamp>/
      b. Render Bootstrap Block from template + plugin contributions
      c. Write/refresh Bootstrap Block between sentinels
-     d. Symlink (or copy-sync on Windows) memory dir → auto-memory/
+     d. Symlink memory dir → auto-memory/ (Dev Mode required on Windows per D9)
      e. Symlink skills dir → skills-shared/
      f. Register Makakoo MCP server in host's MCP config
 8. Start daemon + verify health
@@ -324,6 +328,34 @@ makakoo install                                        # core distro + daemon + 
 **Minimal.** A user who wants just the kernel runs `makakoo install --no-infect --distro minimal` and gets a daemon with nothing in it but Brain + MCP.
 
 **Maximal.** A user who wants everything runs `makakoo install --distro sebastian` or equivalent.
+
+### The full kernel CLI surface
+
+The `makakoo` binary exposes the following top-level verbs. Each is a
+subcommand with its own help page; the full surface is locked here so
+plugins and distros can rely on it without rebuilds.
+
+| Verb | Purpose |
+|---|---|
+| `makakoo setup` | First-run wizard: pick persona name, pronoun, voice default |
+| `makakoo install` | Umbrella: core distro + daemon install + auto-detect + infect |
+| `makakoo daemon <status|start|stop|restart|install|uninstall|logs>` | Daemon lifecycle |
+| `makakoo sancho <status|tick|enable|disable>` | SANCHO scheduler inspection + control |
+| `makakoo plugin <install|uninstall|list|info|enable|disable|update|test>` | Plugin lifecycle |
+| `makakoo distro <install|save|list|update|switch>` | Distro lifecycle |
+| `makakoo infect <host|--all|--refresh>` / `makakoo uninfect <host|--all>` | Infection control |
+| `makakoo skill <run|list|info>` | Skill invocation |
+| `makakoo audit [--plugin <name>] [--denied]` | Capability audit log review |
+| `makakoo secret <set|get|delete|list>` | OS keyring secret management |
+| `makakoo harvey <export|import|fork|wipe|clone>` | Identity sovereignty ops (D16) |
+| `makakoo harvey remember <text>` | Manual session handoff marker (D20 v0.1) |
+| `makakoo version` | Version + persona + build metadata |
+| `makakoo mcp` | Stdio MCP gateway (invoked by infected hosts) |
+| `makakoo infect clean-backups --older-than <N>d` | Retention management for infection backups |
+
+**Harvey-scoped verbs** (`makakoo harvey *`) are the identity sovereignty
+ops + the `remember` handoff marker. These are grouped under `harvey`
+because they operate on Harvey-the-being, not on Makakoo-the-kernel.
 
 ## 7. The plugin model
 
@@ -532,7 +564,7 @@ We treat Redox as a first-class target from day one, even though we're not shipp
 2. **File I/O uses `std::fs` only.** No `io_uring`, no `kqueue`, no `IOCP`. Redox's VFS supports `std::fs`, so we get a free port.
 3. **Process spawning via `std::process::Command`.** Redox supports this through schemes.
 4. **Network via `std::net`.** Redox supports TCP/UDP via `tcp:` and `udp:` schemes.
-5. **No SQLite bundled from C.** We use `rusqlite` with `bundled` feature; this compiles on Redox (Redox's libc port handles it), but if it ever doesn't, we have a pure-Rust SQLite implementation as backup (`sqlparser-rs` + handrolled FTS is possible but a last resort).
+5. **SQLite via `rusqlite` bundled C (single portable-C exception per D1).** Redox has a SQLite cookbook recipe historically, so the bundled build *should* compile on Redox via `relibc`, but this is unverified until Phase B adds `cargo check --target x86_64-unknown-redox -p makakoo-core` to CI. If bundled SQLite fails on Redox, the pure-Rust fallback is **`limbo`** (Turso's pure-Rust SQLite reimplementation) or **`libsql`** (Turso's fork with more-tested cross-platform support). We pin this as a Phase-B CI gate rather than a Phase-A assumption.
 6. **Capability verbs map to Redox schemes.** `brain/read` → `file:/home/user/.makakoo/data/Brain/`. `net/http` → `http:`. `llm/chat` → `chan:makakoo-llm`. The mapping is mechanical; Redox uses schemes, we use capability verbs, the shapes are identical.
 7. **Plugin manifest format is OS-agnostic.** `plugin.toml` doesn't assume any particular OS and the kernel loader doesn't either.
 8. **Daemon lifecycle abstraction.** `PlatformAdapter::install_daemon()` knows how to register a service on launchd / systemd / Task Scheduler / Redox init. We add the Redox impl in Phase H+.
@@ -555,7 +587,7 @@ Today's state (honest snapshot):
 - `CROSS-PLATFORM-TODOS.md` confirms Linux + Windows not started.
 
 **Phase A — Architecture spec** (6-8 hours, markdown only, ZERO code)
-Write the 12 spec documents listed in section 5. This document is one of them. Ship as a PR to `makakoo-os/spec/`. Review by Sebastian + one lope ensemble validator pass. No merge until the spec is solid.
+Write the 14 spec documents listed in SPRINT-MAKAKOO-OS-MASTER.md section 7 Phase A deliverables (12 new spec docs + this document + the master sprint plan). Ship as a PR to `makakoo-os/spec/`. Review by Sebastian + one adversarial agent reviewer pass (lope-negotiate wedges on pure prose per the `lope_wedge` memory — use Agent-based review instead). No merge until the spec is solid.
 
 Outputs:
 - `spec/ARCHITECTURE.md` (this doc)
@@ -579,7 +611,7 @@ Implement `plugin install/uninstall/list/info/enable/disable`. Implement `distro
 Per-plugin Unix domain socket (named pipe on Windows) + PID verification + grant table + audit log. Client libraries in Rust, Python, Node. Wire checks into brain, llm, net, state helpers. Add `makakoo audit <plugin>` command that prints what capabilities a plugin has called vs declared (catches bugs + honest plugins). See section 8 for the full design.
 
 **Phase F — Cross-OS installer** (1-2 days)
-`install/install.sh`, `install/install.ps1`, `makakoo install` umbrella command. CLI host detection table per OS in `spec/INSTALL_MATRIX.md` implemented in `crates/cli/src/detect.rs`. Windows Task Scheduler adapter in `crates/platform/windows.rs`. Symlink fallback to copy-sync for Windows.
+`install/install.sh`, `install/install.ps1`, `makakoo install` umbrella command. CLI host detection table per OS in `spec/INSTALL_MATRIX.md` implemented in `crates/cli/src/detect.rs`. Windows Task Scheduler adapter in `crates/platform/windows.rs`. Windows install script verifies Developer Mode is enabled before proceeding (per D9); refuses install on locked-down Windows with a clear pointer to Settings → For Developers → Developer Mode. No copy-sync fallback.
 
 **Phase G — Release pipeline** (1 day)
 CI matrix for 4 targets. Release tarballs (macOS universal, Linux x86_64 + aarch64, Windows x86_64). Homebrew formula. winget manifest. `.deb` + `.rpm`. One-liner install script hosted at `makakoo.com/install`.

@@ -203,13 +203,19 @@ host OS:
 **The install script contract:**
 - Runs inside the staged plugin directory (`$MAKAKOO_HOME/plugins/.stage/<name>/`)
 - Has `$MAKAKOO_HOME` env var available
-- Has `$MAKAKOO_SOCKET_PATH` env var available for capability socket
+- **Does NOT have `$MAKAKOO_SOCKET_PATH`.** The capability socket is
+  created AFTER install succeeds (plugin lifecycle §7.3 steps 8 → 11).
+  Install scripts run in a pre-capability context; they can use the
+  filesystem and PATH but cannot call brain/llm/net helpers.
 - Should write all build artifacts to the plugin dir (no system-wide
   installation)
 - Should not require sudo / admin. If it needs elevated permissions,
   the plugin is probably the wrong shape.
 - Must exit 0 on success, non-zero on failure
 - Stdout + stderr are captured and shown to the user on failure
+- Optional `on_install` hook (distinct from `install`) runs AFTER the
+  socket is available if you need to do capability-scoped first-time
+  setup (e.g. writing an initial Brain page). See ABI_SKILL.md §4.
 
 **Example `install.sh`:**
 ```sh

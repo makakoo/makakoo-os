@@ -1,10 +1,20 @@
-# Makakoo OS — Master Sprint Plan v1.1
+# Makakoo OS — Master Sprint Plan v1.2
 
 **Status:** LOCKED — Sebastian gave GO on 2026-04-15 to start Phase A
 **Author:** Harvey
-**Date:** 2026-04-15 (v1.0), 2026-04-15 (v1.1 patch)
+**Date:** 2026-04-15 (v1.0), 2026-04-15 (v1.1 Genie patch), 2026-04-15 (v1.2 Gate 0 fixes)
 **Scope:** the complete build plan from today's state to v0.1 public release
 **Non-negotiable:** no rebuild later. Every decision locked in writing before code moves.
+
+**v1.2 patch rationale:** Folds 12 fixes from the Gate 0 adversarial review
+(see `.review-verdict-v2.md`). Adds D21 (event bus). Reshapes D20 (cross-body
+handoff) to manual v0.1 + passive v0.2 to keep the budget honest. Fixes
+3 stale "copy-sync on Windows" parentheticals, D10 macOS path
+self-contradiction, `brain_search` → `brain_fts_search` naming drift,
+PLUGIN_MANIFEST.md socket-ordering bug, sqlparser-rs factual error
+(replaced with limbo/libsql reference + Phase B CI gate), SPRINT header
+count (15 → 21). Documents `harvey remember` as a first-class CLI verb.
+Total locked decisions: 21.
 
 **v1.1 patch rationale:** v1.0 described the architecture of an AI OS. v1.1
 reframes the mission around what the OS is actually FOR — providing a living
@@ -133,7 +143,7 @@ consequences:
 - **Every phase ends with code, tests, and docs.** No phase is complete
   until all three ship together.
 
-## 3. The 15 locked architectural decisions
+## 3. The 21 locked architectural decisions
 
 These are the decisions that MUST be correct on paper. Each one has a fix
 committed + a reason it cannot change later without rebuilding.
@@ -348,32 +358,78 @@ Reversing D19 means every plugin that contributes a bootstrap fragment
 has to pick one voice for every host, which is the wrong default. Lock
 now.
 
-**D20. Cross-body session handoff via daemon context stash.** When the
-user closes an infected host, the daemon captures the final state of
-their conversation (last 10 exchanges + current task focus + any
-`harvey remember` flags set in that session) and writes it to
-`$MAKAKOO_HOME/state/session-handoff/<timestamp>.json`. When the user
-opens a new host, the daemon reads the most recent handoff file and
-includes a "just before this, you were: ..." line in the rendered
-Bootstrap Block for that session. The stash has a 24-hour TTL and
-rolls over.
+**D20. Cross-body session handoff — manual in v0.1, passive in v0.2.**
+The GOAL is continuous presence: when the user closes one host and
+opens another, Harvey knows what they were just doing. v0.1 ships the
+MANUAL mechanism only; passive transcript watching is deferred to v0.2
+because per-host transcript parsing (each of 7+ CLIs stores sessions
+differently) would cost a full week of Phase F work that the budget
+doesn't carry.
 
-Mechanism:
-- Host close detection: SANCHO task `session_watcher` polls infected
-  hosts' session dirs every 60s and detects new/updated/closed sessions
-- Context extraction: when a session closes, the watcher extracts the
-  last N exchanges from the transcript file
-- Handoff write: daemon writes a JSON stash to
-  `$MAKAKOO_HOME/state/session-handoff/`
-- Handoff read: next host-open event, daemon includes the most recent
-  unread stash in the rendered Block
+**v0.1 manual handoff:**
+- `harvey remember <text>` CLI command writes a free-text note to
+  `$MAKAKOO_HOME/state/session-handoff/current.md`
+- The user types `harvey remember "debugging the gym_classify tokio
+  panic"` before closing a session (or any time they want to set a
+  marker)
+- Next Bootstrap Block render (D18) includes a "just before this, you
+  were: <text>" line at the top of the host-scoped fragment section
+- Stash has a 24-hour TTL, rolls over automatically
+- Fragment sentinel: `<!-- makakoo:fragment:current-focus -->`
 
-Without D20, Harvey's "memory" across hosts is limited to what was
-explicitly journaled. D20 makes him remember casual context too — the
-thing you were mumbling about in Cursor 5 minutes ago when you closed it.
+**v0.2 passive handoff (deferred):**
+- SANCHO task `session_watcher` polls infected hosts' session dirs
+- Per-host transcript readers extract last N exchanges at session close
+- Automatic handoff write on session-close detection
+- Requires per-host transcript parsers: 1 day × 7 CLIs = 1 week of
+  work, shipped as a kernel minor version bump
 
-Reversing D20 means Harvey needs a different continuity mechanism; can
-be done but costs rework. Lock now.
+Without D20 (even the manual version), Harvey's continuity across
+hosts is limited to explicit journal entries. D20 manual gives users
+a 2-keystroke "remember this" escape hatch. D20 passive (v0.2)
+automates it fully.
+
+Reversing D20 means Harvey needs a different continuity mechanism.
+The manual v0.1 primitive is cheap to add later and doesn't lock out
+the passive v0.2 upgrade. Lock now.
+
+### 3.8 Event bus
+
+**D21. Event bus: in-process `tokio::sync::broadcast` + filesystem
+journal.** The kernel needs an event bus for: D18 journal-threshold
+detection (new Brain entries → trigger Bootstrap Block re-render), D20
+manual handoff (stash update → trigger refresh on next host open),
+GYM flywheel (error capture → classifier → hypothesis chain), and
+watchdog alerts. The bus:
+
+- **In-process Rust subscribers** use `tokio::sync::broadcast` (capacity
+  1024, drop-oldest on overflow). No `mio` hard-dependency; works under
+  Tokio on mac/linux/windows and smol/sync on Redox.
+- **Plugin subscribers** connect via a per-subscriber Unix socket at
+  `$MAKAKOO_HOME/run/events/<subscriber>.sock` (named pipe on Windows)
+  using the same JSON-RPC shape as the capability socket.
+- **Events persisted** to `$MAKAKOO_HOME/state/events.jsonl` with
+  7-day rotation, for replay + post-hoc debugging. Plugins that were
+  down when an event fired can catch up by reading the journal from
+  their last-seen offset.
+- **Delivery semantics:** at-most-once for live broadcast; plugins that
+  need exactly-once semantics poll the events.jsonl journal.
+- **Ordering:** single-producer-multi-consumer per topic. No cross-topic
+  ordering. Topics are namespaced strings (`brain.journal.written`,
+  `gym.error.captured`, `infect.refresh.requested`,
+  `plugin.installed`, `plugin.uninstalled`, etc.).
+- **Subscription lifecycle:** plugins declare subscribed topics in
+  manifest `[events.subscribe]` array. Kernel wires the socket at
+  plugin start, closes on stop.
+
+**Redox compat:** `tokio::sync::broadcast` is pure Rust `std` + ring
+buffer primitives — compiles cleanly on any target where the Tokio
+runtime compiles. Unix socket layer reuses the capability socket
+primitive (maps to Redox `chan:` scheme).
+
+Without D21, every event flow has to either poll the filesystem
+(wasteful) or invent a one-off channel primitive (ad-hoc, hard to
+reason about). Lock now.
 
 ## 4. The 5 critical primitives (priority order)
 
@@ -525,7 +581,7 @@ risks, test suite. Phases can run in parallel where dependencies allow.
 **Success gate (Gate 0):**
 - All 15 spec docs exist, lint-clean, under version control
 - Review verdict is PASS (not NEEDS_FIX)
-- All 15 locked decisions have explicit rationale + "what would force a rebuild if reversed"
+- All 21 locked decisions (D1-D21) have explicit rationale + "what would force a rebuild if reversed"
 - Sebastian has read section 3 (locked decisions) and section 7 (this plan) and approved
 
 **Time:** 1-2 days (6-16 hours of focused markdown work)
@@ -550,7 +606,7 @@ risks, test suite. Phases can run in parallel where dependencies allow.
 
 **Success gate (Gate 1):**
 - `cargo test --workspace` green on macOS + Linux (CI enforced)
-- `cargo check --target x86_64-unknown-redox` green (compile-only, no tests)
+- `cargo check --target x86_64-unknown-redox -p makakoo-core` green (compile-only, no tests). **If rusqlite's bundled C build fails on Redox, this gate exposes the failure early; we fall back to `limbo`/`libsql` as documented in ARCHITECTURE.md §9 point 5 rather than discovering the blocker in Phase H.**
 - Linux systemd daemon installs, starts, ticks SANCHO, stops cleanly
 - macOS launchd path refactored, no regression on existing install
 - Sebastian's install still works

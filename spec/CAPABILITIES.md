@@ -304,6 +304,10 @@ let client = Client::connect_from_env()?;
 let recent = client.brain_recent(10, None)?;
 let reply = client.llm_chat("minimax/ail-compound", messages)?;
 client.state_write("my-data.json", bytes)?;
+
+// Secrets are read through the socket, never via env var.
+// The grant must include secrets/read:<KEY_NAME>.
+let api_key = client.secret_read("AIL_API_KEY")?;
 ```
 
 The client reads `MAKAKOO_SOCKET_PATH` from env, opens the socket,
@@ -318,6 +322,11 @@ client = Client.connect_from_env()
 recent = client.brain_recent(limit=10)
 reply = client.llm_chat("minimax/ail-compound", messages)
 client.state_write("my-data.json", data)
+
+# Secret reads go through the capability socket.
+with client.secret_read("AIL_API_KEY") as secret:
+    # context manager auto-zeroes the value on exit
+    make_request(auth=secret.value)
 ```
 
 Same shape as the Rust client. Install target:

@@ -16,7 +16,7 @@ client. The gateway fans tool calls out to the right handler.
 
 Tools can be:
 - **In-process Rust handlers** living inside `crates/mcp/src/handlers/`
-  (fastest, used for kernel-provided tools like `brain_search`,
+  (fastest, used for kernel-provided tools like `brain_fts_search`,
   `brain_write_journal`, `sancho_status`)
 - **Out-of-process subprocess handlers** living inside a plugin (any
   language, used for everything else)
@@ -73,7 +73,7 @@ def status(params: dict) -> dict:
 ### 3.2 Rust (in-process, kernel-shipped only)
 
 ```toml
-handler = "crate::tier_a::brain::brain_search"
+handler = "crate::tier_a::brain::brain_fts_search"
 ```
 
 Rust handlers are compiled into the MCP gateway binary and run
@@ -206,12 +206,12 @@ Same semver rules.
 Tool **renames** are major version bumps because existing hosts will
 see the old name disappear. New tools are minor bumps.
 
-## 10. Example: `brain_search` (Rust in-process)
+## 10. Example: `brain_fts_search` (Rust in-process)
 
 Lives in `crates/mcp/src/handlers/tier_a/brain.rs`. Handler signature:
 
 ```rust
-pub async fn brain_search(
+pub async fn brain_fts_search(
     ctx: &ToolContext,
     params: Value,
 ) -> Result<Value, ToolError> {
