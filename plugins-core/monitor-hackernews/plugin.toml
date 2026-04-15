@@ -1,0 +1,38 @@
+[plugin]
+name = "monitor-hackernews"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+summary = "Hourly Hacker News front-page scan, writes highlights to the Brain"
+license = "MIT"
+
+[source]
+path = "plugins-core/monitor-hackernews"
+
+[abi]
+sancho-task = "^0.1"
+
+[depends]
+python = ">=3.11"
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+run = "python3 -u harvey-os/agents/hackernews/hn_monitor.py"
+
+[capabilities]
+grants = [
+  "brain/write",
+  "net/http:https://news.ycombinator.com/*",
+  "net/http:https://hacker-news.firebaseio.com/*",
+  "llm/chat",
+]
+
+[sancho]
+tasks = [{ name = "hackernews_monitor", interval = "3600s" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/monitor-hackernews"
+retention = "keep"

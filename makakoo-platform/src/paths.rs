@@ -67,15 +67,24 @@ pub fn data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Tests mutate the process-global MAKAKOO_HOME env var; cargo test
+    // runs them in parallel by default, so we serialize any test that
+    // touches env state through this mutex. Matches the pattern used in
+    // makakoo/src/test_support.rs.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn home_resolves_to_something() {
+        let _g = ENV_LOCK.lock().unwrap();
         let h = makakoo_home();
         assert!(!h.as_os_str().is_empty());
     }
 
     #[test]
     fn data_dir_is_under_home() {
+        let _g = ENV_LOCK.lock().unwrap();
         let d = data_dir();
         assert!(d.ends_with("data"));
         assert!(d.starts_with(makakoo_home()));
@@ -83,6 +92,7 @@ mod tests {
 
     #[test]
     fn env_override_wins() {
+        let _g = ENV_LOCK.lock().unwrap();
         let sentinel = std::env::temp_dir().join("makakoo_test_platform_paths");
         std::env::set_var("MAKAKOO_HOME", &sentinel);
         assert_eq!(makakoo_home(), sentinel);

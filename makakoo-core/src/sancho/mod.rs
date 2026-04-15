@@ -5,6 +5,13 @@
 //! daily briefings, etc.) on a gated tick loop. Each task is a
 //! [`SanchoHandler`] paired with a set of [`Gate`]s that decide whether
 //! the handler may run at the current moment.
+//!
+//! Phase C (2026-04-15): subprocess tasks (watchdogs, GYM) no longer live
+//! as hardcoded registrations here. They are discovered from plugin
+//! manifests under `$MAKAKOO_HOME/plugins/*/plugin.toml` via
+//! [`register_plugin_sancho_tasks`]. The 8 pure-Rust handlers below are
+//! the only hardcoded tasks left — they belong to the kernel, not to any
+//! plugin.
 
 pub mod engine;
 pub mod gates;
@@ -22,13 +29,41 @@ pub use handlers::{
 };
 pub use registry::{HandlerReport, SanchoContext, SanchoHandler, SanchoRegistry, TaskRegistration};
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Build the default production registry matching the Python SANCHO
-/// defaults. Callers can append custom tasks to the returned registry
-/// before handing it to [`SanchoEngine::new`].
-pub fn default_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
+use crate::plugin::PluginRegistry;
+
+/// Parse a human-readable duration like `"5m"`, `"300s"`, `"24h"`, `"7d"`.
+/// Falls back to `default` on any parse failure so plugin manifests
+/// cannot crash the registry build — a bad interval becomes a logged
+/// warning in the caller.
+pub fn parse_interval(spec: &str, default: Duration) -> Duration {
+    let s = spec.trim();
+    if s.is_empty() {
+        return default;
+    }
+    let (num_part, unit) = s.split_at(s.len() - 1);
+    let last = s.chars().last().unwrap_or(' ');
+    let (num_str, mul) = match last {
+        's' => (num_part, 1u64),
+        'm' => (num_part, 60),
+        'h' => (num_part, 3600),
+        'd' => (num_part, 86400),
+        c if c.is_ascii_digit() => (s, 1),
+        _ => return default,
+    };
+    let _ = unit; // silence unused
+    match num_str.parse::<u64>() {
+        Ok(n) => Duration::from_secs(n.saturating_mul(mul)),
+        Err(_) => default,
+    }
+}
+
+/// Build the kernel's native SANCHO registry — 8 pure-Rust handlers that
+/// ship with the kernel and never come from a plugin.
+pub fn native_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
     let mut reg = SanchoRegistry::new();
     let llm_for_dream: Arc<dyn LlmCall> = Arc::clone(&ctx.llm) as Arc<dyn LlmCall>;
     let llm_for_brief: Arc<dyn LlmCall> = Arc::clone(&ctx.llm) as Arc<dyn LlmCall>;
@@ -76,126 +111,83 @@ pub fn default_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
             Arc::new(ActiveHoursGate::new(8, 22)),
         ],
     );
-
-    // ─────────────────────────────────────────────────────────────
-    // Optional subprocess tasks (Python workshop on top of Rust core)
-    //
-    // These wrap Python scripts that live in the sibling harvey-os
-    // tree and under agents/. None of them are required for the Rust
-    // daemon to boot — each registration checks `script.exists()`
-    // first and is silently skipped if missing. That way a fresh
-    // public install of makakoo-os runs cleanly with just the 8
-    // native Rust tasks, and upgrading to a full-fat install (cloning
-    // harvey-os alongside) lights up the extra tasks automatically on
-    // next daemon restart. Ported from crontab 2026-04-15; graceful
-    // degrade added 2026-04-15 as part of the GYM supercenter work.
-    // ─────────────────────────────────────────────────────────────
-    let python = "/usr/local/opt/python@3.11/bin/python3.11".to_string();
-
-    let switchailocal_script = ctx.home.join("harvey-os/core/watchdogs/switchailocal_watchdog.py");
-    if switchailocal_script.exists() {
-        reg.register(
-            Arc::new(SubprocessHandler::new(
-                "switchailocal_watchdog",
-                python.clone(),
-                vec![
-                    "-u".to_string(),
-                    switchailocal_script.to_string_lossy().into_owned(),
-                ],
-            )),
-            vec![Arc::new(TimeGate::new(Duration::from_secs(5 * 60)))],
-        );
-    }
-
-    let pg_script = ctx.home.join("agents/pg-watchdog/pg_watchdog.py");
-    if pg_script.exists() {
-        reg.register(
-            Arc::new(SubprocessHandler::new(
-                "pg_watchdog",
-                python.clone(),
-                vec!["-u".to_string(), pg_script.to_string_lossy().into_owned()],
-            )),
-            vec![Arc::new(TimeGate::new(Duration::from_secs(15 * 60)))],
-        );
-    }
-
-    let hn_script = ctx.home.join("harvey-os/agents/hackernews/hn_monitor.py");
-    if hn_script.exists() {
-        reg.register(
-            Arc::new(SubprocessHandler::new(
-                "hackernews_monitor",
-                python.clone(),
-                vec!["-u".to_string(), hn_script.to_string_lossy().into_owned()],
-            )),
-            vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
-        );
-    }
-
-    // Harvey's Mascot GYM — 5 layers, all through one dispatch shim.
-    // Register all five iff the shim exists; otherwise skip the whole
-    // GYM. A partial GYM is worse than no GYM.
-    let gym_shim_path = ctx.home.join("harvey-os/bin/run-sancho-task.py");
-    if gym_shim_path.exists() {
-        let gym_shim = gym_shim_path.to_string_lossy().into_owned();
-
-        reg.register(
-            Arc::new(SanchoSubprocess::gym("gym_classify", &python, &gym_shim)),
-            vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
-        );
-
-        reg.register(
-            Arc::new(SanchoSubprocess::gym("gym_hypothesize", &python, &gym_shim)),
-            vec![
-                Arc::new(TimeGate::new(Duration::from_secs(84600))),
-                Arc::new(ActiveHoursGate::new(1, 4)),
-            ],
-        );
-
-        reg.register(
-            Arc::new(SanchoSubprocess::gym("gym_lope_gate", &python, &gym_shim)),
-            vec![
-                Arc::new(TimeGate::new(Duration::from_secs(84600))),
-                Arc::new(ActiveHoursGate::new(3, 6)),
-            ],
-        );
-
-        reg.register(
-            Arc::new(SanchoSubprocess::gym("gym_morning_report", &python, &gym_shim)),
-            vec![
-                Arc::new(TimeGate::new(Duration::from_secs(84600))),
-                Arc::new(ActiveHoursGate::new(6, 9)),
-            ],
-        );
-
-        reg.register(
-            Arc::new(SanchoSubprocess::gym("gym_weekly_report", &python, &gym_shim)),
-            vec![
-                Arc::new(TimeGate::new(Duration::from_secs(7 * 86400))),
-                Arc::new(ActiveHoursGate::new(8, 11)),
-            ],
-        );
-    }
-
     reg
 }
 
-/// Tiny ergonomic wrapper so the five gym tasks don't each repeat the
-/// `python -u <shim> --task <name>` vector literal. Returns a
-/// SubprocessHandler ready to register.
-struct SanchoSubprocess;
-impl SanchoSubprocess {
-    fn gym(task: &str, python: &str, shim: &str) -> SubprocessHandler {
-        SubprocessHandler::new(
-            task,
-            python.to_string(),
-            vec![
-                "-u".to_string(),
-                shim.to_string(),
-                "--task".to_string(),
-                task.to_string(),
-            ],
-        )
+/// Walk a [`PluginRegistry`] and add a [`SubprocessHandler`] to `reg` for
+/// every `[sancho].tasks` entry declared by any plugin. The plugin's
+/// `[entrypoint].run` command is the base invocation; the task name is
+/// appended as `--task <name>` (matching the convention used by the
+/// hardcoded GYM dispatcher the Python version shipped with).
+///
+/// Plugins whose `run` is missing are silently skipped — the manifest
+/// parser already rejects SanchoTask-kind plugins without `run`, so this
+/// branch only fires for Agent-kind plugins that declare sancho tasks as
+/// a side channel without providing `run` (which is a manifest-level
+/// modeling mistake we tolerate gracefully).
+pub fn register_plugin_sancho_tasks(reg: &mut SanchoRegistry, plugins: &PluginRegistry) {
+    for plugin in plugins.plugins() {
+        let Some(run_cmd) = plugin.manifest.entrypoint.run.clone() else {
+            continue;
+        };
+        for task in &plugin.manifest.sancho.tasks {
+            let handler = build_subprocess_handler(&plugin.root, &run_cmd, &task.name);
+            let mut gates: Vec<Arc<dyn Gate>> = Vec::new();
+            gates.push(Arc::new(TimeGate::new(parse_interval(
+                &task.interval,
+                Duration::from_secs(3600),
+            ))));
+            if let Some([start, end]) = task.active_hours {
+                gates.push(Arc::new(ActiveHoursGate::new(
+                    u32::from(start),
+                    u32::from(end),
+                )));
+            }
+            for gate_name in &task.gates {
+                match gate_name.as_str() {
+                    "session" => gates.push(Arc::new(SessionGate)),
+                    "lock" => gates.push(Arc::new(LockGate)),
+                    _ => {}
+                }
+            }
+            reg.register(Arc::new(handler), gates);
+        }
     }
+}
+
+/// Build a [`SubprocessHandler`] for a plugin sancho task. Splits the
+/// plugin's `[entrypoint].run` string on whitespace so we can re-inject
+/// `--task <name>` as extra args. Paths in the entrypoint are resolved
+/// relative to the plugin root.
+fn build_subprocess_handler(
+    plugin_root: &Path,
+    run_cmd: &str,
+    task_name: &str,
+) -> SubprocessHandler {
+    let mut parts = run_cmd.split_whitespace();
+    let program = parts.next().unwrap_or("").to_string();
+    let program_path = if program.starts_with("./") || program.starts_with(".venv") {
+        plugin_root.join(&program).to_string_lossy().into_owned()
+    } else {
+        program
+    };
+    let mut args: Vec<String> = parts.map(|s| s.to_string()).collect();
+    args.push("--task".to_string());
+    args.push(task_name.to_string());
+    SubprocessHandler::new(task_name, program_path, args)
+}
+
+/// Build the default production registry. Pass `plugins` to inject
+/// manifest-driven subprocess tasks; pass `&PluginRegistry::default()` to
+/// get just the 8 native Rust handlers (used by tests and for the fresh
+/// install smoke).
+pub fn default_registry(
+    ctx: Arc<SanchoContext>,
+    plugins: &PluginRegistry,
+) -> SanchoRegistry {
+    let mut reg = native_registry(ctx);
+    register_plugin_sancho_tasks(&mut reg, plugins);
+    reg
 }
 
 #[cfg(test)]
@@ -215,61 +207,127 @@ mod tests {
         Arc::new(SanchoContext::new(store, bus, llm, emb, home.to_path_buf()))
     }
 
+    fn seed_plugin(home: &std::path::Path, dir_name: &str, body: &str) {
+        let p = home.join("plugins").join(dir_name);
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("plugin.toml"), body).unwrap();
+    }
+
     #[test]
     fn fresh_install_registers_only_native_tasks() {
-        // No harvey-os/, no agents/. Graceful degrade: only the 8 native
-        // Rust handlers should register. This is what a fresh public
-        // install of makakoo-os looks like.
+        // No plugins/ dir, no manifests. The kernel's 8 native Rust
+        // handlers are the entire surface.
         let dir = TempDir::new().unwrap();
-        let reg = default_registry(make_ctx(dir.path()));
+        let plugins = PluginRegistry::load_default(dir.path()).unwrap();
+        let reg = default_registry(make_ctx(dir.path()), &plugins);
         assert_eq!(
             reg.len(),
             8,
-            "fresh install with no Python scripts should yield exactly 8 native tasks"
+            "fresh install with no plugins should yield exactly 8 native tasks"
         );
     }
 
     #[test]
-    fn full_install_registers_sixteen_tasks() {
-        // Seed the expected script paths as empty stub files. With all
-        // 4 optional scripts present, we get the full 16-task surface:
-        // 8 native + 3 watchdogs + 5 gym.
+    fn native_registry_has_exactly_eight() {
+        let dir = TempDir::new().unwrap();
+        let reg = native_registry(make_ctx(dir.path()));
+        assert_eq!(reg.len(), 8);
+    }
+
+    #[test]
+    fn plugin_with_one_sancho_task_registers() {
         let dir = TempDir::new().unwrap();
         let home = dir.path();
-        let touch = |rel: &str| {
-            let p = home.join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(&p, b"#!/usr/bin/env python3\n").unwrap();
-        };
-        touch("harvey-os/core/watchdogs/switchailocal_watchdog.py");
-        touch("agents/pg-watchdog/pg_watchdog.py");
-        touch("harvey-os/agents/hackernews/hn_monitor.py");
-        touch("harvey-os/bin/run-sancho-task.py");
+        seed_plugin(
+            home,
+            "watchdog-postgres",
+            r#"
+[plugin]
+name = "watchdog-postgres"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
 
-        let reg = default_registry(make_ctx(home));
+[source]
+path = "."
+
+[abi]
+sancho-task = "^0.1"
+
+[entrypoint]
+run = "python3 -m pg_watchdog"
+
+[sancho]
+tasks = [{ name = "pg_watchdog", interval = "900s" }]
+"#,
+        );
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        let reg = default_registry(make_ctx(home), &plugins);
+        assert_eq!(reg.len(), 9, "8 native + 1 plugin task");
+    }
+
+    #[test]
+    fn plugin_with_multiple_sancho_tasks_all_register() {
+        // Five tasks under one plugin — mirrors the GYM shape that used
+        // to live as hardcoded SanchoSubprocess::gym calls in this file.
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        seed_plugin(
+            home,
+            "mascot-gym",
+            r#"
+[plugin]
+name = "mascot-gym"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+
+[source]
+path = "."
+
+[abi]
+sancho-task = "^0.1"
+
+[entrypoint]
+run = "python3 -m gym.run"
+
+[sancho]
+tasks = [
+  { name = "gym_classify", interval = "3600s" },
+  { name = "gym_hypothesize", interval = "84600s", active_hours = [1, 4] },
+  { name = "gym_lope_gate", interval = "84600s", active_hours = [3, 6] },
+  { name = "gym_morning_report", interval = "84600s", active_hours = [6, 9] },
+  { name = "gym_weekly_report", interval = "604800s", active_hours = [8, 11] },
+]
+"#,
+        );
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        let reg = default_registry(make_ctx(home), &plugins);
+        assert_eq!(reg.len(), 13, "8 native + 5 gym tasks");
+    }
+
+    #[test]
+    fn parse_interval_handles_common_shapes() {
         assert_eq!(
-            reg.len(),
-            16,
-            "full install with all Python scripts present should yield 16 tasks"
+            parse_interval("5m", Duration::from_secs(1)),
+            Duration::from_secs(300)
         );
-    }
-
-    #[test]
-    fn partial_install_gym_skipped_when_shim_missing() {
-        // Watchdogs present but the GYM dispatch shim is not.
-        // Expect 8 native + 3 watchdogs = 11, with no gym_* at all.
-        let dir = TempDir::new().unwrap();
-        let home = dir.path();
-        let touch = |rel: &str| {
-            let p = home.join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(&p, b"#!/usr/bin/env python3\n").unwrap();
-        };
-        touch("harvey-os/core/watchdogs/switchailocal_watchdog.py");
-        touch("agents/pg-watchdog/pg_watchdog.py");
-        touch("harvey-os/agents/hackernews/hn_monitor.py");
-
-        let reg = default_registry(make_ctx(home));
-        assert_eq!(reg.len(), 11);
+        assert_eq!(
+            parse_interval("300s", Duration::from_secs(1)),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            parse_interval("24h", Duration::from_secs(1)),
+            Duration::from_secs(86400)
+        );
+        assert_eq!(
+            parse_interval("7d", Duration::from_secs(1)),
+            Duration::from_secs(604800)
+        );
+        // Garbage falls back to default.
+        assert_eq!(
+            parse_interval("garbage", Duration::from_secs(42)),
+            Duration::from_secs(42)
+        );
     }
 }

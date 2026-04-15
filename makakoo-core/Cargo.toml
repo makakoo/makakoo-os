@@ -27,6 +27,8 @@ rand.workspace = true
 teloxide.workspace = true
 base64 = "0.22"
 petgraph = "0.6"
+toml.workspace = true
+semver.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

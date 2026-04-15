@@ -1,0 +1,44 @@
+[plugin]
+name = "mascot-gym"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+summary = "Harvey's Mascot GYM — 5-layer self-improvement flywheel"
+license = "MIT"
+
+[source]
+path = "plugins-core/mascot-gym"
+
+[abi]
+sancho-task = "^0.1"
+
+[depends]
+python = ">=3.11"
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+run = "python3 -u harvey-os/bin/run-sancho-task.py"
+
+[capabilities]
+grants = [
+  "brain/read",
+  "brain/write",
+  "llm/chat",
+  "llm/embed",
+]
+
+[sancho]
+tasks = [
+  { name = "gym_classify",       interval = "3600s" },
+  { name = "gym_hypothesize",    interval = "84600s", active_hours = [1, 4] },
+  { name = "gym_lope_gate",      interval = "84600s", active_hours = [3, 6] },
+  { name = "gym_morning_report", interval = "84600s", active_hours = [6, 9] },
+  { name = "gym_weekly_report",  interval = "604800s", active_hours = [8, 11] },
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/mascot-gym"
+retention = "keep"

@@ -18,6 +18,7 @@ pub mod llm;
 pub mod nursery;
 pub mod outbound;
 pub mod platform;
+pub mod plugin;
 pub mod sancho;
 pub mod superbrain;
 pub mod swarm;

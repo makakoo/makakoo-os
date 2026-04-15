@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use comfy_table::{presets::UTF8_FULL, Cell, Color as TableColor, Table};
 
+use makakoo_core::plugin::PluginRegistry;
 use makakoo_core::sancho::{default_registry, SanchoContext, SanchoEngine};
 
 use crate::cli::SanchoCmd;
@@ -35,7 +36,9 @@ async fn build_engine(ctx: &CliContext) -> anyhow::Result<SanchoEngine> {
         emb,
         ctx.home().clone(),
     ));
-    let registry = default_registry(Arc::clone(&sancho_ctx));
+    let plugins = PluginRegistry::load_default(ctx.home())
+        .unwrap_or_default();
+    let registry = default_registry(Arc::clone(&sancho_ctx), &plugins);
     Ok(SanchoEngine::new(
         registry,
         sancho_ctx,
