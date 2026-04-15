@@ -257,7 +257,10 @@ mod tests {
 
     #[test]
     fn load_bootstrap_errors_when_missing() {
-        // Temporarily point MAKAKOO_HOME at an empty dir.
+        // Temporarily point MAKAKOO_HOME at an empty dir. Takes the
+        // crate-wide ENV_MUTEX so we don't race another test also
+        // setting MAKAKOO_HOME (see context::tests::ENV_MUTEX).
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         std::env::set_var("MAKAKOO_HOME", tmp.path());
         let r = load_bootstrap();

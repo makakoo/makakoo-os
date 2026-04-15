@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 makakoo-core = { path = "../makakoo-core" }
+makakoo-platform = { path = "../makakoo-platform" }
 tokio.workspace = true
 clap.workspace = true
 crossterm.workspace = true
@@ -25,9 +26,6 @@ async-trait.workspace = true
 dirs.workspace = true
 regex.workspace = true
 keyring.workspace = true
-
-[target.'cfg(target_os = "windows")'.dependencies]
-auto-launch.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

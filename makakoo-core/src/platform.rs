@@ -14,9 +14,13 @@ use crate::error::{MakakooError, Result};
 /// Resolve the Makakoo home directory.
 ///
 /// Precedence: `$MAKAKOO_HOME` → `$HARVEY_HOME` (legacy alias kept for
-/// backwards compatibility) → `~/HARVEY`. Installs that migrated from the
-/// pre-rename Harvey OS era may keep `~/HARVEY` as the physical directory
-/// and symlink `~/MAKAKOO` to it.
+/// backwards compatibility) → OS-native default (per D10 in
+/// ARCHITECTURE.md): `~/.makakoo` on macOS, `~/.local/share/makakoo`
+/// on Linux XDG, `%LOCALAPPDATA%\Makakoo` on Windows.
+///
+/// Sebastian's pre-v0.1 install keeps `~/MAKAKOO` working through
+/// `$MAKAKOO_HOME` env var + a compat symlink added in Phase H; the
+/// fallback never points at `~/HARVEY` or `~/MAKAKOO` for fresh installs.
 pub fn makakoo_home() -> PathBuf {
     if let Ok(p) = std::env::var("MAKAKOO_HOME") {
         if !p.is_empty() {
@@ -28,9 +32,41 @@ pub fn makakoo_home() -> PathBuf {
             return PathBuf::from(p);
         }
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("HARVEY")
+    // OS-native default. Matches D10 in the architecture spec.
+    #[cfg(target_os = "macos")]
+    {
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".makakoo");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(x) = std::env::var("XDG_DATA_HOME") {
+            if !x.is_empty() {
+                return PathBuf::from(x).join("makakoo");
+            }
+        }
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".local/share/makakoo");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local) = dirs::data_local_dir() {
+            return local.join("Makakoo");
+        }
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Makakoo");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        // Redox and other targets — fall back to ~/.makakoo, which also
+        // matches the Redox adapter stub.
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".makakoo");
+    }
 }
 
 /// OS-native config dir: `~/Library/Application Support/makakoo` on macOS,

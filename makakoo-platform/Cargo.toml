@@ -1,0 +1,24 @@
+[package]
+name = "makakoo-platform"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Platform adapter trait + per-OS implementations for Makakoo OS"
+
+[dependencies]
+# No makakoo-core dep — platform crate is standalone so it cross-compiles
+# cleanly to any target regardless of what makakoo-core's transitive deps
+# (teloxide → reqwest → openssl-sys) require. Path helpers are duplicated
+# in src/paths.rs and tested independently. Keeping the dep list this
+# lean is critical for the Redox + Linux cross-check gates.
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+auto-launch = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"

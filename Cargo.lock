@@ -1834,7 +1834,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "auto-launch",
  "chrono",
  "clap",
  "comfy-table",
@@ -1842,6 +1841,7 @@ dependencies = [
  "dirs 5.0.1",
  "keyring",
  "makakoo-core",
+ "makakoo-platform",
  "once_cell",
  "regex",
  "serde",
@@ -1901,6 +1901,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wiremock",
+]
+
+[[package]]
+name = "makakoo-platform"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auto-launch",
+ "dirs 5.0.1",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

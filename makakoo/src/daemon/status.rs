@@ -1,7 +1,9 @@
-//! Daemon status + logs.
+//! Daemon status + logs — queries the `PlatformAdapter` trait.
 
 use anyhow::Result;
 use std::path::PathBuf;
+
+use makakoo_platform::{CurrentPlatform, PlatformAdapter};
 
 /// Three-state view of the daemon, used by `makakoo daemon status`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,39 +24,13 @@ impl DaemonState {
 }
 
 pub fn current_state() -> DaemonState {
-    #[cfg(target_os = "macos")]
-    {
-        if !super::macos::is_installed() {
-            DaemonState::NotInstalled
-        } else if super::macos::is_running() {
-            DaemonState::Running
-        } else {
-            DaemonState::InstalledStopped
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if !super::linux::is_installed() {
-            DaemonState::NotInstalled
-        } else if super::linux::is_running() {
-            DaemonState::Running
-        } else {
-            DaemonState::InstalledStopped
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        if !super::windows::is_installed() {
-            DaemonState::NotInstalled
-        } else if super::windows::is_running() {
-            DaemonState::Running
-        } else {
-            DaemonState::InstalledStopped
-        }
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
+    let platform = CurrentPlatform::default();
+    if !platform.daemon_is_installed() {
         DaemonState::NotInstalled
+    } else if platform.daemon_is_running() {
+        DaemonState::Running
+    } else {
+        DaemonState::InstalledStopped
     }
 }
 
@@ -101,5 +77,10 @@ mod tests {
     fn log_dir_under_data_dir() {
         let d = log_dir();
         assert!(d.ends_with("logs"));
+    }
+
+    #[test]
+    fn current_state_does_not_panic() {
+        let _ = current_state();
     }
 }

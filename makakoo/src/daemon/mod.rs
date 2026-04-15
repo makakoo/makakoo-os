@@ -18,12 +18,11 @@ pub mod install;
 pub mod status;
 pub mod uninstall;
 
-#[cfg(target_os = "linux")]
-pub mod linux;
-#[cfg(target_os = "macos")]
-pub mod macos;
-#[cfg(target_os = "windows")]
-pub mod windows;
+// Per-OS daemon modules retired in Phase B — all logic now lives behind
+// the `makakoo_platform::PlatformAdapter` trait. See
+// `../../makakoo-platform/src/{macos,linux,windows,redox}.rs` for the
+// new implementations. This module now only hosts the dispatch shim,
+// the CLI subcommand enum, and the daemon main loop.
 
 /// `makakoo daemon <subcommand>`.
 #[derive(Debug, Subcommand)]

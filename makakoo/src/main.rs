@@ -28,6 +28,8 @@ mod infect;
 mod output;
 mod secrets;
 mod skill_runner;
+#[cfg(test)]
+mod test_support;
 
 use cli::Cli;
 

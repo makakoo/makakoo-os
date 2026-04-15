@@ -205,7 +205,9 @@ mod tests {
 
     #[test]
     fn context_resolves_paths_without_io() {
-        // Just construct — no subsystem opens yet.
+        // Just construct — no subsystem opens yet. Takes the crate-wide
+        // ENV_MUTEX so we don't race another test also setting MAKAKOO_HOME.
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("MAKAKOO_HOME", dir.path());
         let ctx = CliContext::new().unwrap();
@@ -216,6 +218,7 @@ mod tests {
 
     #[test]
     fn context_store_opens_lazily() {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("data")).unwrap();
         std::env::set_var("MAKAKOO_HOME", dir.path());
