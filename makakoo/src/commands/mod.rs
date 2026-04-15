@@ -14,6 +14,7 @@ pub mod promotions;
 pub mod query;
 pub mod sancho;
 pub mod search;
+pub mod setup;
 pub mod skill;
 pub mod version;
 
@@ -40,6 +41,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         }
         Commands::Skill { name, args } => skill::run(&name, &args),
         Commands::Version => version::run(),
+        Commands::Setup { force } => setup::run(force),
         Commands::Daemon { cmd } => {
             crate::daemon::dispatch(cmd).await?;
             Ok(0)

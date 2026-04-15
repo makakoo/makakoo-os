@@ -90,6 +90,15 @@ pub enum Commands {
     /// Print version, persona, and build metadata.
     Version,
 
+    /// Interactive first-run wizard — name your assistant, pick a
+    /// pronoun, pick a default voice. Writes `config/persona.json`.
+    /// Refuses to overwrite an existing file unless `--force`.
+    Setup {
+        /// Overwrite an existing `config/persona.json`.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Daemon management — install/uninstall/status/logs/run.
     Daemon {
         #[command(subcommand)]
