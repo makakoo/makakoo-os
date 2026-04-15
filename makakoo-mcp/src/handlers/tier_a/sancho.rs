@@ -44,24 +44,27 @@ impl ToolHandler for SanchoStatusHandler {
     }
     async fn call(&self, _params: Value) -> Result<Value, RpcError> {
         // The SANCHO engine runner isn't bound into the MCP context at
-        // T13 — it lives in its own tokio task owned by the daemon. For
-        // now we return a static "idle" snapshot so consumers (Harvey
-        // CLI, Claude Code) can rely on the shape while T15 wires live
-        // reporting via the event bus.
+        // T13 — it lives in its own tokio task owned by the daemon. This
+        // stub list mirrors `sancho::default_registry()` so consumers see
+        // the real task names; update both together when adding handlers.
+        // Live tick reporting via the event bus lands in T15.
         Ok(json!({
             "engine": "idle",
             "tasks": [
                 "dream",
                 "wiki_lint",
-                "memory_consolidation",
-                "memory_promotion",
                 "index_rebuild",
                 "daily_briefing",
+                "memory_consolidation",
+                "memory_promotion",
+                "superbrain_sync_embed",
                 "dynamic_checklist",
-                "superbrain_sync_embed"
+                "switchailocal_watchdog",
+                "pg_watchdog",
+                "hackernews_monitor"
             ],
             "last_tick": null,
-            "note": "t13 read-only stub; live reporting arrives in t15"
+            "note": "t13 read-only stub mirroring default_registry(); live reporting lands in t15"
         }))
     }
 }

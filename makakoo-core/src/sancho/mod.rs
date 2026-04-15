@@ -18,7 +18,7 @@ pub use gates::{
 pub use handlers::{
     DailyBriefingHandler, DreamHandler, DynamicChecklistHandler, FakeLlmCall,
     IndexRebuildHandler, LlmCall, MemoryConsolidationHandler, MemoryPromotionHandler,
-    SuperbrainSyncEmbedHandler, WikiLintHandler,
+    SubprocessHandler, SuperbrainSyncEmbedHandler, WikiLintHandler,
 };
 pub use registry::{HandlerReport, SanchoContext, SanchoHandler, SanchoRegistry, TaskRegistration};
 
@@ -76,6 +76,62 @@ pub fn default_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
             Arc::new(ActiveHoursGate::new(8, 22)),
         ],
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // Legacy subprocess tasks (ported from crontab 2026-04-15)
+    // These wrap existing Python scripts until they're rewritten in
+    // native Rust. Each matches its original crontab cadence.
+    // ─────────────────────────────────────────────────────────────
+    let python = "/usr/local/opt/python@3.11/bin/python3.11".to_string();
+
+    // switchAILocal watchdog — was every 5 min in crontab
+    reg.register(
+        Arc::new(SubprocessHandler::new(
+            "switchailocal_watchdog",
+            python.clone(),
+            vec![
+                "-u".to_string(),
+                ctx.home
+                    .join("harvey-os/core/watchdogs/switchailocal_watchdog.py")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        )),
+        vec![Arc::new(TimeGate::new(Duration::from_secs(5 * 60)))],
+    );
+
+    // Postgres cluster watchdog — was every 15 min
+    reg.register(
+        Arc::new(SubprocessHandler::new(
+            "pg_watchdog",
+            python.clone(),
+            vec![
+                "-u".to_string(),
+                ctx.home
+                    .join("agents/pg-watchdog/pg_watchdog.py")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        )),
+        vec![Arc::new(TimeGate::new(Duration::from_secs(15 * 60)))],
+    );
+
+    // HackerNews monitor — was every hour at :05
+    reg.register(
+        Arc::new(SubprocessHandler::new(
+            "hackernews_monitor",
+            python,
+            vec![
+                "-u".to_string(),
+                ctx.home
+                    .join("harvey-os/agents/hackernews/hn_monitor.py")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        )),
+        vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
+    );
+
     reg
 }
 
@@ -89,7 +145,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn default_registry_has_eight_tasks() {
+    fn default_registry_has_eleven_tasks() {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(SuperbrainStore::open(&dir.path().join("b.db")).unwrap());
         let bus = PersistentEventBus::open(&dir.path().join("bus.db")).unwrap();
@@ -103,6 +159,7 @@ mod tests {
             dir.path().to_path_buf(),
         ));
         let reg = default_registry(ctx);
-        assert_eq!(reg.len(), 8);
+        // 8 native Rust handlers + 3 legacy subprocess handlers = 11
+        assert_eq!(reg.len(), 11);
     }
 }

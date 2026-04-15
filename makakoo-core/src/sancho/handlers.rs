@@ -566,6 +566,128 @@ impl SanchoHandler for DynamicChecklistHandler {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+//  9. SubprocessHandler — generic wrapper for legacy Python watchdogs
+// ─────────────────────────────────────────────────────────────────────
+
+/// Runs an arbitrary shell command on each tick and records its exit status
+/// in today's Brain journal. Used to schedule legacy Python scripts from
+/// Rust SANCHO instead of crontab — bridges the Python→Rust migration for
+/// tasks that haven't been ported to native Rust yet.
+///
+/// Captures up to 200 chars of stdout for the journal line; truncates longer
+/// output. Failures (non-zero exit) are logged but don't crash the engine.
+pub struct SubprocessHandler {
+    task_name: String,
+    program: String,
+    args: Vec<String>,
+    cwd: Option<PathBuf>,
+}
+
+impl SubprocessHandler {
+    pub fn new(
+        task_name: impl Into<String>,
+        program: impl Into<String>,
+        args: Vec<String>,
+    ) -> Self {
+        Self {
+            task_name: task_name.into(),
+            program: program.into(),
+            args,
+            cwd: None,
+        }
+    }
+
+    pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+}
+
+#[async_trait]
+impl SanchoHandler for SubprocessHandler {
+    fn name(&self) -> &str {
+        &self.task_name
+    }
+
+    async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
+        let start = Instant::now();
+        let mut cmd = tokio::process::Command::new(&self.program);
+        cmd.args(&self.args);
+        if let Some(ref cwd) = self.cwd {
+            cmd.current_dir(cwd);
+        } else {
+            cmd.current_dir(&ctx.home);
+        }
+        // Give the subprocess the canonical env so Python scripts resolve
+        // paths correctly even if the launchd env doesn't carry them.
+        cmd.env("MAKAKOO_HOME", &ctx.home);
+        cmd.env("HARVEY_HOME", &ctx.home);
+        cmd.env(
+            "PYTHONPATH",
+            ctx.home
+                .join("harvey-os")
+                .to_string_lossy()
+                .into_owned(),
+        );
+
+        let output = cmd.output().await;
+        let elapsed = start.elapsed();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let summary = truncate(&stdout, 200);
+                let line = if summary.is_empty() {
+                    format!("- [[SANCHO]] {}: ok ({}ms)", self.task_name, elapsed.as_millis())
+                } else {
+                    format!(
+                        "- [[SANCHO]] {}: ok — {} ({}ms)",
+                        self.task_name,
+                        summary,
+                        elapsed.as_millis()
+                    )
+                };
+                append_journal_line(&ctx.home, &line)?;
+                let report = HandlerReport::ok(&self.task_name, summary, elapsed);
+                publish_report(ctx, &report);
+                Ok(report)
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let summary = truncate(&stderr, 200);
+                let code = out.status.code().unwrap_or(-1);
+                let line = format!(
+                    "- [[SANCHO]] {}: FAILED (exit {}) — {}",
+                    self.task_name, code, summary
+                );
+                let _ = append_journal_line(&ctx.home, &line);
+                let report = HandlerReport::failed(
+                    &self.task_name,
+                    format!("exit {code}: {summary}"),
+                    elapsed,
+                );
+                publish_report(ctx, &report);
+                Ok(report)
+            }
+            Err(e) => {
+                let line = format!(
+                    "- [[SANCHO]] {}: SPAWN ERROR — {}",
+                    self.task_name, e
+                );
+                let _ = append_journal_line(&ctx.home, &line);
+                let report = HandlerReport::failed(
+                    &self.task_name,
+                    format!("spawn error: {e}"),
+                    elapsed,
+                );
+                publish_report(ctx, &report);
+                Ok(report)
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 //  Tests
 // ─────────────────────────────────────────────────────────────────────
 
