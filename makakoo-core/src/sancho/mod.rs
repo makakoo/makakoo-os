@@ -120,7 +120,7 @@ pub fn default_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
     reg.register(
         Arc::new(SubprocessHandler::new(
             "hackernews_monitor",
-            python,
+            python.clone(),
             vec![
                 "-u".to_string(),
                 ctx.home
@@ -132,7 +132,81 @@ pub fn default_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
         vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
     );
 
+    // ─────────────────────────────────────────────────────────────
+    // Harvey's Mascot GYM — 5 layers (2026-04-15 supercenter reopen)
+    // All five layers route through the Python dispatch shim because
+    // the GYM codebase is Python-first. Rust owns the schedule; Python
+    // owns the work. Same SubprocessHandler pattern used above.
+    // ─────────────────────────────────────────────────────────────
+    let gym_shim = ctx
+        .home
+        .join("harvey-os/bin/run-sancho-task.py")
+        .to_string_lossy()
+        .into_owned();
+
+    // gym_classify — hourly error cluster refresh (Layer 2)
+    reg.register(
+        Arc::new(SanchoSubprocess::gym("gym_classify", &python, &gym_shim)),
+        vec![Arc::new(TimeGate::new(Duration::from_secs(3600)))],
+    );
+
+    // gym_hypothesize — nightly (23.5h) hypothesis generation (Layer 3)
+    // active 01:00-04:00 so it overlaps Sebastian's sleep window
+    reg.register(
+        Arc::new(SanchoSubprocess::gym("gym_hypothesize", &python, &gym_shim)),
+        vec![
+            Arc::new(TimeGate::new(Duration::from_secs(84600))),
+            Arc::new(ActiveHoursGate::new(1, 4)),
+        ],
+    );
+
+    // gym_lope_gate — nightly lope validation (Layer 4)
+    reg.register(
+        Arc::new(SanchoSubprocess::gym("gym_lope_gate", &python, &gym_shim)),
+        vec![
+            Arc::new(TimeGate::new(Duration::from_secs(84600))),
+            Arc::new(ActiveHoursGate::new(3, 6)),
+        ],
+    );
+
+    // gym_morning_report — daily Brain journal rollup (Layer 4b)
+    reg.register(
+        Arc::new(SanchoSubprocess::gym("gym_morning_report", &python, &gym_shim)),
+        vec![
+            Arc::new(TimeGate::new(Duration::from_secs(84600))),
+            Arc::new(ActiveHoursGate::new(6, 9)),
+        ],
+    );
+
+    // gym_weekly_report — 7-day rollup + blocklist refresh (Level 2 supercenter)
+    reg.register(
+        Arc::new(SanchoSubprocess::gym("gym_weekly_report", &python, &gym_shim)),
+        vec![
+            Arc::new(TimeGate::new(Duration::from_secs(7 * 86400))),
+            Arc::new(ActiveHoursGate::new(8, 11)),
+        ],
+    );
+
     reg
+}
+
+/// Tiny ergonomic wrapper so the five gym tasks don't each repeat the
+/// `python -u <shim> --task <name>` vector literal. Returns a
+/// SubprocessHandler ready to register.
+struct SanchoSubprocess;
+impl SanchoSubprocess {
+    fn gym(task: &str, python: &str, shim: &str) -> SubprocessHandler {
+        SubprocessHandler::new(
+            task,
+            python.to_string(),
+            vec![
+                "-u".to_string(),
+                shim.to_string(),
+                "--task".to_string(),
+                task.to_string(),
+            ],
+        )
+    }
 }
 
 #[cfg(test)]
@@ -145,7 +219,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn default_registry_has_eleven_tasks() {
+    fn default_registry_has_sixteen_tasks() {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(SuperbrainStore::open(&dir.path().join("b.db")).unwrap());
         let bus = PersistentEventBus::open(&dir.path().join("bus.db")).unwrap();
@@ -159,7 +233,7 @@ mod tests {
             dir.path().to_path_buf(),
         ));
         let reg = default_registry(ctx);
-        // 8 native Rust handlers + 3 legacy subprocess handlers = 11
-        assert_eq!(reg.len(), 11);
+        // 8 native Rust handlers + 3 legacy subprocess handlers + 5 gym tasks = 16
+        assert_eq!(reg.len(), 16);
     }
 }

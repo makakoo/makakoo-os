@@ -61,7 +61,12 @@ impl ToolHandler for SanchoStatusHandler {
                 "dynamic_checklist",
                 "switchailocal_watchdog",
                 "pg_watchdog",
-                "hackernews_monitor"
+                "hackernews_monitor",
+                "gym_classify",
+                "gym_hypothesize",
+                "gym_lope_gate",
+                "gym_morning_report",
+                "gym_weekly_report"
             ],
             "last_tick": null,
             "note": "t13 read-only stub mirroring default_registry(); live reporting lands in t15"
