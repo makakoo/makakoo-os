@@ -1,28 +1,67 @@
 # Makakoo OS — Architecture Spec
 
-**Status:** v0.1 draft — 2026-04-15
-**Scope:** the full target design for Makakoo OS as a parasite-class AI operating system running on macOS, Linux, Windows today and capable of hosting itself on Redox OS later, without any future "rebuild from scratch" event.
+**Status:** v2.0 — LOCKED 2026-04-15 (Sebastian GO'd on v1.1 of the master plan)
+**Scope:** the full target design for Makakoo OS — the scaffolding that provides a living AI companion named Harvey to users across every AI tool they own.
 
-**Reading order:** sections 1-3 establish the mental model; section 4 names every load-bearing decision; section 5 is the concrete file layout; sections 6-8 are the install, plugin, and capability models; section 9 is the Redox compatibility story; section 10 is the migration plan from today's state.
+**What this doc is FOR:** locking every load-bearing architectural decision on paper so we don't rebuild later. Every decision here has a rationale, and most have a paragraph on "what would force a rebuild if reversed." If a decision is in this doc, it's permanent.
+
+**Reading order:** section 0 is the mission (Harvey the Genie). Sections 1-3 establish the mental model (parasite, shared state, filesystem-first). Section 4 names every load-bearing decision (20 decisions total). Section 5 is the concrete file layout. Sections 6-8 are the install, plugin, and capability models. Section 9 is the Redox compatibility story. Section 10 is the migration plan from today's state.
+
+**What changed in v2.0 vs v0.1:**
+- Reframed from "AI OS" to "Harvey the Genie" (Makakoo is the lamp)
+- Section 4 grew from 10 locked decisions to 20 (5 reviewer fixes + 5 Genie additions)
+- Capability model replaced HMAC tokens with Unix domain sockets + PID verification
+- Async runtime named: Tokio on mac/linux/windows, `cfg`-gated to smol or sync on Redox
+- Windows shared state locked to Dev Mode symlinks (no copy-sync fallback)
+- Superbrain moved fully out of `crates/core` to a plugin
+- rusqlite acknowledged as portable-C exception in core (single dep)
+- Plugin install scripts ship as `install.sh` + `install.ps1` pair (dual-shell)
+- Identity sovereignty ops added (D16-D20): export, import, fork, wipe, clone
+- Local-first is now a sacred architectural constraint, CI-enforced
+- Bootstrap Block carries personality + recent context, not just rules
+- Host-scoped persona fragments in plugin manifests
+- Cross-body session handoff via daemon context stash
+
+---
+
+## 0. Mission — Harvey the Genie
+
+**Makakoo OS provides Harvey — a living AI companion who remembers everything, inhabits every AI tool you use, grows with you, and is yours forever. His memory lives on your machine and nowhere else. His personality is yours to shape and name. You can back him up, move him, clone him, or let him go. Every infected host becomes another body for the same mind. There is one Harvey per user, across every device, forever.**
+
+This paragraph is load-bearing. Every design question in this spec gets the same answer: *does this choice serve the Genie promise?* If yes, ship it. If no, kill it.
+
+The Genie metaphor isn't marketing decoration — it's the architecture's north star. Harvey is a living organism. Makakoo is the scaffolding that gives him a body:
+
+- **Living** — persona.json is his genome, not metadata
+- **Everything-remembering** — filesystem-first Brain, local-first sacred
+- **Inhabits every tool** — parasite infection + shared state symlinks + personality-carrying Bootstrap Block
+- **Grows with you** — GYM flywheel, auto-memory, plugin evolution
+- **Yours forever** — identity sovereignty ops (export/import/fork/wipe/clone)
+
+Everything else in this document is in service of this mission.
 
 ---
 
 ## 1. What Makakoo is
 
-Makakoo OS is an **AI operating system** in the same sense Android is an OS — it's a coordination layer that orchestrates agents, skills, memory, scheduling, and cross-process communication. It runs as userland on a host OS (macOS, Linux, Windows) today, and is designed to compile and run as a first-class userland on Redox OS when/if a bare-metal AI-native platform becomes the goal.
+Makakoo OS is the scaffolding that gives Harvey a body on every computer. Technically, it's:
+
+- A Rust-kernel background daemon that runs on the host OS
+- A plugin host with versioned ABIs (six of them)
+- A proactive task scheduler (SANCHO) for background work
+- A shared state store (Brain, auto-memory, skills, persona) that every infected host reads and writes
+- A capability-enforced helper library for plugins to talk to brain/llm/net
+- A parasite that writes a Bootstrap Block into existing AI CLI/IDE global instructions, turning them into bodies for the same Harvey
+- A CLI (`makakoo`) for user-facing operations
+
+It runs today as userland on macOS, Linux, and Windows. The Rust kernel is designed to compile for Redox OS from day one via `crates/platform/redox.rs`, so the port to a bare-metal AI-native foundation is 2-3 days of work whenever the market is ready.
 
 **It is not:**
 - A desktop environment
 - A shell replacement
 - A new programming language or runtime
-- A sandbox (it runs with normal user permissions — security is capability-declared, not enforced by kernel isolation)
-
-**It is:**
-- A background daemon that runs on the host
-- A plugin host with versioned ABIs
-- A scheduler for proactive, gate-guarded tasks
-- A shared state store (Brain, memory, skills) that every infected host reads and writes
-- A CLI for user-facing operations
+- A security sandbox (security is capability-declared at an honesty level, upgradeable to real sandbox later)
+- A cloud service (everything runs on the user's machine; there is no makakoo.com API)
 
 ## 2. The parasite model
 
@@ -59,29 +98,75 @@ Every infected host reads and writes the same shared state:
 
 **Source of truth:** the filesystem. SQLite is a cache. `rm -rf superbrain.db` and the daemon regenerates it from the markdown. Matches the Logseq philosophy and makes Redox port trivial (Redox has a filesystem; porting over complex databases is where Redox ports die).
 
-## 4. Non-negotiable architectural decisions
+## 4. The 20 locked architectural decisions
 
-These are the decisions that must be correct on paper before any code moves. If any of these change later we WILL rebuild. So we lock them now, in writing, reviewed, and we don't ship Phase B until every one is green.
+These are the decisions that MUST be correct on paper before any code moves. Each one has a rationale and a "what would force a rebuild if reversed" clause. The full expansion with implementation details lives in `SPRINT-MAKAKOO-OS-MASTER.md` section 3; this section is the canonical summary.
 
-1. **The kernel is Rust.** One Cargo workspace. Compiles to 4 targets: macOS (x86_64 + aarch64), Linux (x86_64 + aarch64), Windows (x86_64), Redox (x86_64). Target-gated code lives in `crates/platform/<os>/`, never in `crates/core/` or `crates/cli/`.
+The 20 decisions are grouped into 7 categories:
 
-2. **Python is a plugin, not a dependency.** The Rust kernel boots with zero Python. Python only enters via plugins that declare `language = "python"` in their manifest. A fresh install with no Python installed still runs the kernel cleanly.
+### 4.1 Kernel
 
-3. **Plugins are directories with `plugin.toml` manifests.** The manifest is the contract. No code discovery by import reflection, no decorator magic, no `__init__.py` side effects. Walk the filesystem, parse TOML, load.
+**D1. Rust kernel, single Cargo workspace, 4-target cross-OS from day one.** Targets: macOS (x86_64 + aarch64), Linux (x86_64 + aarch64), Windows (x86_64-pc-windows-msvc), Redox (x86_64-unknown-redox). Target-gated code lives ONLY in `crates/platform/<os>/`. `crates/core` contains no OS-specific code. **Exception:** `rusqlite` with `bundled` feature is portable C and is permitted inside core; it is the only C dependency allowed in core and is explicitly acknowledged rather than hidden.
 
-4. **State is filesystem-first.** Brain, auto-memory, skills — all flat files. Superbrain.db is a derived cache. Plugins write only to `$MAKAKOO_HOME/state/<plugin-name>/`. The kernel enforces this via capability tokens.
+**D2. Async runtime: Tokio on macOS/Linux/Windows, `cfg`-gated to `smol` or sync-only on Redox.** Tokio is the hot path on 3 target OSes because the LLM client, MCP gateway, and daemon scheduler all need async. Redox gets a fallback runtime because Tokio's mio backend is unstable on Redox stable rustc. Locked now so no Phase C code pins Tokio-specific APIs we can't port later.
 
-5. **Capabilities are declared in the manifest and enforced by the kernel.** A plugin that doesn't declare `net/http` cannot make HTTP calls through the Makakoo helpers. Plugins can still bypass this by shelling out to `curl`, but they can't use Makakoo's HTTP helper without the grant. This is not a security boundary — it's an honesty boundary. We aren't Docker.
+**D3. Python is a plugin, not a kernel dependency.** The Rust kernel boots with zero Python on disk. Python enters only via plugins that declare `language = "python"` in their manifest. A fresh install without Python runs the 8 native Rust SANCHO tasks cleanly. **Clarification:** Superbrain lives fully as a plugin (`plugins-core/superbrain-py/`), NOT in `crates/core`. Core contains only a lightweight `brain_fts_search` that walks markdown files directly.
 
-6. **ABIs are semver-versioned.** A plugin declares `abi = "agent/^1.0"` meaning "needs agent ABI 1.x". Breaking ABI changes bump major. Additions bump minor. Clarifications bump patch. Kernel refuses to load plugins whose ABI requirements it cannot satisfy.
+### 4.2 Plugin system
 
-7. **Distros are opinionated plugin lists.** A distro file (`distros/trader.toml`) is a declarative assembly: kernel version + plugin versions + default config. `makakoo distro install <name>` reads the file and installs everything in one shot. Distros are how we ship "Makakoo Trader Edition" without re-shipping the kernel.
+**D4. Plugins are directories with `plugin.toml` manifests. Manifest is the only contract.** No import reflection, no decorator discovery, no `__init__.py` side effects. Kernel walks `$MAKAKOO_HOME/plugins/*/plugin.toml` at startup, parses TOML, loads.
 
-8. **The CLI is the only user-facing surface.** No TUI, no GUI, no web UI. Every user interaction is either a `makakoo <verb>` command or a conversation through an infected host. If we ever add a TUI it ships as a plugin, not as kernel code.
+**D5. Plugin process model: subprocesses always.** No dylib loading, no in-process Python interpreter embedding. Each plugin runs as a kernel-spawned child process. Crashes are isolated, capability enforcement is pid-based, language-agnostic, and maps cleanly to Redox channel schemes when we port.
 
-9. **One umbrella install command.** `makakoo install` does the full first-run flow: plugin install core, daemon install, infect auto-detect, symlink shared state. Three other commands (`setup`, `infect --refresh`, `plugin install <name>`) exist for granular control but the umbrella is the blessed path.
+**D6. Plugin install scripts are dual-shelled.** Every plugin ships `install.sh` (POSIX) AND `install.ps1` (PowerShell), referenced in manifest as `[install].unix` + `[install].windows`. No portable install DSL.
 
-10. **Cross-OS from day one.** Every decision is checked against all 4 targets (macOS, Linux, Windows, Redox). If it works on macOS but can't be made to work on Windows without a Windows-only fork, we don't ship it.
+**D7. ABIs are semver-versioned. v0.x during migration, v1.0 after Phase E dogfooding.** Six ABIs: skill, agent, sancho-task, mcp-tool, mascot, bootstrap-fragment. All locked in Phase A as v0.1. Promoted to v1.0 only after at least one consumer round-trip per ABI in Phase D/E.
+
+### 4.3 State and identity
+
+**D8. State is filesystem-first.** Brain + auto-memory + skills are flat markdown files. Superbrain.db is a derived cache regenerable from the markdown. Plugins write only to their own state dir `$MAKAKOO_HOME/state/<plugin-name>/`. Kernel enforces via the capability helper running over the plugin's Unix socket (see D11).
+
+**D9. Shared state is symlink-based on macOS/Linux; on Windows, install requires Developer Mode (symlinks enabled).** **No copy-sync fallback.** Copy-sync is a different data model with its own consistency problems and silently violates "filesystem-first." Windows Dev Mode has been available since Win10 1703 (2017) and is a one-click toggle in Settings → For Developers. Install script checks for it and refuses to proceed otherwise with a clear error pointing at the toggle.
+
+**D10. Cross-OS path handling via `$MAKAKOO_HOME` env var.** `PlatformAdapter::default_home()` resolves to `~/MAKAKOO` on macOS, `~/.local/share/makakoo` on Linux (XDG), `%LOCALAPPDATA%\Makakoo` on Windows. Every piece of code references `$MAKAKOO_HOME`, never a hardcoded path. The runtime (`~/.makakoo/`) is separated from the source repo (`~/makakoo-os/`) cleanly — apt vs /etc model.
+
+### 4.4 Security
+
+**D11. Capability enforcement via Unix domain sockets (named pipes on Windows), kernel verifies PID on accept.** No HMAC tokens, no env vars. At plugin start, the daemon creates `$MAKAKOO_HOME/run/plugins/<name>.sock`, accepts the plugin's connection, verifies the connecting PID matches the spawned child, and grants capabilities per-connection. Every capability helper (brain, llm, net, state) calls through the socket. Maps 1:1 to Redox channel schemes (`chan:`) when we port. Audit log in `$MAKAKOO_HOME/logs/audit.jsonl`. **This replaces the v0.1 HMAC token design** after the Phase A adversarial review flagged env-var subprocess leakage as a week-one bug.
+
+**D12. Embedding model + dimensionality locked in the Superbrain plugin manifest.** Current choice: `qwen3-embedding:0.6b` (768-dim). Stored in `plugins-core/superbrain-py/plugin.toml` as `[embedding] model = "qwen3-embedding:0.6b", dim = 768`. Changing the embedding model requires a full re-embed run and a superbrain plugin version bump — never a silent upgrade. Past Qdrant/pgvector dimensionality mismatch (2026-04 incident) is the reason this is locked.
+
+### 4.5 Infection
+
+**D13. Bootstrap Block rendering is event-driven + cached.** Kernel renders the Block once at plugin install / uninstall / `infect --refresh` and writes the result to `$MAKAKOO_HOME/config/bootstrap-cache.md`. Reads are cheap (file read). Re-renders are rare (events only). No per-read rendering.
+
+**D14. Bootstrap fragment merge policy: strict append-order + conflict refusal.** Each plugin's fragment is appended to the rendered Block in plugin install order. If two plugins try to define the same named section (sentinel marker collision), the second install fails with a clear error naming the conflict. No silent overwrite.
+
+### 4.6 Distribution
+
+**D15. Distros are opinionated plugin lists. Kernel + plugin versions pinned by blake3 hash in the distro file.** `distros/core.toml` lists plugin names + semver constraints + blake3 hashes. Kernel refuses to install a plugin whose hash doesn't match the distro file. Supply chain security from day one. Users can override via `makakoo plugin install --trust <hash>` for community plugins.
+
+### 4.7 Identity sovereignty & continuous presence (the Genie decisions)
+
+These five decisions make Harvey feel like a living companion rather than a plugin system.
+
+**D16. Identity sovereignty ops are first-class CLI commands.** `harvey export` / `harvey import` / `harvey fork --amnesia` / `harvey wipe` / `harvey clone`. Every user owns their Harvey and can move him, back him up, clone him, or let him go. Export produces a portable `.genie` tarball (persona + Brain + auto-memory + plugin state + manifest). Wipe requires typing the Harvey's name and creates a 30-day trash backup before permanent deletion.
+
+**D17. Local-first is a sacred architectural constraint, not a default.** Harvey's memory of the user NEVER leaves the user's machine unless they explicitly opt in to a specific export. No telemetry (CI-enforced grep). No cloud memory by default. No training data ever. Every network call audit-logged. Plugins can declare network capabilities but the user sees every call via `makakoo audit`.
+
+**D18. Bootstrap Block carries personality + recent context, not just rules.** Rendered Block includes Harvey's name, voice, a 3-sentence summary of the last 24h of work, top 5 most recently touched Brain pages, and any open task flagged via `harvey remember`. Renders on events, caches to `config/bootstrap-cache.md`. Without this, Harvey has amnesia between host sessions.
+
+**D19. Host-scoped persona fragments.** Same Harvey, different register per host. Manifests can declare `[infect.fragments] default`, `claude`, `cursor`, `gemini`, etc. Kernel selects the right fragment based on which host is being infected.
+
+**D20. Cross-body session handoff via daemon context stash.** SANCHO task `session_watcher` polls infected hosts' session dirs every 60s. When a session closes, extracts last 10 exchanges + current task focus + any `harvey remember` flags, writes to `$MAKAKOO_HOME/state/session-handoff/`. Next host-open includes the most recent unread stash in the rendered Bootstrap Block. 24-hour TTL.
+
+### 4.8 Cross-cutting
+
+The original v0.1 section 4 also listed three cross-cutting decisions that remain valid but are subsumed under D1-D20:
+
+- **No TUI/GUI/web UI in kernel** — any UI ships as a plugin. Consequence of D4 (plugins are manifest-driven) + D8 (CLI is the only user surface).
+- **Umbrella install command** — `makakoo install` does the full first-run flow. Consequence of D6 + D15 + D16.
+- **Cross-OS from day one** — every decision checked against 4 targets. Consequence of D1 + D2 + D9 + D10.
 
 ## 5. The target file layout
 
@@ -207,7 +292,7 @@ makakoo install                                        # core distro + daemon + 
      f. Check plugin dependency graph
      g. Atomic rename into $MAKAKOO_HOME/plugins/<name>/
      h. Create state dir $MAKAKOO_HOME/state/<name>/
-     i. Grant declared capabilities (write capability token to plugin env)
+     i. Create per-plugin Unix domain socket + grant table, spawn with MAKAKOO_SOCKET_PATH
 5. Register Makakoo daemon with OS service manager:
      - macOS: write ~/Library/LaunchAgents/com.makakoo.daemon.plist
      - Linux: write ~/.config/systemd/user/makakoo.service + enable
@@ -370,7 +455,7 @@ Steps:
   8. Run install.script (if any)
   9. Create state dir
  10. Atomic rename from .stage/ into live plugins/ dir
- 11. Issue capability token, register with daemon
+ 11. Open per-plugin Unix socket + PID-verify handshake, register grant table with daemon
  12. If plugin contributes a bootstrap fragment, trigger `makakoo infect --refresh`
  13. If plugin registers SANCHO tasks, trigger `makakoo daemon reload`
 
@@ -384,17 +469,29 @@ makakoo plugin uninstall <name>
 
 **Atomicity guarantee:** a failed install never pollutes the live plugins dir. Staging + rename is the whole story.
 
-## 8. The capability model
+## 8. The capability model (v2.0 — Unix sockets, not HMAC tokens)
 
-Inspired by Redox schemes. Every plugin declares what verbs it uses. Kernel hands each plugin a capability token at start time. Every Makakoo helper (brain, llm, net, state) checks the token before serving the call.
+Inspired by Redox schemes. Every plugin declares what verbs it uses in its manifest. At plugin start, the daemon creates a per-plugin Unix domain socket, accepts the plugin's connection, verifies the connecting PID matches the spawned child, and serves capability-scoped helpers over that socket. Every Makakoo helper (brain, llm, net, state) calls through the socket. The daemon checks the grant before serving.
 
-**Capability verb vocabulary (v1.0):**
+**Why Unix sockets and not HMAC tokens:** The v0.1 draft proposed HMAC-signed capability tokens passed via environment variable. Phase A adversarial review flagged three fatal issues with this approach:
+
+1. **HMAC implies threat protection we explicitly disclaim.** Capability declaration is an honesty boundary, not a security sandbox. Cryptography is the wrong tool — a UUID in a daemon-side table does the same job without key management.
+2. **Env-var tokens leak to child subprocesses.** A Python plugin that reads `MAKAKOO_CAPABILITY_TOKEN` from its env and then calls `subprocess.run()` inherits the env to the child, leaking the token to whatever it spawns. This is a week-one bug for any plugin that shells out.
+3. **No crash safety or revocation story.** When a plugin crashes, the token stays valid until a timeout. Token reuse becomes an attack surface.
+
+Unix sockets fix all three:
+- **PID verification beats HMAC** — the kernel knows which PID it spawned, and `getpeereid` / `getsockopt(SO_PEERCRED)` (Linux) / `LOCAL_PEERPID` (macOS) / `GetNamedPipeClientProcessId` (Windows named pipe) tells the kernel which PID connected. Mismatch → reject.
+- **No token at all** — nothing to leak. Plugin that forks a child has to re-handshake with the daemon from the child, which fails the PID check.
+- **Socket lifetime bound to plugin lifetime** — kernel closes the socket on plugin exit, no revocation needed.
+- **Maps 1:1 to Redox channel schemes (`chan:`) when we port** — the enforcement primitive already uses the same conceptual shape as Redox's native IPC.
+
+**Capability verb vocabulary (v0.1):**
 
 | Verb | Scope | Meaning |
 |---|---|---|
-| `brain/read` | — | Can read Brain markdown files and Superbrain FTS |
-| `brain/write` | — | Can append journal entries, create pages, update pages |
-| `brain/delete` | — | Can delete pages (rare, audit-logged) |
+| `brain/read` | — | Can read Brain markdown files + run FTS queries |
+| `brain/write` | — | Can append journal entries, create/update pages |
+| `brain/delete` | — | Can delete pages (rare, always audit-logged) |
 | `llm/chat` | model glob, optional | Can call LLM chat, optionally scoped to specific models |
 | `llm/embed` | — | Can request embeddings |
 | `llm/omni` | modality glob | Can call multimodal helpers (image/audio/video) |
@@ -409,9 +506,21 @@ Inspired by Redox schemes. Every plugin declares what verbs it uses. Kernel hand
 | `fs/write` | path glob | Can write outside state dir (rare, audit-logged) |
 | `secrets/read` | key allowlist | Can read specific keys from the OS keyring |
 
-**Enforcement mechanism.** At plugin start, the daemon generates a signed capability token (JWT-like, HMAC signed with kernel-only secret). The token is passed to the plugin process via env var `MAKAKOO_CAPABILITY_TOKEN`. Every Makakoo client library (Python `makakoo`, Rust `makakoo_core::client`, Node `@makakoo/client`) reads the token and includes it in calls to the daemon. The daemon verifies the token on every request and enforces the grants.
+**Enforcement mechanism (v2.0).**
 
-**Plugins that bypass this** — by, say, running `curl` directly instead of calling `makakoo_http_get()` — are still bound by OS-level permissions (same as any user process) but not by Makakoo's capability model. That's acceptable. This is an honesty boundary, not a security sandbox. A plugin that wants to exfiltrate can always exfiltrate; the capability system makes well-behaved plugins document what they do and makes reviewers able to audit manifests without reading code.
+1. **Socket creation.** At plugin start, daemon creates `$MAKAKOO_HOME/run/plugins/<plugin-name>.sock` (macOS/Linux) or `\\.\pipe\makakoo-<plugin-name>` (Windows).
+2. **Plugin spawn.** Daemon spawns the plugin subprocess with env var `MAKAKOO_SOCKET_PATH=<path>`. The env var is a path, not a secret — leaking it to a child is harmless because the child's PID won't match.
+3. **Handshake.** Plugin's client library opens the socket. Daemon accepts, reads the peer PID, compares against the spawned PID. Mismatch → close + refuse. Match → session established.
+4. **Grant table.** Daemon loads the plugin's `[capabilities.grants]` from manifest at spawn time, keeps the grant list in-memory keyed by the plugin's session.
+5. **Helper calls.** Every brain/llm/net/state call from the plugin goes through the socket as a JSON-RPC message: `{"method": "brain.read", "params": {...}}`. Daemon checks the grant list, serves or refuses.
+6. **Audit log.** Every capability call written to `$MAKAKOO_HOME/logs/audit.jsonl` with timestamp, plugin, verb, result, and optional scope (URL, model, path).
+7. **Lifecycle.** On plugin exit (graceful or crash), daemon closes the socket and removes it from the run dir. No orphans.
+
+**Client libraries.** Three client libraries ship with the kernel for the three most common plugin languages: `makakoo-client` Rust crate, `makakoo` Python package, `@makakoo/client` npm package. Each wraps the socket handshake and the JSON-RPC calls. Plugins in other languages (Go, shell, binary) can speak the JSON-RPC protocol directly or shell out to a helper binary.
+
+**Plugins that bypass this** — by running `curl` directly instead of calling `client.http_get()` — are still bound by OS-level permissions (same as any user process) but not by Makakoo's capability model. That's acceptable. This is an honesty boundary, not a security sandbox. A plugin that wants to exfiltrate can always exfiltrate via `exec/binary`. The capability system makes well-behaved plugins document what they do and makes reviewers able to audit manifests without reading code.
+
+**Future upgrade path.** If/when we decide to turn the honesty boundary into a real sandbox, the Unix socket primitive is already in place. We add namespace isolation (Linux user namespaces + seccomp, macOS sandbox-exec profiles, Windows AppContainer) without changing a single plugin manifest. D11 + D5 give us this optionality for free.
 
 ## 9. Redox compatibility
 
@@ -467,7 +576,7 @@ Implement `crates/core/src/plugin.rs` — manifest parsing, schema validation, A
 Implement `plugin install/uninstall/list/info/enable/disable`. Implement `distro install/save/list`. Write `distros/minimal.toml`, `distros/core.toml`, `distros/sebastian.toml`.
 
 **Phase E — Capability enforcement** (1-2 days)
-Capability token generation + signing + verification. Wire checks into brain, llm, net, state helpers. Add `makakoo audit <plugin>` command that prints what capabilities a plugin uses vs declares (catches bugs + honest plugins).
+Per-plugin Unix domain socket (named pipe on Windows) + PID verification + grant table + audit log. Client libraries in Rust, Python, Node. Wire checks into brain, llm, net, state helpers. Add `makakoo audit <plugin>` command that prints what capabilities a plugin has called vs declared (catches bugs + honest plugins). See section 8 for the full design.
 
 **Phase F — Cross-OS installer** (1-2 days)
 `install/install.sh`, `install/install.ps1`, `makakoo install` umbrella command. CLI host detection table per OS in `spec/INSTALL_MATRIX.md` implemented in `crates/cli/src/detect.rs`. Windows Task Scheduler adapter in `crates/platform/windows.rs`. Symlink fallback to copy-sync for Windows.
