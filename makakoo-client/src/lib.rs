@@ -324,6 +324,133 @@ impl Client {
             .ok_or(ClientError::BadResponse)?;
         Ok(s.to_string())
     }
+
+    // ── brain ─────────────────────────────────────────────────────────
+
+    /// Full-text search over Brain content.
+    pub async fn brain_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, ClientError> {
+        let v = self
+            .call(
+                "brain.search",
+                "brain/read",
+                "",
+                serde_json::json!({ "query": query, "limit": limit }),
+            )
+            .await?;
+        let hits = v.get("hits").and_then(|x| x.as_array()).ok_or(ClientError::BadResponse)?;
+        Ok(hits.clone())
+    }
+
+    /// Most recent Brain documents, optionally filtered by doc_type.
+    pub async fn brain_recent(
+        &self,
+        limit: usize,
+        doc_type: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>, ClientError> {
+        let mut params = serde_json::json!({ "limit": limit });
+        if let Some(t) = doc_type {
+            params["doc_type"] = serde_json::json!(t);
+        }
+        let v = self.call("brain.recent", "brain/read", "", params).await?;
+        let hits = v.get("hits").and_then(|x| x.as_array()).ok_or(ClientError::BadResponse)?;
+        Ok(hits.clone())
+    }
+
+    /// Fetch a single Brain document by id. Returns `None` if missing.
+    pub async fn brain_read(
+        &self,
+        doc_id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        let v = self
+            .call(
+                "brain.read",
+                "brain/read",
+                "",
+                serde_json::json!({ "doc_id": doc_id }),
+            )
+            .await?;
+        match v.get("doc") {
+            Some(d) if !d.is_null() => Ok(Some(d.clone())),
+            _ => Ok(None),
+        }
+    }
+
+    /// Append one line to today's Brain journal. The line is
+    /// auto-prefixed with `- ` if missing so output stays Logseq-
+    /// outliner-compatible.
+    pub async fn brain_write_journal(&self, line: &str) -> Result<String, ClientError> {
+        let v = self
+            .call(
+                "brain.write_journal",
+                "brain/write",
+                "",
+                serde_json::json!({ "line": line }),
+            )
+            .await?;
+        let path = v
+            .get("appended_to")
+            .and_then(|x| x.as_str())
+            .ok_or(ClientError::BadResponse)?
+            .to_string();
+        Ok(path)
+    }
+
+    // ── llm ──────────────────────────────────────────────────────────
+
+    /// Chat completion. Each message is `(role, content)` where role is
+    /// `"user"`, `"assistant"`, or `"system"`. The plugin must declare
+    /// `llm/chat:<model-glob>` to call the requested model.
+    pub async fn llm_chat(
+        &self,
+        model: &str,
+        messages: &[(&str, &str)],
+    ) -> Result<String, ClientError> {
+        let msgs: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+            .collect();
+        let v = self
+            .call(
+                "llm.chat",
+                "llm/chat",
+                model,
+                serde_json::json!({ "model": model, "messages": msgs }),
+            )
+            .await?;
+        let content = v
+            .get("content")
+            .and_then(|x| x.as_str())
+            .ok_or(ClientError::BadResponse)?
+            .to_string();
+        Ok(content)
+    }
+
+    /// Generate an embedding vector for `text`. Plugin must declare
+    /// `llm/embed` (optionally scoped to an embedding-model glob).
+    pub async fn llm_embed(&self, text: &str) -> Result<Vec<f32>, ClientError> {
+        let v = self
+            .call(
+                "llm.embed",
+                "llm/embed",
+                "",
+                serde_json::json!({ "text": text }),
+            )
+            .await?;
+        let vec_json = v
+            .get("embedding")
+            .and_then(|x| x.as_array())
+            .ok_or(ClientError::BadResponse)?;
+        let mut out = Vec::with_capacity(vec_json.len());
+        for v in vec_json {
+            let f = v.as_f64().ok_or(ClientError::BadResponse)?;
+            out.push(f as f32);
+        }
+        Ok(out)
+    }
 }
 
 #[derive(Debug, Clone)]

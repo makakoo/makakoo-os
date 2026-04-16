@@ -17,10 +17,14 @@
 //! existing `makakoo-core` subsystems so they ship separately from
 //! the primitives here.
 
+pub mod brain;
 pub mod composite;
+pub mod llm;
 pub mod secrets;
 pub mod state;
 
+pub use brain::{append_journal_line, BrainHandler};
 pub use composite::CompositeHandler;
+pub use llm::LlmHandler;
 pub use secrets::{InMemorySecretBackend, SecretBackend, SecretError, SecretHandler};
 pub use state::{StateError, StateHandler};

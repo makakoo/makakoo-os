@@ -234,3 +234,103 @@ class Client:
         if not isinstance(value, str):
             raise ClientError("malformed secrets.read response")
         return value
+
+    # ── brain ────────────────────────────────────────────────────────
+
+    def brain_search(self, query: str, limit: int = 10) -> list[dict]:
+        """FTS over Brain content. Returns a list of hits."""
+        r = self._call(
+            "brain.search",
+            "brain/read",
+            "",
+            {"query": query, "limit": limit},
+        )
+        hits = r.get("hits", [])
+        if not isinstance(hits, list):
+            raise ClientError("malformed brain.search response")
+        return hits
+
+    def brain_recent(
+        self, limit: int = 10, doc_type: Optional[str] = None
+    ) -> list[dict]:
+        """Most recent Brain documents, optionally filtered by type."""
+        params: dict = {"limit": limit}
+        if doc_type is not None:
+            params["doc_type"] = doc_type
+        r = self._call("brain.recent", "brain/read", "", params)
+        hits = r.get("hits", [])
+        if not isinstance(hits, list):
+            raise ClientError("malformed brain.recent response")
+        return hits
+
+    def brain_read(self, doc_id: str) -> Optional[dict]:
+        """Fetch one Brain document by id. Returns ``None`` if missing."""
+        r = self._call(
+            "brain.read",
+            "brain/read",
+            "",
+            {"doc_id": doc_id},
+        )
+        doc = r.get("doc")
+        return doc if isinstance(doc, dict) else None
+
+    def brain_write_journal(self, line: str) -> str:
+        """Append one line to today's Brain journal. Returns the path
+        the line was written to. The kernel auto-prefixes ``- `` if the
+        line doesn't already start with it.
+        """
+        r = self._call(
+            "brain.write_journal",
+            "brain/write",
+            "",
+            {"line": line},
+        )
+        path = r.get("appended_to")
+        if not isinstance(path, str):
+            raise ClientError("malformed brain.write_journal response")
+        return path
+
+    # ── llm ──────────────────────────────────────────────────────────
+
+    def llm_chat(
+        self,
+        model: str,
+        messages: list[tuple[str, str]] | list[dict],
+    ) -> str:
+        """Chat completion. ``messages`` accepts either ``[(role,
+        content), …]`` or ``[{"role": ..., "content": ...}, …]``. Plugin
+        must declare ``llm/chat:<model-glob>`` for the requested model.
+        """
+        msgs_norm: list[dict] = []
+        for m in messages:
+            if isinstance(m, tuple) and len(m) == 2:
+                msgs_norm.append({"role": m[0], "content": m[1]})
+            elif isinstance(m, dict):
+                msgs_norm.append(m)
+            else:
+                raise ClientError(f"bad chat message shape: {m!r}")
+        r = self._call(
+            "llm.chat",
+            "llm/chat",
+            model,
+            {"model": model, "messages": msgs_norm},
+        )
+        content = r.get("content")
+        if not isinstance(content, str):
+            raise ClientError("malformed llm.chat response")
+        return content
+
+    def llm_embed(self, text: str) -> list[float]:
+        """Generate an embedding vector for ``text``. Plugin must
+        declare ``llm/embed`` in its manifest.
+        """
+        r = self._call(
+            "llm.embed",
+            "llm/embed",
+            "",
+            {"text": text},
+        )
+        vec = r.get("embedding")
+        if not isinstance(vec, list):
+            raise ClientError("malformed llm.embed response")
+        return [float(v) for v in vec]
