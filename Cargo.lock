@@ -1864,6 +1864,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -1896,6 +1897,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "windows-sys 0.59.0",
  "wiremock",
 ]
 

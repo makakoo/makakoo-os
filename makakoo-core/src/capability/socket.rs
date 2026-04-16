@@ -16,10 +16,14 @@
 //! - Server struct that owns the listener + GrantTable + AuditLog
 //! - `serve()` async loop that accepts + spawns a handler task per conn
 //! - PID verification via `libc::getsockopt` on macOS + Linux
-//! - Windows + Redox: compile-time stubs that return `NotSupported`
-//!   at runtime. Real Windows named-pipe impl deferred to Phase F
-//!   where it's validated on a real Windows VM as part of the
-//!   cross-OS installer — see `spec/CAPABILITIES.md §4.2`.
+//! - **Phase F/3 added**: real Windows named-pipe impl using
+//!   `tokio::net::windows::named_pipe::ServerOptions` +
+//!   `GetNamedPipeClientProcessId` for PID verify. Pipe name is
+//!   `\\.\pipe\makakoo-<plugin-name>`. Code paths are `#[cfg(windows)]`
+//!   and can only be validated on a real Windows build — Phase G CI
+//!   with a Windows runner is the first place they execute.
+//! - Redox: `NotSupported` stub. Native `chan:` scheme adapter in
+//!   the Redox port phase.
 //! - Pluggable `Handler` trait so Phase E/3 can wire brain/llm/state
 //!   service impls without reshaping the dispatch core
 //!
@@ -40,11 +44,21 @@ use super::audit::{AuditEntry, AuditLog, AuditResult};
 use super::grants::{GrantCheck, GrantTable};
 
 /// Canonical socket path for a plugin under a given Makakoo home.
+/// On Unix this is a filesystem path. On Windows the equivalent is
+/// [`pipe_name`] returning `\\.\pipe\makakoo-<plugin-name>` — this
+/// function still returns a conventional path for logging but the
+/// Windows accept loop uses the pipe name.
 pub fn socket_path(makakoo_home: &Path, plugin_name: &str) -> PathBuf {
     makakoo_home
         .join("run")
         .join("plugins")
         .join(format!("{plugin_name}.sock"))
+}
+
+/// Windows named-pipe name for a plugin. Spec §4.2: the kernel opens
+/// `\\.\pipe\makakoo-<name>` as the server; plugins connect by name.
+pub fn pipe_name(plugin_name: &str) -> String {
+    format!(r"\\.\pipe\makakoo-{plugin_name}")
 }
 
 /// JSON-RPC-ish request body. Every call carries a `verb` (the
@@ -209,8 +223,9 @@ impl CapabilityServer {
         &self.socket
     }
 
-    /// Bind the Unix socket + spawn an accept loop. Returns a handle
-    /// that cleans up the socket on drop.
+    /// Bind the Unix socket (or Windows named pipe) + spawn an accept
+    /// loop. Returns a handle that cleans up the socket on drop.
+    #[cfg(unix)]
     pub async fn serve(self) -> Result<ServerHandle, SocketError> {
         let listener = bind_socket(&self.socket).await?;
         info!("capability socket listening at {}", self.socket.display());
@@ -274,6 +289,119 @@ impl CapabilityServer {
             running,
         })
     }
+
+    /// Windows variant — spawns an accept loop over named-pipe server
+    /// instances. Each accepted client becomes its own tokio task just
+    /// like the Unix path.
+    ///
+    /// **Untested code path** on non-Windows machines. Phase G CI with
+    /// a Windows runner is the first place this executes.
+    #[cfg(windows)]
+    pub async fn serve(self) -> Result<ServerHandle, SocketError> {
+        use std::os::windows::io::AsRawHandle;
+        use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
+        // Derive a pipe name from the plugin's socket path. We take the
+        // file stem — `foo-plugin.sock` → `foo-plugin` — so the pipe
+        // stays aligned with the (canonical) socket path the caller
+        // built via `socket_path()`.
+        let stem = self
+            .socket
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("makakoo");
+        let pipe = pipe_name(stem);
+        info!("capability named-pipe listening at {pipe}");
+
+        let grants = self.grants.clone();
+        let audit = self.audit.clone();
+        let handler = self.handler.clone();
+        let expected_pid = self.expected_pid;
+        let pipe_for_log = pipe.clone();
+
+        let running = Arc::new(Mutex::new(0usize));
+        let accept_running = Arc::clone(&running);
+
+        let task = tokio::spawn(async move {
+            // Pre-create the first server instance. On Windows a server
+            // is single-use: after a client connects, we create a new
+            // server instance for the next client.
+            let mut server = match ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(&pipe)
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("failed to create named pipe {pipe}: {e}");
+                    return;
+                }
+            };
+
+            loop {
+                if let Err(e) = server.connect().await {
+                    warn!("named pipe connect failed on {pipe_for_log}: {e}");
+                    break;
+                }
+
+                // Harvest the PID before handing the stream off.
+                let peer = peer_pid_windows(&server).ok();
+                if let (Some(expected), Some(got)) = (expected_pid, peer) {
+                    if expected != got {
+                        warn!(
+                            "rejecting named-pipe peer pid {got} (expected {expected}) on {pipe_for_log}"
+                        );
+                        // Disconnect + rebuild server instance for the next client.
+                        match ServerOptions::new().create(&pipe_for_log) {
+                            Ok(next) => server = next,
+                            Err(e) => {
+                                warn!("rebuild named pipe failed: {e}");
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                // Swap the current server out with a fresh one for the
+                // next client before handing this connection off.
+                let next = match ServerOptions::new().create(&pipe_for_log) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("create next named pipe failed: {e}");
+                        break;
+                    }
+                };
+                let active = std::mem::replace(&mut server, next);
+
+                {
+                    let mut n = accept_running.lock().await;
+                    *n += 1;
+                }
+                let g = Arc::clone(&grants);
+                let a = Arc::clone(&audit);
+                let h = Arc::clone(&handler);
+                let running_for_conn = Arc::clone(&accept_running);
+                tokio::spawn(async move {
+                    let _ = handle_connection_windows(active, g, a, h).await;
+                    let mut n = running_for_conn.lock().await;
+                    *n = n.saturating_sub(1);
+                });
+            }
+        });
+
+        Ok(ServerHandle {
+            socket: self.socket.clone(),
+            task: Some(task),
+            running,
+        })
+    }
+
+    /// Non-Unix, non-Windows fallback. Redox port landing in a later
+    /// phase; until then, callers hit `NotSupported` at runtime.
+    #[cfg(not(any(unix, windows)))]
+    pub async fn serve(self) -> Result<ServerHandle, SocketError> {
+        Err(SocketError::NotSupported)
+    }
 }
 
 /// Drop-on-end handle to a running server. Dropping removes the socket
@@ -329,7 +457,12 @@ async fn bind_socket(path: &Path) -> Result<tokio::net::UnixListener, SocketErro
     })
 }
 
-#[cfg(not(unix))]
+// Windows doesn't use Unix listeners — it uses named pipes (see the
+// `#[cfg(windows)]` block below). This stub exists only to keep the
+// non-Windows, non-Unix targets (e.g. Redox) compiling; on those
+// targets `CapabilityServer::serve` returns `NotSupported` before
+// ever calling `bind_socket`.
+#[cfg(not(any(unix, windows)))]
 async fn bind_socket(_path: &Path) -> Result<tokio::net::UnixListener, SocketError> {
     Err(SocketError::NotSupported)
 }
@@ -345,13 +478,13 @@ async fn accept_one(
     Ok((stream, pid))
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 async fn accept_one(
     _listener: &tokio::net::UnixListener,
 ) -> Result<(tokio::net::UnixStream, Option<u32>), std::io::Error> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "capability sockets require Unix",
+        "capability sockets not supported on this platform",
     ))
 }
 
@@ -419,12 +552,34 @@ pub fn peer_pid(stream: &tokio::net::UnixStream) -> std::io::Result<u32> {
     Ok(cred.pid as u32)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub fn peer_pid(_stream: &tokio::net::UnixStream) -> std::io::Result<u32> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "peer_pid not implemented on this platform",
     ))
+}
+
+/// Windows peer-PID extraction via `GetNamedPipeClientProcessId`. Spec
+/// §4.2. Uses `windows-sys` for the raw FFI call.
+#[cfg(windows)]
+pub fn peer_pid_windows(
+    server: &tokio::net::windows::named_pipe::NamedPipeServer,
+) -> std::io::Result<u32> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+
+    let handle = server.as_raw_handle() as HANDLE;
+    let mut pid: u32 = 0;
+    // SAFETY: `handle` is a valid, connected named-pipe server handle
+    // from tokio; `GetNamedPipeClientProcessId` writes the peer PID
+    // into our `&mut pid`. Returns zero on failure per Windows docs.
+    let ok = unsafe { GetNamedPipeClientProcessId(handle, &mut pid as *mut u32) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(pid)
 }
 
 /// Per-connection read/write loop. Reads newline-delimited JSON, checks
@@ -465,7 +620,7 @@ async fn handle_connection(
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 async fn handle_connection(
     _stream: tokio::net::UnixStream,
     _grants: Arc<GrantTable>,
@@ -473,6 +628,48 @@ async fn handle_connection(
     _handler: Arc<dyn CapabilityHandler>,
 ) -> std::io::Result<()> {
     Ok(())
+}
+
+/// Windows per-connection loop. Same JSON-RPC framing as the Unix
+/// path; the only difference is the stream type.
+#[cfg(windows)]
+async fn handle_connection_windows(
+    stream: tokio::net::windows::named_pipe::NamedPipeServer,
+    grants: Arc<GrantTable>,
+    audit: Arc<AuditLog>,
+    handler: Arc<dyn CapabilityHandler>,
+) -> std::io::Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    // tokio's NamedPipeServer implements AsyncRead + AsyncWrite directly;
+    // we need a buffered reader for line-at-a-time JSON.
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            return Ok(());
+        }
+
+        let start = std::time::Instant::now();
+        let response = match serde_json::from_str::<CapabilityRequest>(line.trim()) {
+            Ok(req) => dispatch(&req, &grants, &audit, &*handler, start).await,
+            Err(e) => CapabilityResponse {
+                id: serde_json::Value::Null,
+                result: None,
+                error: Some(CapabilityError::bad_request(format!(
+                    "invalid request: {e}"
+                ))),
+            },
+        };
+
+        let bytes = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
+        writer.write_all(&bytes).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+    }
 }
 
 async fn dispatch(

@@ -38,6 +38,7 @@ teloxide = { version = "0.17", default-features = false, features = ["macros", "
 toml = "0.8"
 semver = { version = "1", features = ["serde"] }
 libc = "0.2"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Pipes"] }
 
 [profile.release]
 lto = true
