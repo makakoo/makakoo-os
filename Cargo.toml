@@ -37,6 +37,7 @@ rand = "0.8"
 teloxide = { version = "0.17", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
 toml = "0.8"
 semver = { version = "1", features = ["serde"] }
+libc = "0.2"
 
 [profile.release]
 lto = true

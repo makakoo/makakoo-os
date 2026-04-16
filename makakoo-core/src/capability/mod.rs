@@ -21,10 +21,15 @@
 
 pub mod audit;
 pub mod grants;
+pub mod socket;
 pub mod verb;
 
 pub use audit::{AuditEntry, AuditLog, AuditResult, RotationError};
 pub use grants::{resolve_grants, GrantCheck, GrantTable, ResolveError};
+pub use socket::{
+    socket_path, CapabilityError, CapabilityHandler, CapabilityRequest,
+    CapabilityResponse, CapabilityServer, EchoHandler, ServerHandle, SocketError,
+};
 pub use verb::{
     normalize_grant, parse_grant, scope_matches, Verb, VerbError, KNOWN_VERBS,
     SCOPE_REQUIRED_VERBS,
