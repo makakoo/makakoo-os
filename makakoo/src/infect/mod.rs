@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
+pub mod ext;
 pub mod slots;
 pub mod writer;
 
@@ -157,7 +158,107 @@ pub async fn run_with_home_and_body(
         let r = write_bootstrap_to_slot(slot, body, home, dry_run);
         report.results.push(r);
     }
+
+    // Extension hosts (VSCode Copilot/Cline/Continue + JetBrains AI).
+    // Targets are resolved from the current machine's filesystem — we
+    // only write to a host if its config dir exists, so a user without
+    // VSCode or JetBrains isn't surprised by unexpected file creations.
+    for target in ext_targets_from(home) {
+        // Dry-run + target-doesn't-exist = nothing to do. Writing to a
+        // fresh Cline/Continue dir is safe because detect_ext_hosts
+        // already told us the parent is present.
+        let r = ext::write_ext_host(&target, body, dry_run);
+        report.results.push(r);
+    }
+
     Ok(report)
+}
+
+/// Resolve extension-host write targets for the current machine. Only
+/// hosts whose config dir is present are returned — we don't spawn
+/// new VSCode or JetBrains installs.
+///
+/// Paths mirror `spec/INSTALL_MATRIX.md §3.8-3.9` and `detect.rs`'s
+/// `detect_ext_hosts` logic; this function is a sibling consumer of
+/// the same table.
+fn ext_targets_from(home: &Path) -> Vec<ext::ExtTarget> {
+    let mut out = Vec::new();
+
+    // VSCode user dir — Copilot + Cline share this parent.
+    let vscode_user = if cfg!(target_os = "macos") {
+        Some(home.join("Library/Application Support/Code/User"))
+    } else if cfg!(target_os = "linux") {
+        Some(home.join(".config/Code/User"))
+    } else {
+        std::env::var_os("APPDATA")
+            .map(|p| PathBuf::from(p).join("Code/User"))
+            .or_else(|| Some(home.join("AppData/Roaming/Code/User")))
+    };
+
+    if let Some(vs) = vscode_user {
+        if vs.exists() {
+            out.push(ext::ExtTarget {
+                kind: ext::ExtHostKind::Copilot,
+                path: vs.join("copilot-instructions.md"),
+            });
+            let cline_dir = vs.join("globalStorage/saoudrizwan.claude-dev");
+            if cline_dir.exists() {
+                out.push(ext::ExtTarget {
+                    kind: ext::ExtHostKind::Cline,
+                    path: cline_dir.join("CLAUDE.md"),
+                });
+            }
+        }
+    }
+
+    // Continue.dev — ~/.continue/config.json, same path on all OSes.
+    let continue_dir = home.join(".continue");
+    if continue_dir.exists() {
+        out.push(ext::ExtTarget {
+            kind: ext::ExtHostKind::Continue,
+            path: continue_dir.join("config.json"),
+        });
+    }
+
+    // JetBrains — pick the newest product-version dir and target its
+    // AI_Assistant/rules.md. Multi-IDE coverage is a later slice.
+    let jb_root = if cfg!(target_os = "macos") {
+        Some(home.join("Library/Application Support/JetBrains"))
+    } else if cfg!(target_os = "linux") {
+        Some(home.join(".config/JetBrains"))
+    } else {
+        std::env::var_os("APPDATA")
+            .map(|p| PathBuf::from(p).join("JetBrains"))
+            .or_else(|| Some(home.join("AppData/Roaming/JetBrains")))
+    };
+    if let Some(root) = jb_root {
+        if root.is_dir() {
+            let mut product_dirs: Vec<PathBuf> = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&root) {
+                for entry in rd.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name
+                        .chars()
+                        .next()
+                        .map(|c| c.is_ascii_uppercase())
+                        .unwrap_or(false)
+                        && name.chars().any(|c| c.is_ascii_digit())
+                    {
+                        product_dirs.push(entry.path());
+                    }
+                }
+            }
+            product_dirs.sort();
+            if let Some(latest) = product_dirs.into_iter().next_back() {
+                out.push(ext::ExtTarget {
+                    kind: ext::ExtHostKind::JetBrains,
+                    path: latest.join("AI_Assistant/rules.md"),
+                });
+            }
+        }
+    }
+
+    out
 }
 
 /// Paths that would be written for the given home. Used by `--dry-run`
