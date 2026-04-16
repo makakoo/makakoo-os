@@ -1,0 +1,36 @@
+[plugin]
+name = "skill-meta-canary"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Cross-CLI honesty probe — measures workspace-context capture by re-running prompts in clean vs HARVEY_HOME cwds"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-meta-canary"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u harvey-os/skills/meta/canary/canary.py"
+
+# Canary spawns three other CLIs (opencode/gemini/codex) in subprocess to score
+# their output, then writes JSON results under $MAKAKOO_HOME/data/canary/.
+# fs/read+write are required for the prompt sibling + results dir.
+[capabilities]
+grants = [
+  "exec/binary:opencode",
+  "exec/binary:gemini",
+  "exec/binary:codex",
+  "fs/read:**",
+  "fs/write:**",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-meta-canary"
+retention = "keep"

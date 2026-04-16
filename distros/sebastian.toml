@@ -32,6 +32,10 @@ version = "^0.1"
 "skill-system-health"      = { version = "*" }
 "skill-system-security"    = { version = "*" }
 
+# Phase H/3 batch 2 — first non-system wizards (cross-CLI probe + OpenClaw bridge).
+"skill-meta-canary"                       = { version = "*" }
+"skill-infrastructure-openclaw-bridge"    = { version = "*" }
+
 [defaults]
 voice = "caveman"
 persona_name = "Harvey"
@@ -41,14 +45,16 @@ pronoun = "he/him"
 message = """
 Sebastian Edition installed. You now have Makakoo Core + the migrated
 harvey-os skills shipped so far:
-  - skill-meta-caveman-voice  (bootstrap-fragment, ~63% output-token savings)
-  - skill-system-network      (interactive wizard, 'makakoo skill network')
-  - skill-system-files        (file-manager wizard, 'makakoo skill files')
-  - skill-system-health       (services + machine resources, 'makakoo skill health')
-  - skill-system-security     ('Is this command safe?', 'makakoo skill security')
+  - skill-meta-caveman-voice                (bootstrap-fragment, ~63% output-token savings)
+  - skill-system-network                    (interactive wizard, 'makakoo skill network')
+  - skill-system-files                      (file-manager wizard, 'makakoo skill files')
+  - skill-system-health                     (services + machine resources, 'makakoo skill health')
+  - skill-system-security                   ('Is this command safe?', 'makakoo skill security')
+  - skill-meta-canary                       (cross-CLI honesty probe, 'makakoo skill canary')
+  - skill-infrastructure-openclaw-bridge    (Harvey↔OpenClaw delegation, 'makakoo skill openclaw-bridge')
 
 Persona locked to: Harvey (voice=caveman, pronoun=he/him).
 
-Phase H/3 batch 1. Remaining harvey-os skills + agents migrate in
+Phase H/3 batch 2. Remaining harvey-os skills + agents migrate in
 later H/3 batches.
 """

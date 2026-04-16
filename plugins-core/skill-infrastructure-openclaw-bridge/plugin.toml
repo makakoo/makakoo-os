@@ -1,0 +1,34 @@
+[plugin]
+name = "skill-infrastructure-openclaw-bridge"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Harvey↔OpenClaw delegation layer — status/delegate/sessions/capabilities subcommands"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-infrastructure-openclaw-bridge"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u harvey-os/skills/infrastructure/openclaw-bridge/bridge.py"
+
+# Bridge shells out to the `openclaw` CLI for every action and persists
+# state/sessions/logs/capabilities under $MAKAKOO_HOME/data/openclaw-bridge/.
+# No direct network calls — openclaw itself owns LLM transport.
+[capabilities]
+grants = [
+  "exec/binary:openclaw",
+  "fs/read:**",
+  "fs/write:**",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-infrastructure-openclaw-bridge"
+retention = "keep"
