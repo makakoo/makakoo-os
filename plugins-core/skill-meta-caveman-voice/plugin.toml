@@ -1,0 +1,23 @@
+[plugin]
+name = "skill-meta-caveman-voice"
+version = "0.1.0"
+kind = "bootstrap-fragment"
+language = "shell"
+summary = "Terse, token-efficient internal voice — cuts ~63% of aggregate output tokens"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-meta-caveman-voice"
+
+[abi]
+skill = "^1.0"
+bootstrap-fragment = "^1.0"
+
+[depends]
+
+[capabilities]
+grants = []
+
+[infect.fragments]
+default = "fragments/default.md"

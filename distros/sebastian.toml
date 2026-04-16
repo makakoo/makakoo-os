@@ -1,0 +1,45 @@
+# distros/sebastian.toml
+#
+# Sebastian Edition — Harvey's daily-driver distro. Layers on top of `core`
+# with the first two pilot-migrated skills from harvey-os: the internal
+# caveman-voice bootstrap fragment and the network diagnostic wizard.
+# Declares persona = Harvey (default voice is caveman, not factory).
+#
+# This is the dogfood distro. Every skill/agent Sebastian migrates from
+# the legacy Python tree into plugins-core gets added here FIRST, and
+# shaken out on the live install before being promoted to `creator` or
+# another downstream distro.
+
+[distro]
+name = "sebastian"
+display_name = "Sebastian Edition (Harvey, the full rig)"
+version = "0.1.0"
+description = "Harvey's daily-driver install — core + migrated harvey-os skills. Pilot distro for Phase H skill migrations."
+license = "MIT"
+
+include = ["core.toml"]
+
+[kernel]
+version = "^0.1"
+
+[plugins]
+# Phase H/2 pilot migrations from harvey-os/skills/.
+"skill-meta-caveman-voice" = { version = "*" }
+"skill-system-network"     = { version = "*" }
+
+[defaults]
+voice = "caveman"
+persona_name = "Harvey"
+pronoun = "he/him"
+
+[post_install]
+message = """
+Sebastian Edition installed. You now have Makakoo Core + the first two
+pilot-migrated harvey-os skills:
+  - skill-meta-caveman-voice  (bootstrap-fragment, ~63% output-token savings)
+  - skill-system-network      (interactive wizard at 'makakoo skill run skill-system-network')
+
+Persona locked to: Harvey (voice=caveman, pronoun=he/him).
+
+Phase H/2 pilot. Remaining harvey-os skills + agents migrate in H/3+.
+"""
