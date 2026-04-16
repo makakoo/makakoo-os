@@ -24,6 +24,7 @@ mod cli;
 mod commands;
 mod context;
 mod daemon;
+mod detect;
 mod infect;
 mod output;
 mod secrets;

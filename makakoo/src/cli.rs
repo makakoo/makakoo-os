@@ -132,6 +132,34 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: DistroCmd,
     },
+
+    /// One-shot install: distro + daemon + infect + health check.
+    ///
+    /// Phase F/1 umbrella command. Runs the existing `distro install`,
+    /// `daemon install`, and `infect --global` pipelines in sequence
+    /// and prints a unified plan+result summary. Skip individual
+    /// steps with `--skip-*` flags, preview the plan with `--dry-run`.
+    Install {
+        /// Distro to install. Default `core`.
+        #[arg(long, default_value = "core")]
+        distro: String,
+
+        /// Print what would happen without executing any step.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the interactive confirmation on distro install.
+        #[arg(long)]
+        yes: bool,
+
+        /// Skip the `daemon install` step.
+        #[arg(long)]
+        skip_daemon: bool,
+
+        /// Skip the `infect --global` step.
+        #[arg(long)]
+        skip_infect: bool,
+    },
 }
 
 /// `makakoo plugin <subcommand>`.
@@ -558,6 +586,55 @@ mod tests {
             assert!(!dry_run);
         } else {
             panic!("expected Distro::Install");
+        }
+    }
+
+    #[test]
+    fn parse_install_defaults() {
+        let cli = Cli::try_parse_from(["makakoo", "install"]).unwrap();
+        if let Commands::Install {
+            distro,
+            dry_run,
+            yes,
+            skip_daemon,
+            skip_infect,
+        } = cli.command
+        {
+            assert_eq!(distro, "core");
+            assert!(!dry_run);
+            assert!(!yes);
+            assert!(!skip_daemon);
+            assert!(!skip_infect);
+        } else {
+            panic!("expected Install");
+        }
+    }
+
+    #[test]
+    fn parse_install_with_flags() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "install",
+            "--distro",
+            "minimal",
+            "--dry-run",
+            "--skip-daemon",
+        ])
+        .unwrap();
+        if let Commands::Install {
+            distro,
+            dry_run,
+            skip_daemon,
+            skip_infect,
+            ..
+        } = cli.command
+        {
+            assert_eq!(distro, "minimal");
+            assert!(dry_run);
+            assert!(skip_daemon);
+            assert!(!skip_infect);
+        } else {
+            panic!("expected Install");
         }
     }
 

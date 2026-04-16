@@ -9,6 +9,7 @@
 pub mod buddy;
 pub mod distro;
 pub mod dream;
+pub mod install;
 pub mod mcp;
 pub mod nursery;
 pub mod plugin;
@@ -56,6 +57,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Secret { cmd } => dispatch_secret(cmd),
         Commands::Plugin { cmd } => plugin::run(ctx, cmd).await,
         Commands::Distro { cmd } => distro::run(ctx, cmd).await,
+        cmd @ Commands::Install { .. } => install::dispatch(ctx, cmd).await,
     }
 }
 
