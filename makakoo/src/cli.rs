@@ -120,6 +120,91 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: SecretCmd,
     },
+
+    /// Plugin lifecycle — list, inspect, install, uninstall.
+    Plugin {
+        #[command(subcommand)]
+        cmd: PluginCmd,
+    },
+
+    /// Distro management — list, install a bundle of plugins.
+    Distro {
+        #[command(subcommand)]
+        cmd: DistroCmd,
+    },
+}
+
+/// `makakoo plugin <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum PluginCmd {
+    /// List every installed plugin with version + hash.
+    List {
+        /// Emit JSON instead of the default table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show the parsed manifest + lock entry for one plugin.
+    Info {
+        /// Plugin name as declared in its `plugin.toml`.
+        name: String,
+    },
+
+    /// Install a plugin from a local source directory (or a bundled
+    /// `plugins-core/<name>` if `--core` is set).
+    Install {
+        /// Either a local path or — with `--core` — a plugins-core name.
+        source: String,
+
+        /// Resolve `source` against `$MAKAKOO_PLUGINS_CORE` (or the
+        /// `plugins-core/` dir under the current repo).
+        #[arg(long)]
+        core: bool,
+
+        /// Expected blake3 of the plugin source tree. Takes precedence
+        /// over the value declared in the manifest.
+        #[arg(long)]
+        blake3: Option<String>,
+    },
+
+    /// Remove an installed plugin. With `--purge`, also wipe its state dir.
+    Uninstall {
+        /// Plugin name.
+        name: String,
+
+        /// Wipe the plugin's state dir in addition to its install dir.
+        #[arg(long)]
+        purge: bool,
+    },
+}
+
+/// `makakoo distro <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum DistroCmd {
+    /// List every distro file shipped under `distros/` plus the currently
+    /// active distro (if any).
+    List,
+
+    /// Install a named distro (`minimal`, `core`, …) or a local file
+    /// passed via `--from`. Resolves includes, installs every plugin in
+    /// the effective list, writes `plugins.lock`.
+    Install {
+        /// Distro name as declared inside `distros/<name>.toml`.
+        #[arg(required_unless_present = "from")]
+        name: Option<String>,
+
+        /// Install from a local distro file instead of the shipped set.
+        #[arg(long)]
+        from: Option<std::path::PathBuf>,
+
+        /// Skip the interactive confirmation.
+        #[arg(long)]
+        yes: bool,
+
+        /// Print what would happen without installing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// `makakoo secret <subcommand>`. Writes go through the OS keyring
@@ -340,6 +425,168 @@ mod tests {
             assert_eq!(args, vec!["--list-tools"]);
         } else {
             panic!("expected Mcp");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_list() {
+        let cli = Cli::try_parse_from(["makakoo", "plugin", "list"]).unwrap();
+        match cli.command {
+            Commands::Plugin {
+                cmd: PluginCmd::List { json: false },
+            } => {}
+            _ => panic!("expected Plugin::List"),
+        }
+    }
+
+    #[test]
+    fn parse_plugin_list_json() {
+        let cli = Cli::try_parse_from(["makakoo", "plugin", "list", "--json"]).unwrap();
+        if let Commands::Plugin {
+            cmd: PluginCmd::List { json },
+        } = cli.command
+        {
+            assert!(json);
+        } else {
+            panic!("expected Plugin::List");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_info() {
+        let cli = Cli::try_parse_from(["makakoo", "plugin", "info", "mascot-gym"]).unwrap();
+        if let Commands::Plugin {
+            cmd: PluginCmd::Info { name },
+        } = cli.command
+        {
+            assert_eq!(name, "mascot-gym");
+        } else {
+            panic!("expected Plugin::Info");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_install_core() {
+        let cli = Cli::try_parse_from([
+            "makakoo", "plugin", "install", "--core", "mascot-gym",
+        ])
+        .unwrap();
+        if let Commands::Plugin {
+            cmd:
+                PluginCmd::Install {
+                    source,
+                    core,
+                    blake3,
+                },
+        } = cli.command
+        {
+            assert_eq!(source, "mascot-gym");
+            assert!(core);
+            assert!(blake3.is_none());
+        } else {
+            panic!("expected Plugin::Install");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_install_local_path() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "plugin",
+            "install",
+            "/tmp/my-plugin",
+        ])
+        .unwrap();
+        if let Commands::Plugin {
+            cmd: PluginCmd::Install { source, core, .. },
+        } = cli.command
+        {
+            assert_eq!(source, "/tmp/my-plugin");
+            assert!(!core);
+        } else {
+            panic!("expected Plugin::Install");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_uninstall_with_purge() {
+        let cli = Cli::try_parse_from([
+            "makakoo", "plugin", "uninstall", "mascot-gym", "--purge",
+        ])
+        .unwrap();
+        if let Commands::Plugin {
+            cmd: PluginCmd::Uninstall { name, purge },
+        } = cli.command
+        {
+            assert_eq!(name, "mascot-gym");
+            assert!(purge);
+        } else {
+            panic!("expected Plugin::Uninstall");
+        }
+    }
+
+    #[test]
+    fn parse_distro_list() {
+        let cli = Cli::try_parse_from(["makakoo", "distro", "list"]).unwrap();
+        matches!(
+            cli.command,
+            Commands::Distro {
+                cmd: DistroCmd::List
+            }
+        );
+    }
+
+    #[test]
+    fn parse_distro_install_named() {
+        let cli = Cli::try_parse_from([
+            "makakoo", "distro", "install", "core", "--yes",
+        ])
+        .unwrap();
+        if let Commands::Distro {
+            cmd:
+                DistroCmd::Install {
+                    name,
+                    from,
+                    yes,
+                    dry_run,
+                },
+        } = cli.command
+        {
+            assert_eq!(name.as_deref(), Some("core"));
+            assert!(from.is_none());
+            assert!(yes);
+            assert!(!dry_run);
+        } else {
+            panic!("expected Distro::Install");
+        }
+    }
+
+    #[test]
+    fn parse_distro_install_from_file() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "distro",
+            "install",
+            "--from",
+            "/tmp/custom.toml",
+            "--dry-run",
+        ])
+        .unwrap();
+        if let Commands::Distro {
+            cmd:
+                DistroCmd::Install {
+                    name,
+                    from,
+                    yes: _,
+                    dry_run,
+                },
+        } = cli.command
+        {
+            assert!(name.is_none());
+            assert_eq!(from.as_deref().map(|p| p.to_str().unwrap()), Some("/tmp/custom.toml"));
+            assert!(dry_run);
+        } else {
+            panic!("expected Distro::Install");
         }
     }
 }

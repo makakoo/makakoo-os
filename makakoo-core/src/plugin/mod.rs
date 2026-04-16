@@ -12,11 +12,15 @@
 //! Schema source of truth: `spec/PLUGIN_MANIFEST.md` v0.1. Every validation
 //! rule in §17 of that spec is enforced here.
 
+pub mod install;
+pub mod lock;
 pub mod manifest;
 pub mod registry;
 pub mod resolver;
 pub mod staging;
 
+pub use install::{install_from_path, uninstall, InstallError, InstallRequest, PluginSource};
+pub use lock::{lock_path, LockEntry, LockError, LockMeta, PluginsLock};
 pub use manifest::{
     AbiTable, CapabilitiesTable, DependsTable, EntrypointTable, InfectTable, InstallTable,
     Manifest, ManifestError, McpTable, McpToolSpec, PluginKind, PluginLanguage, PluginTable,

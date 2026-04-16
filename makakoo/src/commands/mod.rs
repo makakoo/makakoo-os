@@ -7,9 +7,11 @@
 //! `main.rs` prints them via `output::print_error`.
 
 pub mod buddy;
+pub mod distro;
 pub mod dream;
 pub mod mcp;
 pub mod nursery;
+pub mod plugin;
 pub mod promotions;
 pub mod query;
 pub mod sancho;
@@ -52,6 +54,8 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             Ok(if report.error_count() == 0 { 0 } else { 1 })
         }
         Commands::Secret { cmd } => dispatch_secret(cmd),
+        Commands::Plugin { cmd } => plugin::run(ctx, cmd).await,
+        Commands::Distro { cmd } => distro::run(ctx, cmd).await,
     }
 }
 

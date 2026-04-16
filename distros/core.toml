@@ -1,0 +1,44 @@
+# distros/core.toml
+#
+# The default install for most users. Layers on top of minimal with the
+# four in-tree plugins-core manifests: three watchdogs and the Mascot GYM.
+# When makakoo-arbitrage, harveychat, brain, and friends ship as external
+# plugins we grow this list.
+
+[distro]
+name = "core"
+display_name = "Makakoo Core"
+version = "0.1.0"
+description = "Essential plugins for a usable Harvey. The default install."
+license = "MIT"
+
+include = ["minimal.toml"]
+
+[kernel]
+version = "^0.1"
+
+[plugins]
+# Watchdogs — wake up the services Harvey depends on.
+"watchdog-switchailocal" = { version = "*" }
+"watchdog-postgres" = { version = "*" }
+"monitor-hackernews" = { version = "*" }
+
+# Mascot GYM — the 5-layer self-improvement flywheel.
+"mascot-gym" = { version = "*" }
+
+[defaults]
+voice = "caveman"
+
+[post_install]
+message = """
+Makakoo Core installed. Four plugins are now registered:
+  - watchdog-switchailocal   (300s interval)
+  - watchdog-postgres        (900s interval)
+  - monitor-hackernews       (3600s interval)
+  - mascot-gym               (5 SANCHO tasks)
+
+Next:
+  1. makakoo daemon install     — launchd/systemd agent for the tick loop
+  2. makakoo secret set AIL_API_KEY — so the LLM gateway can answer
+  3. makakoo sancho status      — verify all tasks are registered
+"""

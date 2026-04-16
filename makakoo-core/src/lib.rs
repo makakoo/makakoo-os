@@ -10,6 +10,7 @@ pub mod agents;
 pub mod chat;
 pub mod config;
 pub mod db;
+pub mod distro;
 pub mod embeddings;
 pub mod error;
 pub mod event_bus;
