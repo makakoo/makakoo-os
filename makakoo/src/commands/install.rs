@@ -187,9 +187,7 @@ fn print_plan(
     let ext_present: Vec<&DetectedExtHost> =
         ext.iter().filter(|h| h.is_detected()).collect();
     if !ext_present.is_empty() {
-        println!(
-            "\n  extension hosts (detect-only, infect coming in F/5):"
-        );
+        println!("\n  extension hosts (will infect alongside the 7 CLIs):");
         for h in ext_present {
             println!("    - {}: {}", h.display_name, h.config_path.display());
         }
