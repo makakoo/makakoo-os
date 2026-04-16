@@ -133,6 +133,17 @@ pub enum Commands {
         cmd: DistroCmd,
     },
 
+    /// Prepare `$MAKAKOO_HOME` for kernel use — non-destructive.
+    ///
+    /// Creates any missing kernel dirs (plugins/, state/, run/, logs/,
+    /// config/) and writes a migration marker with a timestamp. Never
+    /// touches existing data/, agents/, or harvey-os/. Idempotent.
+    Migrate {
+        /// Print the plan without creating any dirs.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// One-shot install: distro + daemon + infect + health check.
     ///
     /// Phase F/1 umbrella command. Runs the existing `distro install`,

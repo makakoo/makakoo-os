@@ -11,6 +11,7 @@ pub mod distro;
 pub mod dream;
 pub mod install;
 pub mod mcp;
+pub mod migrate;
 pub mod nursery;
 pub mod plugin;
 pub mod promotions;
@@ -58,6 +59,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Plugin { cmd } => plugin::run(ctx, cmd).await,
         Commands::Distro { cmd } => distro::run(ctx, cmd).await,
         cmd @ Commands::Install { .. } => install::dispatch(ctx, cmd).await,
+        Commands::Migrate { dry_run } => migrate::run(ctx, dry_run).await,
     }
 }
 
