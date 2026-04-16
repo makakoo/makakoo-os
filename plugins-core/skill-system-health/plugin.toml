@@ -1,0 +1,31 @@
+[plugin]
+name = "skill-system-health"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "System health dashboard — Harvey services + machine resource monitor"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-system-health"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u harvey-os/skills/system/health/health_dashboard.py"
+
+[capabilities]
+grants = [
+  "net/http:http://localhost:18080/*",
+  "net/http:http://localhost:6333/*",
+  "net/http:http://127.0.0.1:12315/*",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-system-health"
+retention = "keep"

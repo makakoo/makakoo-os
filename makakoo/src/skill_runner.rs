@@ -154,9 +154,33 @@ fn which_python() -> Result<PathBuf> {
 }
 
 /// Walk `dir` recursively looking for a subdirectory named `name`
-/// containing a `SKILL.md` file. Returns the first match. Capped at
-/// a reasonable traversal depth to avoid symlink loops.
+/// containing a `SKILL.md` file AND at least one runnable `.py`
+/// (anything not starting with `_`). Returns the first match.
+/// Capped at a reasonable traversal depth to avoid symlink loops.
+///
+/// The runnable-python predicate matters because some skill names
+/// collide across categories — e.g. `meta/health` is docs-only while
+/// `system/health` has the actual dashboard. Without the predicate,
+/// depth-first traversal can hand back the wrong directory.
 fn walk_for_skill(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
+    fn dir_has_runnable_py(dir: &Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("py") {
+                continue;
+            }
+            let basename = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if basename.starts_with('_') {
+                continue;
+            }
+            return true;
+        }
+        false
+    }
+
     fn inner(dir: &Path, name: &str, depth: usize) -> Result<Option<PathBuf>> {
         if depth > 8 {
             return Ok(None);
@@ -175,7 +199,10 @@ fn walk_for_skill(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
                 Some(s) => s.to_string(),
                 None => continue,
             };
-            if basename == name && path.join("SKILL.md").is_file() {
+            if basename == name
+                && path.join("SKILL.md").is_file()
+                && dir_has_runnable_py(&path)
+            {
                 return Ok(Some(path));
             }
             if let Some(found) = inner(&path, name, depth + 1)? {
@@ -200,13 +227,25 @@ fn resolve_entry(skill_dir: &Path, name: &str) -> Result<PathBuf> {
             return Ok(c.clone());
         }
     }
-    // Fallback — first `.py` file in the skill dir.
+    // Fallback — first `.py` file in the skill dir whose basename
+    // doesn't start with `_`. Skipping the underscore prefix keeps
+    // Python conventions (`__init__.py`, private helpers like
+    // `_internal.py`) from being picked accidentally — those are
+    // never the user-facing entry point.
     if let Ok(entries) = std::fs::read_dir(skill_dir) {
         for e in entries.flatten() {
             let p = e.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("py") {
-                return Ok(p);
+            if p.extension().and_then(|e| e.to_str()) != Some("py") {
+                continue;
             }
+            let basename = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if basename.starts_with('_') {
+                continue;
+            }
+            return Ok(p);
         }
     }
     Err(anyhow!("no .py entry file in {}", skill_dir.display()))
@@ -326,5 +365,42 @@ mod tests {
         fs::write(p.join("main.py"), "x=3\n").unwrap();
         let entry = resolve_entry(p, "gamma").unwrap();
         assert!(entry.ends_with("run.py"));
+    }
+
+    #[test]
+    fn discover_skips_docs_only_collision() {
+        // Two folders named "health": meta/health is docs-only,
+        // system/health has the runnable dashboard. Discover must
+        // skip the docs-only sibling and return the runnable one.
+        let dir = TempDir::new().unwrap();
+        let skills = dir.path().join("skills");
+
+        let docs_only = skills.join("meta").join("health");
+        fs::create_dir_all(&docs_only).unwrap();
+        fs::write(docs_only.join("SKILL.md"), "---\nname: health\n---\n").unwrap();
+
+        let runnable = skills.join("system").join("health");
+        fs::create_dir_all(&runnable).unwrap();
+        fs::write(runnable.join("SKILL.md"), "---\nname: health\n---\n").unwrap();
+        fs::write(runnable.join("__init__.py"), "\"\"\"docstring\"\"\"\n").unwrap();
+        fs::write(runnable.join("health_dashboard.py"), "print('hi')\n").unwrap();
+
+        let runner = SkillRunner::with_paths(PathBuf::from("python3"), skills);
+        let hit = runner.discover("health").unwrap();
+        assert!(hit.skill_dir.ends_with("system/health"));
+        assert!(hit.entry.ends_with("health_dashboard.py"));
+    }
+
+    #[test]
+    fn resolve_entry_fallback_skips_underscore_prefix() {
+        // Real-world layout: __init__.py + the actual wizard. The
+        // fallback must skip __init__.py and pick the wizard, even
+        // when the filesystem returns __init__.py first.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path();
+        fs::write(p.join("__init__.py"), "\"\"\"docstring\"\"\"\n").unwrap();
+        fs::write(p.join("file_manager.py"), "print('hi')\n").unwrap();
+        let entry = resolve_entry(p, "files").unwrap();
+        assert!(entry.ends_with("file_manager.py"));
     }
 }

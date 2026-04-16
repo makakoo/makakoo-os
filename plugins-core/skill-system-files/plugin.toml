@@ -1,0 +1,30 @@
+[plugin]
+name = "skill-system-files"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Interactive file manager — arrow-key file browser with copy/delete"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-system-files"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u harvey-os/skills/system/files/file_manager.py"
+
+[capabilities]
+grants = [
+  "fs/read:**",
+  "fs/write:**",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-system-files"
+retention = "keep"
