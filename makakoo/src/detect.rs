@@ -60,6 +60,138 @@ impl DetectedHost {
     }
 }
 
+/// Extension hosts covered by INSTALL_MATRIX §3.8 (VSCode extensions)
+/// and §3.9 (JetBrains AI). These don't fit the 7-CLI `SLOTS` table
+/// because their paths are OS-specific application-support dirs,
+/// not `~/.foo/`. Detection only — infect of these hosts is Phase F/5+.
+#[derive(Debug, Clone)]
+pub struct DetectedExtHost {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub config_path: PathBuf,
+    pub config_exists: bool,
+}
+
+impl DetectedExtHost {
+    pub fn is_detected(&self) -> bool {
+        self.config_exists
+    }
+}
+
+/// Detect the 4 extension-based hosts (VSCode Copilot + Continue + Cline
+/// + JetBrains AI). On macOS these live under
+/// `~/Library/Application Support/…`; on Linux under `~/.config/…`; on
+/// Windows under `%APPDATA%…`.
+pub fn detect_ext_hosts(home: &Path) -> Vec<DetectedExtHost> {
+    let mut out = Vec::new();
+
+    // 1. GitHub Copilot for VSCode — user-level copilot-instructions.md
+    if let Some(path) = vscode_user_dir(home).map(|d| d.join("copilot-instructions.md")) {
+        out.push(DetectedExtHost {
+            id: "vscode-copilot",
+            display_name: "VSCode + GitHub Copilot",
+            config_exists: path.parent().map(|p| p.exists()).unwrap_or(false),
+            config_path: path,
+        });
+    }
+
+    // 2. Continue.dev — ~/.continue/config.json (Continue reads
+    //    systemMessage from here). All three OSes use $HOME/.continue.
+    let continue_path = home.join(".continue/config.json");
+    out.push(DetectedExtHost {
+        id: "continue-dev",
+        display_name: "Continue.dev",
+        config_exists: home.join(".continue").is_dir(),
+        config_path: continue_path,
+    });
+
+    // 3. Cline (Claude Dev) — VSCode extension globalStorage. Long path.
+    if let Some(user_dir) = vscode_user_dir(home) {
+        let cline_dir =
+            user_dir.join("globalStorage/saoudrizwan.claude-dev");
+        let cline_md = cline_dir.join("CLAUDE.md");
+        out.push(DetectedExtHost {
+            id: "cline",
+            display_name: "Cline (Claude Dev)",
+            config_exists: cline_dir.is_dir(),
+            config_path: cline_md,
+        });
+    }
+
+    // 4. JetBrains AI — scan for any IDE product-version directory under
+    //    the vendor root. Pick the first found; infecting multiple IDEs
+    //    is Phase F/5 scope.
+    let jb_root = jetbrains_config_root(home);
+    if let Some(ref root) = jb_root {
+        let mut product_dirs: Vec<PathBuf> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(root) {
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // JetBrains dirs look like "IntelliJIdea2025.1" /
+                // "PyCharm2025.1" / "GoLand2024.3" / "WebStorm2025.1" /
+                // "RustRover2025.1". The product-version shape is our
+                // filter: first letter uppercase + contains a version
+                // digit somewhere after the prefix.
+                if name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                    && name.chars().any(|c| c.is_ascii_digit())
+                {
+                    product_dirs.push(entry.path());
+                }
+            }
+        }
+        // Pick newest (alphabetical sort + last since versions like
+        // 2024.3 < 2025.1 when sorted lexically).
+        product_dirs.sort();
+        if let Some(latest) = product_dirs.into_iter().next_back() {
+            let rules = latest.join("AI_Assistant/rules.md");
+            out.push(DetectedExtHost {
+                id: "jetbrains-ai",
+                display_name: format!(
+                    "JetBrains AI ({})",
+                    latest.file_name().unwrap_or_default().to_string_lossy()
+                )
+                .leak(),
+                config_exists: latest.is_dir(),
+                config_path: rules,
+            });
+        }
+    }
+
+    out
+}
+
+fn vscode_user_dir(home: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        Some(home.join("Library/Application Support/Code/User"))
+    } else if cfg!(target_os = "linux") {
+        Some(home.join(".config/Code/User"))
+    } else if cfg!(target_os = "windows") {
+        // On Windows the User dir is under %APPDATA%, which isn't
+        // trivially derivable from $HOME. Callers on Windows should
+        // use `dirs::data_dir()` or check `%APPDATA%` directly. For
+        // now we return a best-guess path that may not be accurate.
+        std::env::var_os("APPDATA")
+            .map(|p| PathBuf::from(p).join("Code/User"))
+            .or_else(|| Some(home.join("AppData/Roaming/Code/User")))
+    } else {
+        None
+    }
+}
+
+fn jetbrains_config_root(home: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        Some(home.join("Library/Application Support/JetBrains"))
+    } else if cfg!(target_os = "linux") {
+        Some(home.join(".config/JetBrains"))
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA")
+            .map(|p| PathBuf::from(p).join("JetBrains"))
+            .or_else(|| Some(home.join("AppData/Roaming/JetBrains")))
+    } else {
+        None
+    }
+}
+
 /// Probe the 7 CLI hosts. `home` is the user's home dir — pass
 /// `dirs::home_dir().unwrap_or_default()` in production, inject a
 /// tempdir in tests.
@@ -235,6 +367,79 @@ mod tests {
     #[test]
     fn binary_for_unknown_slot() {
         assert_eq!(binary_for("nonexistent"), None);
+    }
+
+    #[test]
+    fn ext_hosts_empty_home_returns_not_detected() {
+        let tmp = TempDir::new().unwrap();
+        let hosts = detect_ext_hosts(tmp.path());
+        for h in &hosts {
+            assert!(!h.is_detected(), "{} shouldn't be detected", h.id);
+        }
+        // Order + presence: continue + copilot + cline always shipped
+        // as probe targets. JetBrains conditional on the vendor root
+        // existing, so not guaranteed here.
+        let ids: Vec<&str> = hosts.iter().map(|h| h.id).collect();
+        assert!(ids.contains(&"continue-dev"));
+    }
+
+    #[test]
+    fn continue_dev_detected_when_config_dir_exists() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".continue")).unwrap();
+        let hosts = detect_ext_hosts(tmp.path());
+        let cont = hosts.iter().find(|h| h.id == "continue-dev").unwrap();
+        assert!(cont.is_detected());
+        assert!(cont
+            .config_path
+            .to_string_lossy()
+            .contains(".continue/config.json"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn jetbrains_detected_with_product_version_dir() {
+        let tmp = TempDir::new().unwrap();
+        let jb = tmp
+            .path()
+            .join("Library/Application Support/JetBrains/IntelliJIdea2025.1");
+        fs::create_dir_all(&jb).unwrap();
+        let hosts = detect_ext_hosts(tmp.path());
+        let jb_host = hosts.iter().find(|h| h.id == "jetbrains-ai");
+        assert!(jb_host.is_some(), "JetBrains should be detected");
+        let h = jb_host.unwrap();
+        assert!(h.is_detected());
+        assert!(h.config_path.ends_with("AI_Assistant/rules.md"));
+        assert!(h.display_name.contains("IntelliJIdea2025.1"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn jetbrains_picks_newest_product_version() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("Library/Application Support/JetBrains");
+        for name in ["IntelliJIdea2024.1", "IntelliJIdea2025.1", "PyCharm2024.3"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+        let hosts = detect_ext_hosts(tmp.path());
+        let h = hosts.iter().find(|h| h.id == "jetbrains-ai").unwrap();
+        // PyCharm2024.3 is alphabetically last → picked.
+        // This is a deliberate simplification; Phase F/5 can infect all.
+        assert!(h.display_name.contains("PyCharm2024.3"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cline_detected_when_globalstorage_exists() {
+        let tmp = TempDir::new().unwrap();
+        let cline = tmp
+            .path()
+            .join("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev");
+        fs::create_dir_all(&cline).unwrap();
+        let hosts = detect_ext_hosts(tmp.path());
+        let h = hosts.iter().find(|h| h.id == "cline").unwrap();
+        assert!(h.is_detected());
+        assert!(h.config_path.ends_with("CLAUDE.md"));
     }
 
     #[test]

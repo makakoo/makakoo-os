@@ -28,7 +28,7 @@ use crossterm::style::Stylize;
 
 use crate::cli::{Commands, DistroCmd};
 use crate::context::CliContext;
-use crate::detect::{detect_all, DetectedHost};
+use crate::detect::{detect_all, detect_ext_hosts, DetectedExtHost, DetectedHost};
 use crate::output;
 
 pub async fn run(
@@ -45,8 +45,9 @@ pub async fn run(
     let detected = detect_all(&home);
     let present: Vec<&DetectedHost> =
         detected.iter().filter(|h| h.is_detected()).collect();
+    let ext = detect_ext_hosts(&home);
 
-    print_plan(&distro, &detected, skip_daemon, skip_infect, dry_run);
+    print_plan(&distro, &detected, &ext, skip_daemon, skip_infect, dry_run);
 
     if dry_run {
         println!();
@@ -114,6 +115,7 @@ pub async fn run(
 fn print_plan(
     distro: &str,
     detected: &[DetectedHost],
+    ext: &[DetectedExtHost],
     skip_daemon: bool,
     skip_infect: bool,
     dry_run: bool,
@@ -177,6 +179,20 @@ fn print_plan(
             "    {}",
             "(no hosts detected — only distro + daemon will be installed)".dark_grey()
         );
+    }
+
+    // Extension-based hosts (VSCode + JetBrains) are detection-only for
+    // now; infect of these lands in Phase F/5. Surface them so users
+    // can see the detection working and expect the feature.
+    let ext_present: Vec<&DetectedExtHost> =
+        ext.iter().filter(|h| h.is_detected()).collect();
+    if !ext_present.is_empty() {
+        println!(
+            "\n  extension hosts (detect-only, infect coming in F/5):"
+        );
+        for h in ext_present {
+            println!("    - {}: {}", h.display_name, h.config_path.display());
+        }
     }
 }
 
