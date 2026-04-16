@@ -17,7 +17,9 @@
 //! - `serve()` async loop that accepts + spawns a handler task per conn
 //! - PID verification via `libc::getsockopt` on macOS + Linux
 //! - Windows + Redox: compile-time stubs that return `NotSupported`
-//!   at runtime (real Windows impl lands in Phase E/4)
+//!   at runtime. Real Windows named-pipe impl deferred to Phase F
+//!   where it's validated on a real Windows VM as part of the
+//!   cross-OS installer — see `spec/CAPABILITIES.md §4.2`.
 //! - Pluggable `Handler` trait so Phase E/3 can wire brain/llm/state
 //!   service impls without reshaping the dispatch core
 //!

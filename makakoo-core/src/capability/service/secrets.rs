@@ -63,7 +63,7 @@ impl InMemorySecretBackend {
         }
     }
 
-    pub fn with(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn with(self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.insert(name, value);
         self
     }
