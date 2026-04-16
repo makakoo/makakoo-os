@@ -1854,6 +1854,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "makakoo-client"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "makakoo-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "makakoo-core"
 version = "0.1.0"
 dependencies = [

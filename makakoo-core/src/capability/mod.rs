@@ -21,11 +21,16 @@
 
 pub mod audit;
 pub mod grants;
+pub mod service;
 pub mod socket;
 pub mod verb;
 
 pub use audit::{AuditEntry, AuditLog, AuditResult, RotationError};
 pub use grants::{resolve_grants, GrantCheck, GrantTable, ResolveError};
+pub use service::{
+    CompositeHandler, InMemorySecretBackend, SecretBackend, SecretError,
+    SecretHandler, StateError, StateHandler,
+};
 pub use socket::{
     socket_path, CapabilityError, CapabilityHandler, CapabilityRequest,
     CapabilityResponse, CapabilityServer, EchoHandler, ServerHandle, SocketError,
