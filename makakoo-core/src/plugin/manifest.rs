@@ -694,7 +694,7 @@ language = "python"
 path = "local/example"
 
 [abi]
-skill = "^0.1"
+skill = "^1.0"
 
 [entrypoint]
 run = ".venv/bin/python -m example"
@@ -740,7 +740,7 @@ run = ".venv/bin/python -m example"
 
     #[test]
     fn rejects_empty_abi() {
-        let body = minimal().replace("[abi]\nskill = \"^0.1\"", "[abi]");
+        let body = minimal().replace("[abi]\nskill = \"^1.0\"", "[abi]");
         let err = Manifest::parse(&body, &p()).unwrap_err();
         assert!(format!("{err}").contains("[abi]"));
     }
@@ -759,7 +759,7 @@ language = "python"
 path = "local/x"
 
 [abi]
-agent = "^0.1"
+agent = "^1.0"
 
 [entrypoint]
 start = ".venv/bin/python -m x --start"
@@ -856,7 +856,7 @@ git = "https://example.com/x"
 rev = "main"
 
 [abi]
-skill = "^0.1"
+skill = "^1.0"
 
 [entrypoint]
 run = ".venv/bin/python -m example"
@@ -888,7 +888,7 @@ language = "python"
 path = "local/mascot"
 
 [abi]
-mascot = "^0.1"
+mascot = "^1.0"
 "#;
         let err = Manifest::parse(body, &p()).unwrap_err();
         assert!(format!("{err}").contains("[mascot]"));
@@ -907,7 +907,7 @@ language = "shell"
 path = "local/f"
 
 [abi]
-bootstrap-fragment = "^0.1"
+bootstrap-fragment = "^1.0"
 "#;
         let err = Manifest::parse(body, &p()).unwrap_err();
         assert!(format!("{err}").contains("infect.fragments"));
@@ -942,9 +942,9 @@ rev = "v0.3.1"
 blake3 = "abcd1234"
 
 [abi]
-agent = "^0.1"
-sancho-task = "^0.1"
-mcp-tool = "^0.1"
+agent = "^1.0"
+sancho-task = "^1.0"
+mcp-tool = "^1.0"
 
 [depends]
 plugins = ["brain ^1.0", "llm ^1.0"]

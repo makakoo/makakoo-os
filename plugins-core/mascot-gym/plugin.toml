@@ -10,7 +10,7 @@ license = "MIT"
 path = "plugins-core/mascot-gym"
 
 [abi]
-sancho-task = "^0.1"
+sancho-task = "^1.0"
 
 [depends]
 python = ">=3.11"

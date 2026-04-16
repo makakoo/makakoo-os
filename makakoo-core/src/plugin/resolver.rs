@@ -25,15 +25,18 @@ pub struct KernelAbiSupport {
     pub bootstrap_fragment: Version,
 }
 
-/// Phase C: every ABI ships at 0.1.0. Phase E will lock these to 1.0.0
-/// after dogfood confirms the shape is right.
+/// Phase E/1 lock: every ABI promoted from 0.1.0 → 1.0.0 now that the
+/// capability vocabulary + grant resolver + audit log are real code.
+/// Plugins whose manifests declare `^0.1` will fail to load — this is
+/// deliberate, it forces every plugin author to re-read the spec and
+/// explicitly opt into v1.
 pub const KERNEL_ABI_SUPPORT: KernelAbiSupport = KernelAbiSupport {
-    skill: Version::new(0, 1, 0),
-    agent: Version::new(0, 1, 0),
-    sancho_task: Version::new(0, 1, 0),
-    mcp_tool: Version::new(0, 1, 0),
-    mascot: Version::new(0, 1, 0),
-    bootstrap_fragment: Version::new(0, 1, 0),
+    skill: Version::new(1, 0, 0),
+    agent: Version::new(1, 0, 0),
+    sancho_task: Version::new(1, 0, 0),
+    mcp_tool: Version::new(1, 0, 0),
+    mascot: Version::new(1, 0, 0),
+    bootstrap_fragment: Version::new(1, 0, 0),
 };
 
 #[derive(Debug, Error)]
@@ -262,7 +265,7 @@ language = "python"
 path = "local/{name}"
 
 [abi]
-skill = "^0.1"
+skill = "^1.0"
 
 [entrypoint]
 run = "true"

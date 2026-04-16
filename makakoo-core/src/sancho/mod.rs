@@ -252,7 +252,7 @@ language = "python"
 path = "."
 
 [abi]
-sancho-task = "^0.1"
+sancho-task = "^1.0"
 
 [entrypoint]
 run = "python3 -m pg_watchdog"
@@ -286,7 +286,7 @@ language = "python"
 path = "."
 
 [abi]
-sancho-task = "^0.1"
+sancho-task = "^1.0"
 
 [entrypoint]
 run = "python3 -m gym.run"

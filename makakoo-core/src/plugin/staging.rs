@@ -244,7 +244,7 @@ language = "python"
 path = ".{blake_line}"
 
 [abi]
-skill = "^0.1"
+skill = "^1.0"
 
 [entrypoint]
 run = "true"

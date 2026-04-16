@@ -6,6 +6,7 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color as TableColor, Table};
 use crossterm::style::Stylize;
 use serde_json::json;
 
+use makakoo_core::capability::resolve_grants;
 use makakoo_core::plugin::{
     install_from_path, uninstall as core_uninstall, InstallRequest, Manifest, PluginRegistry,
     PluginSource, PluginsLock,
@@ -29,7 +30,13 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
 }
 
 fn list(ctx: &CliContext, as_json: bool) -> anyhow::Result<i32> {
-    let registry = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
+    let registry = match PluginRegistry::load_default(ctx.home()) {
+        Ok(r) => r,
+        Err(e) => {
+            output::print_error(format!("plugin registry failed to load: {e:#}"));
+            return Ok(1);
+        }
+    };
     let lock = PluginsLock::load(ctx.home())?;
 
     if as_json {
@@ -110,11 +117,33 @@ fn info(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
         println!("  license:  {lic}");
     }
 
+    // Resolve the full grant table (explicit grants + auto-defaults).
+    // Surface both the raw manifest declarations and the effective
+    // resolved set so plugin authors can see what Makakoo actually
+    // grants their plugin at load time.
     if !m.capabilities.grants.is_empty() {
-        println!("\n  capabilities:");
+        println!("\n  declared grants:");
         for g in &m.capabilities.grants {
             println!("    - {g}");
         }
+    }
+    match resolve_grants(m, ctx.home()) {
+        Ok(table) => {
+            let rows = table.rows();
+            if !rows.is_empty() {
+                println!("\n  effective grants (incl. auto-defaults):");
+                for (verb, scopes) in rows {
+                    if scopes.iter().all(|s| s.is_empty()) {
+                        println!("    - {verb}");
+                    } else {
+                        let rendered: Vec<&str> =
+                            scopes.iter().map(|s| s.as_str()).collect();
+                        println!("    - {verb}:{}", rendered.join(","));
+                    }
+                }
+            }
+        }
+        Err(e) => output::print_warn(format!("grant resolution failed: {e}")),
     }
     if !m.sancho.tasks.is_empty() {
         println!("\n  sancho tasks:");

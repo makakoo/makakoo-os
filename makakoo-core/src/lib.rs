@@ -7,6 +7,7 @@
 //! CLI, SANCHO, nursery, etc. on top of these primitives.
 
 pub mod agents;
+pub mod capability;
 pub mod chat;
 pub mod config;
 pub mod db;
