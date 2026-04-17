@@ -36,6 +36,11 @@ version = "^0.1"
 "skill-meta-canary"                       = { version = "*" }
 "skill-infrastructure-openclaw-bridge"    = { version = "*" }
 
+# Sprint 002 batch 3 — dev orchestrator, loops, FTS5 search.
+"skill-dev-dev-orchestrator"              = { version = "*" }
+"skill-meta-loops"                        = { version = "*" }
+"skill-productivity-fts5-search"          = { version = "*" }
+
 [defaults]
 voice = "caveman"
 persona_name = "Harvey"
@@ -52,9 +57,12 @@ harvey-os skills shipped so far:
   - skill-system-security                   ('Is this command safe?', 'makakoo skill security')
   - skill-meta-canary                       (cross-CLI honesty probe, 'makakoo skill canary')
   - skill-infrastructure-openclaw-bridge    (Harvey↔OpenClaw delegation, 'makakoo skill openclaw-bridge')
+  - skill-dev-dev-orchestrator              (parallel dev tasks, 'makakoo skill dev-orchestrator')
+  - skill-meta-loops                        (session summary + watchdog, 'makakoo skill loops')
+  - skill-productivity-fts5-search          (Brain FTS5 search, 'makakoo skill fts5-search')
 
 Persona locked to: Harvey (voice=caveman, pronoun=he/him).
 
-Phase H/3 batch 2. Remaining harvey-os skills + agents migrate in
-later H/3 batches.
+Sprint 002 batch 3. Library plugin lib-hte ships with core.
+13 plugins total in this distro.
 """

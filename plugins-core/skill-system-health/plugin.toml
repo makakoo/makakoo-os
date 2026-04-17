@@ -14,6 +14,7 @@ path = "plugins-core/skill-system-health"
 skill = "^1.0"
 
 [depends]
+plugins = ["lib-hte"]
 python = ">=3.8"
 
 [entrypoint]

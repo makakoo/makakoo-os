@@ -18,6 +18,9 @@ include = ["minimal.toml"]
 version = "^0.1"
 
 [plugins]
+# Libraries — importable Python packages that skills depend on.
+"lib-hte" = { version = "*" }
+
 # Watchdogs — wake up the services Harvey depends on.
 "watchdog-switchailocal" = { version = "*" }
 "watchdog-postgres" = { version = "*" }

@@ -1,0 +1,26 @@
+[plugin]
+name = "skill-productivity-fts5-search"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Fast full-text search across Brain journal files using SQLite FTS5"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-productivity-fts5-search"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u harvey-os/skills/productivity/fts5_search/search_cli.py"
+
+[capabilities]
+grants = [
+  "brain/read",
+  "fs/read:$MAKAKOO_HOME/data/Brain/**",
+]

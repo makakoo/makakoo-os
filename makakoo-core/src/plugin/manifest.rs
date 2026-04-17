@@ -93,6 +93,7 @@ pub enum PluginKind {
     McpTool,
     Mascot,
     BootstrapFragment,
+    Library,
 }
 
 impl PluginKind {
@@ -104,6 +105,7 @@ impl PluginKind {
             PluginKind::McpTool => "mcp-tool",
             PluginKind::Mascot => "mascot",
             PluginKind::BootstrapFragment => "bootstrap-fragment",
+            PluginKind::Library => "library",
         }
     }
 }
@@ -360,6 +362,7 @@ pub struct EmbeddingTable {
 pub struct Manifest {
     pub plugin: PluginTable,
     pub source: SourceTable,
+    #[serde(default)]
     pub abi: AbiTable,
     #[serde(default)]
     pub depends: DependsTable,
@@ -496,8 +499,9 @@ impl Manifest {
             ));
         }
 
-        // Rule 7 (partial): [abi] must not be empty.
-        if self.abi.is_empty() {
+        // Rule 7 (partial): [abi] must not be empty — except for library
+        // plugins which provide importable code, not a callable ABI surface.
+        if self.abi.is_empty() && self.plugin.kind != PluginKind::Library {
             return Err(ManifestError::invalid(
                 path,
                 "[abi] must declare at least one ABI (e.g. skill = \"^0.1\")",
@@ -608,6 +612,9 @@ impl Manifest {
             }
             PluginKind::McpTool | PluginKind::BootstrapFragment => {
                 // These kinds declare entrypoints in their kind-specific tables.
+            }
+            PluginKind::Library => {
+                // Library plugins provide importable code, not runnable entrypoints.
             }
         }
         Ok(())

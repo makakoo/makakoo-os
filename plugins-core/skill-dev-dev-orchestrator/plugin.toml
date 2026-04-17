@@ -1,0 +1,26 @@
+[plugin]
+name = "skill-dev-dev-orchestrator"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Parallel multi-component dev orchestrator — spawns subagent processes for independent tasks"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-dev-dev-orchestrator"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u harvey-os/skills/dev/dev-orchestrator/orchestrate.py"
+
+[capabilities]
+grants = [
+  "exec/binary:python3",
+  "net/http",
+]

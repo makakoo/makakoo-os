@@ -78,6 +78,18 @@ impl PluginRegistry {
             .find(|p| p.manifest.plugin.name == name)
     }
 
+    /// Return filesystem paths for all installed `kind = "library"` plugins.
+    /// These paths should be prepended to PYTHONPATH (or equivalent) so that
+    /// skill and agent plugins can import library code.
+    pub fn get_library_paths(&self) -> Vec<PathBuf> {
+        use super::manifest::PluginKind;
+        self.plugins
+            .iter()
+            .filter(|p| p.manifest.plugin.kind == PluginKind::Library)
+            .map(|p| p.root.clone())
+            .collect()
+    }
+
     /// Discover every plugin under `$MAKAKOO_HOME/plugins/`. Returns an
     /// empty registry if the directory doesn't exist (fresh install).
     pub fn load_default(makakoo_home: &Path) -> Result<Self, RegistryError> {

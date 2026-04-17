@@ -1,0 +1,26 @@
+[plugin]
+name = "skill-meta-loops"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Scheduled task management — session summaries and watchdog loops"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-meta-loops"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u harvey-os/skills/meta/loops/session_summary.py"
+
+[capabilities]
+grants = [
+  "brain/write",
+  "net/http",
+]

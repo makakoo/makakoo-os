@@ -8,15 +8,11 @@
 //!
 //! Entry-file discovery order:
 //!
+//!   0. `entry:` key in SKILL.md YAML frontmatter (highest priority)
 //!   1. `run.py`
 //!   2. `<skill_name>.py`
 //!   3. `main.py`
 //!   4. The first `.py` file in the skill directory, if any
-//!
-//! Rust doesn't try to parse SKILL.md frontmatter for an explicit
-//! entrypoint yet — every skill the user ships today follows one of
-//! the four patterns above. If that changes, extend [`discover`] with
-//! a YAML-frontmatter pass that reads an `entry:` key.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,13 +46,20 @@ impl SkillRunner {
         let home = makakoo_home();
         let skills_dir = home.join("harvey-os").join("skills");
         let python = which_python()?;
-        let mut env = HashMap::new();
-        env.insert("MAKAKOO_HOME".into(), home.to_string_lossy().into_owned());
-        env.insert("HARVEY_HOME".into(), home.to_string_lossy().into_owned());
-        // Put harvey-os on the Python import path so skills can do
-        // `from core.xyz import ...`.
-        let pythonpath = home.join("harvey-os").to_string_lossy().into_owned();
-        env.insert("PYTHONPATH".into(), pythonpath);
+        let env = build_skill_env(&home, &[]);
+        Ok(Self {
+            python,
+            skills_dir,
+            env,
+        })
+    }
+
+    /// Build a runner with library plugin paths injected into PYTHONPATH.
+    pub fn with_library_paths(library_paths: &[PathBuf]) -> Result<Self> {
+        let home = makakoo_home();
+        let skills_dir = home.join("harvey-os").join("skills");
+        let python = which_python()?;
+        let env = build_skill_env(&home, library_paths);
         Ok(Self {
             python,
             skills_dir,
@@ -130,6 +133,35 @@ impl SkillRunner {
             .with_context(|| format!("failed to spawn python3 for skill '{name}'"))?;
         Ok(status)
     }
+}
+
+/// Build the environment map for running Python skills. Prepends
+/// `$MAKAKOO_HOME/harvey-os` and any library-plugin paths to the
+/// existing PYTHONPATH instead of clobbering it.
+///
+/// This is the single source of truth for skill/plugin env setup —
+/// both `SkillRunner` and the plugin dispatch bridge use this.
+pub fn build_skill_env(home: &Path, library_paths: &[PathBuf]) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    env.insert("MAKAKOO_HOME".into(), home.to_string_lossy().into_owned());
+    env.insert("HARVEY_HOME".into(), home.to_string_lossy().into_owned());
+
+    // Build PYTHONPATH: library plugins + harvey-os + existing env value.
+    let mut parts: Vec<PathBuf> = Vec::new();
+    for lp in library_paths {
+        parts.push(lp.clone());
+    }
+    parts.push(home.join("harvey-os"));
+    if let Ok(existing) = std::env::var("PYTHONPATH") {
+        if !existing.is_empty() {
+            parts.extend(std::env::split_paths(&existing));
+        }
+    }
+
+    if let Ok(pp) = std::env::join_paths(parts) {
+        env.insert("PYTHONPATH".into(), pp.to_string_lossy().into_owned());
+    }
+    env
 }
 
 /// Resolve a `python3` binary. Prefers `$MAKAKOO_PYTHON`, then
@@ -214,9 +246,49 @@ fn walk_for_skill(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
     inner(dir, name, 0)
 }
 
+/// Extract the `entry:` value from SKILL.md YAML frontmatter, if present.
+/// Frontmatter is the text between the first `---` line and the next `---`.
+fn read_entry_from_frontmatter(skill_dir: &Path) -> Option<String> {
+    let skill_md = skill_dir.join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_md).ok()?;
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    // Find the closing `---` after the opening one.
+    let after_open = &trimmed[3..].trim_start_matches(['\r', '\n']);
+    let close = after_open.find("\n---")?;
+    let frontmatter = &after_open[..close];
+    // Simple line-by-line parse for `entry:` — avoids pulling in a
+    // YAML library for one key.
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("entry:") {
+            let val = val.trim().trim_matches('"').trim_matches('\'');
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Pick the entry `.py` file for a skill. See module docs for the
 /// ordered candidate list.
 fn resolve_entry(skill_dir: &Path, name: &str) -> Result<PathBuf> {
+    // Priority 0: explicit `entry:` in SKILL.md frontmatter.
+    if let Some(entry_name) = read_entry_from_frontmatter(skill_dir) {
+        let entry_path = skill_dir.join(&entry_name);
+        if entry_path.is_file() {
+            return Ok(entry_path);
+        }
+        return Err(anyhow!(
+            "SKILL.md declares entry: '{}' but file does not exist in {}",
+            entry_name,
+            skill_dir.display()
+        ));
+    }
+
     let candidates = [
         skill_dir.join("run.py"),
         skill_dir.join(format!("{name}.py")),
@@ -402,5 +474,140 @@ mod tests {
         fs::write(p.join("file_manager.py"), "print('hi')\n").unwrap();
         let entry = resolve_entry(p, "files").unwrap();
         assert!(entry.ends_with("file_manager.py"));
+    }
+
+    // ── entry: frontmatter tests ──────────────────────────────────
+
+    #[test]
+    fn resolve_entry_uses_frontmatter_entry_key() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path();
+        fs::write(
+            p.join("SKILL.md"),
+            "---\nname: loops\nentry: loop_runner.py\n---\n# Loops\n",
+        )
+        .unwrap();
+        fs::write(p.join("run.py"), "decoy\n").unwrap();
+        fs::write(p.join("loop_runner.py"), "print('loops')\n").unwrap();
+        let entry = resolve_entry(p, "loops").unwrap();
+        // entry: key wins over run.py
+        assert!(entry.ends_with("loop_runner.py"));
+    }
+
+    #[test]
+    fn resolve_entry_frontmatter_missing_file_errors() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path();
+        fs::write(
+            p.join("SKILL.md"),
+            "---\nname: ghost\nentry: does_not_exist.py\n---\n",
+        )
+        .unwrap();
+        let err = resolve_entry(p, "ghost").unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn resolve_entry_no_frontmatter_falls_through() {
+        // SKILL.md without entry: key — should fall through to
+        // the normal heuristic cascade.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path();
+        fs::write(p.join("SKILL.md"), "---\nname: plain\n---\n").unwrap();
+        fs::write(p.join("run.py"), "print('hi')\n").unwrap();
+        let entry = resolve_entry(p, "plain").unwrap();
+        assert!(entry.ends_with("run.py"));
+    }
+
+    #[test]
+    fn resolve_entry_no_skill_md_falls_through() {
+        // No SKILL.md at all — should still work via heuristics.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path();
+        fs::write(p.join("main.py"), "print('hi')\n").unwrap();
+        let entry = resolve_entry(p, "whatever").unwrap();
+        assert!(entry.ends_with("main.py"));
+    }
+
+    #[test]
+    fn resolve_entry_frontmatter_quoted_value() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path();
+        fs::write(
+            p.join("SKILL.md"),
+            "---\nname: quoted\nentry: \"wizard.py\"\n---\n",
+        )
+        .unwrap();
+        fs::write(p.join("wizard.py"), "print('q')\n").unwrap();
+        let entry = resolve_entry(p, "quoted").unwrap();
+        assert!(entry.ends_with("wizard.py"));
+    }
+
+    #[test]
+    fn discover_with_frontmatter_entry() {
+        // End-to-end: walk_for_skill finds the dir, resolve_entry
+        // reads the frontmatter entry: key.
+        let dir = TempDir::new().unwrap();
+        let skills = dir.path().join("skills");
+        let skill_dir = skills.join("meta").join("loops");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: loops\nentry: loop_runner.py\n---\n",
+        )
+        .unwrap();
+        fs::write(skill_dir.join("loop_runner.py"), "print('loops')\n").unwrap();
+        fs::write(skill_dir.join("other.py"), "decoy\n").unwrap();
+        let runner = SkillRunner::with_paths(PathBuf::from("python3"), skills);
+        let hit = runner.discover("loops").unwrap();
+        assert!(hit.entry.ends_with("loop_runner.py"));
+    }
+
+    // ── build_skill_env tests ─────────────────────────────────────
+
+    #[test]
+    fn build_env_prepends_not_clobbers() {
+        // Temporarily set PYTHONPATH to a known value. We can't use
+        // the crate-level ENV_MUTEX here because that's in the
+        // `makakoo` crate, not this test mod — but this test only
+        // reads the var via build_skill_env, so a scoped set is fine.
+        let sentinel = "/usr/lib/existing-path";
+        let old = std::env::var("PYTHONPATH").ok();
+        std::env::set_var("PYTHONPATH", sentinel);
+
+        let home = PathBuf::from("/fake/home");
+        let env = build_skill_env(&home, &[]);
+        let pp = env.get("PYTHONPATH").unwrap();
+        assert!(pp.contains("/fake/home/harvey-os"), "should contain harvey-os");
+        assert!(pp.ends_with(sentinel), "should preserve existing PYTHONPATH at the end");
+
+        // Restore.
+        match old {
+            Some(v) => std::env::set_var("PYTHONPATH", v),
+            None => std::env::remove_var("PYTHONPATH"),
+        }
+    }
+
+    #[test]
+    fn build_env_includes_library_paths() {
+        let old = std::env::var("PYTHONPATH").ok();
+        std::env::remove_var("PYTHONPATH");
+
+        let home = PathBuf::from("/fake/home");
+        let lib_paths = vec![
+            PathBuf::from("/plugins/lib-hte"),
+            PathBuf::from("/plugins/lib-utils"),
+        ];
+        let env = build_skill_env(&home, &lib_paths);
+        let pp = env.get("PYTHONPATH").unwrap();
+        // Check contains instead of hardcoded ':' for cross-platform.
+        assert!(pp.contains("/plugins/lib-hte"), "library paths should be present");
+        assert!(pp.contains("/plugins/lib-utils"), "all library paths included");
+        assert!(pp.contains("/fake/home/harvey-os"), "harvey-os still present");
+
+        // Restore.
+        if let Some(v) = old {
+            std::env::set_var("PYTHONPATH", v);
+        }
     }
 }
