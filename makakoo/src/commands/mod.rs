@@ -43,7 +43,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Promotions { threshold, limit } => {
             promotions::run(ctx, threshold, limit)
         }
-        Commands::Skill { name, args } => skill::run(&name, &args),
+        Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,
         Commands::Version => version::run(),
         Commands::Setup { force } => setup::run(force),
         Commands::Daemon { cmd } => {

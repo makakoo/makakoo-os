@@ -26,5 +26,5 @@ pub mod state;
 pub use brain::{append_journal_line, BrainHandler};
 pub use composite::CompositeHandler;
 pub use llm::LlmHandler;
-pub use secrets::{InMemorySecretBackend, SecretBackend, SecretError, SecretHandler};
+pub use secrets::{EnvSecretBackend, InMemorySecretBackend, SecretBackend, SecretError, SecretHandler};
 pub use state::{StateError, StateHandler};

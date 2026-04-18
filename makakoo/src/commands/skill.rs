@@ -1,21 +1,28 @@
-//! `makakoo skill <name> [args...]` — plugin-first, legacy-fallback dispatch.
+//! `makakoo skill <name> [args...]` — plugin-first, capability-enforced dispatch.
 //!
 //! Dispatch order:
 //!   1. Look up `<name>` in the PluginRegistry (installed plugins).
-//!      If found, read `[entrypoint].run`, expand `$MAKAKOO_HOME`, spawn.
+//!      If found, start a per-plugin CapabilityServer on a Unix socket,
+//!      spawn the plugin process with the socket path in env, and enforce
+//!      grants at runtime.
 //!   2. Fall back to legacy `SkillRunner` (walks `harvey-os/skills/`).
 //!
 //! Both paths use `build_skill_env` for unified PYTHONPATH handling.
 
 use std::process::Command;
+use std::sync::Arc;
 
+use makakoo_core::capability::{
+    build_plugin_handler, socket_path, AuditLog, CapabilityServer,
+};
 use makakoo_core::platform::makakoo_home;
 use makakoo_core::plugin::PluginRegistry;
 
+use crate::context::CliContext;
 use crate::output;
 use crate::skill_runner::{build_skill_env, SkillRunner};
 
-pub fn run(name: &str, args: &[String]) -> anyhow::Result<i32> {
+pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Result<i32> {
     let home = makakoo_home();
     let registry = PluginRegistry::load_default(&home).unwrap_or_default();
 
@@ -24,10 +31,41 @@ pub fn run(name: &str, args: &[String]) -> anyhow::Result<i32> {
     if let Some(plugin) = find_plugin(&registry, name) {
         if let Some(run_cmd) = &plugin.manifest.entrypoint.run {
             let library_paths = registry.get_library_paths();
-            let env = build_skill_env(&home, &library_paths);
+            let mut env = build_skill_env(&home, &library_paths);
 
-            // Split command into parts FIRST so that $MAKAKOO_HOME can
-            // contain spaces without breaking the argument list.
+            // Build capability handler + grant table for this plugin.
+            let store = ctx.store()?;
+            let llm = ctx.llm();
+            let emb = ctx.embeddings();
+            let (handler, grants) =
+                build_plugin_handler(&plugin.manifest, &home, store, llm, emb)?;
+
+            // Create per-invocation socket (PID suffix prevents parallel collisions).
+            let sock = socket_path(&home, &format!(
+                "{}-{}",
+                plugin.manifest.plugin.name,
+                std::process::id()
+            ));
+            if let Some(parent) = sock.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+
+            let audit = Arc::new(AuditLog::open_default(&home)?);
+            let server = CapabilityServer::new(
+                sock.clone(),
+                grants,
+                audit,
+                handler,
+            );
+            let handle = server.serve().await?;
+
+            // Tell the plugin where to connect.
+            env.insert(
+                "MAKAKOO_PLUGIN_SOCKET".into(),
+                sock.to_string_lossy().into_owned(),
+            );
+
+            // Split command into parts, expand $MAKAKOO_HOME.
             let parts: Vec<String> = run_cmd
                 .split_whitespace()
                 .map(|p| p.replace("$MAKAKOO_HOME", &home.to_string_lossy()))
@@ -44,8 +82,6 @@ pub fn run(name: &str, args: &[String]) -> anyhow::Result<i32> {
             let mut cmd = Command::new(&parts[0]);
             cmd.args(&parts[1..]);
             cmd.args(args);
-            // Set working dir to $MAKAKOO_HOME so relative paths in
-            // entrypoint.run resolve correctly.
             cmd.current_dir(&home);
             for (k, v) in &env {
                 cmd.env(k, v);
@@ -57,6 +93,12 @@ pub fn run(name: &str, args: &[String]) -> anyhow::Result<i32> {
                     plugin.manifest.plugin.name
                 )
             })?;
+
+            // Plugin exited — shut down the socket server and clean up.
+            handle.shutdown().await;
+            // Socket file removed by shutdown, but ensure cleanup on any path.
+            let _ = std::fs::remove_file(&sock);
+
             return Ok(status.code().unwrap_or(1));
         }
     }
@@ -73,10 +115,7 @@ pub fn run(name: &str, args: &[String]) -> anyhow::Result<i32> {
     }
 }
 
-/// Find a plugin matching the given skill name. Tries:
-///   1. Exact match (e.g. "skill-meta-canary")
-///   2. Suffix match stripping "skill-" prefix (e.g. "canary" matches "skill-meta-canary")
-///   3. Suffix match on last segment (e.g. "dev-orchestrator" matches "skill-dev-dev-orchestrator")
+/// Find a plugin matching the given skill name.
 fn find_plugin<'a>(
     registry: &'a PluginRegistry,
     name: &str,

@@ -95,6 +95,19 @@ impl SecretBackend for InMemorySecretBackend {
     }
 }
 
+/// Backend that reads secrets from environment variables. Used in
+/// production — plugins get whatever the kernel process has in its env.
+/// Scope enforcement happens at the grant layer, not here.
+pub struct EnvSecretBackend;
+
+impl SecretBackend for EnvSecretBackend {
+    fn get(&self, name: &str) -> Result<String, SecretError> {
+        std::env::var(name).map_err(|_| SecretError::NotFound {
+            name: name.to_string(),
+        })
+    }
+}
+
 pub struct SecretHandler {
     backend: std::sync::Arc<dyn SecretBackend>,
 }

@@ -28,8 +28,8 @@ pub mod verb;
 pub use audit::{AuditEntry, AuditLog, AuditResult, RotationError};
 pub use grants::{resolve_grants, GrantCheck, GrantTable, ResolveError};
 pub use service::{
-    CompositeHandler, InMemorySecretBackend, SecretBackend, SecretError,
-    SecretHandler, StateError, StateHandler,
+    CompositeHandler, EnvSecretBackend, InMemorySecretBackend, SecretBackend,
+    SecretError, SecretHandler, StateError, StateHandler,
 };
 pub use socket::{
     socket_path, CapabilityError, CapabilityHandler, CapabilityRequest,
@@ -39,3 +39,49 @@ pub use verb::{
     normalize_grant, parse_grant, scope_matches, Verb, VerbError, KNOWN_VERBS,
     SCOPE_REQUIRED_VERBS,
 };
+
+use std::path::Path;
+use std::sync::Arc;
+
+/// Build a ready-to-serve `CompositeHandler` + `GrantTable` for a
+/// plugin manifest. This is the factory that turns a plugin.toml into
+/// a live capability sandbox — call it when spawning a plugin, then
+/// pass the handler + grants to `CapabilityServer::new()`.
+pub fn build_plugin_handler(
+    manifest: &crate::plugin::manifest::Manifest,
+    home: &Path,
+    store: Arc<crate::superbrain::SuperbrainStore>,
+    llm: Arc<crate::llm::LlmClient>,
+    emb: Arc<crate::embeddings::EmbeddingClient>,
+) -> Result<(Arc<dyn CapabilityHandler>, Arc<GrantTable>), grants::ResolveError> {
+    let grant_table = Arc::new(resolve_grants(manifest, home)?);
+
+    let plugin_name = &manifest.plugin.name;
+    let state_dir = home.join("state").join(plugin_name);
+    std::fs::create_dir_all(&state_dir).ok();
+
+    // Secret backend reads from env — plugins get whatever the kernel
+    // process has. Scope enforcement happens at the grant layer, not
+    // the backend.
+    let secret_backend: Arc<dyn SecretBackend> =
+        Arc::new(service::secrets::EnvSecretBackend);
+
+    let composite: Arc<dyn CapabilityHandler> = Arc::new(
+        CompositeHandler::new()
+            .register("state", Arc::new(StateHandler::new(state_dir)))
+            .register("secrets", Arc::new(SecretHandler::new(secret_backend)))
+            .register(
+                "brain",
+                Arc::new(service::brain::BrainHandler::new(
+                    store,
+                    home.join("data/Brain"),
+                )),
+            )
+            .register(
+                "llm",
+                Arc::new(service::llm::LlmHandler::new(llm, emb)),
+            ),
+    );
+
+    Ok((composite, grant_table))
+}
