@@ -292,9 +292,6 @@ fn symlink_status(path: &Path, canonical: &Path) -> SymlinkStatus {
             Ok(t) => t,
             Err(_) => return SymlinkStatus::BrokenOrAbsent,
         };
-        // Compare canonicalised forms so /var/foo and /private/var/foo
-        // (macOS) don't trigger false drift. If the symlink target
-        // doesn't exist on disk, treat as broken.
         let target_resolved = if target.is_absolute() {
             target.clone()
         } else {
@@ -303,17 +300,17 @@ fn symlink_status(path: &Path, canonical: &Path) -> SymlinkStatus {
         if !target_resolved.exists() {
             return SymlinkStatus::BrokenOrAbsent;
         }
-        let normalise = |p: &Path| {
-            fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-        };
+        let normalise = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         if normalise(&target_resolved) != normalise(canonical) {
             return SymlinkStatus::WrongTarget;
         }
         SymlinkStatus::Ok
     } else if meta.is_dir() {
-        // Real directory where we expected a symlink — not strictly
-        // wrong, but worth surfacing as drift.
-        SymlinkStatus::WrongTarget
+        // Real directory where we expected a symlink — likely user-owned
+        // content (qwen ships its own skills/, etc.). Don't flag as
+        // drift — auto-repair would destroy data. User-managed setups
+        // stay user-managed.
+        SymlinkStatus::Missing
     } else {
         SymlinkStatus::WrongTarget
     }
