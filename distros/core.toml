@@ -25,6 +25,7 @@ version = "^0.1"
 # Watchdogs — wake up the services Harvey depends on.
 "watchdog-switchailocal" = { version = "*" }
 "watchdog-postgres" = { version = "*" }
+"watchdog-infect" = { version = "*" }
 "monitor-hackernews" = { version = "*" }
 
 # Mascot GYM — the 5-layer self-improvement flywheel.
@@ -38,9 +39,10 @@ voice = "caveman"
 
 [post_install]
 message = """
-Makakoo Core installed. Four plugins are now registered:
+Makakoo Core installed. Five plugins are now registered:
   - watchdog-switchailocal   (300s interval)
   - watchdog-postgres        (900s interval)
+  - watchdog-infect          (21600s interval — catches + heals infect drift)
   - monitor-hackernews       (3600s interval)
   - mascot-gym               (5 SANCHO tasks)
 

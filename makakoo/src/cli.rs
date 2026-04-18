@@ -156,6 +156,10 @@ pub enum Commands {
         /// Exit code = 1 if any drift detected (CI-friendly).
         #[arg(long)]
         verify: bool,
+        /// Emit drift report as structured JSON on stdout (for watchdogs).
+        /// Only meaningful with `--verify`; an error otherwise.
+        #[arg(long)]
+        json: bool,
         /// Preview what would be written without touching any files.
         #[arg(long)]
         dry_run: bool,

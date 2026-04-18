@@ -307,6 +307,50 @@ tasks = [
     }
 
     #[test]
+    fn watchdog_infect_plugin_registers() {
+        // Sprint-008 plugin. Test asserts registry *contains* a handler
+        // named `watchdog_infect` rather than asserting a fragile total
+        // (len() == N breaks whenever any other native task lands).
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        seed_plugin(
+            home,
+            "watchdog-infect",
+            r#"
+[plugin]
+name = "watchdog-infect"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+
+[source]
+path = "."
+
+[abi]
+sancho-task = "^1.0"
+
+[entrypoint]
+run = "python3 -u plugins/watchdog-infect/watchdog.py"
+
+[sancho]
+tasks = [{ name = "watchdog_infect", interval = "21600s" }]
+"#,
+        );
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        let reg = default_registry(make_ctx(home), &plugins);
+        let names: Vec<&str> = reg.tasks().iter().map(|t| t.handler.name()).collect();
+        assert!(
+            names.contains(&"watchdog_infect"),
+            "expected watchdog_infect in registered tasks; got {names:?}"
+        );
+        assert!(
+            reg.len() >= 9,
+            "8 native + at least 1 plugin task expected, got {}",
+            reg.len()
+        );
+    }
+
+    #[test]
     fn parse_interval_handles_common_shapes() {
         assert_eq!(
             parse_interval("5m", Duration::from_secs(1)),

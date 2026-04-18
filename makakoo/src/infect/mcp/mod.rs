@@ -29,8 +29,6 @@ pub mod adapters;
 pub mod drift;
 pub mod target;
 
-pub use drift::{audit, audit_all, repair_symlinks, DriftReport};
-
 pub use target::{McpFormat, McpTarget};
 
 /// The canonical `harvey` MCP server entry. Every infected CLI must
