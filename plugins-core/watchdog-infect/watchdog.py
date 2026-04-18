@@ -83,6 +83,22 @@ def summarise_drift(data: dict) -> tuple[int, list[str]]:
 
 def tick(makakoo: str) -> int:
     verify = run_makakoo(makakoo, "infect", "--verify", "--json")
+    # A non-zero return from `--verify` means either drift (exit 1) or a
+    # real execution failure (exit 2+, stale binary, arg rejection).
+    # Exit 1 is expected — drift. Anything else is an audit failure.
+    if verify.returncode not in (0, 1):
+        stamp = datetime.now().strftime("%H:%M:%S")
+        snippet = (verify.stderr or verify.stdout or "<no output>").strip()[:200]
+        append_journal(
+            f"- [[Makakoo Watchdog]] audit failed at {stamp}: "
+            f"makakoo exit {verify.returncode}: {snippet}"
+        )
+        print(
+            f"watchdog-infect: `makakoo infect --verify --json` exited {verify.returncode}: "
+            f"{snippet}",
+            file=sys.stderr,
+        )
+        return 2
     try:
         data = parse_verify_json(verify.stdout)
     except (ValueError, json.JSONDecodeError) as exc:

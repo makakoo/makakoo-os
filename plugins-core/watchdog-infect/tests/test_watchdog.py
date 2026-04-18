@@ -175,6 +175,28 @@ def test_json_parse_error_fails_loud(fake_home, journal_after, monkeypatch):
     assert "parse error" in journal_after()
 
 
+def test_stale_binary_audit_fails_cleanly(fake_home, journal_after, monkeypatch):
+    # Regression: dogfood 2026-04-18 hit a stale makakoo on PATH that
+    # rejected `--json`, wrote to stderr, exited 2. Empty stdout + bad
+    # exit must report "audit failed / exit N" — not the misleading
+    # "parse error" which implies the flag is broken, not missing.
+    def fake_run(_mk, *_args):
+        return _cp(
+            stdout="",
+            stderr="error: unexpected argument '--json' found\n",
+            returncode=2,
+        )
+
+    monkeypatch.setattr(watchdog, "run_makakoo", fake_run)
+    code = watchdog.tick("/fake/makakoo")
+    assert code == 2
+    entry = journal_after()
+    assert "audit failed" in entry
+    assert "exit 2" in entry
+    assert "--json" in entry
+    assert "parse error" not in entry
+
+
 def test_makakoo_binary_missing_fails_loud(fake_home, journal_after, monkeypatch):
     monkeypatch.setattr(watchdog, "resolve_makakoo", lambda: None)
     # `main` is the layer that calls resolve_makakoo — invoke it directly.
