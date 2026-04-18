@@ -68,7 +68,27 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             json,
             dry_run,
             target,
-        } => crate::infect::dispatch(global, mcp, verify, json, dry_run, target).await,
+            local,
+            dir,
+            detect_installed_only,
+            force_all,
+            remove,
+        } => {
+            crate::infect::dispatch(crate::infect::InfectArgs {
+                global,
+                mcp,
+                verify,
+                json,
+                dry_run,
+                target,
+                local,
+                dir,
+                detect_installed_only,
+                force_all,
+                remove,
+            })
+            .await
+        }
         Commands::Secret { cmd } => dispatch_secret(cmd),
         Commands::Plugin { cmd } => plugin::run(ctx, cmd).await,
         Commands::Distro { cmd } => distro::run(ctx, cmd).await,

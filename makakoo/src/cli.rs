@@ -167,6 +167,28 @@ pub enum Commands {
         /// (claude,gemini,codex,opencode,vibe,qwen,cursor).
         #[arg(long, value_delimiter = ',')]
         target: Vec<String>,
+        /// Project-scoped infect: write .harvey/context.md + per-CLI
+        /// derivative files (CLAUDE.md, GEMINI.md, AGENTS.md, QWEN.md,
+        /// .cursor/rules/makakoo.mdc, .vibe/context.md) in the nearest
+        /// project root. Mutually exclusive with --global/--mcp/--verify.
+        #[arg(long)]
+        local: bool,
+        /// Target directory for --local. Default: current directory;
+        /// walks up to find .git/ or .harvey/.
+        #[arg(long, value_name = "PATH")]
+        dir: Option<std::path::PathBuf>,
+        /// With --local: only write derivatives for CLIs that have a
+        /// ~/.<cli>/ dotdir present. Default is to write all 6 files.
+        #[arg(long)]
+        detect_installed_only: bool,
+        /// With --local: write all 6 derivatives regardless of dotdir
+        /// presence (explicit default; useful in CI to document intent).
+        #[arg(long)]
+        force_all: bool,
+        /// With --local: strip harvey:infect-local marker blocks from
+        /// derivatives, leaving .harvey/ source files untouched.
+        #[arg(long)]
+        remove: bool,
     },
 
     /// Manage secrets in the OS keyring.

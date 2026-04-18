@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 
 pub mod ext;
+pub mod local;
 pub mod mcp;
 pub mod renderer;
 pub mod slots;
@@ -173,28 +174,62 @@ pub fn format_verify_json(drifts: &[mcp::drift::DriftReport]) -> serde_json::Val
     })
 }
 
+/// Struct-packed CLI args — keeps the function signature stable as new
+/// flags land (sprint-008 added `--json`, sprint-009 adds `--local` + 4
+/// project-scoped flags).
+pub struct InfectArgs {
+    pub global: bool,
+    pub mcp: bool,
+    pub verify: bool,
+    pub json: bool,
+    pub dry_run: bool,
+    pub target: Vec<String>,
+    pub local: bool,
+    pub dir: Option<PathBuf>,
+    pub detect_installed_only: bool,
+    pub force_all: bool,
+    pub remove: bool,
+}
+
 /// Top-level CLI dispatcher for `makakoo infect`.
 ///
 /// Decision matrix:
-///   * `--verify`              → audit-only across MCP + (later) drift; exit 1 on any drift
-///   * `--verify --json`       → same audit but emit structured JSON on stdout (for watchdogs)
+///   * `--local`               → project-scoped; mutually exclusive with others
+///   * `--verify`              → audit-only across MCP + drift; exit 1 on drift
+///   * `--verify --json`       → same audit but structured JSON stdout (watchdogs)
 ///   * `--mcp` (alone)         → write only MCP, skip bootstrap
-///   * `--global` (or no flag) → write bootstrap AND MCP (the new default)
-pub async fn dispatch(
-    global: bool,
-    mcp_only: bool,
-    verify: bool,
-    json: bool,
-    dry_run: bool,
-    target: Vec<String>,
-) -> Result<i32> {
-    if json && !verify {
+///   * `--global` (or no flag) → write bootstrap AND MCP (default)
+pub async fn dispatch(args: InfectArgs) -> Result<i32> {
+    if args.local && (args.global || args.mcp || args.verify) {
+        eprintln!(
+            "error: --local is mutually exclusive with --global/--mcp/--verify. \
+             Use --local alone for project-scoped infect."
+        );
+        return Ok(2);
+    }
+    if args.json && !args.verify {
         eprintln!(
             "error: --json only makes sense with --verify (structured drift report). \
              Use --verify --json for machine-consumable output."
         );
         return Ok(2);
     }
+
+    if args.local {
+        return dispatch_local_cli(args).await;
+    }
+
+    // Alias struct fields into the local names the existing body uses —
+    // keeps the diff small while still making the call site struct-based.
+    let InfectArgs {
+        global,
+        mcp: mcp_only,
+        verify,
+        json,
+        dry_run,
+        target,
+        ..
+    } = args;
 
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?;
     let mcp_binary = mcp::resolve_mcp_binary();
@@ -280,6 +315,34 @@ pub async fn dispatch(
     }
 
     Ok(if bootstrap_failed || mcp_failed { 1 } else { 0 })
+}
+
+/// Route `--local` → the project-scoped dispatch in `infect::local`. Resolves
+/// `--dir` → cwd → walks up to project root, then hands off to
+/// `local::dispatch_local`.
+async fn dispatch_local_cli(args: InfectArgs) -> Result<i32> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?;
+    let start_dir = match args.dir {
+        Some(p) => p,
+        None => std::env::current_dir()
+            .map_err(|e| anyhow!("no current dir available: {e}"))?,
+    };
+    let opts = local::LocalOptions {
+        detect_installed_only: args.detect_installed_only,
+        force_all: args.force_all,
+        remove: args.remove,
+        dry_run: args.dry_run,
+    };
+    match local::dispatch_local(&start_dir, &home, opts) {
+        Ok(report) => {
+            print!("{}", report.human_summary());
+            Ok(0)
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            Ok(1)
+        }
+    }
 }
 
 /// Same as [`run`] but lets callers (tests, daemons) override the home
@@ -609,11 +672,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_rejects_combination_with_global() {
+        // --local with --global must exit 2 before any filesystem work.
+        let code = dispatch(InfectArgs {
+            global: true,
+            mcp: false,
+            verify: false,
+            json: false,
+            dry_run: false,
+            target: vec![],
+            local: true,
+            dir: None,
+            detect_installed_only: false,
+            force_all: false,
+            remove: false,
+        })
+        .await
+        .unwrap();
+        assert_eq!(code, 2, "dispatch should return 2 for --local with --global");
+    }
+
+    #[tokio::test]
     async fn json_without_verify_is_rejected() {
         // --json alone (no --verify) must fail loud with exit code 2.
         // We don't need a real $HOME here because the flag combo is
         // checked before any filesystem work.
-        let code = dispatch(false, false, false, true, false, vec![]).await.unwrap();
+        let code = dispatch(InfectArgs {
+            global: false,
+            mcp: false,
+            verify: false,
+            json: true,
+            dry_run: false,
+            target: vec![],
+            local: false,
+            dir: None,
+            detect_installed_only: false,
+            force_all: false,
+            remove: false,
+        })
+        .await
+        .unwrap();
         assert_eq!(
             code, 2,
             "dispatch should return 2 when --json is passed without --verify"
