@@ -9,6 +9,7 @@
 pub mod buddy;
 pub mod distro;
 pub mod dream;
+pub mod flag;
 pub mod install;
 pub mod mcp;
 pub mod migrate;
@@ -19,6 +20,7 @@ pub mod query;
 pub mod sancho;
 pub mod search;
 pub mod setup;
+pub mod sync;
 pub mod skill;
 pub mod version;
 
@@ -35,11 +37,20 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             question,
             top_k,
             model,
-        } => query::run(ctx, &question, top_k, &model).await,
+            show_memory,
+        } => query::run(ctx, &question, top_k, &model, show_memory).await,
         Commands::Sancho { cmd } => sancho::run(ctx, cmd).await,
         Commands::Buddy { cmd } => buddy::run(ctx, cmd),
         Commands::Nursery { cmd } => nursery::run(ctx, cmd),
         Commands::Dream => dream::run(ctx).await,
+        Commands::Flag { reason, skill } => flag::run(ctx, &reason, skill),
+        Commands::Sync {
+            force,
+            embed,
+            no_auto_memory,
+            embed_limit,
+            file,
+        } => sync::run(ctx, force, embed, no_auto_memory, embed_limit, file).await,
         Commands::Promotions { threshold, limit } => {
             promotions::run(ctx, threshold, limit)
         }

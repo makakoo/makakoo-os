@@ -8,7 +8,7 @@ authors = ["Makakoo OS contributors"]
 license = "MIT"
 
 [source]
-path = "plugins-core/lib-hte"
+path = "plugins-core/lib-hte/src"
 
 [depends]
 python = ">=3.9"

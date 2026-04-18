@@ -16,7 +16,9 @@ pub mod embeddings;
 pub mod error;
 pub mod event_bus;
 pub mod gimmicks;
+pub mod gym;
 pub mod llm;
+pub mod memory;
 pub mod nursery;
 pub mod outbound;
 pub mod platform;
@@ -28,3 +30,15 @@ pub mod telemetry;
 pub mod wiki;
 
 pub use error::{MakakooError, Result};
+
+/// Crate-wide test helpers. Shared mutex serializes any test that
+/// mutates `MAKAKOO_HOME` (a process-global env var) to prevent
+/// flakes when cargo runs unit tests in parallel.
+#[cfg(test)]
+pub(crate) mod test_lock {
+    use std::sync::Mutex;
+    pub(crate) static ENV_GUARD: Mutex<()> = Mutex::new(());
+    pub(crate) fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}

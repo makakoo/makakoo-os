@@ -20,6 +20,7 @@ version = "^0.1"
 [plugins]
 # Libraries — importable Python packages that skills depend on.
 "lib-hte" = { version = "*" }
+"lib-agent-loop" = { version = "*" }
 
 # Watchdogs — wake up the services Harvey depends on.
 "watchdog-switchailocal" = { version = "*" }
@@ -28,6 +29,9 @@ version = "^0.1"
 
 # Mascot GYM — the 5-layer self-improvement flywheel.
 "mascot-gym" = { version = "*" }
+
+# Memory consolidation — nightly dream pass strengthens the Brain graph.
+"agent-dreams" = { version = "*" }
 
 [defaults]
 voice = "caveman"

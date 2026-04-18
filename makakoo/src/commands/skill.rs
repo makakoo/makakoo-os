@@ -15,6 +15,7 @@ use std::sync::Arc;
 use makakoo_core::capability::{
     build_plugin_handler, socket_path, AuditLog, CapabilityServer,
 };
+use makakoo_core::gym::{ErrorCapture, ErrorEntry, ErrorSource};
 use makakoo_core::platform::makakoo_home;
 use makakoo_core::plugin::PluginRegistry;
 
@@ -99,7 +100,20 @@ pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Resul
             // Socket file removed by shutdown, but ensure cleanup on any path.
             let _ = std::fs::remove_file(&sock);
 
-            return Ok(status.code().unwrap_or(1));
+            let exit = status.code().unwrap_or(1);
+            if exit != 0 {
+                let _ = ErrorCapture::new(&home).record(
+                    ErrorEntry::new(ErrorSource::Tool)
+                        .cmd(format!("makakoo skill {name}"))
+                        .stderr(format!(
+                            "plugin '{}' exited {exit}",
+                            plugin.manifest.plugin.name
+                        ))
+                        .exit_code(exit)
+                        .skill_in_scope(name),
+                );
+            }
+            return Ok(exit);
         }
     }
 
@@ -107,9 +121,28 @@ pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Resul
     let library_paths = registry.get_library_paths();
     let runner = SkillRunner::with_library_paths(&library_paths)?;
     match runner.run(name, args) {
-        Ok(status) => Ok(status.code().unwrap_or(1)),
+        Ok(status) => {
+            let exit = status.code().unwrap_or(1);
+            if exit != 0 {
+                let _ = ErrorCapture::new(&home).record(
+                    ErrorEntry::new(ErrorSource::Tool)
+                        .cmd(format!("makakoo skill {name}"))
+                        .stderr(format!("legacy skill exited {exit}"))
+                        .exit_code(exit)
+                        .skill_in_scope(name),
+                );
+            }
+            Ok(exit)
+        }
         Err(e) => {
-            output::print_error(format!("skill '{name}': {e}"));
+            let msg = format!("skill '{name}': {e}");
+            let _ = ErrorCapture::new(&home).record(
+                ErrorEntry::new(ErrorSource::Tool)
+                    .cmd(format!("makakoo skill {name}"))
+                    .stderr(&msg)
+                    .skill_in_scope(name),
+            );
+            output::print_error(msg);
             Ok(1)
         }
     }

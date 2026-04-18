@@ -140,6 +140,7 @@ pub fn load_persona() -> Result<PersonaConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_lock::lock_env;
 
     #[test]
     fn default_is_neutral_brand_name() {
@@ -215,13 +216,14 @@ mod tests {
 
     #[test]
     fn load_persona_returns_default_when_missing() {
+        let _g = lock_env();
         // Redirect MAKAKOO_HOME to an empty tempdir so we know the file
         // does not exist.
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("MAKAKOO_HOME", dir.path());
         let cfg = load_persona().unwrap();
-        assert_eq!(cfg, PersonaConfig::default());
         std::env::remove_var("MAKAKOO_HOME");
+        assert_eq!(cfg, PersonaConfig::default());
     }
 
     /// T18 — the user's real persona.json has `{name, user, pronouns,
@@ -230,6 +232,7 @@ mod tests {
     /// plural-legacy `pronouns` alias feeding the `pronoun` field.
     #[test]
     fn load_persona_accepts_legacy_partial_file() {
+        let _g = lock_env();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("config");
         std::fs::create_dir_all(&config_dir).unwrap();
@@ -250,6 +253,7 @@ mod tests {
     /// default kicks in and returns the neutral `they`. No warning.
     #[test]
     fn load_persona_pronoun_default_is_they_when_absent() {
+        let _g = lock_env();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("config");
         std::fs::create_dir_all(&config_dir).unwrap();
@@ -268,6 +272,7 @@ mod tests {
 
     #[test]
     fn load_persona_reads_file() {
+        let _g = lock_env();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("config");
         std::fs::create_dir_all(&config_dir).unwrap();

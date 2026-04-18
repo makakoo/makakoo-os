@@ -15,5 +15,9 @@
 //! * entry file (`run.py`, `run.sh`, or a Rust `Cargo.toml`-backed
 //!   binary depending on `kind`).
 
+pub mod lifecycle;
 pub mod scaffold;
+pub use lifecycle::{
+    AgentLaunchSpec, AgentProcess, AgentSupervisor, HealthStatus,
+};
 pub use scaffold::{AgentKind, AgentScaffold, AgentSpec};
