@@ -130,6 +130,7 @@ mod tests {
 
     #[test]
     fn data_dir_under_home() {
+        let _g = crate::test_lock::lock_env();
         let data = data_dir();
         assert!(data.ends_with("data"));
         assert!(data.starts_with(makakoo_home()));
@@ -137,17 +138,19 @@ mod tests {
 
     #[test]
     fn temp_dir_has_makakoo_suffix() {
+        let _g = crate::test_lock::lock_env();
         let tmp = temp_dir();
         assert!(tmp.ends_with("makakoo"));
     }
 
     #[test]
     fn env_override_wins() {
-        // Use a unique var value so we don't race other tests.
+        let _g = crate::test_lock::lock_env();
         let sentinel = std::env::temp_dir().join("makakoo_test_home_sentinel");
         std::env::set_var("MAKAKOO_HOME", &sentinel);
-        assert_eq!(makakoo_home(), sentinel);
+        let observed = makakoo_home();
         std::env::remove_var("MAKAKOO_HOME");
+        assert_eq!(observed, sentinel);
     }
 
     #[test]
