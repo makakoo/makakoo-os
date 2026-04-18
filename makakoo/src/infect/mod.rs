@@ -168,12 +168,29 @@ pub async fn dispatch(
         Some(target.as_slice())
     };
 
+    let makakoo_home = makakoo_core::platform::makakoo_home();
+
     if verify {
-        // Audit-only: dry-run mcp sync, exit 1 if anything would change.
-        let mut report = mcp::sync_all(&home, mcp_binary.as_deref(), true, target_filter);
-        report.verify_only = true;
-        print!("{}", report.human_summary());
-        let dirty = report.would_change() + report.errors();
+        // Audit-only: full drift scan (MCP + bootstrap markers + symlinks).
+        // Exits 1 if any drift detected.
+        let spec = mcp::McpServerSpec::default_harvey(&makakoo_home, mcp_binary.as_deref());
+        let drifts = mcp::drift::audit_all(&home, &makakoo_home, &spec);
+        let mut dirty = 0usize;
+        println!("makakoo infect --verify (full drift scan) — 7 target(s)");
+        for d in &drifts {
+            let target = d.target.expect("audit always sets target");
+            let issues = d.issues_human();
+            if issues.is_empty() {
+                println!("  {:<10} clean", target.short_name());
+            } else {
+                dirty += 1;
+                println!(
+                    "  {:<10} drift: {}",
+                    target.short_name(),
+                    issues.join(", ")
+                );
+            }
+        }
         return Ok(if dirty == 0 { 0 } else { 1 });
     }
 
@@ -188,10 +205,39 @@ pub async fn dispatch(
         }
     }
 
-    // 2. MCP sync (always runs unless `--verify`).
-    let mcp_report = mcp::sync_all(&home, mcp_binary.as_deref(), dry_run, target_filter);
+    // 2. MCP sync (always runs unless `--verify`). Spec home is
+    //    $MAKAKOO_HOME (where data + harvey-os live), CLI dotdirs
+    //    are under $HOME — pass both correctly.
+    let mcp_report = mcp::sync_all(&home, &makakoo_home, mcp_binary.as_deref(), dry_run, target_filter);
     print!("{}", mcp_report.human_summary());
     let mcp_failed = mcp_report.errors() > 0;
+
+    // 3. Symlink + recursive-symlink repair pass (only on real run).
+    // Reuses the drift audit so repair only touches what's actually
+    // broken — never recreates a working symlink.
+    if !dry_run {
+        let spec = mcp::McpServerSpec::default_harvey(&makakoo_home, mcp_binary.as_deref());
+        let drifts = mcp::drift::audit_all(&home, &makakoo_home, &spec);
+        let mut total_actions = 0usize;
+        for d in &drifts {
+            let target = d.target.expect("audit always sets target");
+            if d.memory_broken
+                || d.memory_wrong_target
+                || d.skills_broken
+                || d.skills_wrong_target
+                || d.recursive_symlink_in_memory
+            {
+                let actions = mcp::drift::repair_symlinks(&home, &makakoo_home, target, d);
+                for a in &actions {
+                    println!("  symlink-repair: {}", a);
+                }
+                total_actions += actions.len();
+            }
+        }
+        if total_actions > 0 {
+            println!("symlink-repair: {} action(s) taken", total_actions);
+        }
+    }
 
     Ok(if bootstrap_failed || mcp_failed { 1 } else { 0 })
 }

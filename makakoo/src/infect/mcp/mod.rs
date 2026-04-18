@@ -29,6 +29,8 @@ pub mod adapters;
 pub mod drift;
 pub mod target;
 
+pub use drift::{audit, audit_all, repair_symlinks, DriftReport};
+
 pub use target::{McpFormat, McpTarget};
 
 /// The canonical `harvey` MCP server entry. Every infected CLI must
@@ -199,17 +201,20 @@ impl McpSyncReport {
 
 /// Run mcp sync across every target known to the infect system.
 ///
+/// `cli_home` is OS-level $HOME (where CLI dotdirs live).
+/// `makakoo_home` is `$MAKAKOO_HOME` (used to populate the spec's env).
 /// `dry_run`: when true, no files are written; outcomes are
 /// `WouldChange` for any target that would be touched.
 /// `targets`: when `Some`, restricts the run to that subset (matched
 /// by short name, e.g. `["claude", "vibe"]`).
 pub fn sync_all(
-    home: &Path,
+    cli_home: &Path,
+    makakoo_home: &Path,
     mcp_binary: Option<&Path>,
     dry_run: bool,
     targets: Option<&[String]>,
 ) -> McpSyncReport {
-    let spec = McpServerSpec::default_harvey(home, mcp_binary);
+    let spec = McpServerSpec::default_harvey(makakoo_home, mcp_binary);
     let mut report = McpSyncReport {
         dry_run,
         verify_only: false,
@@ -221,7 +226,7 @@ pub fn sync_all(
                 continue;
             }
         }
-        let outcome = sync_one(home, target, &spec, dry_run);
+        let outcome = sync_one(cli_home, target, &spec, dry_run);
         report.results.push((*target, outcome));
     }
     report
@@ -333,7 +338,7 @@ mod tests {
     #[test]
     fn skipped_when_target_dir_absent() {
         let tmp = tempfile::tempdir().unwrap();
-        let report = sync_all(tmp.path(), None, true, None);
+        let report = sync_all(tmp.path(), tmp.path(), None, true, None);
         // Every target should be skipped because tmpdir has no CLI dirs.
         assert!(report.skipped() > 0);
         assert_eq!(report.added(), 0);
