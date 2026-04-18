@@ -6,6 +6,7 @@
 //! fully constructed.
 
 pub mod agents;
+pub mod infect;
 pub mod journal;
 pub mod multimodal;
 pub mod nursery;
@@ -48,4 +49,7 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     registry.register(Arc::new(multimodal::DescribeAudioHandler::new(ctx.clone())));
     registry.register(Arc::new(multimodal::DescribeVideoHandler::new(ctx.clone())));
     registry.register(Arc::new(multimodal::GenerateImageHandler::new(ctx.clone())));
+
+    // Infect — project-scoped harvey install from chat.
+    registry.register(Arc::new(infect::HarveyInfectLocalHandler::new(ctx.clone())));
 }
