@@ -60,8 +60,10 @@ pub async fn dispatch(cmd: DaemonCmd) -> Result<()> {
 }
 
 /// The actual daemon main loop. Spawns SANCHO as a background tokio
-/// task and blocks on Ctrl-C.
+/// task, runs the agent supervisor on a polling tick, and blocks on
+/// Ctrl-C.
 pub async fn run_forever() -> Result<()> {
+    use makakoo_core::agents::AgentSupervisor;
     use makakoo_core::plugin::PluginRegistry;
     use makakoo_core::sancho::{default_registry, SanchoContext, SanchoEngine};
 
@@ -95,12 +97,77 @@ pub async fn run_forever() -> Result<()> {
         }
     });
 
+    // Agent supervisor — currently has no auto-discovered agent plugins
+    // (Phase 5 vendoring lands those). Polls health every 30s; restarts
+    // crashed children with exponential backoff. The empty-supervisor
+    // case is a no-op so this is safe to wire even when no agents exist.
+    let supervisor = Arc::new(AgentSupervisor::new());
+    let sup_for_loop = Arc::clone(&supervisor);
+    let sup_token = tokio_util_cancel::CancelOnce::new();
+    let sup_token_for_loop = sup_token.clone();
+    let supervisor_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let restarted = sup_for_loop.check_and_restart();
+                    if restarted > 0 {
+                        info!(restarted, "agent supervisor restarted dead children");
+                    }
+                }
+                _ = sup_token_for_loop.wait() => break,
+            }
+        }
+    });
+    info!(
+        agents = supervisor.len(),
+        "agent supervisor started (poll every 30s)"
+    );
+
     tokio::signal::ctrl_c().await?;
-    info!("shutdown signal received — stopping sancho");
+    info!("shutdown signal received — stopping sancho + agent supervisor");
     shutdown.notify_waiters();
+    sup_token.cancel();
+    supervisor.shutdown(Duration::from_millis(500));
     let _ = sancho_handle.await;
+    let _ = supervisor_handle.await;
     info!("daemon exiting");
     Ok(())
+}
+
+/// Tiny cancellation helper to avoid pulling in `tokio_util` as a
+/// dep. One-shot signal driven by an atomic flag + a Notify so the
+/// supervisor loop can wake on shutdown rather than waiting for the
+/// next 30s tick.
+mod tokio_util_cancel {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    #[derive(Clone)]
+    pub struct CancelOnce {
+        flag: Arc<AtomicBool>,
+        notify: Arc<Notify>,
+    }
+    impl CancelOnce {
+        pub fn new() -> Self {
+            Self {
+                flag: Arc::new(AtomicBool::new(false)),
+                notify: Arc::new(Notify::new()),
+            }
+        }
+        pub fn cancel(&self) {
+            if !self.flag.swap(true, Ordering::SeqCst) {
+                self.notify.notify_waiters();
+            }
+        }
+        pub async fn wait(&self) {
+            if self.flag.load(Ordering::SeqCst) {
+                return;
+            }
+            self.notify.notified().await;
+        }
+    }
 }
 
 #[cfg(test)]
