@@ -501,7 +501,10 @@ impl Manifest {
 
         // Rule 7 (partial): [abi] must not be empty — except for library
         // plugins which provide importable code, not a callable ABI surface.
-        if self.abi.is_empty() && self.plugin.kind != PluginKind::Library {
+        if self.abi.is_empty()
+            && self.plugin.kind != PluginKind::Library
+            && self.plugin.kind != PluginKind::BootstrapFragment
+        {
             return Err(ManifestError::invalid(
                 path,
                 "[abi] must declare at least one ABI (e.g. skill = \"^0.1\")",

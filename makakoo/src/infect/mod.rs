@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 
 pub mod ext;
+pub mod renderer;
 pub mod slots;
 pub mod writer;
 
@@ -102,8 +103,25 @@ impl InfectReport {
 /// Errors if none exist — the infect system refuses to write a stub
 /// bootstrap. That's by design; silently writing the wrong content into
 /// every CLI slot would be much worse than a loud failure.
+/// Load the bootstrap content. Priority:
+///   1. Render from plugin registry (cache → fresh render)
+///   2. Fall back to static `global_bootstrap.md` (legacy compat)
 pub fn load_bootstrap() -> Result<String> {
     let home = makakoo_core::platform::makakoo_home();
+
+    // Try dynamic rendering from plugin registry.
+    let registry = makakoo_core::plugin::PluginRegistry::load_default(&home)
+        .unwrap_or_default();
+    if !registry.is_empty() {
+        match renderer::load_or_render(&registry, &home, None) {
+            Ok(body) => return Ok(body),
+            Err(e) => {
+                tracing::warn!(error = %e, "fragment renderer failed, falling back to static bootstrap");
+            }
+        }
+    }
+
+    // Legacy fallback: static file.
     let candidates = [
         home.join("global_bootstrap.md"),
         home.join("harvey-os/global_bootstrap.md"),
@@ -116,14 +134,9 @@ pub fn load_bootstrap() -> Result<String> {
             return Ok(body.trim_end().to_string() + "\n");
         }
     }
-    Err(anyhow!(
-        "canonical bootstrap not found; looked in: {}",
-        candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
+
+    // Last resort: use the compiled-in base template without fragments.
+    Ok(renderer::render(&registry, &home, None)?)
 }
 
 /// Run infect across every built-in slot. `global` is reserved for a
@@ -366,6 +379,9 @@ mod tests {
         std::env::set_var("MAKAKOO_HOME", tmp.path());
         let r = load_bootstrap();
         std::env::remove_var("MAKAKOO_HOME");
-        assert!(r.is_err());
+        // With the compiled-in base template, bootstrap never fails —
+        // it falls through to the embedded template without fragments.
+        assert!(r.is_ok());
+        assert!(r.unwrap().contains("You are Harvey"));
     }
 }
