@@ -50,7 +50,7 @@ pub fn sync(
         }
     };
 
-    let desired = build_server_value(spec);
+    let desired = build_server_value(spec, is_opencode);
     let outcome_kind = upsert_server(&mut root, parent_key, SERVER_NAME, desired.clone());
 
     if matches!(outcome_kind, UpsertOutcome::Unchanged) {
@@ -119,11 +119,37 @@ fn upsert_server(
 }
 
 /// Convert a [`McpServerSpec`] into the JSON shape the CLIs expect.
-fn build_server_value(spec: &McpServerSpec) -> Value {
+///
+/// Two shapes emit:
+/// - **Flat** (Claude / Gemini / Qwen / Cursor): `command: str`, `args: [str]`,
+///   `env: {k:v}`, optional `description`.
+/// - **OpenCode**: `type: "local"`, `enabled: true`, `command: [str,...]` with
+///   the binary prepended to args, `environment: {k:v}`, optional `description`.
+///   OpenCode's JSON schema rejects the flat shape outright (2026-04-18 bug
+///   Sebastian hit — sprint-007 adapter had been emitting flat-for-all).
+fn build_server_value(spec: &McpServerSpec, is_opencode: bool) -> Value {
     let mut env = Map::new();
     for (k, v) in &spec.env {
         env.insert(k.clone(), Value::String(v.clone()));
     }
+
+    if is_opencode {
+        let mut combined = Vec::with_capacity(1 + spec.args.len());
+        combined.push(Value::String(spec.command.clone()));
+        for a in &spec.args {
+            combined.push(Value::String(a.clone()));
+        }
+        let mut entry = Map::new();
+        entry.insert("type".to_string(), Value::String("local".into()));
+        entry.insert("enabled".to_string(), Value::Bool(true));
+        entry.insert("command".to_string(), Value::Array(combined));
+        entry.insert("environment".to_string(), Value::Object(env));
+        if let Some(prompt) = &spec.prompt {
+            entry.insert("description".to_string(), Value::String(prompt.clone()));
+        }
+        return Value::Object(entry);
+    }
+
     let mut entry = Map::new();
     entry.insert("command".to_string(), Value::String(spec.command.clone()));
     entry.insert(
@@ -284,6 +310,89 @@ mod tests {
         assert!(v.get("mcp").is_some());
         assert!(v.get("mcpServers").is_none());
         assert!(v["mcp"].get("harvey").is_some());
+    }
+
+    #[test]
+    fn opencode_schema_matches_official_shape() {
+        // Regression — Sebastian hit "Configuration is invalid at
+        // opencode.json — Invalid input mcp.harvey" on 2026-04-18.
+        // Root cause: adapter emitted the flat Claude/Gemini shape;
+        // OpenCode's schema rejects it because it requires:
+        //   type: "local" | "remote"
+        //   enabled: bool
+        //   command: [str, ...]  (program + args as one array, NOT {command:str, args:[]})
+        //   environment: {k:v}   (NOT "env")
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        let mut s = spec();
+        s.args = vec!["--flag".into(), "value".into()];
+        let _ = sync(&McpTarget::OpenCode, &path, &s, false, true);
+
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let harvey = &v["mcp"]["harvey"];
+        assert_eq!(harvey["type"], "local", "missing type=local");
+        assert_eq!(harvey["enabled"], true, "missing enabled=true");
+        assert!(
+            harvey["command"].is_array(),
+            "command must be an array in opencode schema, got {}",
+            harvey["command"]
+        );
+        let cmd = harvey["command"].as_array().unwrap();
+        assert_eq!(cmd[0], "/opt/cargo/bin/makakoo-mcp");
+        assert_eq!(cmd[1], "--flag");
+        assert_eq!(cmd[2], "value");
+        assert!(
+            harvey.get("environment").is_some(),
+            "opencode expects `environment`, not `env`"
+        );
+        assert_eq!(harvey["environment"]["MAKAKOO_HOME"], "/h");
+        assert!(
+            harvey.get("env").is_none(),
+            "flat `env` must NOT appear in opencode shape; would fail schema validation"
+        );
+        assert!(
+            harvey.get("args").is_none(),
+            "flat `args` must NOT appear in opencode shape"
+        );
+    }
+
+    #[test]
+    fn opencode_drift_heals_old_flat_shape() {
+        // If a user is on a pre-hotfix install with the bad flat shape
+        // written, the next `infect --global` run should detect drift
+        // and rewrite with the correct shape.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        fs::write(
+            &path,
+            r#"{"mcp":{"harvey":{"command":"/opt/cargo/bin/makakoo-mcp","args":[],"env":{}}}}"#,
+        )
+        .unwrap();
+        let outcome = sync(&McpTarget::OpenCode, &path, &spec(), false, true);
+        assert_eq!(outcome, SyncOutcome::Updated);
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["mcp"]["harvey"]["type"], "local");
+        assert!(v["mcp"]["harvey"]["command"].is_array());
+        assert!(v["mcp"]["harvey"].get("env").is_none());
+    }
+
+    #[test]
+    fn flat_schema_unchanged_for_non_opencode_targets() {
+        // Regression — the opencode fix must NOT change what Claude, Gemini,
+        // Qwen, Cursor see. Those CLIs expect the flat shape.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let harvey = &v["mcpServers"]["harvey"];
+        assert!(
+            harvey["command"].is_string(),
+            "flat shape: command must stay as string for non-opencode targets"
+        );
+        assert!(harvey["args"].is_array());
+        assert!(harvey.get("env").is_some());
+        assert!(harvey.get("environment").is_none());
+        assert!(harvey.get("type").is_none());
     }
 
     #[test]
