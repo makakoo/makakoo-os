@@ -16,6 +16,7 @@ pub mod embeddings;
 pub mod error;
 pub mod event_bus;
 pub mod gimmicks;
+pub mod gym;
 pub mod llm;
 pub mod memory;
 pub mod nursery;

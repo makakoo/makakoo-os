@@ -9,6 +9,7 @@
 pub mod buddy;
 pub mod distro;
 pub mod dream;
+pub mod flag;
 pub mod install;
 pub mod mcp;
 pub mod migrate;
@@ -42,6 +43,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Buddy { cmd } => buddy::run(ctx, cmd),
         Commands::Nursery { cmd } => nursery::run(ctx, cmd),
         Commands::Dream => dream::run(ctx).await,
+        Commands::Flag { reason, skill } => flag::run(ctx, &reason, skill),
         Commands::Sync {
             force,
             embed,

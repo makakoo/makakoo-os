@@ -72,6 +72,16 @@ pub enum Commands {
     /// Memory consolidation pass ("dream").
     Dream,
 
+    /// Flag a wrong-response funnel entry — manual GYM Layer 1 producer.
+    /// Replaces `harvey flag`.
+    Flag {
+        /// Free-form reason / what was wrong.
+        reason: String,
+        /// Skill in scope (best-effort hint to Layer 2).
+        #[arg(long)]
+        skill: Option<String>,
+    },
+
     /// Sync the on-disk Brain (pages/journals/auto-memory) into FTS5.
     /// Replaces Python `superbrain sync`.
     Sync {
