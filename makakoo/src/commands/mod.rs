@@ -73,6 +73,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             detect_installed_only,
             force_all,
             remove,
+            ignore_derivatives,
         } => {
             crate::infect::dispatch(crate::infect::InfectArgs {
                 global,
@@ -86,6 +87,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
                 detect_installed_only,
                 force_all,
                 remove,
+                ignore_derivatives,
             })
             .await
         }
