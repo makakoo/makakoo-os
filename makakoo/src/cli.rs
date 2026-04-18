@@ -141,14 +141,28 @@ pub enum Commands {
         cmd: crate::daemon::DaemonCmd,
     },
 
-    /// Infect CLI global slots with the Makakoo bootstrap block.
+    /// Infect CLI global slots with the Makakoo bootstrap block AND
+    /// the harvey MCP server registration.
     Infect {
-        /// Infect global CLI config slots (the only mode wave 5 ships).
+        /// Write the bootstrap markdown into every global slot AND
+        /// register the harvey MCP server in every CLI's MCP config.
+        /// Default mode if no flag given.
         #[arg(long)]
         global: bool,
+        /// Write ONLY the MCP server registration (skip bootstrap).
+        #[arg(long)]
+        mcp: bool,
+        /// Audit-only: report drift across all CLIs without writing.
+        /// Exit code = 1 if any drift detected (CI-friendly).
+        #[arg(long)]
+        verify: bool,
         /// Preview what would be written without touching any files.
         #[arg(long)]
         dry_run: bool,
+        /// Restrict to a comma-separated subset of targets
+        /// (claude,gemini,codex,opencode,vibe,qwen,cursor).
+        #[arg(long, value_delimiter = ',')]
+        target: Vec<String>,
     },
 
     /// Manage secrets in the OS keyring.

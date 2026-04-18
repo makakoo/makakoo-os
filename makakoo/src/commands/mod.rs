@@ -61,11 +61,13 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             crate::daemon::dispatch(cmd).await?;
             Ok(0)
         }
-        Commands::Infect { global, dry_run } => {
-            let report = crate::infect::run(global, dry_run).await?;
-            print!("{}", report.human_summary());
-            Ok(if report.error_count() == 0 { 0 } else { 1 })
-        }
+        Commands::Infect {
+            global,
+            mcp,
+            verify,
+            dry_run,
+            target,
+        } => crate::infect::dispatch(global, mcp, verify, dry_run, target).await,
         Commands::Secret { cmd } => dispatch_secret(cmd),
         Commands::Plugin { cmd } => plugin::run(ctx, cmd).await,
         Commands::Distro { cmd } => distro::run(ctx, cmd).await,
