@@ -189,6 +189,11 @@ pub enum Commands {
         /// derivatives, leaving .harvey/ source files untouched.
         #[arg(long)]
         remove: bool,
+        /// With --local: upsert a marker block into the project root
+        /// `.gitignore` listing the six derivative paths so they stop
+        /// showing as untracked in `git status`. Opt-in.
+        #[arg(long)]
+        ignore_derivatives: bool,
     },
 
     /// Manage secrets in the OS keyring.

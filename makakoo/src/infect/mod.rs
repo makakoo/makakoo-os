@@ -189,6 +189,7 @@ pub struct InfectArgs {
     pub detect_installed_only: bool,
     pub force_all: bool,
     pub remove: bool,
+    pub ignore_derivatives: bool,
 }
 
 /// Top-level CLI dispatcher for `makakoo infect`.
@@ -332,6 +333,7 @@ async fn dispatch_local_cli(args: InfectArgs) -> Result<i32> {
         force_all: args.force_all,
         remove: args.remove,
         dry_run: args.dry_run,
+        ignore_derivatives: args.ignore_derivatives,
     };
     match local::dispatch_local(&start_dir, &home, opts) {
         Ok(report) => {
@@ -686,6 +688,7 @@ mod tests {
             detect_installed_only: false,
             force_all: false,
             remove: false,
+            ignore_derivatives: false,
         })
         .await
         .unwrap();
@@ -709,6 +712,7 @@ mod tests {
             detect_installed_only: false,
             force_all: false,
             remove: false,
+            ignore_derivatives: false,
         })
         .await
         .unwrap();
