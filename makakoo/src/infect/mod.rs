@@ -147,19 +147,55 @@ pub async fn run(_global: bool, dry_run: bool) -> Result<InfectReport> {
     run_with_home(&dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?, dry_run).await
 }
 
+/// Build the structured JSON payload emitted by `infect --verify --json`.
+///
+/// Exposed as a pure function so tests can assert the shape without
+/// standing up a real `$HOME` / `$MAKAKOO_HOME`. Watchdogs consume this
+/// shape — changing it is a breaking change, so the test suite locks
+/// the keys.
+pub fn format_verify_json(drifts: &[mcp::drift::DriftReport]) -> serde_json::Value {
+    let dirty_count = drifts.iter().filter(|d| !d.is_clean()).count();
+    serde_json::json!({
+        "clean": dirty_count == 0,
+        "dirty_count": dirty_count,
+        "targets": drifts
+            .iter()
+            .map(|d| {
+                let t = d.target.expect("audit always sets target");
+                let issues = d.issues_human();
+                serde_json::json!({
+                    "name": t.short_name(),
+                    "clean": issues.is_empty(),
+                    "issues": issues,
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
 /// Top-level CLI dispatcher for `makakoo infect`.
 ///
 /// Decision matrix:
 ///   * `--verify`              → audit-only across MCP + (later) drift; exit 1 on any drift
+///   * `--verify --json`       → same audit but emit structured JSON on stdout (for watchdogs)
 ///   * `--mcp` (alone)         → write only MCP, skip bootstrap
 ///   * `--global` (or no flag) → write bootstrap AND MCP (the new default)
 pub async fn dispatch(
     global: bool,
     mcp_only: bool,
     verify: bool,
+    json: bool,
     dry_run: bool,
     target: Vec<String>,
 ) -> Result<i32> {
+    if json && !verify {
+        eprintln!(
+            "error: --json only makes sense with --verify (structured drift report). \
+             Use --verify --json for machine-consumable output."
+        );
+        return Ok(2);
+    }
+
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?;
     let mcp_binary = mcp::resolve_mcp_binary();
     let target_filter = if target.is_empty() {
@@ -175,23 +211,27 @@ pub async fn dispatch(
         // Exits 1 if any drift detected.
         let spec = mcp::McpServerSpec::default_harvey(&makakoo_home, mcp_binary.as_deref());
         let drifts = mcp::drift::audit_all(&home, &makakoo_home, &spec);
-        let mut dirty = 0usize;
-        println!("makakoo infect --verify (full drift scan) — 7 target(s)");
-        for d in &drifts {
-            let target = d.target.expect("audit always sets target");
-            let issues = d.issues_human();
-            if issues.is_empty() {
-                println!("  {:<10} clean", target.short_name());
-            } else {
-                dirty += 1;
-                println!(
-                    "  {:<10} drift: {}",
-                    target.short_name(),
-                    issues.join(", ")
-                );
+        let dirty_count = drifts.iter().filter(|d| !d.is_clean()).count();
+
+        if json {
+            println!("{}", serde_json::to_string(&format_verify_json(&drifts))?);
+        } else {
+            println!("makakoo infect --verify (full drift scan) — 7 target(s)");
+            for d in &drifts {
+                let target = d.target.expect("audit always sets target");
+                let issues = d.issues_human();
+                if issues.is_empty() {
+                    println!("  {:<10} clean", target.short_name());
+                } else {
+                    println!(
+                        "  {:<10} drift: {}",
+                        target.short_name(),
+                        issues.join(", ")
+                    );
+                }
             }
         }
-        return Ok(if dirty == 0 { 0 } else { 1 });
+        return Ok(if dirty_count == 0 { 0 } else { 1 });
     }
 
     let mut bootstrap_failed = false;
@@ -479,5 +519,104 @@ mod tests {
         // it falls through to the embedded template without fragments.
         assert!(r.is_ok());
         assert!(r.unwrap().contains("You are Harvey"));
+    }
+
+    // --- Phase A: --verify --json shape + contract ---------------------
+
+    use crate::infect::mcp::drift::DriftReport;
+    use crate::infect::mcp::McpTarget;
+
+    fn drift(target: McpTarget) -> DriftReport {
+        DriftReport {
+            target: Some(target),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn verify_json_clean_outputs_expected_shape() {
+        let drifts: Vec<DriftReport> = McpTarget::all().iter().map(|t| drift(*t)).collect();
+        let v = format_verify_json(&drifts);
+        assert_eq!(v["clean"], serde_json::Value::Bool(true));
+        assert_eq!(v["dirty_count"], serde_json::Value::from(0u64));
+        let targets = v["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), McpTarget::all().len());
+        for t in targets {
+            assert_eq!(t["clean"], serde_json::Value::Bool(true));
+            assert_eq!(t["issues"].as_array().unwrap().len(), 0);
+            assert!(t["name"].is_string());
+        }
+    }
+
+    #[test]
+    fn verify_json_dirty_lists_issues() {
+        let mut drifts: Vec<DriftReport> = McpTarget::all().iter().map(|t| drift(*t)).collect();
+        // Dirty the first two targets with distinct issues.
+        drifts[0].mcp_missing = true;
+        drifts[1].memory_broken = true;
+        drifts[1].recursive_symlink_in_memory = true;
+        let v = format_verify_json(&drifts);
+        assert_eq!(v["clean"], serde_json::Value::Bool(false));
+        assert_eq!(v["dirty_count"], serde_json::Value::from(2u64));
+        let targets = v["targets"].as_array().unwrap();
+        let t0 = &targets[0];
+        assert_eq!(t0["clean"], serde_json::Value::Bool(false));
+        let t0_issues: Vec<&str> = t0["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i.as_str().unwrap())
+            .collect();
+        assert!(t0_issues.contains(&"mcp-missing"));
+        let t1 = &targets[1];
+        let t1_issues: Vec<&str> = t1["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i.as_str().unwrap())
+            .collect();
+        assert!(t1_issues.contains(&"memory-symlink-broken"));
+        assert!(t1_issues.contains(&"recursive-symlink-in-memory"));
+    }
+
+    #[test]
+    fn verify_json_schema_keys_locked() {
+        // Watchdogs consume this — changing keys is breaking. Lock them.
+        let drifts: Vec<DriftReport> = vec![drift(McpTarget::Claude)];
+        let v = format_verify_json(&drifts);
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&String> = obj.keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                &"clean".to_string(),
+                &"dirty_count".to_string(),
+                &"targets".to_string()
+            ]
+        );
+        let target_obj = v["targets"][0].as_object().unwrap();
+        let mut target_keys: Vec<&String> = target_obj.keys().collect();
+        target_keys.sort();
+        assert_eq!(
+            target_keys,
+            vec![
+                &"clean".to_string(),
+                &"issues".to_string(),
+                &"name".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn json_without_verify_is_rejected() {
+        // --json alone (no --verify) must fail loud with exit code 2.
+        // We don't need a real $HOME here because the flag combo is
+        // checked before any filesystem work.
+        let code = dispatch(false, false, false, true, false, vec![]).await.unwrap();
+        assert_eq!(
+            code, 2,
+            "dispatch should return 2 when --json is passed without --verify"
+        );
     }
 }
