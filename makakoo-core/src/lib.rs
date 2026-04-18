@@ -17,6 +17,7 @@ pub mod error;
 pub mod event_bus;
 pub mod gimmicks;
 pub mod llm;
+pub mod memory;
 pub mod nursery;
 pub mod outbound;
 pub mod platform;

@@ -45,6 +45,10 @@ pub enum Commands {
         /// Override the LLM model name.
         #[arg(long, default_value = "ail-compound")]
         model: String,
+        /// Print the assembled L0+L1+L2 memory block before the LLM
+        /// answer (also accessible as `--show-memory`).
+        #[arg(short = 'v', long = "show-memory")]
+        show_memory: bool,
     },
 
     /// SANCHO proactive task engine.
