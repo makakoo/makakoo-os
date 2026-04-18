@@ -19,6 +19,7 @@ pub mod query;
 pub mod sancho;
 pub mod search;
 pub mod setup;
+pub mod sync;
 pub mod skill;
 pub mod version;
 
@@ -41,6 +42,13 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Buddy { cmd } => buddy::run(ctx, cmd),
         Commands::Nursery { cmd } => nursery::run(ctx, cmd),
         Commands::Dream => dream::run(ctx).await,
+        Commands::Sync {
+            force,
+            embed,
+            no_auto_memory,
+            embed_limit,
+            file,
+        } => sync::run(ctx, force, embed, no_auto_memory, embed_limit, file).await,
         Commands::Promotions { threshold, limit } => {
             promotions::run(ctx, threshold, limit)
         }

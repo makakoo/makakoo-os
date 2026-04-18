@@ -72,6 +72,28 @@ pub enum Commands {
     /// Memory consolidation pass ("dream").
     Dream,
 
+    /// Sync the on-disk Brain (pages/journals/auto-memory) into FTS5.
+    /// Replaces Python `superbrain sync`.
+    Sync {
+        /// Re-index every file regardless of stored content_hash.
+        #[arg(long)]
+        force: bool,
+        /// Also embed any docs that don't have vectors yet (best-effort,
+        /// requires a reachable embedding gateway).
+        #[arg(long)]
+        embed: bool,
+        /// Skip the auto-memory dir (default: include if present).
+        #[arg(long)]
+        no_auto_memory: bool,
+        /// Maximum docs to embed in this pass when `--embed` is set.
+        #[arg(long, default_value_t = 200)]
+        embed_limit: usize,
+        /// Index a single file under pages/journals instead of a full
+        /// walk. Useful as a post-write hook.
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+    },
+
     /// Print memory promotion candidates.
     Promotions {
         /// Only include candidates scoring at or above this threshold.
