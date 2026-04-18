@@ -6,6 +6,11 @@ Cargo.lock.bak
 .DS_Store
 Thumbs.db
 
+# Python byproducts
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Editor
 .idea/
 .vscode/
