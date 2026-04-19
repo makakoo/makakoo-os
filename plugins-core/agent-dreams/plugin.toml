@@ -17,7 +17,7 @@ sancho-task = "^1.0"
 python = ">=3.11"
 
 [entrypoint]
-run = "python3 -u $MAKAKOO_HOME/plugins/agent-dreams/src/consolidator.py"
+run = "python3 -u plugins/agent-dreams/src/consolidator.py"
 
 [capabilities]
 grants = [
