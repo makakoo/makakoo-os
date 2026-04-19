@@ -15,11 +15,75 @@
 //! well past the user's personal-install cardinality, and keyed the same
 //! way within this runtime.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
 
 use crate::error::Result;
+
+/// Canonicalize a Brain doc path to a `$MAKAKOO_HOME`-rooted form.
+///
+/// Three jobs, in order:
+///   1. Rewrite the legacy `/Users/sebastian/HARVEY/` prefix (or any
+///      `$HOME/HARVEY/` style path) to the `$MAKAKOO_HOME` equivalent.
+///      The symlink `~/HARVEY → ~/MAKAKOO` normally resolves both to the
+///      same inode, but we do the rewrite explicitly so the stored path
+///      stays valid after the symlink is removed.
+///   2. If the path is relative, prepend `$MAKAKOO_HOME` (falling back
+///      to `$HARVEY_HOME`, then `$HOME/MAKAKOO`).
+///   3. Best-effort `fs::canonicalize` to resolve any remaining symlinks.
+///      If canonicalization fails (path doesn't exist yet, permissions,
+///      etc.) the non-canonical string is returned — this is a stored-
+///      data normalizer, not a filesystem assertion.
+pub fn canonicalize_brain_path(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+
+    let makakoo_home = std::env::var("MAKAKOO_HOME")
+        .or_else(|_| std::env::var("HARVEY_HOME"))
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/sebastian".to_string());
+            format!("{home}/MAKAKOO")
+        });
+
+    // Step 1: legacy HARVEY prefix rewrite. Cover both the hard-coded
+    // Sebastian path and any `$HOME/HARVEY/` form. The rewrite target is
+    // the same `$MAKAKOO_HOME` either way.
+    let mut rewritten = if let Some(rest) = path.strip_prefix("/Users/sebastian/HARVEY/") {
+        format!("{}/{}", makakoo_home.trim_end_matches('/'), rest)
+    } else if path == "/Users/sebastian/HARVEY" {
+        makakoo_home.clone()
+    } else if let Ok(home) = std::env::var("HOME") {
+        let harvey_prefix = format!("{home}/HARVEY/");
+        if let Some(rest) = path.strip_prefix(&harvey_prefix) {
+            format!("{}/{}", makakoo_home.trim_end_matches('/'), rest)
+        } else if path == format!("{home}/HARVEY") {
+            makakoo_home.clone()
+        } else {
+            path.to_string()
+        }
+    } else {
+        path.to_string()
+    };
+
+    // Step 2: relative path resolution.
+    if !Path::new(&rewritten).is_absolute() {
+        let joined = PathBuf::from(&makakoo_home).join(&rewritten);
+        rewritten = joined.to_string_lossy().to_string();
+    }
+
+    // Step 3: best-effort canonicalize. Ignore errors (the path may not
+    // exist yet, or live on a removed volume). Canonical path must still
+    // be UTF-8; fall back to the rewritten string if conversion fails.
+    if let Ok(canon) = std::fs::canonicalize(&rewritten) {
+        if let Some(s) = canon.to_str() {
+            return s.to_string();
+        }
+    }
+    rewritten
+}
 
 /// Internal aggregate row pulled out of `recall_log` during rebuild.
 type StatsAggregate = (
@@ -102,9 +166,10 @@ impl RecallTracker {
             for item in items {
                 let snippet: String = item.content.chars().take(280).collect();
                 let content_hash = Self::hash(&Self::normalize(&snippet));
+                let canonical_path = canonicalize_brain_path(&item.doc_path);
                 stmt.execute(params![
                     item.doc_id,
-                    item.doc_path,
+                    canonical_path,
                     content_hash,
                     query_hash,
                     item.score,
@@ -332,8 +397,10 @@ mod tests {
     #[test]
     fn top_recalled_orders_by_count() {
         let (_d, t) = make_tracker();
-        let hot = RecallItem::new(1, "hot.md", "hot content");
-        let warm = RecallItem::new(2, "warm.md", "warm content");
+        // Absolute paths so canonicalize_brain_path returns them unchanged
+        // (no HARVEY prefix, no relative resolution).
+        let hot = RecallItem::new(1, "/tmp/recall-test-hot.md", "hot content");
+        let warm = RecallItem::new(2, "/tmp/recall-test-warm.md", "warm content");
         for _ in 0..5 {
             t.track(&hot, "q").unwrap();
         }
@@ -343,9 +410,9 @@ mod tests {
         t.rebuild_stats().unwrap();
         let top = t.top_recalled(10).unwrap();
         assert_eq!(top.len(), 2);
-        assert_eq!(top[0].0, "hot.md");
+        assert_eq!(top[0].0, "/tmp/recall-test-hot.md");
         assert_eq!(top[0].1, 5);
-        assert_eq!(top[1].0, "warm.md");
+        assert_eq!(top[1].0, "/tmp/recall-test-warm.md");
     }
 
     #[test]
@@ -354,5 +421,86 @@ mod tests {
         t.track(&RecallItem::new(1, "x", "y"), "q").unwrap();
         let deleted = t.prune_old_logs(30).unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    // ── canonicalize_brain_path helper tests ──────────────────────
+    // These tests mutate env vars. Serialize them on a Mutex so parallel
+    // test execution doesn't race on $MAKAKOO_HOME.
+    use std::sync::Mutex as StdMutex;
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn with_makakoo_home<F: FnOnce()>(home: &str, f: F) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev_mak = std::env::var("MAKAKOO_HOME").ok();
+        let prev_har = std::env::var("HARVEY_HOME").ok();
+        std::env::set_var("MAKAKOO_HOME", home);
+        std::env::remove_var("HARVEY_HOME");
+        f();
+        match prev_mak {
+            Some(v) => std::env::set_var("MAKAKOO_HOME", v),
+            None => std::env::remove_var("MAKAKOO_HOME"),
+        }
+        if let Some(v) = prev_har {
+            std::env::set_var("HARVEY_HOME", v);
+        }
+    }
+
+    #[test]
+    fn canonicalize_rewrites_harvey_to_makakoo() {
+        with_makakoo_home("/tmp/nonexistent-makakoo-home", || {
+            let out = canonicalize_brain_path("/Users/sebastian/HARVEY/data/Brain/x.md");
+            assert_eq!(out, "/tmp/nonexistent-makakoo-home/data/Brain/x.md");
+        });
+    }
+
+    #[test]
+    fn canonicalize_leaves_makakoo_paths_alone() {
+        with_makakoo_home("/tmp/nonexistent-makakoo-home", || {
+            let out = canonicalize_brain_path(
+                "/tmp/nonexistent-makakoo-home/data/Brain/journals/2026_04_19.md",
+            );
+            // No existing file → canonicalize best-effort returns input unchanged.
+            assert_eq!(
+                out,
+                "/tmp/nonexistent-makakoo-home/data/Brain/journals/2026_04_19.md"
+            );
+        });
+    }
+
+    #[test]
+    fn canonicalize_resolves_relative_paths() {
+        with_makakoo_home("/tmp/rel-makakoo-home", || {
+            let out = canonicalize_brain_path("data/Brain/pages/Tytus.md");
+            assert_eq!(out, "/tmp/rel-makakoo-home/data/Brain/pages/Tytus.md");
+        });
+    }
+
+    #[test]
+    fn canonicalize_empty_input_returns_empty() {
+        let out = canonicalize_brain_path("");
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn canonicalize_bare_harvey_home() {
+        with_makakoo_home("/mak", || {
+            let out = canonicalize_brain_path("/Users/sebastian/HARVEY");
+            assert_eq!(out, "/mak");
+        });
+    }
+
+    #[test]
+    fn track_batch_canonicalizes_harvey_path_before_insert() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("MAKAKOO_HOME", "/tmp/t-canon-home");
+        std::env::remove_var("HARVEY_HOME");
+        let (_d, t) = make_tracker();
+        let item = RecallItem::new(1, "/Users/sebastian/HARVEY/data/Brain/a.md", "body");
+        t.track(&item, "query").unwrap();
+        let conn = t.conn.lock().unwrap();
+        let path: String = conn
+            .query_row("SELECT doc_path FROM recall_log LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(path, "/tmp/t-canon-home/data/Brain/a.md");
     }
 }

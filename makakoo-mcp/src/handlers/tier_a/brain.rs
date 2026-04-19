@@ -7,11 +7,56 @@
 use async_trait::async_trait;
 use makakoo_core::llm::ChatMessage as LlmMessage;
 use makakoo_core::superbrain::memory_stack::{SemanticHit, SessionIdentity};
+use makakoo_core::superbrain::recall::RecallItem;
+use makakoo_core::superbrain::store::{SearchHit, VectorHit};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
 use crate::dispatch::{ToolContext, ToolHandler};
 use crate::jsonrpc::RpcError;
+
+/// Record a batch of FTS search hits into `recall_log`. Non-fatal —
+/// tracker absence or insert failure only warns in tracing.
+fn track_search_hits(ctx: &ToolContext, query: &str, hits: &[SearchHit], source: &str) {
+    let Some(tracker) = ctx.recall.as_ref() else {
+        return;
+    };
+    if hits.is_empty() || query.is_empty() {
+        return;
+    }
+    let items: Vec<RecallItem> = hits
+        .iter()
+        .map(|h| {
+            RecallItem::new(0, h.doc_id.clone(), h.content.clone())
+                .with_score(h.score as f64)
+                .with_source(source.to_string())
+        })
+        .collect();
+    if let Err(e) = tracker.track_batch(&items, query) {
+        tracing::warn!("recall track_batch failed (source={source}): {e}");
+    }
+}
+
+/// Record a batch of vector-similarity hits into `recall_log`. Non-fatal.
+fn track_vector_hits(ctx: &ToolContext, query: &str, hits: &[VectorHit], source: &str) {
+    let Some(tracker) = ctx.recall.as_ref() else {
+        return;
+    };
+    if hits.is_empty() || query.is_empty() {
+        return;
+    }
+    let items: Vec<RecallItem> = hits
+        .iter()
+        .map(|h| {
+            RecallItem::new(0, h.doc_id.clone(), h.content.clone())
+                .with_score(h.similarity as f64)
+                .with_source(source.to_string())
+        })
+        .collect();
+    if let Err(e) = tracker.track_batch(&items, query) {
+        tracing::warn!("recall track_batch (vector) failed (source={source}): {e}");
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
@@ -52,6 +97,28 @@ impl BrainSearchHandler {
     pub fn new(ctx: Arc<ToolContext>) -> Self {
         Self { ctx }
     }
+
+    /// Shared search body. Alias handlers call this with their own
+    /// `recall_source` string so `recall_log.source` reflects which MCP
+    /// tool name the client invoked.
+    async fn search_with_source(
+        &self,
+        params: Value,
+        recall_source: &str,
+    ) -> Result<Value, RpcError> {
+        let query = require_query(&params)?;
+        let limit = optional_u64(&params, "limit", 10) as usize;
+        let store = self
+            .ctx
+            .store
+            .as_ref()
+            .ok_or_else(|| RpcError::internal("subsystem not wired: store"))?;
+        let hits = store
+            .search(&query, limit)
+            .map_err(|e| RpcError::internal(format!("brain_search: {e}")))?;
+        track_search_hits(&self.ctx, &query, &hits, recall_source);
+        Ok(json!(hits))
+    }
 }
 
 #[async_trait]
@@ -74,17 +141,7 @@ impl ToolHandler for BrainSearchHandler {
         })
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
-        let query = require_query(&params)?;
-        let limit = optional_u64(&params, "limit", 10) as usize;
-        let store = self
-            .ctx
-            .store
-            .as_ref()
-            .ok_or_else(|| RpcError::internal("subsystem not wired: store"))?;
-        let hits = store
-            .search(&query, limit)
-            .map_err(|e| RpcError::internal(format!("brain_search: {e}")))?;
-        Ok(json!(hits))
+        self.search_with_source(params, "mcp:brain_search").await
     }
 }
 
@@ -113,7 +170,9 @@ impl ToolHandler for HarveyBrainSearchHandler {
         self.inner.input_schema()
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
-        self.inner.call(params).await
+        self.inner
+            .search_with_source(params, "mcp:harvey_brain_search")
+            .await
     }
 }
 
@@ -130,7 +189,7 @@ impl BrainQueryHandler {
         Self { ctx }
     }
 
-    async fn run(&self, params: Value) -> Result<Value, RpcError> {
+    async fn run(&self, params: Value, recall_source: &str) -> Result<Value, RpcError> {
         let query = require_query(&params)?;
         let top_k = optional_u64(&params, "top_k", 5) as usize;
 
@@ -142,6 +201,9 @@ impl BrainQueryHandler {
         let hits = store
             .search(&query, top_k)
             .map_err(|e| RpcError::internal(format!("brain_query: {e}")))?;
+
+        // Record underlying FTS hits regardless of LLM synthesis path.
+        track_search_hits(&self.ctx, &query, &hits, recall_source);
 
         // No LLM wired → return the hits unchanged with an empty answer.
         let llm = match self.ctx.llm.as_ref() {
@@ -218,7 +280,7 @@ impl ToolHandler for BrainQueryHandler {
         })
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
-        self.run(params).await
+        self.run(params, "mcp:brain_query").await
     }
 }
 
@@ -246,7 +308,9 @@ impl ToolHandler for HarveySuperbrainQueryHandler {
         self.inner.input_schema()
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
-        self.inner.call(params).await
+        self.inner
+            .run(params, "mcp:harvey_superbrain_query")
+            .await
     }
 }
 
@@ -484,6 +548,12 @@ impl ToolHandler for HarveySuperbrainVectorSearchHandler {
         let hits = store
             .vector_search(&qvec, limit)
             .map_err(|e| RpcError::internal(format!("vector_search: {e}")))?;
+        track_vector_hits(
+            &self.ctx,
+            &query,
+            &hits,
+            "mcp:harvey_superbrain_vector_search",
+        );
         Ok(json!(hits))
     }
 }
@@ -563,5 +633,153 @@ mod tests {
     fn harvey_superbrain_query_name() {
         let h = HarveySuperbrainQueryHandler::new(empty_ctx());
         assert_eq!(h.name(), "harvey_superbrain_query");
+    }
+
+    // ── Phase A — recall-tracking integration tests ──────────────────
+    //
+    // These wire a real SuperbrainStore + RecallTracker into a
+    // ToolContext, invoke the handler, and assert `recall_log` has a
+    // row. They prove MCP brain searches from any CLI now feed the
+    // memory promoter.
+
+    use makakoo_core::superbrain::recall::RecallTracker;
+    use makakoo_core::superbrain::store::SuperbrainStore;
+    use tempfile::tempdir;
+
+    fn wired_ctx(dir: &std::path::Path) -> (Arc<ToolContext>, Arc<SuperbrainStore>) {
+        let store = Arc::new(SuperbrainStore::open(&dir.join("sb.db")).unwrap());
+        let tracker = Arc::new(RecallTracker::new(store.conn_arc()));
+        // Seed one document so search has something to return.
+        store
+            .write_document(
+                "/tmp/makakoo-test-doc.md",
+                "the quick brown fox jumps over the lazy dog",
+                "page",
+                serde_json::json!([]),
+            )
+            .unwrap();
+        let ctx = Arc::new(
+            ToolContext::empty(dir.to_path_buf())
+                .with_store(store.clone())
+                .with_recall(tracker),
+        );
+        (ctx, store)
+    }
+
+    fn count_recall(store: &SuperbrainStore) -> i64 {
+        let conn = store.conn_arc();
+        let conn = conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM recall_log", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn first_recall_source(store: &SuperbrainStore) -> Option<String> {
+        let conn = store.conn_arc();
+        let conn = conn.lock().unwrap();
+        conn.query_row(
+            "SELECT source FROM recall_log ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
+    #[tokio::test]
+    async fn brain_search_writes_recall_log() {
+        let dir = tempdir().unwrap();
+        let (ctx, store) = wired_ctx(dir.path());
+        let h = BrainSearchHandler::new(ctx);
+        let out = h.call(json!({"query": "fox"})).await.unwrap();
+        assert!(out.is_array());
+        assert!(!out.as_array().unwrap().is_empty(), "should find the doc");
+        assert_eq!(count_recall(&store), 1);
+        assert_eq!(first_recall_source(&store).as_deref(), Some("mcp:brain_search"));
+    }
+
+    #[tokio::test]
+    async fn brain_search_without_tracker_is_safe() {
+        let dir = tempdir().unwrap();
+        // Wire store but NOT recall — handler must still succeed.
+        let store = Arc::new(SuperbrainStore::open(&dir.path().join("sb.db")).unwrap());
+        store
+            .write_document(
+                "/tmp/makakoo-no-track.md",
+                "hello world",
+                "page",
+                serde_json::json!([]),
+            )
+            .unwrap();
+        let ctx = Arc::new(ToolContext::empty(dir.path().to_path_buf()).with_store(store));
+        let h = BrainSearchHandler::new(ctx);
+        let out = h.call(json!({"query": "hello"})).await.unwrap();
+        assert!(out.is_array());
+    }
+
+    #[tokio::test]
+    async fn harvey_brain_search_uses_aliased_source() {
+        let dir = tempdir().unwrap();
+        let (ctx, store) = wired_ctx(dir.path());
+        let h = HarveyBrainSearchHandler::new(ctx);
+        h.call(json!({"query": "fox"})).await.unwrap();
+        assert_eq!(
+            first_recall_source(&store).as_deref(),
+            Some("mcp:harvey_brain_search")
+        );
+    }
+
+    #[tokio::test]
+    async fn brain_query_records_recall_for_each_hit() {
+        let dir = tempdir().unwrap();
+        let (ctx, store) = wired_ctx(dir.path());
+        // Seed a second doc so query returns multiple hits.
+        store
+            .as_ref()
+            .write_document(
+                "/tmp/makakoo-extra-doc.md",
+                "the lazy fox hops",
+                "page",
+                serde_json::json!([]),
+            )
+            .unwrap();
+        let h = BrainQueryHandler::new(ctx);
+        h.call(json!({"query": "fox", "top_k": 5})).await.unwrap();
+        assert!(count_recall(&store) >= 1);
+        assert_eq!(
+            first_recall_source(&store).as_deref(),
+            Some("mcp:brain_query")
+        );
+    }
+
+    #[tokio::test]
+    async fn harvey_superbrain_query_uses_aliased_source() {
+        let dir = tempdir().unwrap();
+        let (ctx, store) = wired_ctx(dir.path());
+        let h = HarveySuperbrainQueryHandler::new(ctx);
+        h.call(json!({"query": "fox"})).await.unwrap();
+        assert_eq!(
+            first_recall_source(&store).as_deref(),
+            Some("mcp:harvey_superbrain_query")
+        );
+    }
+
+    #[tokio::test]
+    async fn brain_search_empty_query_does_not_record() {
+        let dir = tempdir().unwrap();
+        let (ctx, store) = wired_ctx(dir.path());
+        let h = BrainSearchHandler::new(ctx);
+        let err = h.call(json!({"query": ""})).await.unwrap_err();
+        assert_eq!(err.code, crate::jsonrpc::INVALID_PARAMS);
+        assert_eq!(count_recall(&store), 0);
+    }
+
+    #[tokio::test]
+    async fn brain_search_no_hits_does_not_record() {
+        let dir = tempdir().unwrap();
+        let (ctx, store) = wired_ctx(dir.path());
+        let h = BrainSearchHandler::new(ctx);
+        h.call(json!({"query": "zxqwvnonsenseXYZ"}))
+            .await
+            .unwrap();
+        assert_eq!(count_recall(&store), 0);
     }
 }
