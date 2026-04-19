@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 
 pub mod ext;
+pub mod hooks;
 pub mod local;
 pub mod mcp;
 pub mod renderer;
@@ -288,6 +289,15 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
     print!("{}", mcp_report.human_summary());
     let mcp_failed = mcp_report.errors() > 0;
 
+    // 2b. GYM error-funnel hook install (sprint-010 Phase E). Runs
+    //     alongside bootstrap + MCP so every CLI that has a hook-
+    //     compatible surface gets the same error-capture plumbing.
+    //     Independent of the target filter — the CLI subset governs
+    //     bootstrap/MCP, whereas hooks always target the 3-CLI set.
+    let hook_report = hooks::install_gym_hooks(&home, dry_run);
+    print!("{}", hook_report.human_summary());
+    let hook_failed = hook_report.error_count() > 0;
+
     // 3. Symlink + recursive-symlink repair pass (only on real run).
     // Reuses the drift audit so repair only touches what's actually
     // broken — never recreates a working symlink.
@@ -315,7 +325,11 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
         }
     }
 
-    Ok(if bootstrap_failed || mcp_failed { 1 } else { 0 })
+    Ok(if bootstrap_failed || mcp_failed || hook_failed {
+        1
+    } else {
+        0
+    })
 }
 
 /// Route `--local` → the project-scoped dispatch in `infect::local`. Resolves

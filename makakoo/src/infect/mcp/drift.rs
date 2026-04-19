@@ -29,6 +29,11 @@ pub struct DriftReport {
     pub skills_broken: bool,
     pub skills_wrong_target: bool,
     pub recursive_symlink_in_memory: bool,
+    /// Sprint-010: GYM error-funnel hook missing from a CLI that
+    /// supports the JS Stop-hook convention (claude, gemini, opencode).
+    pub gym_hook_missing: bool,
+    /// Sprint-010: GYM hook present but content diverges from canonical.
+    pub gym_hook_divergent: bool,
 }
 
 impl DriftReport {
@@ -42,6 +47,8 @@ impl DriftReport {
             && !self.skills_broken
             && !self.skills_wrong_target
             && !self.recursive_symlink_in_memory
+            && !self.gym_hook_missing
+            && !self.gym_hook_divergent
     }
 
     pub fn issue_count(&self) -> usize {
@@ -55,6 +62,8 @@ impl DriftReport {
             self.skills_broken,
             self.skills_wrong_target,
             self.recursive_symlink_in_memory,
+            self.gym_hook_missing,
+            self.gym_hook_divergent,
         ]
         .iter()
         .filter(|x| **x)
@@ -89,6 +98,12 @@ impl DriftReport {
         }
         if self.recursive_symlink_in_memory {
             out.push("recursive-symlink-in-memory");
+        }
+        if self.gym_hook_missing {
+            out.push("gym-hook-missing");
+        }
+        if self.gym_hook_divergent {
+            out.push("gym-hook-divergent");
         }
         out
     }
@@ -163,7 +178,27 @@ pub fn audit(
         }
     }
 
+    // -- GYM error-funnel hook (only CLIs with JS Stop-hook surface) ---
+    // Only 3 of 7 targets have a JS hook convention today — the others
+    // report `NotApplicable` and leave both flags false (clean).
+    if let Some(slot) = gym_hook_slot_for_target(&target) {
+        use crate::infect::hooks::{audit_hook, HookDriftState};
+        match audit_hook(slot, home) {
+            HookDriftState::NotApplicable | HookDriftState::Clean => {}
+            HookDriftState::Missing => r.gym_hook_missing = true,
+            HookDriftState::Divergent => r.gym_hook_divergent = true,
+        }
+    }
+
     r
+}
+
+/// Map an `McpTarget` to its `HookSlot` if one exists. Codex, Qwen,
+/// Cursor, Vibe return `None` (documented gap — see hooks.rs).
+fn gym_hook_slot_for_target(target: &McpTarget) -> Option<&'static crate::infect::hooks::HookSlot> {
+    use crate::infect::hooks::HOOK_SLOTS;
+    let name = target.short_name();
+    HOOK_SLOTS.iter().find(|s| s.name == name)
 }
 
 /// Audit every target. See [`audit`] for the home/makakoo_home split.
@@ -483,6 +518,58 @@ mod tests {
         let actions = repair_symlinks(dir.path(), dir.path(), McpTarget::Vibe, &drift);
         assert!(actions.iter().any(|a| a.contains("removed recursive")));
         assert!(!recursive.exists());
+    }
+
+    #[test]
+    fn detects_missing_gym_hook_for_claude() {
+        // Claude installed (~/.claude exists), hook absent.
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        let r = audit(dir.path(), dir.path(), McpTarget::Claude, &spec(dir.path()));
+        assert!(
+            r.gym_hook_missing,
+            "expected gym_hook_missing, got: {:?}",
+            r.issues_human()
+        );
+        assert!(r.issues_human().contains(&"gym-hook-missing"));
+    }
+
+    #[test]
+    fn gym_hook_clean_after_infect_installs_hook() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/hooks")).unwrap();
+        // Write canonical content.
+        std::fs::write(
+            dir.path().join(".claude/hooks/harvey-gym-error.js"),
+            crate::infect::hooks::GYM_HOOK_SOURCE,
+        )
+        .unwrap();
+        let r = audit(dir.path(), dir.path(), McpTarget::Claude, &spec(dir.path()));
+        assert!(!r.gym_hook_missing);
+        assert!(!r.gym_hook_divergent);
+    }
+
+    #[test]
+    fn detects_divergent_gym_hook() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/hooks")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude/hooks/harvey-gym-error.js"),
+            b"// stale content",
+        )
+        .unwrap();
+        let r = audit(dir.path(), dir.path(), McpTarget::Claude, &spec(dir.path()));
+        assert!(r.gym_hook_divergent);
+    }
+
+    #[test]
+    fn gym_hook_not_audited_for_cli_without_hook_surface() {
+        // Codex has no HookSlot — hook fields always false.
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        let r = audit(dir.path(), dir.path(), McpTarget::Codex, &spec(dir.path()));
+        assert!(!r.gym_hook_missing);
+        assert!(!r.gym_hook_divergent);
     }
 
     #[test]
