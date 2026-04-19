@@ -2,6 +2,7 @@
 
 use anyhow::Context;
 
+use makakoo_core::superbrain::diagnostics::{compute_stats, MemoryStats};
 use makakoo_core::superbrain::recall::{migrate_legacy_paths, LegacyPathReport};
 
 use crate::cli::MemoryCmd;
@@ -38,9 +39,67 @@ fn print_report(r: &LegacyPathReport, dry_run: bool) {
     }
 }
 
-fn stats(_ctx: &CliContext, _json: bool) -> anyhow::Result<i32> {
-    // Implemented in Phase C.
-    anyhow::bail!("`makakoo memory stats` ships in sprint-010 Phase C");
+fn stats(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
+    let store = ctx.store().context("opening superbrain store")?;
+    let conn_arc = store.conn_arc();
+    let conn = conn_arc
+        .lock()
+        .map_err(|_| anyhow::anyhow!("superbrain connection mutex poisoned"))?;
+    let stats = compute_stats(&conn).context("computing memory stats")?;
+    drop(conn);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&stats)?);
+    } else {
+        print_stats_human(&stats);
+    }
+    Ok(0)
+}
+
+fn print_stats_human(s: &MemoryStats) {
+    let t = &s.thresholds;
+    println!("Recall log:");
+    println!("  total entries:        {}", s.recall_log.total);
+    println!("  today:                {}", s.recall_log.today);
+    println!("  last 7d:              {}", s.recall_log.last_7d);
+    if s.recall_log.by_source.is_empty() {
+        println!("  by source:            (none)");
+    } else {
+        println!("  by source:");
+        for (src, n) in &s.recall_log.by_source {
+            println!("    {src:<32} {n}");
+        }
+    }
+    println!();
+    println!("Recall stats (promoter input):");
+    println!(
+        "  total content_hashes:                         {}",
+        s.recall_stats.total_content_hashes
+    );
+    println!(
+        "  passing MIN_RECALL_COUNT({}):                   {}",
+        t.min_recall_count, s.recall_stats.passing_min_recall_count
+    );
+    println!(
+        "  passing MIN_UNIQUE_QUERIES({}):                 {}",
+        t.min_unique_queries, s.recall_stats.passing_min_unique_queries
+    );
+    println!(
+        "  passing MAX_AGE_DAYS({}):                      {}",
+        t.max_age_days, s.recall_stats.passing_max_age_days
+    );
+    println!(
+        "  (MIN_SCORE({:.2}) applied inside promoter — see tracing)",
+        t.min_score
+    );
+    println!();
+    println!("Memory promotions:");
+    println!("  total:        {}", s.memory_promotions.total);
+    println!("  last 7d:      {}", s.memory_promotions.last_7d);
+    match &s.memory_promotions.last_promoted_at {
+        Some(ts) => println!("  last at:      {ts}"),
+        None => println!("  last at:      (never)"),
+    }
 }
 
 #[cfg(test)]

@@ -109,30 +109,44 @@ impl MemoryPromoter {
         Ok(row.map(|r| score_row(&r).0))
     }
 
-    /// Rank all non-promoted candidates by composite score.
+    /// Rank all non-promoted candidates by composite score. Emits a
+    /// single `info` tracing event per run with kill-count breakdown by
+    /// filter, so `makakoo memory stats` and operator logs have
+    /// observable pipeline pressure.
     pub fn rank_candidates(&self) -> Result<Vec<Promotion>> {
         let conn = self.conn.lock().expect("promoter conn poisoned");
         let rows = load_all_rows(&conn)?;
         drop(conn);
 
+        let total = rows.len();
+        let mut killed_promoted = 0usize;
+        let mut killed_recall_count = 0usize;
+        let mut killed_unique_queries = 0usize;
+        let mut killed_age = 0usize;
+        let mut killed_score = 0usize;
         let mut out = Vec::new();
         for r in rows {
             if r.promoted_at.is_some() {
+                killed_promoted += 1;
                 continue;
             }
             if r.recall_count < MIN_RECALL_COUNT {
+                killed_recall_count += 1;
                 continue;
             }
             if r.unique_queries < MIN_UNIQUE_QUERIES {
+                killed_unique_queries += 1;
                 continue;
             }
             if let Some(age) = age_days(&r.first_recalled_at) {
                 if age > MAX_AGE_DAYS {
+                    killed_age += 1;
                     continue;
                 }
             }
             let (score, components) = score_row(&r);
             if score < MIN_SCORE {
+                killed_score += 1;
                 continue;
             }
             out.push(Promotion {
@@ -143,6 +157,16 @@ impl MemoryPromoter {
                 components,
             });
         }
+        tracing::info!(
+            total_candidates = total,
+            already_promoted = killed_promoted,
+            killed_recall_count_lt_min = killed_recall_count,
+            killed_unique_queries_lt_min = killed_unique_queries,
+            killed_age_gt_max = killed_age,
+            killed_score_lt_min = killed_score,
+            ranked = out.len(),
+            "memory_promoter: rank_candidates"
+        );
         out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         out.truncate(MAX_PROMOTIONS_PER_RUN);
         Ok(out)
