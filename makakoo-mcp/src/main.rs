@@ -135,11 +135,20 @@ async fn build_context() -> Result<ToolContext> {
                 Arc::clone(&graph),
             ));
             let costs = Arc::new(makakoo_core::telemetry::CostTracker::new(Arc::clone(&conn)));
+            // Sprint-010 Phase A: wire RecallTracker so MCP brain-search
+            // handlers can write to `recall_log`. Shares the same sqlite
+            // connection as the superbrain store — `track_batch` runs in
+            // its own transaction so writer contention is serialised
+            // without a second DB handle.
+            let recall = Arc::new(makakoo_core::superbrain::recall::RecallTracker::new(
+                Arc::clone(&conn),
+            ));
             ctx = ctx
                 .with_store(store_arc)
                 .with_graph(graph)
                 .with_memory(memory)
-                .with_costs(costs);
+                .with_costs(costs)
+                .with_recall(recall);
 
             // Outbound queue shares the superbrain connection — the
             // `outbound_drafts` table is part of the same migration set
@@ -244,4 +253,34 @@ async fn build_swarm_state(
         coordinator,
         artifacts,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sprint-010 regression guard: whenever the superbrain store is
+    /// reachable, `build_context` MUST also wire a `RecallTracker`.
+    /// Without this, MCP brain-search handlers silently skip the
+    /// `track_batch` call (ctx.recall.is_none()) and no `recall_log`
+    /// rows get written — which was the original bug Phase A fixed at
+    /// the handler layer but left un-wired at the context layer.
+    #[tokio::test]
+    async fn build_context_wires_recall_when_store_is_reachable() {
+        let dir = tempfile::tempdir().unwrap();
+        // Point MAKAKOO_HOME at the tempdir so build_context opens a
+        // fresh store instead of the real one.
+        let prev = std::env::var("MAKAKOO_HOME").ok();
+        std::env::set_var("MAKAKOO_HOME", dir.path());
+        let ctx = build_context().await.unwrap();
+        match prev {
+            Some(v) => std::env::set_var("MAKAKOO_HOME", v),
+            None => std::env::remove_var("MAKAKOO_HOME"),
+        }
+        assert!(ctx.store.is_some(), "store should open under fresh MAKAKOO_HOME");
+        assert!(
+            ctx.recall.is_some(),
+            "recall tracker must be wired whenever store is — sprint-010 phase-a"
+        );
+    }
 }
