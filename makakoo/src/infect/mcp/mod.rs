@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub mod adapters;
+pub mod deep;
 pub mod drift;
 pub mod target;
 

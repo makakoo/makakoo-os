@@ -166,6 +166,16 @@ pub enum Commands {
         /// Only meaningful with `--verify`; an error otherwise.
         #[arg(long)]
         json: bool,
+        /// Extend `--verify` to also audit per-project (`~/.claude.json`
+        /// `projects[*].mcpServers.harvey`), workspace-local `.mcp.json`
+        /// files, and prunable `git worktree` records. Only meaningful
+        /// with `--verify`. Implies repair when combined with `--repair`.
+        #[arg(long)]
+        deep: bool,
+        /// With `--verify --deep`, apply canonical rewrites to every
+        /// zombie entry found. Without `--repair`, `--deep` is read-only.
+        #[arg(long)]
+        repair: bool,
         /// Preview what would be written without touching any files.
         #[arg(long)]
         dry_run: bool,

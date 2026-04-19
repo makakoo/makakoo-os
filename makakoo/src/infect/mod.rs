@@ -156,10 +156,21 @@ pub async fn run(_global: bool, dry_run: bool) -> Result<InfectReport> {
 /// shape — changing it is a breaking change, so the test suite locks
 /// the keys.
 pub fn format_verify_json(drifts: &[mcp::drift::DriftReport]) -> serde_json::Value {
-    let dirty_count = drifts.iter().filter(|d| !d.is_clean()).count();
-    serde_json::json!({
-        "clean": dirty_count == 0,
-        "dirty_count": dirty_count,
+    format_verify_json_with_deep(drifts, None)
+}
+
+/// Extended JSON payload that includes the deep audit when `--deep` is
+/// passed. Additive schema: the `deep` field is omitted when `None` so
+/// existing watchdogs keep seeing the old shape unchanged.
+pub fn format_verify_json_with_deep(
+    drifts: &[mcp::drift::DriftReport],
+    deep: Option<&mcp::deep::DeepDriftReport>,
+) -> serde_json::Value {
+    let shallow_dirty = drifts.iter().filter(|d| !d.is_clean()).count();
+    let deep_dirty = deep.map(|d| d.total_issue_count()).unwrap_or(0);
+    let mut obj = serde_json::json!({
+        "clean": shallow_dirty == 0 && deep_dirty == 0,
+        "dirty_count": shallow_dirty,
         "targets": drifts
             .iter()
             .map(|d| {
@@ -172,7 +183,13 @@ pub fn format_verify_json(drifts: &[mcp::drift::DriftReport]) -> serde_json::Val
                 })
             })
             .collect::<Vec<_>>(),
-    })
+    });
+    if let Some(d) = deep {
+        obj.as_object_mut()
+            .expect("json object")
+            .insert("deep".to_string(), mcp::deep::to_json(d));
+    }
+    obj
 }
 
 /// Struct-packed CLI args — keeps the function signature stable as new
@@ -183,6 +200,8 @@ pub struct InfectArgs {
     pub mcp: bool,
     pub verify: bool,
     pub json: bool,
+    pub deep: bool,
+    pub repair: bool,
     pub dry_run: bool,
     pub target: Vec<String>,
     pub local: bool,
@@ -216,6 +235,20 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
         );
         return Ok(2);
     }
+    if (args.deep || args.repair) && !args.verify {
+        eprintln!(
+            "error: --deep / --repair only apply to --verify. \
+             Run `makakoo infect --verify --deep [--repair]`."
+        );
+        return Ok(2);
+    }
+    if args.repair && !args.deep {
+        eprintln!(
+            "error: --repair requires --deep. \
+             Shallow drift is already repaired on every `infect --global` run."
+        );
+        return Ok(2);
+    }
 
     if args.local {
         return dispatch_local_cli(args).await;
@@ -228,6 +261,8 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
         mcp: mcp_only,
         verify,
         json,
+        deep,
+        repair,
         dry_run,
         target,
         ..
@@ -245,13 +280,36 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
 
     if verify {
         // Audit-only: full drift scan (MCP + bootstrap markers + symlinks).
-        // Exits 1 if any drift detected.
+        // With --deep, extend into per-project / workspace / worktree scopes.
+        // Exits 1 if any drift detected (0 on clean, even after --repair).
         let spec = mcp::McpServerSpec::default_harvey(&makakoo_home, mcp_binary.as_deref());
         let drifts = mcp::drift::audit_all(&home, &makakoo_home, &spec);
-        let dirty_count = drifts.iter().filter(|d| !d.is_clean()).count();
+        let shallow_dirty = drifts.iter().filter(|d| !d.is_clean()).count();
+
+        let mut deep_report = if deep {
+            Some(mcp::deep::deep_audit(&home, &makakoo_home, &spec, &[]))
+        } else {
+            None
+        };
+
+        let mut repair_actions: Vec<String> = Vec::new();
+        if repair {
+            if let Some(report) = deep_report.as_ref() {
+                if !report.is_clean() {
+                    repair_actions = mcp::deep::repair_deep(&home, &spec, report);
+                    // Re-audit so the final report reflects post-repair state.
+                    deep_report = Some(mcp::deep::deep_audit(&home, &makakoo_home, &spec, &[]));
+                }
+            }
+        }
+
+        let deep_dirty = deep_report.as_ref().map(|d| d.total_issue_count()).unwrap_or(0);
 
         if json {
-            println!("{}", serde_json::to_string(&format_verify_json(&drifts))?);
+            println!(
+                "{}",
+                serde_json::to_string(&format_verify_json_with_deep(&drifts, deep_report.as_ref()))?
+            );
         } else {
             println!("makakoo infect --verify (full drift scan) — 7 target(s)");
             for d in &drifts {
@@ -267,8 +325,46 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
                     );
                 }
             }
+            if let Some(report) = deep_report.as_ref() {
+                println!(
+                    "\nmakakoo infect --verify --deep (project + workspace + worktree)"
+                );
+                if report.is_clean() {
+                    println!("  deep scan: clean");
+                } else {
+                    for p in &report.claude_projects {
+                        println!(
+                            "  claude project scope   {}: {}",
+                            p.project_key,
+                            p.issues_human().join(", ")
+                        );
+                    }
+                    for w in &report.workspaces {
+                        println!(
+                            "  workspace .mcp.json    {}: {}",
+                            w.path.display(),
+                            w.issues_human().join(", ")
+                        );
+                    }
+                    for pw in &report.prunable_worktrees {
+                        println!(
+                            "  prunable worktree       {} (dead path: {}) — {}",
+                            pw.worktree_name,
+                            pw.dead_path.display(),
+                            pw.reason
+                        );
+                    }
+                }
+                for action in &repair_actions {
+                    println!("  deep-repair: {}", action);
+                }
+            }
         }
-        return Ok(if dirty_count == 0 { 0 } else { 1 });
+        return Ok(if shallow_dirty == 0 && deep_dirty == 0 {
+            0
+        } else {
+            1
+        });
     }
 
     let mut bootstrap_failed = false;
@@ -695,6 +791,8 @@ mod tests {
             mcp: false,
             verify: false,
             json: false,
+            deep: false,
+            repair: false,
             dry_run: false,
             target: vec![],
             local: true,
@@ -719,6 +817,8 @@ mod tests {
             mcp: false,
             verify: false,
             json: true,
+            deep: false,
+            repair: false,
             dry_run: false,
             target: vec![],
             local: false,
@@ -734,5 +834,96 @@ mod tests {
             code, 2,
             "dispatch should return 2 when --json is passed without --verify"
         );
+    }
+
+    #[tokio::test]
+    async fn deep_without_verify_is_rejected() {
+        let code = dispatch(InfectArgs {
+            global: false,
+            mcp: false,
+            verify: false,
+            json: false,
+            deep: true,
+            repair: false,
+            dry_run: false,
+            target: vec![],
+            local: false,
+            dir: None,
+            detect_installed_only: false,
+            force_all: false,
+            remove: false,
+            ignore_derivatives: false,
+        })
+        .await
+        .unwrap();
+        assert_eq!(code, 2, "--deep alone must be rejected");
+    }
+
+    #[tokio::test]
+    async fn repair_without_deep_is_rejected() {
+        let code = dispatch(InfectArgs {
+            global: false,
+            mcp: false,
+            verify: true,
+            json: false,
+            deep: false,
+            repair: true,
+            dry_run: false,
+            target: vec![],
+            local: false,
+            dir: None,
+            detect_installed_only: false,
+            force_all: false,
+            remove: false,
+            ignore_derivatives: false,
+        })
+        .await
+        .unwrap();
+        assert_eq!(code, 2, "--repair requires --deep");
+    }
+
+    #[test]
+    fn verify_json_with_deep_reports_clean_state() {
+        let drifts = vec![mcp::drift::DriftReport {
+            target: Some(mcp::McpTarget::Claude),
+            ..Default::default()
+        }];
+        let deep = mcp::deep::DeepDriftReport::default();
+        let v = format_verify_json_with_deep(&drifts, Some(&deep));
+        assert_eq!(v["clean"], true);
+        assert_eq!(v["deep"]["clean"], true);
+        assert_eq!(v["deep"]["total_issues"], 0);
+    }
+
+    #[test]
+    fn verify_json_without_deep_omits_deep_key() {
+        let drifts = vec![mcp::drift::DriftReport {
+            target: Some(mcp::McpTarget::Claude),
+            ..Default::default()
+        }];
+        let v = format_verify_json_with_deep(&drifts, None);
+        assert!(
+            v.get("deep").is_none(),
+            "deep key must be omitted when None: {v}"
+        );
+    }
+
+    #[test]
+    fn verify_json_with_deep_marks_dirty_when_deep_has_issues() {
+        let drifts: Vec<mcp::drift::DriftReport> = vec![];
+        let deep = mcp::deep::DeepDriftReport {
+            claude_projects: vec![mcp::deep::ProjectDrift {
+                project_key: "/p".to_string(),
+                claude_json_path: std::path::PathBuf::from("/c"),
+                command_stale: true,
+                args_stale: false,
+                zombie_env_keys: vec![],
+            }],
+            workspaces: vec![],
+            prunable_worktrees: vec![],
+        };
+        let v = format_verify_json_with_deep(&drifts, Some(&deep));
+        assert_eq!(v["clean"], false);
+        assert_eq!(v["deep"]["clean"], false);
     }
 }
