@@ -12,6 +12,7 @@ pub mod dream;
 pub mod flag;
 pub mod install;
 pub mod mcp;
+pub mod memory;
 pub mod migrate;
 pub mod nursery;
 pub mod plugin;
@@ -51,6 +52,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             embed_limit,
             file,
         } => sync::run(ctx, force, embed, no_auto_memory, embed_limit, file).await,
+        Commands::Memory { cmd } => memory::run(ctx, cmd).await,
         Commands::Promotions { threshold, limit } => {
             promotions::run(ctx, threshold, limit)
         }

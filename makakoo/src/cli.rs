@@ -104,6 +104,12 @@ pub enum Commands {
         file: Option<std::path::PathBuf>,
     },
 
+    /// Memory subsystem diagnostics and maintenance.
+    Memory {
+        #[command(subcommand)]
+        cmd: MemoryCmd,
+    },
+
     /// Print memory promotion candidates.
     Promotions {
         /// Only include candidates scoring at or above this threshold.
@@ -346,6 +352,25 @@ pub enum SecretCmd {
     Delete {
         /// Canonical key name.
         key: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MemoryCmd {
+    /// Rewrite legacy `/Users/sebastian/HARVEY/` paths in `recall_log`,
+    /// `recall_stats`, and `memory_promotions` to the canonical
+    /// `/Users/sebastian/MAKAKOO/` form. Sprint-010 migration.
+    PurgeLegacy {
+        /// Report counts without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Print memory pipeline diagnostics — recall_log, recall_stats,
+    /// promoter gate pass-rates, last promoter run.
+    Stats {
+        /// Emit machine-readable JSON instead of the default table.
+        #[arg(long)]
+        json: bool,
     },
 }
 

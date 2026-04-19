@@ -99,6 +99,101 @@ type StatsAggregate = (
     String, // last_recalled_at
 );
 
+/// Report from [`migrate_legacy_paths`]. All counts are the number of
+/// rows rewritten (or that would be rewritten in dry-run mode).
+#[derive(Debug, Default, Clone)]
+pub struct LegacyPathReport {
+    pub recall_log_rewritten: i64,
+    pub recall_stats_rewritten: i64,
+    pub memory_promotions_rewritten: i64,
+    pub recall_stats_deduped: i64,
+}
+
+/// Rewrite legacy `/Users/sebastian/HARVEY/` paths to the equivalent
+/// `/Users/sebastian/MAKAKOO/` paths across `recall_log`, `recall_stats`,
+/// and `memory_promotions`. Deduplicate `recall_stats` on `content_hash`
+/// (keep oldest rowid) if the rewrite creates collisions.
+///
+/// In `dry_run` mode the report contains the counts that WOULD be
+/// rewritten but no UPDATE runs. Idempotent — a second run produces a
+/// zero-count report.
+pub fn migrate_legacy_paths(conn: &Connection, dry_run: bool) -> Result<LegacyPathReport> {
+    let count_prefix = |table: &str| -> Result<i64> {
+        let sql = format!(
+            "SELECT COUNT(*) FROM {table} WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'"
+        );
+        Ok(conn.query_row(&sql, [], |r| r.get::<_, i64>(0))?)
+    };
+
+    let recall_log_n = count_prefix("recall_log")?;
+    let recall_stats_n = count_prefix("recall_stats")?;
+    let memory_promotions_n = count_prefix("memory_promotions")?;
+
+    let mut report = LegacyPathReport {
+        recall_log_rewritten: recall_log_n,
+        recall_stats_rewritten: recall_stats_n,
+        memory_promotions_rewritten: memory_promotions_n,
+        ..Default::default()
+    };
+
+    if dry_run {
+        // Still compute the would-be dedup count so the user sees the full
+        // shape of the operation. Copy recall_stats rows into a temp view
+        // after simulated rewrite, count collisions.
+        let would_dedup: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(n), 0) FROM (
+                SELECT COUNT(*) - 1 AS n
+                FROM recall_stats
+                GROUP BY content_hash,
+                    REPLACE(doc_path, '/Users/sebastian/HARVEY/', '/Users/sebastian/MAKAKOO/')
+                HAVING COUNT(*) > 1
+            )",
+            [],
+            |r| r.get(0),
+        )?;
+        report.recall_stats_deduped = would_dedup;
+        return Ok(report);
+    }
+
+    // ── real run ─────────────────────────────────────────────────
+    conn.execute(
+        "UPDATE recall_log
+            SET doc_path = REPLACE(doc_path,
+                '/Users/sebastian/HARVEY/', '/Users/sebastian/MAKAKOO/')
+          WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE recall_stats
+            SET doc_path = REPLACE(doc_path,
+                '/Users/sebastian/HARVEY/', '/Users/sebastian/MAKAKOO/')
+          WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE memory_promotions
+            SET doc_path = REPLACE(doc_path,
+                '/Users/sebastian/HARVEY/', '/Users/sebastian/MAKAKOO/')
+          WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'",
+        [],
+    )?;
+
+    // Deduplicate recall_stats on content_hash: rewrite may have
+    // converted two different-path rows (HARVEY vs MAKAKOO) into two
+    // identical content_hash rows. Keep the oldest rowid to preserve
+    // first_recalled_at history.
+    let dedup_n = conn.execute(
+        "DELETE FROM recall_stats
+          WHERE rowid NOT IN (
+              SELECT MIN(rowid) FROM recall_stats GROUP BY content_hash
+          )",
+        [],
+    )? as i64;
+    report.recall_stats_deduped = dedup_n;
+
+    Ok(report)
+}
+
 /// A single recall event — one search result for one query.
 #[derive(Debug, Clone)]
 pub struct RecallItem {
@@ -487,6 +582,144 @@ mod tests {
             let out = canonicalize_brain_path("/Users/sebastian/HARVEY");
             assert_eq!(out, "/mak");
         });
+    }
+
+    // ── Phase B — migrate_legacy_paths tests ─────────────────────
+    fn seed_harvey_rows(conn: &Connection) {
+        // recall_log
+        conn.execute(
+            "INSERT INTO recall_log
+                (doc_id, doc_path, content_hash, query_hash, score, source)
+             VALUES (1, '/Users/sebastian/HARVEY/data/Brain/pages/Tytus.md',
+                     'h1', 'q1', 0.9, 'superbrain')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO recall_log
+                (doc_id, doc_path, content_hash, query_hash, score, source)
+             VALUES (2, '/Users/sebastian/HARVEY/data/Brain/journals/2026_04_15.md',
+                     'h2', 'q1', 0.8, 'superbrain')",
+            [],
+        )
+        .unwrap();
+        // recall_stats
+        conn.execute(
+            "INSERT INTO recall_stats
+                (content_hash, doc_id, doc_path, recall_count, unique_queries,
+                 unique_days, total_score, max_score)
+             VALUES ('h1', 1, '/Users/sebastian/HARVEY/data/Brain/pages/Tytus.md',
+                     3, 2, 2, 2.5, 0.9)",
+            [],
+        )
+        .unwrap();
+        // memory_promotions
+        conn.execute(
+            "INSERT INTO memory_promotions
+                (content_hash, doc_id, doc_path, promoted_at, reason)
+             VALUES ('h1', 1, '/Users/sebastian/HARVEY/data/Brain/pages/Tytus.md',
+                     datetime('now'), 'score=0.82')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migrate_legacy_paths_dry_run_reports_counts_without_writing() {
+        let (_d, t) = make_tracker();
+        {
+            let conn = t.conn.lock().unwrap();
+            seed_harvey_rows(&conn);
+            let rep = migrate_legacy_paths(&conn, true).unwrap();
+            assert_eq!(rep.recall_log_rewritten, 2);
+            assert_eq!(rep.recall_stats_rewritten, 1);
+            assert_eq!(rep.memory_promotions_rewritten, 1);
+            // Still on HARVEY path after dry-run.
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM recall_log WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 2);
+        }
+    }
+
+    #[test]
+    fn migrate_legacy_paths_rewrites_all_three_tables() {
+        let (_d, t) = make_tracker();
+        {
+            let conn = t.conn.lock().unwrap();
+            seed_harvey_rows(&conn);
+            let rep = migrate_legacy_paths(&conn, false).unwrap();
+            assert_eq!(rep.recall_log_rewritten, 2);
+            assert_eq!(rep.recall_stats_rewritten, 1);
+            assert_eq!(rep.memory_promotions_rewritten, 1);
+
+            for table in ["recall_log", "recall_stats", "memory_promotions"] {
+                let n: i64 = conn
+                    .query_row(
+                        &format!(
+                            "SELECT COUNT(*) FROM {table} WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'"
+                        ),
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(n, 0, "{table} still has HARVEY paths");
+            }
+        }
+    }
+
+    #[test]
+    fn migrate_legacy_paths_is_idempotent() {
+        let (_d, t) = make_tracker();
+        {
+            let conn = t.conn.lock().unwrap();
+            seed_harvey_rows(&conn);
+            let _ = migrate_legacy_paths(&conn, false).unwrap();
+            let rep2 = migrate_legacy_paths(&conn, false).unwrap();
+            assert_eq!(rep2.recall_log_rewritten, 0);
+            assert_eq!(rep2.recall_stats_rewritten, 0);
+            assert_eq!(rep2.memory_promotions_rewritten, 0);
+        }
+    }
+
+    #[test]
+    fn migrate_legacy_paths_dedupes_content_hash_collisions() {
+        let (_d, t) = make_tracker();
+        {
+            let conn = t.conn.lock().unwrap();
+            // Seed a pair that will collide on content_hash after rewrite:
+            // same hash, HARVEY and MAKAKOO paths already present.
+            conn.execute(
+                "INSERT INTO recall_stats (content_hash, doc_id, doc_path, recall_count, unique_queries, unique_days, total_score, max_score)
+                 VALUES ('collide', 1, '/Users/sebastian/HARVEY/x.md', 2, 1, 1, 0.8, 0.8)",
+                [],
+            ).unwrap();
+            // Now rewrite — after rewrite the HARVEY row becomes MAKAKOO/x.md.
+            // Seed an existing MAKAKOO row with same content_hash.
+            conn.execute(
+                "INSERT INTO recall_stats (content_hash, doc_id, doc_path, recall_count, unique_queries, unique_days, total_score, max_score)
+                 VALUES ('collide', 1, '/tmp/other.md', 2, 1, 1, 0.8, 0.8)",
+                [],
+            ).unwrap_err();
+            // PRIMARY KEY(content_hash) blocks the raw second insert.
+            // So the real collision scenario for this schema is: schemas
+            // use content_hash PRIMARY KEY — dedup is defense-in-depth only.
+            // Verify the DELETE runs with no spurious removals when there
+            // are no duplicates possible.
+            let n_before: i64 = conn
+                .query_row("SELECT COUNT(*) FROM recall_stats", [], |r| r.get(0))
+                .unwrap();
+            let rep = migrate_legacy_paths(&conn, false).unwrap();
+            let n_after: i64 = conn
+                .query_row("SELECT COUNT(*) FROM recall_stats", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n_before, n_after, "dedup must not drop rows with no duplicates");
+            assert_eq!(rep.recall_stats_deduped, 0);
+        }
     }
 
     #[test]
