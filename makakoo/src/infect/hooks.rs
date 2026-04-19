@@ -173,24 +173,10 @@ fn install_one(slot: &HookSlot, home: &Path, dry_run: bool) -> HookInstallResult
         };
     }
 
-    if dry_run {
-        return HookInstallResult {
-            slot_name: slot.name,
-            path: target_file,
-            status: HookInstallStatus::DryRun,
-        };
-    }
-
-    // Ensure hook dir exists.
-    if let Err(e) = std::fs::create_dir_all(&target_dir) {
-        return HookInstallResult {
-            slot_name: slot.name,
-            path: target_file,
-            status: HookInstallStatus::Error(format!("create hook dir: {e}")),
-        };
-    }
-
-    // Compare existing content if present.
+    // Compare existing content if present — same logic for dry-run and
+    // real-run so `--dry-run` previews accurately (Unchanged when the
+    // hook already matches; DryRun only when a write would actually
+    // happen).
     if target_file.exists() {
         match std::fs::read_to_string(&target_file) {
             Ok(existing) if existing == GYM_HOOK_SOURCE => {
@@ -201,6 +187,13 @@ fn install_one(slot: &HookSlot, home: &Path, dry_run: bool) -> HookInstallResult
                 };
             }
             Ok(_) => {
+                if dry_run {
+                    return HookInstallResult {
+                        slot_name: slot.name,
+                        path: target_file,
+                        status: HookInstallStatus::DryRun,
+                    };
+                }
                 if let Err(e) = std::fs::write(&target_file, GYM_HOOK_SOURCE) {
                     return HookInstallResult {
                         slot_name: slot.name,
@@ -222,6 +215,23 @@ fn install_one(slot: &HookSlot, home: &Path, dry_run: bool) -> HookInstallResult
                 };
             }
         }
+    }
+
+    if dry_run {
+        return HookInstallResult {
+            slot_name: slot.name,
+            path: target_file,
+            status: HookInstallStatus::DryRun,
+        };
+    }
+
+    // Ensure hook dir exists before writing fresh.
+    if let Err(e) = std::fs::create_dir_all(&target_dir) {
+        return HookInstallResult {
+            slot_name: slot.name,
+            path: target_file,
+            status: HookInstallStatus::Error(format!("create hook dir: {e}")),
+        };
     }
 
     match write_hook(&target_file) {
