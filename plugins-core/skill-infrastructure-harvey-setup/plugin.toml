@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-infrastructure-harvey-setup"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Use when the user types /harvey:setup or asks 'set up Harvey', 'configure Harvey', 'verify my Harvey install', 'is Harvey working', or 'run the Harvey setup wizard'. Walks the user through verifying the MCP plugin install, registering with other CLIs on the box, and (optionally) configuring HarveyChat for Telegram. Calls Harvey's existing CLI tools rather than reimplementing the wizard."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-infrastructure-harvey-setup"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-infrastructure-harvey-setup"
+retention = "keep"

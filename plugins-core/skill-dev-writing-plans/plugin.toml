@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-dev-writing-plans"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Use when you have a spec or requirements for a multi-step task, before touching code"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-dev-writing-plans"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-dev-writing-plans"
+retention = "keep"

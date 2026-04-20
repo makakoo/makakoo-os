@@ -1,0 +1,57 @@
+date	time	skill	gap_description	baseline_score	improved_score	delta	status
+2026-03-27	16:21:02	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan/SKILL.md	Description should start with 'Use when': Plan mode for Hermes — inspect context, write a ma...	44	84	40	improved
+2026-03-27	16:21:02	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan/SKILL.md	No trigger commands found in skill	42	81	39	improved
+2026-03-27	16:21:02	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan/SKILL.md	Only 1/7 CSO keywords found	40	77	37	improved
+2026-03-27	16:22:42	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	53	82	29	improved
+2026-03-28	00:02:11	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	54	86	32	improved
+2026-03-28	00:02:12	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	58	86	28	improved
+2026-03-28	00:02:13	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	59	84	25	improved
+2026-03-28	01:02:14	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	45	74	29	improved
+2026-03-28	01:02:14	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	59	90	31	improved
+2026-03-28	01:02:14	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	57	74	17	improved
+2026-03-28	02:02:15	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	48	87	39	improved
+2026-03-28	02:02:15	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	53	85	32	improved
+2026-03-28	02:02:15	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	57	88	31	improved
+2026-03-28	03:02:17	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	58	76	18	improved
+2026-03-28	03:02:17	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	42	89	47	improved
+2026-03-28	03:02:18	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	55	88	33	improved
+2026-03-28	04:02:25	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	53	78	25	improved
+2026-03-28	04:02:29	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	44	77	33	improved
+2026-03-28	04:02:52	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	57	84	27	improved
+2026-03-28	05:02:59	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	51	90	39	improved
+2026-03-28	05:03:01	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	46	90	44	improved
+2026-03-28	05:03:05	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	52	72	20	improved
+2026-03-28	06:03:12	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	56	90	34	improved
+2026-03-28	06:03:14	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	49	77	28	improved
+2026-03-28	06:03:16	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	59	85	26	improved
+2026-03-28	07:03:22	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	50	70	20	improved
+2026-03-28	07:03:24	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	57	85	28	improved
+2026-03-28	07:03:30	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	49	74	25	improved
+2026-03-28	08:03:39	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	42	86	44	improved
+2026-03-28	08:03:43	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	47	74	27	improved
+2026-03-28	08:03:48	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	43	79	36	improved
+2026-03-29	20:17:55	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	46	75	29	improved
+2026-03-29	20:17:55	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	56	74	18	improved
+2026-03-29	20:19:17	/Users/sebastian/HARVEY/harvey-os/skills/dev/writing-skills/SKILL.md	No trigger commands found in skill	51	71	20	improved
+2026-03-29	20:19:34	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan/SKILL.md	Description should start with 'Use when': Plan mode for Hermes — inspect context, write a ma...	49	72	23	improved
+2026-03-29	20:19:34	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan/SKILL.md	No trigger commands found in skill	59	82	23	improved
+2026-03-29	20:19:34	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan/SKILL.md	Only 1/7 CSO keywords found	49	75	26	improved
+2026-03-29	21:06:48	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	bad-description-format	Description should start with 'Use when'	50	50	0	no-improvement
+2026-03-29	21:07:12	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	no-trigger-phrases	No trigger commands found in skill	50	50	0	no-improvement
+2026-03-29	21:07:48	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	low-cso-keywords	Only 1/7 CSO keywords found	50	50	0	no-improvement
+2026-03-29	21:11:28	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	bad-description-format	Description should start with 'Use when'	50	50	0	no-improvement
+2026-03-29	21:12:08	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	no-trigger-phrases	No trigger commands found in skill	50	50	0	no-improvement
+2026-03-29	21:12:55	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	low-cso-keywords	Only 1/7 CSO keywords found	50	50	0	no-improvement
+2026-03-29	21:15:04	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	bad-description-format	Description should start with 'Use when'	0	50	50	improved
+2026-03-29	21:15:48	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	no-trigger-phrases	No trigger commands found in skill	0	100	100	improved
+2026-03-29	21:16:33	/Users/sebastian/HARVEY/harvey-os/skills/blockchain/polymarket/SKILL.md	low-cso-keywords	Only 1/7 CSO keywords found	0	0	0	no-improvement
+2026-03-29	21:21:43	/Users/sebastian/HARVEY/harvey-os/skills/career/career-manager/SKILL.md	bad-description-format	Description should start with 'Use when'	0	20	20	improved
+2026-03-29	21:22:54	/Users/sebastian/HARVEY/harvey-os/skills/career/career-manager/SKILL.md	missing-common-mistakes	Large skill (>150 words) missing common mistakes section	50	0	-50	no-improvement
+2026-03-29	22:29:12	/Users/sebastian/HARVEY/harvey-os/skills/dev/autoplan/SKILL.md	weak-description	Description too short (1 chars)	0	0	0	no-improvement
+2026-03-29	22:30:18	/Users/sebastian/HARVEY/harvey-os/skills/dev/autoplan/SKILL.md	no-trigger-phrases	No trigger commands found in skill	0	100	100	improved
+2026-03-29	22:31:24	/Users/sebastian/HARVEY/harvey-os/skills/dev/autoplan/SKILL.md	missing-common-mistakes	Large skill (>150 words) missing common mistakes section	0	0	0	no-improvement
+2026-03-29	22:32:28	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan-ceo-review/SKILL.md	weak-description	Description too short (1 chars)	0	50	50	improved
+2026-03-29	22:33:38	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan-ceo-review/SKILL.md	no-trigger-phrases	No trigger commands found in skill	100	0	-100	no-improvement
+2026-03-29	22:34:44	/Users/sebastian/HARVEY/harvey-os/skills/dev/plan-ceo-review/SKILL.md	missing-common-mistakes	Large skill (>150 words) missing common mistakes section	0	0	0	no-improvement
+2026-03-29	22:35:56	/Users/sebastian/HARVEY/harvey-os/skills/dev/investigate/SKILL.md	weak-description	Description too short (1 chars)	0	0	0	no-improvement
+2026-03-29	22:37:11	/Users/sebastian/HARVEY/harvey-os/skills/dev/investigate/SKILL.md	no-trigger-phrases	No trigger commands found in skill	0	100	100	improved
