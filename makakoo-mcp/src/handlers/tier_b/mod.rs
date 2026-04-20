@@ -12,6 +12,7 @@ pub mod knowledge;
 pub mod multimodal;
 pub mod nursery;
 pub mod outbound;
+pub mod pi;
 pub mod sancho;
 pub mod wiki;
 
@@ -58,4 +59,12 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     registry.register(Arc::new(knowledge::HarveyKnowledgeIngestHandler::new(
         ctx.clone(),
     )));
+
+    // Pi — v0.2 Phase B.3/B.4: pi --rpc wrappers for agentic workflows.
+    registry.register(Arc::new(pi::PiRunHandler::new(ctx.clone())));
+    registry.register(Arc::new(pi::PiSessionForkHandler::new(ctx.clone())));
+    registry.register(Arc::new(pi::PiSessionLabelHandler::new(ctx.clone())));
+    registry.register(Arc::new(pi::PiSessionExportHandler::new(ctx.clone())));
+    registry.register(Arc::new(pi::PiSetModelHandler::new(ctx.clone())));
+    registry.register(Arc::new(pi::PiSteerHandler::new(ctx.clone())));
 }
