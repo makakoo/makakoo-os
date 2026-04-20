@@ -1,0 +1,34 @@
+[plugin]
+name = "sancho-task-pi-session-sync"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Walk ~/.pi/agent/sessions/*.jsonl every 10 min and sync new entries to Brain pages under data/Brain/pages/pi-sessions/"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-pi-session-sync"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+plugins = ["agent-pi ^0.1"]
+
+[entrypoint]
+run = "python3 -u plugins/sancho-task-pi-session-sync/src/sync.py"
+
+[capabilities]
+grants = [
+    "fs/read:~/.pi/agent/sessions",
+    "brain/write",
+]
+
+[sancho]
+tasks = [{ name = "pi_session_sync", interval = "600s" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-pi"
+retention = "keep"

@@ -150,8 +150,9 @@ class AgentCoordinator:
 
     def register_all_default(self) -> Dict[str, Subagent]:
         """
-        Convenience: register all 6 Phase 2 built-in subagents with default
-        config. Returns a dict of {name: agent}.
+        Convenience: register all Phase 2 built-in subagents with default
+        config, plus the optional PiSubagent when PI_AGENT_ENABLED is set.
+        Returns a dict of {name: agent}.
 
         This is what HarveyChat gateway calls at startup once we flip the
         switch from single-agent to swarm mode.
@@ -184,6 +185,26 @@ class AgentCoordinator:
                 log.error(
                     f"[coordinator] failed to register {cls.__name__}: {e}"
                 )
+
+        # Optional: PiSubagent. Registered only when `PI_AGENT_ENABLED=1`
+        # AND the `pi` binary is on PATH. Failing silently on missing pi
+        # matches the "no surprise errors on fresh installs" pattern.
+        try:
+            from core.subagents.pi_agent import PiSubagent
+
+            pi_agent = PiSubagent(
+                artifact_store=self.artifact_store,
+                event_bus=self.event_bus,
+            )
+            if pi_agent.available():
+                self.register(pi_agent)
+            else:
+                log.debug(
+                    "[coordinator] PiSubagent not registered "
+                    "(PI_AGENT_ENABLED unset or pi binary missing)"
+                )
+        except Exception as e:
+            log.warning(f"[coordinator] PiSubagent probe failed: {e}")
 
         return dict(self._agents)
 
