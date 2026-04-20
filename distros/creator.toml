@@ -1,0 +1,68 @@
+# distros/creator.toml
+#
+# Creator Edition — Makakoo for writers, streamers, artists, and anyone
+# whose primary output is content rather than code. Layers on top of
+# `core` with the skills that accelerate authoring + publishing loops:
+# brain search, cross-CLI routing, and the HTE library for building
+# interactive tooling.
+#
+# v0.1 scope: the plug-and-play kernel ships with the skill plugins
+# migrated from harvey-os so far. Creator-native plugins (image gen,
+# video editing, publishing bridges) queue behind Phase H.4 ports of
+# the relevant harvey-os/agents/* trees. When those land, they get
+# added here FIRST — same dogfood-before-promote rule that `sebastian`
+# follows.
+
+[distro]
+name = "creator"
+display_name = "Makakoo Creator Edition"
+version = "0.1.0"
+description = "Makakoo for content creators — writers, streamers, artists, anyone whose primary output is content. Brain-centric authoring + publishing loops, not engineering tools."
+license = "MIT"
+
+include = ["core.toml"]
+
+[kernel]
+version = "^0.1"
+
+[plugins]
+# Brain search — instant full-text retrieval across the creator's
+# notes, drafts, journal. The fastest path from "what did I write
+# about X" to an open buffer.
+"skill-productivity-fts5-search" = { version = "*" }
+
+# Cross-CLI honesty probe — creators drive Makakoo through whichever
+# CLI is open; canary keeps those hosts from diverging on the same
+# question.
+"skill-meta-canary" = { version = "*" }
+
+# Loops — session summary + watchdog. Captures the "what did I ship
+# today" signal a creator replays at end of day.
+"skill-meta-loops" = { version = "*" }
+
+# Caveman voice — ~63% token savings on internal tool orchestration
+# without touching the external prose. Creators spend way more time
+# in internal chatter than the median dev.
+"skill-meta-caveman-voice" = { version = "*" }
+
+# TODO (Phase H.4): add creator-specific skills as they land in
+# plugins-core/ — e.g. skill-creative-* for image gen, songsee for
+# music, youtube-content for publishing bridges.
+
+[defaults]
+voice = "caveman"
+
+[post_install]
+message = """
+Makakoo Creator Edition installed. You now have Core plus:
+  - skill-productivity-fts5-search (Brain full-text search)
+  - skill-meta-canary              (cross-CLI consistency probe)
+  - skill-meta-loops               (session summaries, watchdog loops)
+  - skill-meta-caveman-voice       (terse internal voice, ~63% token savings)
+
+Next:
+  1. Point `makakoo search "<term>"` at your notes
+  2. Run `makakoo skill canary` to see which CLIs agree on a question
+  3. (Phase H.4 will add the creative toolkit — image gen, music,
+     publishing — on top of this distro)
+"""
