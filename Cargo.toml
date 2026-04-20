@@ -50,16 +50,22 @@ codegen-units = 1
 panic = "abort"
 
 [workspace.metadata.dist]
-# cargo-dist packaging config. CI is DEFERRED — ci = [] means cargo-dist will
-# NOT emit GitHub Actions workflows. When infra lands, flip ci = ["github"] and
-# re-run `cargo dist init` to generate the release pipeline.
+# cargo-dist packaging config. Phase G (sprint-013) flipped ci = ["github"]
+# and expanded the target set so tag-driven releases cover every supported
+# OS. Re-run `cargo dist init` after editing this block to regenerate the
+# release workflow if its hand-written form at .github/workflows/release.yml
+# needs to be replaced by cargo-dist's richer version (notarization,
+# signing, etc.) — that migration is scheduled alongside signing-cert
+# acquisition (human-gated, docs/RELEASE_SIGNING.md has the runbook).
 cargo-dist-version = "0.25.1"
-ci = []
-installers = ["shell", "homebrew"]
+ci = ["github"]
+installers = ["shell", "powershell", "homebrew", "msi"]
 targets = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
 ]
 pr-run-mode = "skip"
 tap = "makakoo/homebrew-makakoo"
