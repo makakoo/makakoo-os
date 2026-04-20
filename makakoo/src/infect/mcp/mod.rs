@@ -69,10 +69,16 @@ impl McpServerSpec {
         let mut env = BTreeMap::new();
         env.insert("MAKAKOO_HOME".to_string(), home_str.clone());
         env.insert("HARVEY_HOME".to_string(), home_str.clone());
-        env.insert(
-            "PYTHONPATH".to_string(),
-            home.join("harvey-os").to_string_lossy().to_string(),
-        );
+        // No PYTHONPATH — the Rust MCP binary is self-contained; Python
+        // subprocesses it shells into (knowledge_ingest → ingest.py) are
+        // themselves self-contained. Library imports like `from core.*`
+        // are resolved by `build_skill_env` inserting lib-hte + lib-harvey-core
+        // /src/ paths at skill-dispatch time, not here.
+        //
+        // v0.1-public state: harvey-os/ is archived. Any PYTHONPATH
+        // entry pointing at it would just be noise — Python silently
+        // ignores non-existent sys.path entries, but stale config is
+        // still a footgun for future debugging.
         Self {
             name: "harvey".to_string(),
             command,
@@ -296,11 +302,10 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn default_harvey_uses_canonical_env() {
-        // Hardcodes POSIX-style paths to pin the env-value shape exactly.
-        // On Windows, PathBuf::join uses backslashes so the PYTHONPATH
-        // literal assertion would fail with the same logical contract.
-        // The Windows variant of this test belongs to Phase H.4 alongside
-        // the Windows infect pathing work.
+        // v0.1-public: canonical env is MAKAKOO_HOME + HARVEY_HOME only.
+        // PYTHONPATH is explicitly absent — harvey-os is archived, and
+        // library imports are wired by build_skill_env at skill-dispatch
+        // time rather than leaking into every MCP child's environment.
         let home = PathBuf::from("/Users/test/MAKAKOO");
         let bin = PathBuf::from("/opt/cargo/bin/makakoo-mcp");
         let spec = McpServerSpec::default_harvey(&home, Some(&bin));
@@ -309,9 +314,9 @@ mod tests {
         assert!(spec.args.is_empty());
         assert_eq!(spec.env.get("MAKAKOO_HOME").unwrap(), "/Users/test/MAKAKOO");
         assert_eq!(spec.env.get("HARVEY_HOME").unwrap(), "/Users/test/MAKAKOO");
-        assert_eq!(
-            spec.env.get("PYTHONPATH").unwrap(),
-            "/Users/test/MAKAKOO/harvey-os"
+        assert!(
+            !spec.env.contains_key("PYTHONPATH"),
+            "PYTHONPATH must not be in canonical env after harvey-os retirement"
         );
         assert!(spec.prompt.as_deref().unwrap().contains("harvey_describe_video"));
     }

@@ -447,20 +447,16 @@ fn audit_one_workspace_mcp(path: &Path, spec: &McpServerSpec) -> Option<Workspac
 }
 
 /// Any env key whose current value diverges from canonical — or
-/// any canonical key missing entirely. Special-cases `PYTHONPATH` as
-/// optional (harvey-os Python subdir isn't required for the Rust MCP).
+/// any canonical key missing entirely. Special-cases `PYTHONPATH`:
+/// canonical spec no longer emits it (v0.1-public drops harvey-os),
+/// but we still surface legacy harvey-os / HARVEY-home references as
+/// zombies so `infect --verify` flags them for cleanup.
 fn zombie_env_keys(actual: &Map<String, Value>, canonical: &BTreeMap<String, String>) -> Vec<String> {
     let mut out = Vec::new();
+
+    // Canonical-key divergence check. PYTHONPATH is not canonical anymore.
     for (k, want) in canonical {
         if k == "PYTHONPATH" {
-            // Tolerated: Rust MCP doesn't need it, but spec still emits it
-            // for Python fallback compat. Only flag if present AND stale.
-            match actual.get(k).and_then(|v| v.as_str()) {
-                Some(s) if s != want && s.contains("/Users/sebastian/HARVEY") => {
-                    out.push(k.clone())
-                }
-                _ => {}
-            }
             continue;
         }
         match actual.get(k).and_then(|v| v.as_str()) {
@@ -469,9 +465,17 @@ fn zombie_env_keys(actual: &Map<String, Value>, canonical: &BTreeMap<String, Str
             None => out.push(k.clone()),
         }
     }
+
+    // Retired-path sweep: any actual env value referencing a retired dir
+    // (MAKAKOO/harvey-os, MAKAKOO/agents, legacy /Users/sebastian/HARVEY)
+    // is a zombie, including PYTHONPATH which post-retirement should be
+    // absent rather than stale.
     for (k, v) in actual {
         if let Some(s) = v.as_str() {
-            if s.contains("/Users/sebastian/HARVEY") && !out.contains(k) {
+            let stale = s.contains("/Users/sebastian/HARVEY")
+                || s.contains("MAKAKOO/harvey-os")
+                || s.contains("MAKAKOO/agents");
+            if stale && !out.contains(k) {
                 out.push(k.clone());
             }
         }
