@@ -389,10 +389,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_executes_subprocess() {
         // Use `python3 -c` style via a tiny run.py that exits 0. We
         // rely on python3 being on PATH in the dev env; skip the test
-        // cleanly if it isn't.
+        // cleanly if it isn't. Windows uses `python` / `py -3` and
+        // there's no `which`; a sibling Windows test belongs to
+        // Phase H.4 alongside the Windows skill-runner work.
         let Ok(python) = Command::new("which").arg("python3").output() else {
             return;
         };
@@ -410,7 +413,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_nonzero_exit_propagates() {
+        // Same Unix-only rationale as run_executes_subprocess above.
         let Ok(python) = Command::new("which").arg("python3").output() else {
             return;
         };
@@ -566,6 +571,7 @@ mod tests {
     // ── build_skill_env tests ─────────────────────────────────────
 
     #[test]
+    #[cfg(unix)]
     fn build_env_prepends_not_clobbers() {
         // Temporarily set PYTHONPATH to a known value. We can't use
         // the crate-level ENV_MUTEX here because that's in the
@@ -589,7 +595,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn build_env_includes_library_paths() {
+        // POSIX-path assertion — Windows would use backslash separators.
+        // Same Phase H.4 Windows-variant story as the sister tests here.
         let old = std::env::var("PYTHONPATH").ok();
         std::env::remove_var("PYTHONPATH");
 

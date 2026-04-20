@@ -294,7 +294,13 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    #[cfg(unix)]
     fn default_harvey_uses_canonical_env() {
+        // Hardcodes POSIX-style paths to pin the env-value shape exactly.
+        // On Windows, PathBuf::join uses backslashes so the PYTHONPATH
+        // literal assertion would fail with the same logical contract.
+        // The Windows variant of this test belongs to Phase H.4 alongside
+        // the Windows infect pathing work.
         let home = PathBuf::from("/Users/test/MAKAKOO");
         let bin = PathBuf::from("/opt/cargo/bin/makakoo-mcp");
         let spec = McpServerSpec::default_harvey(&home, Some(&bin));
