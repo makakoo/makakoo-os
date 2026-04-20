@@ -17,6 +17,6 @@ pub mod resolver;
 
 pub use file::{
     DefaultsTable, DistroError, DistroFile, DistroTable, ExcludesTable, KernelTable,
-    PluginPin, PostInstallTable,
+    PluginPin, PluginPinFull, PostInstallTable,
 };
 pub use resolver::{resolve_distro, DistroResolverError, EffectivePlugin, ResolvedDistro};

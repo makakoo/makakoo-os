@@ -369,6 +369,33 @@ pub enum DistroCmd {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Serialize the currently-installed plugin set into a distro TOML
+    /// file so it can be replayed on another machine. Reads every
+    /// enabled entry from `plugins.lock` and pins each to its exact
+    /// version + blake3. Disabled plugins are omitted by default so
+    /// the distro replays the live runtime, not every dir on disk.
+    Save {
+        /// Distro name as it will appear inside the saved file and —
+        /// by default — as the file stem under `distros/`.
+        name: String,
+
+        /// Where to write the distro file. Defaults to
+        /// `distros/<name>.toml` if the repo's distros dir can be
+        /// located (same resolution as `distro install`).
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+
+        /// Overwrite the target file if it already exists.
+        #[arg(long)]
+        force: bool,
+
+        /// Include disabled plugins too. Default: emit only
+        /// `enabled = true` entries so replays don't resurrect
+        /// plugins the user had deliberately turned off.
+        #[arg(long)]
+        include_disabled: bool,
+    },
 }
 
 /// `makakoo secret <subcommand>`. Writes go through the OS keyring

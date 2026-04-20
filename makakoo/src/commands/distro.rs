@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 use comfy_table::{presets::UTF8_FULL, Cell, Color as TableColor, Table};
 use crossterm::style::Stylize;
 
-use makakoo_core::distro::{resolve_distro, DistroFile};
+use std::collections::BTreeMap;
+
+use makakoo_core::distro::{
+    resolve_distro, DistroFile, DistroTable, KernelTable, PluginPin, PluginPinFull,
+};
 use makakoo_core::plugin::{
     install_from_path, InstallRequest, PluginSource, PluginsLock,
 };
@@ -24,6 +28,12 @@ pub async fn run(ctx: &CliContext, cmd: DistroCmd) -> anyhow::Result<i32> {
             yes,
             dry_run,
         } => install(ctx, name, from, yes, dry_run),
+        DistroCmd::Save {
+            name,
+            out,
+            force,
+            include_disabled,
+        } => save(ctx, &name, out, force, include_disabled),
     }
 }
 
@@ -234,6 +244,115 @@ fn install(
     }
 
     Ok(if failed.is_empty() { 0 } else { 1 })
+}
+
+fn save(
+    ctx: &CliContext,
+    name: &str,
+    out: Option<PathBuf>,
+    force: bool,
+    include_disabled: bool,
+) -> anyhow::Result<i32> {
+    // 1) Pull the lock — that's the source of truth for "what's installed
+    //    right now, at what version, pinned by what hash". `plugins.lock`
+    //    lags the registry by at most one install cycle; that's fine
+    //    because the goal is to replay the lock, not the on-disk tree.
+    let lock = PluginsLock::load(ctx.home())?;
+    if lock.plugins.is_empty() {
+        output::print_error(
+            "no plugins installed — nothing to save. Run `makakoo plugin install` first.",
+        );
+        return Ok(1);
+    }
+
+    // 2) Resolve the output path.
+    let dest = match out {
+        Some(p) => p,
+        None => match resolve_distros_dir() {
+            Ok(dir) => dir.join(format!("{name}.toml")),
+            Err(e) => {
+                output::print_error(format!(
+                    "can't determine default distros/ path ({e}). Pass --out <path> explicitly."
+                ));
+                return Ok(1);
+            }
+        },
+    };
+
+    if dest.exists() && !force {
+        output::print_error(format!(
+            "{} already exists — pass --force to overwrite",
+            dest.display()
+        ));
+        return Ok(1);
+    }
+
+    // 3) Build the distro file from the lock. Plugin pins carry the
+    //    exact version + blake3 so the replay is reproducible byte-for-
+    //    byte (assuming the source at path: is still there).
+    let mut plugins: BTreeMap<String, PluginPin> = BTreeMap::new();
+    let mut included = 0usize;
+    let mut skipped_disabled = 0usize;
+    for entry in &lock.plugins {
+        if !entry.enabled && !include_disabled {
+            skipped_disabled += 1;
+            continue;
+        }
+        plugins.insert(
+            entry.name.clone(),
+            PluginPin::Full(PluginPinFull {
+                version: entry.version.clone(),
+                blake3: entry.blake3.clone(),
+            }),
+        );
+        included += 1;
+    }
+
+    if plugins.is_empty() {
+        output::print_error(
+            "no enabled plugins — pass --include-disabled to save the on-disk set anyway",
+        );
+        return Ok(1);
+    }
+
+    let kernel_version = env!("CARGO_PKG_VERSION").to_string();
+    let snapshot = DistroFile {
+        distro: DistroTable {
+            name: name.to_string(),
+            display_name: Some(format!("{name} (saved snapshot)")),
+            version: Some("0.1.0".to_string()),
+            description: Some(format!(
+                "Snapshot saved on {} — reproduces the installed plugin set.",
+                chrono::Utc::now().format("%Y-%m-%d")
+            )),
+            authors: vec![],
+            license: None,
+            include: vec![],
+        },
+        kernel: KernelTable {
+            version: Some(format!("^{kernel_version}")),
+        },
+        plugins,
+        defaults: Default::default(),
+        excludes: Default::default(),
+        post_install: Default::default(),
+    };
+
+    // 4) Validate before writing — if we can't re-parse our own output,
+    //    that's a bug, not a disk issue. Fail loudly.
+    let rendered = toml::to_string_pretty(&snapshot)?;
+    DistroFile::parse(&rendered, &dest)?;
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&dest, &rendered)?;
+
+    output::print_info(format!(
+        "saved {included} plugin(s) to {} (skipped {skipped_disabled} disabled)",
+        dest.display()
+    ));
+    Ok(0)
 }
 
 /// Resolve the distros dir. `$MAKAKOO_DISTROS` env var wins, otherwise
