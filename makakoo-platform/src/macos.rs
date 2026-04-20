@@ -31,6 +31,20 @@ impl MacOsPlatform {
         log_dir: &Path,
         home: &Path,
     ) -> String {
+        // ProgramArguments wraps the binary in `sh -c` so the shell can
+        // `source ~/.env` before exec'ing makakoo. launchd does NOT
+        // inherit the interactive shell's environment, which means
+        // every LLM credential (AIL_API_KEY, GEMINI_API_KEY, etc.)
+        // would be missing — produces a 401 storm on every sancho tick.
+        // Hit twice in production (Pixel 2026-04-14, daemon 2026-04-18),
+        // memory `feedback_daemon_env_plist` is the tattoo. Also sets a
+        // RUST_LOG default of `info` so the sancho heartbeat surfaces
+        // (the tracing subscriber's fallback is `warn`, which hides
+        // every INFO line).
+        let shell_cmd = format!(
+            r#"set -a; [ -f "$HOME/.env" ] && . "$HOME/.env"; set +a; : "${{RUST_LOG:=info}}"; export RUST_LOG; exec {} daemon run"#,
+            exe.display()
+        );
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,14 +54,16 @@ impl MacOsPlatform {
     <string>{label}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{exe}</string>
-        <string>daemon</string>
-        <string>run</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>{shell_cmd}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
     <key>StandardOutPath</key>
     <string>{log_dir}/makakoo.out.log</string>
     <key>StandardErrorPath</key>
@@ -56,14 +72,22 @@ impl MacOsPlatform {
     <dict>
         <key>MAKAKOO_HOME</key>
         <string>{home}</string>
+        <key>HARVEY_HOME</key>
+        <string>{home}</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
 </dict>
 </plist>
 "#,
             label = LABEL,
-            exe = exe.display(),
             log_dir = log_dir.display(),
-            home = home.display()
+            home = home.display(),
+            shell_cmd = shell_cmd,
         )
     }
 }
@@ -152,6 +176,75 @@ mod tests {
         assert!(plist.contains("MAKAKOO_HOME"));
         assert!(plist.contains("/tmp/makakoo-test-home"));
         assert!(plist.trim_end().ends_with("</plist>"));
+    }
+
+    /// Regression — `feedback_daemon_env_plist`. Hardcoded
+    /// `EnvironmentVariables` stubs skip the user's LLM credentials and
+    /// produce a 401 storm on every sancho tick. The fix is a `sh -c`
+    /// wrapper that sources `~/.env` before exec'ing the binary. Hit
+    /// twice in production (Pixel 2026-04-14, daemon 2026-04-18) — this
+    /// test locks the shape so we can't regress into direct exec again.
+    #[test]
+    fn plist_program_arguments_use_sh_wrapper_that_sources_env() {
+        let plist = MacOsPlatform::render_plist(
+            &PathBuf::from("/opt/makakoo/bin/makakoo"),
+            &PathBuf::from("/var/log/makakoo"),
+            &PathBuf::from("/tmp/makakoo-test-home"),
+        );
+        assert!(
+            plist.contains("<string>/bin/sh</string>"),
+            "plist must invoke /bin/sh so it can source ~/.env"
+        );
+        assert!(
+            plist.contains("<string>-c</string>"),
+            "plist must use sh -c to inline the source + exec"
+        );
+        assert!(
+            plist.contains(". \"$HOME/.env\""),
+            "plist must source ~/.env before exec'ing the daemon"
+        );
+        assert!(
+            plist.contains("exec /opt/makakoo/bin/makakoo"),
+            "plist must exec the daemon binary directly from the shell wrapper"
+        );
+    }
+
+    /// The tracing subscriber defaults to WARN, which hides the
+    /// `sancho tick: N/M tasks ok` heartbeat the H.2 loop emits. The
+    /// plist wrapper must set `RUST_LOG=info` when unset so the
+    /// heartbeat actually surfaces in makakoo.err.log.
+    #[test]
+    fn plist_defaults_rust_log_to_info_for_heartbeat_visibility() {
+        let plist = MacOsPlatform::render_plist(
+            &PathBuf::from("/opt/makakoo/bin/makakoo"),
+            &PathBuf::from("/var/log/makakoo"),
+            &PathBuf::from("/tmp/makakoo-test-home"),
+        );
+        // `: "${RUST_LOG:=info}"` is the POSIX-portable "set default
+        // if unset" idiom — user-provided RUST_LOG still wins.
+        assert!(
+            plist.contains(r#"${RUST_LOG:=info}"#),
+            "plist must provide a RUST_LOG=info default"
+        );
+        assert!(
+            plist.contains("export RUST_LOG"),
+            "plist must export RUST_LOG so the child binary sees it"
+        );
+    }
+
+    /// The daemon has historically crashed at boot while SANCHO retries
+    /// handlers; without ThrottleInterval launchd spam-restarts. 30s is
+    /// enough to break tight crash loops without masking legitimate
+    /// restarts.
+    #[test]
+    fn plist_sets_throttle_interval_to_prevent_spam_restart() {
+        let plist = MacOsPlatform::render_plist(
+            &PathBuf::from("/opt/makakoo/bin/makakoo"),
+            &PathBuf::from("/var/log/makakoo"),
+            &PathBuf::from("/tmp/makakoo-test-home"),
+        );
+        assert!(plist.contains("<key>ThrottleInterval</key>"));
+        assert!(plist.contains("<integer>30</integer>"));
     }
 
     #[test]
