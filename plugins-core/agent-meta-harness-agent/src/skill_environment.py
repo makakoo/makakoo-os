@@ -7,7 +7,7 @@ Wraps AgentHarness environment bootstrapping with Harvey SKILL.md injection.
 Usage:
     env = SkillEnvironment(
         session_name="mh_eval_001",
-        skill_path=Path("harvey-os/skills/dev/writing-skills/SKILL.md"),
+        skill_path=Path("plugins-core/dev/writing-skills/SKILL.md"),
     )
     await env.setup()
     result = await agent.run(instruction=task, env=env)

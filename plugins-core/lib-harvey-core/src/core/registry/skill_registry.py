@@ -18,8 +18,15 @@ from typing import Optional
 
 # Add registry dir to path for imports
 REGISTRY_DIR = Path(__file__).parent
-HARVEY_OS = REGISTRY_DIR.parents[1]  # harvey-os/
-SKILLS_DIR = HARVEY_OS / "skills"
+# Post-harvey-os retirement (2026-04-20): skills are plugin dirs under
+# $MAKAKOO_HOME/plugins-core/ (and $MAKAKOO_HOME/plugins once installed).
+_MAKAKOO_HOME = Path(
+    os.environ.get("MAKAKOO_HOME")
+    or os.environ.get("HARVEY_HOME")
+    or os.path.expanduser("~/MAKAKOO")
+)
+HARVEY_OS = _MAKAKOO_HOME / "plugins-core" / "lib-harvey-core"  # legacy name, used as read root
+SKILLS_DIR = _MAKAKOO_HOME / "plugins-core"
 INDEX_PATH = REGISTRY_DIR / "skill_index.json"
 
 # Import our modules
@@ -512,7 +519,7 @@ def discover_skills(
         List of SkillDef objects with parsed frontmatter
 
     Search directories:
-        - $HARVEY_HOME/harvey-os/skills/
+        - $HARVEY_HOME/plugins-core/
         - $HARVEY_HOME/agents/*/ (each agent may have skills)
         - ~/.harvey/skills/ (user-installed skills)
     """
@@ -583,7 +590,7 @@ def get_all_skills_enhanced(
     Enhanced get_all_skills using frontmatter parsing.
 
     Searches in:
-        - {harvey_home}/harvey-os/skills/
+        - {harvey_home}/plugins-core/
         - {harvey_home}/agents/*/ (agent skills)
         - {harvey_home}/.harvey/skills/ (user skills)
         - ~/.harvey/skills/ (global user skills)
@@ -600,7 +607,7 @@ def get_all_skills_enhanced(
         harvey_home = Path(os.environ.get("HARVEY_HOME", str(Path.home() / "HARVEY")))
 
     search_dirs = [
-        harvey_home / "harvey-os" / "skills",
+        harvey_home / "plugins-core",
         harvey_home / "agents",
         harvey_home / ".harvey" / "skills",
         Path.home() / ".harvey" / "skills",

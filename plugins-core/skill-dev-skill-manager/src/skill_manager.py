@@ -4,7 +4,7 @@ Skill Manager Tool -- Agent-Managed Skill Creation & Editing
 
 Allows the agent to create, update, and delete skills, turning successful
 approaches into reusable procedural knowledge. Skills are created in
-harvey-os/skills/<category>/<name>/. Existing skills can be modified or deleted.
+plugins-core/<category>/<name>/. Existing skills can be modified or deleted.
 
 Skills are the agent's procedural memory: they capture *how to do a specific
 type of task* based on proven experience. General memory (Brain) is
@@ -19,7 +19,7 @@ Actions:
   remove_file-- Remove a supporting file from a skill
 
 Directory layout for skills:
-    harvey-os/skills/
+    plugins-core/
     ├── <category>/
     │   └── <skill-name>/
     │       ├── SKILL.md
@@ -44,8 +44,16 @@ logger = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 
-HARVEY_OS = Path(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))) / "harvey-os"
-SKILLS_DIR = HARVEY_OS / "skills"
+_MAKAKOO_HOME = Path(
+    os.environ.get("MAKAKOO_HOME")
+    or os.environ.get("HARVEY_HOME")
+    or os.path.expanduser("~/MAKAKOO")
+)
+# Post-harvey-os retirement (2026-04-20): skills live in plugins-core/ as
+# plugin dirs (kind="skill"). Legacy alias kept for the few callers still
+# reading HARVEY_OS as a read-only identifier.
+HARVEY_OS = _MAKAKOO_HOME / "plugins-core" / "lib-harvey-core"
+SKILLS_DIR = _MAKAKOO_HOME / "plugins-core"
 
 MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
@@ -174,7 +182,7 @@ def _resolve_skill_dir(name: str, category: str = None) -> Path:
 
 def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     """
-    Find a skill by name in harvey-os/skills/.
+    Find a skill by name in plugins-core/.
     Returns {"path": Path} or None.
     """
     if not SKILLS_DIR.exists():
@@ -623,7 +631,7 @@ SKILL_MANAGE_SCHEMA = {
     "description": (
         "Manage skills (create, update, delete). Skills are your procedural "
         "memory — reusable approaches for recurring task types. "
-        "New skills go to harvey-os/skills/<category>/<name>/; existing skills can be modified wherever they live.\n\n"
+        "New skills go to plugins-core/<category>/<name>/; existing skills can be modified wherever they live.\n\n"
         "Actions: create (full SKILL.md + optional category), "
         "patch (old_string/new_string — preferred for fixes), "
         "edit (full SKILL.md rewrite — major overhauls only), "

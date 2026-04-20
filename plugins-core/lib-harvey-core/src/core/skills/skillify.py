@@ -15,7 +15,7 @@ Usage:
     )
     Path("my-skill/SKILL.md").write_text(skill_content)
 
-Path: harvey-os/core/skills/skillify.py
+Path: plugins-core/lib-harvey-core/src/core/skills/skillify.py
 """
 
 from __future__ import annotations

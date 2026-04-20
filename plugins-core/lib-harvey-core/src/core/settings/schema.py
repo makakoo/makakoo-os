@@ -4,7 +4,7 @@ Harvey OS — Settings Schema
 Pydantic models for Harvey's ~90 settings across 15+ categories.
 Matches Claude Code's Zod validation patterns.
 
-Path: harvey-os/core/settings/schema.py
+Path: plugins-core/lib-harvey-core/src/core/settings/schema.py
 """
 
 from __future__ import annotations

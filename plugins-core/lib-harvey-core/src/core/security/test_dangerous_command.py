@@ -7,7 +7,7 @@ import sys
 import os
 import unittest
 
-# Add harvey-os root to path for imports
+# Walk up from src/core/security/ to the plugin root (lib-harvey-core/)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 # Import using hyphen-to-underscore workaround

@@ -14,7 +14,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>python3.11</string>
-        <string>__HARVEY_HOME__/harvey-os/skills/meta/autoimprover/run_improvements.py</string>
+        <string>__HARVEY_HOME__/plugins-core/meta/autoimprover/run_improvements.py</string>
     </array>
 
     <key>WorkingDirectory</key>

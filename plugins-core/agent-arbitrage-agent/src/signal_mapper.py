@@ -79,7 +79,7 @@ class SignalMapper:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(
-            {"Content-Type": "application/json", "User-Agent": "harvey-os/1.0"}
+            {"Content-Type": "application/json", "User-Agent": "makakoo-os/1.0"}
         )
 
     def _parse_target(self, question: str) -> Optional[tuple]:

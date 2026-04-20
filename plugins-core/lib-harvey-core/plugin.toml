@@ -3,7 +3,7 @@ name = "lib-harvey-core"
 version = "0.1.0"
 kind = "library"
 language = "python"
-summary = "Transitional Python bundle of harvey-os/core for migrated plugins. Carved into focused lib-* plugins in v0.2."
+summary = "Transitional Python bundle of the legacy core.* tree (archived as harvey-os 2026-04-20). Carved into focused lib-* plugins in v0.2."
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 

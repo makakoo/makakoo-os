@@ -213,9 +213,9 @@ def cinder_syntax_check(home: Optional[Path] = None) -> Dict[str, Any]:
     """
     home = home or _platform_home()
     scan_roots = [
-        home / "harvey-os" / "core",
-        home / "harvey-os" / "skills",
-        home / "harvey-os" / "bin",
+        home / "plugins-core" / "lib-harvey-core" / "src" / "core",
+        home / "plugins-core",
+        home / "bin",
         home / "agents",
         home / "tests",
     ]
@@ -287,8 +287,8 @@ def ziggy_doc_patrol(home: Optional[Path] = None) -> Dict[str, Any]:
     """
     home = home or _platform_home()
     scan_roots = [
-        home / "harvey-os" / "core",
-        home / "harvey-os" / "skills",
+        home / "plugins-core" / "lib-harvey-core" / "src" / "core",
+        home / "plugins-core",
         home / "agents",
     ]
 

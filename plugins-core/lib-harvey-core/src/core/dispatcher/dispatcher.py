@@ -11,10 +11,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Paths
-HARVEY_OS = Path(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))) / "harvey-os"
-ACTIVE_DIR = HARVEY_OS / "planning" / "ACTIVE"
-SKILLS_DIR = HARVEY_OS / "skills"
+# Paths — post-harvey-os retirement (2026-04-20). HARVEY_OS pointed at a tree
+# that no longer exists; callers now use the live plugin/data locations.
+_MAKAKOO_HOME = Path(
+    os.environ.get("MAKAKOO_HOME")
+    or os.environ.get("HARVEY_HOME")
+    or os.path.expanduser("~/MAKAKOO")
+)
+HARVEY_OS = _MAKAKOO_HOME / "plugins-core" / "lib-harvey-core"  # source root for SOUL.md / AGENTS.md
+ACTIVE_DIR = _MAKAKOO_HOME / "development" / "sprints" / "ACTIVE"
+SKILLS_DIR = _MAKAKOO_HOME / "plugins-core"
 
 # LLM config
 LLM_BASE_URL = "http://localhost:18080/v1"

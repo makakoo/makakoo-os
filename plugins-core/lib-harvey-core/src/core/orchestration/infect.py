@@ -37,7 +37,6 @@ try:
     from .infect_global import GlobalInfector, SlotStatus, BLOCK_VERSION
 except ImportError:
     HARVEY_HOME = os.environ.get("HARVEY_HOME") or os.path.expanduser("~/MAKAKOO")
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from core.orchestration.context_shadow import ContextShadow, detect_project_root
     from core.orchestration.host_detector import HostType, detect_host_strict, HostUncertain
     from core.orchestration.mcp_registrar import MCPRegistrar, RegistrationStatus

@@ -206,14 +206,14 @@ def improve_skill_docs(agent_name: str, knowledge: dict) -> dict:
         log.info("  No skill paths configured for %s — skipping", agent_name)
         return {"status": "skipped", "reason": "no skill paths"}
 
-    eval_script = Path(HARVEY_HOME, "harvey-os", "skills", "meta", "autoimprover", "evaluate_skill.py")
+    eval_script = Path(HARVEY_HOME, "plugins-core", "meta", "autoimprover", "evaluate_skill.py")
     if not eval_script.exists():
         log.warning("  evaluate_skill.py not found — skipping SKILL.md improvement")
         return {"status": "skipped", "reason": "evaluate_skill.py missing"}
 
     results = []
     for skill_rel in skill_paths:
-        skill_file = Path(HARVEY_HOME, "harvey-os", "skills", skill_rel, "SKILL.md")
+        skill_file = Path(HARVEY_HOME, "plugins-core", skill_rel, "SKILL.md")
         if not skill_file.exists():
             log.info("  Skill not found: %s — skipping", skill_rel)
             continue

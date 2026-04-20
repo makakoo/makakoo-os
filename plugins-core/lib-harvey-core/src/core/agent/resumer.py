@@ -34,7 +34,6 @@ import sys
 from typing import Callable, List, Optional
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
 
 log = logging.getLogger("harvey.resumer")
 
@@ -49,13 +48,13 @@ def default_spawner(task_id: str, python: Optional[str] = None) -> subprocess.Po
     python_bin = python or os.environ.get("HARVEY_PYTHON") or sys.executable
     env = os.environ.copy()
     env.setdefault("HARVEY_HOME", HARVEY_HOME)
-    env.setdefault("PYTHONPATH", os.path.join(HARVEY_HOME, "harvey-os"))
+    env.setdefault("PYTHONPATH", HARVEY_HOME)
     proc = subprocess.Popen(
         [python_bin, "-m", "core.agent.run_task", "--task-id", task_id],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        cwd=os.path.join(HARVEY_HOME, "harvey-os"),
+        cwd=HARVEY_HOME,
     )
     log.info(f"[resumer] spawned pid={proc.pid} for task {task_id[:8]}")
     return proc

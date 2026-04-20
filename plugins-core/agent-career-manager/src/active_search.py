@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 
 # Paths
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-SESSION_FILE = os.path.join(HARVEY_HOME, "harvey-os", "skills", "career-manager", ".linkedin_session")
+SESSION_FILE = os.path.join(HARVEY_HOME, "plugins-core", "career-manager", ".linkedin_session")
 OUTPUT_FILE = os.path.join(HARVEY_HOME, "data", "career-manager", "broad_scraped_results.json")
 
 async def search_linkedin(context, keyword):

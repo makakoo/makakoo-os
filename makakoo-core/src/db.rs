@@ -65,25 +65,25 @@ pub fn schema_version(conn: &Connection) -> Result<i64> {
 // Sources:
 //   brain_docs / brain_fts / brain_vectors / entity_graph / events /
 //     cache / recall_log / recall_stats:
-//       harvey-os/core/superbrain/store.py:109-227
+//       plugins-core/lib-harvey-core/src/core/superbrain/store.py:109-227
 //   brain_anchors_fts:
-//       harvey-os/core/superbrain/migrations/001_add_anchor_columns.py:36
+//       plugins-core/lib-harvey-core/src/core/superbrain/migrations/001_add_anchor_columns.py:36
 //   brain_anchor_vectors:
-//       harvey-os/core/superbrain/migrations/002_add_anchor_vectors.py:26
+//       plugins-core/lib-harvey-core/src/core/superbrain/migrations/002_add_anchor_vectors.py:26
 //   artifacts:
-//       harvey-os/core/orchestration/artifact_store.py:119
+//       plugins-core/lib-harvey-core/src/core/orchestration/artifact_store.py:119
 //   bus_events (persistent event bus; renamed to avoid clash with
 //     superbrain.events):
-//       harvey-os/core/orchestration/persistent_event_bus.py:97
+//       plugins-core/lib-harvey-core/src/core/orchestration/persistent_event_bus.py:97
 //   chat_messages / chat_sessions (renamed from messages/sessions to
 //     avoid clash with brain tables):
-//       harvey-os/core/chat/store.py:28,41
+//       plugins-core/lib-harvey-core/src/core/chat/store.py:28,41
 //   chat_tasks (renamed from tasks):
-//       harvey-os/core/chat/task_queue.py:139
+//       plugins-core/lib-harvey-core/src/core/chat/task_queue.py:139
 //   chat_cooldowns:
-//       harvey-os/core/chat/channels/cooldowns.py:50
+//       plugins-core/lib-harvey-core/src/core/chat/channels/cooldowns.py:50
 //   agents:
-//       harvey-os/core/orchestration/agent_discovery/store.py:32
+//       plugins-core/lib-harvey-core/src/core/orchestration/agent_discovery/store.py:32
 //
 // IMPORTANT: table column names match the Python implementation exactly.
 // Where a table name conflicts across Python modules (each module opens

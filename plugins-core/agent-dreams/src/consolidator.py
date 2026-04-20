@@ -169,7 +169,7 @@ class DreamEngine:
         try:
             # Import wiki ops
             import sys
-            sys.path.insert(0, str(Path(HARVEY_HOME) / "harvey-os"))
+            sys.path.insert(0, str(Path(HARVEY_HOME) / "plugins-core" / "lib-harvey-core" / "src"))
             from core.superbrain.wiki import WikiOps
 
             wiki = WikiOps()

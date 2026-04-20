@@ -7,7 +7,7 @@ Key features:
 - Health monitoring with exponential backoff restart
 - Agent state persistence to JSON
 
-Path: harvey-os/core/orchestration/agent_lifecycle.py
+Path: plugins-core/lib-harvey-core/src/core/orchestration/agent_lifecycle.py
 """
 
 from __future__ import annotations

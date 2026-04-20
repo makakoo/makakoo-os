@@ -16,7 +16,7 @@ from pathlib import Path
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 PID_FILE = Path(HARVEY_HOME) / "data" / "chat" / "harveychat.pid"
 LOG_FILE = Path(HARVEY_HOME) / "data" / "logs" / "harveychat-watchdog.log"
-HARVEY_OS = Path(HARVEY_HOME) / "harvey-os"
+HARVEY_OS = Path(HARVEY_HOME) / "plugins-core" / "lib-harvey-core" / "src"
 
 
 def log(msg: str):

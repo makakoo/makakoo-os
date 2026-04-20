@@ -1,4 +1,4 @@
-//! Tier-A skill_discover — filesystem scan of `$MAKAKOO_HOME/harvey-os/skills`
+//! Tier-A skill_discover — filesystem scan of `$MAKAKOO_HOME/plugins/`
 //! for `SKILL.md` files. No DB, no subsystems — just walks the tree and
 //! filters by substring on the relative path / description.
 
@@ -23,7 +23,9 @@ impl SkillDiscoverHandler {
     }
 
     fn skills_root(&self) -> PathBuf {
-        self.ctx.home.join("harvey-os").join("skills")
+        // Post-retirement (2026-04-20, archived tree): skills live as
+        // installed plugin directories under $MAKAKOO_HOME/plugins/.
+        self.ctx.home.join("plugins")
     }
 }
 
@@ -33,8 +35,8 @@ impl ToolHandler for SkillDiscoverHandler {
         "skill_discover"
     }
     fn description(&self) -> &str {
-        "Find SKILL.md entries under harvey-os/skills. Optional substring \
-         filter on path or skill name."
+        "Find SKILL.md entries under $MAKAKOO_HOME/plugins/. Optional \
+         substring filter on path or skill name."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -146,8 +148,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let skill_dir = tmp
             .path()
-            .join("harvey-os")
-            .join("skills")
+            .join("plugins")
             .join("test-category")
             .join("my-skill");
         fs::create_dir_all(&skill_dir).unwrap();
@@ -164,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn skill_discover_filters_by_query() {
         let tmp = tempdir().unwrap();
-        let base = tmp.path().join("harvey-os").join("skills").join("meta");
+        let base = tmp.path().join("plugins").join("meta");
         for name in ["alpha", "beta", "gamma"] {
             let d = base.join(name);
             fs::create_dir_all(&d).unwrap();

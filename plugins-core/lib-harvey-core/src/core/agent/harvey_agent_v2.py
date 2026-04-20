@@ -29,7 +29,6 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
 
 # Reuse the tool registry + dispatch from v1 — no need to duplicate 1000 lines
 from core.agent.harvey_agent import HARVEY_TOOLS, TOOL_DISPATCH, execute_tool

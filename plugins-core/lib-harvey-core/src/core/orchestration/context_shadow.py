@@ -273,8 +273,8 @@ class ContextShadow:
             "",
             "## Capabilities available",
             "- MCP plugin: `harvey-mcp` (40+ tools — see `mcp__harvey__*`)",
-            "- Brain: `python3 harvey-os/core/memory/logseq_bridge.py` (reads files directly, optional Logseq API)",
-            "- Skills: 130+ via `python3 harvey-os/core/registry/skill_registry.py --match`",
+            "- Brain: `python3 plugins-core/lib-harvey-core/src/core/memory/logseq_bridge.py` (reads files directly, optional Logseq API)",
+            "- Skills: 130+ via `python3 plugins-core/lib-harvey-core/src/core/registry/skill_registry.py --match`",
             "",
             "## Recent project context",
         ]

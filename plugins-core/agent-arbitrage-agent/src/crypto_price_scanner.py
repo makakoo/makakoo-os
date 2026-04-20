@@ -185,7 +185,7 @@ class CryptoPriceScanner:
         self.poll_interval = poll_interval
         self.session = requests.Session()
         self.session.headers.update(
-            {"Content-Type": "application/json", "User-Agent": "harvey-os/1.0"}
+            {"Content-Type": "application/json", "User-Agent": "makakoo-os/1.0"}
         )
         self._cache: dict[str, CryptoMarket] = {}
         self._last_fetch = 0.0

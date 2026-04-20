@@ -24,7 +24,7 @@ from typing import Optional
 
 # Base paths
 HARVEY_ROOT = Path(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")))
-SKILLS_ROOT = HARVEY_ROOT / "harvey-os" / "skills"
+SKILLS_ROOT = HARVEY_ROOT / "plugins-core"
 AUTOIMPROVER_ROOT = SKILLS_ROOT / "meta" / "autoimprover"
 RESULTS_TSV = AUTOIMPROVER_ROOT / "results.tsv"
 

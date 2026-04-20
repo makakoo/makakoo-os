@@ -3,7 +3,7 @@
 Tests for Delegate Tool — subagent spawning with depth limiting,
 restricted toolsets, and concurrent child limiting.
 
-Run with: python3 harvey-os/core/improve/tests_delegate_tool.py -v
+Run with: python3 plugins-core/lib-harvey-core/src/core/improve/tests_delegate_tool.py -v
 """
 
 import os

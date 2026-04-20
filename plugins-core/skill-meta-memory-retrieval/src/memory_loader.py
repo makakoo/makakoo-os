@@ -14,7 +14,7 @@ from typing import Optional, List, Dict, Any
 _HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 BRAIN_DIR = os.path.join(_HARVEY_HOME, "data", "Brain")
 BRAIN_API = "http://127.0.0.1:12315"
-LOGSEQ_BRIDGE_PATH = os.path.join(_HARVEY_HOME, "harvey-os", "skills", "logseq-brain", "logseq_bridge.py")
+LOGSEQ_BRIDGE_PATH = os.path.join(_HARVEY_HOME, "plugins-core", "logseq-brain", "logseq_bridge.py")
 
 LAYER_CONFIGS = {
     "identity": {

@@ -99,8 +99,8 @@ impl InfectReport {
 
 /// Load the canonical bootstrap body. Searches, in order:
 ///   1. `$MAKAKOO_HOME/global_bootstrap.md`
-///   2. `$MAKAKOO_HOME/harvey-os/global_bootstrap.md`  (current layout —
-///      harvey-os/ is the Rust submodule root for the user's install)
+///   2. `$MAKAKOO_HOME/plugins/lib-harvey-core/global_bootstrap.md` — the
+///      transitional Python core plugin ships the canonical copy.
 ///   3. `./global_bootstrap.md` relative to the current working directory
 ///
 /// Errors if none exist — the infect system refuses to write a stub
@@ -127,7 +127,8 @@ pub fn load_bootstrap() -> Result<String> {
     // Legacy fallback: static file.
     let candidates = [
         home.join("global_bootstrap.md"),
-        home.join("harvey-os/global_bootstrap.md"),
+        home.join("plugins/lib-harvey-core/global_bootstrap.md"),
+        home.join("plugins-core/lib-harvey-core/global_bootstrap.md"),
         PathBuf::from("global_bootstrap.md"),
     ];
     for path in &candidates {
@@ -379,7 +380,7 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
     }
 
     // 2. MCP sync (always runs unless `--verify`). Spec home is
-    //    $MAKAKOO_HOME (where data + harvey-os live), CLI dotdirs
+    //    $MAKAKOO_HOME (where data + plugins live), CLI dotdirs
     //    are under $HOME — pass both correctly.
     let mcp_report = mcp::sync_all(&home, &makakoo_home, mcp_binary.as_deref(), dry_run, target_filter);
     print!("{}", mcp_report.human_summary());

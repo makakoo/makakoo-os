@@ -23,7 +23,6 @@ import time
 from pathlib import Path
 
 HARVEY_HOME = os.path.expanduser(os.environ.get("HARVEY_HOME", "~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
 
 from core.chat.config import load_config, save_config, CHAT_DATA_DIR, CONFIG_PATH
 from core.chat.gateway import HarveyChat
@@ -103,7 +102,7 @@ def cmd_start(args):
             stdout=open(LOG_FILE, "a"),
             stderr=subprocess.STDOUT,
             start_new_session=True,
-            cwd=os.path.join(HARVEY_HOME, "harvey-os"),
+            cwd=HARVEY_HOME,
             env=env,
         )
         # Wait briefly for startup
@@ -455,7 +454,7 @@ def cmd_setup(args):
     if not deps_ok:
         if not _ask_yn("Continue anyway? (Some features may not work)", default=False):
             print("  Run this again after installing dependencies:")
-            print("    pip install -r ~/MAKAKOO/harvey-os/core/chat/requirements.txt")
+            print("    pip install -r ~/MAKAKOO/plugins-core/lib-harvey-core/src/core/chat/requirements.txt")
             return
 
     # ── STEP 1: Create the Telegram bot ──────────────────
@@ -668,7 +667,7 @@ def cmd_setup(args):
                 cmd_start(FgArgs())
         else:
             print("  To start later:")
-            print(f"    cd ~/MAKAKOO/harvey-os")
+            print(f"    cd ~/MAKAKOO")
             print(f"    {sys.executable} -m core.chat start --daemon")
             print()
             print("  Then open Telegram and message your bot!")

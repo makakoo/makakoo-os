@@ -9,7 +9,8 @@ three independent audit trails.
 Merge policy (hard-coded for Gate 1 — do NOT weaken without a new sprint):
     1. approve() MUST NOT be called in any autonomous code path.
     2. `harvey improve approve ALL` is rejected with a hard error.
-    3. Rejects to harvey-os/core/* are blocked (human signs those).
+    3. Rejects to core plugin code (lib-harvey-core, makakoo-os/makakoo/
+       makakoo-core/, makakoo-mcp/) are blocked — humans sign those.
     4. Only files listed in the pending sprint's "Files" section are
        touched. Any drift between the sprint and the improved blob is
        a hard error.
@@ -35,7 +36,20 @@ REJECTED_DIR = IMPROVEMENTS_DIR / "rejected"
 MERGED_DIR = IMPROVEMENTS_DIR / "merged"
 PROVENANCE_DIR = IMPROVEMENTS_DIR / "provenance"
 
-CORE_PATH_PREFIX = "harvey-os/core/"
+# Paths the autoimprover is NEVER allowed to touch — human-signed territory.
+# Updated 2026-04-20 after harvey-os retirement: the previous single-string
+# prefix pointed at the archived tree and matched nothing post-rename,
+# silently disabling this guard. List now enumerates every core tree.
+CORE_PATH_PREFIXES: tuple[str, ...] = (
+    "plugins-core/lib-harvey-core/src/core/",
+    "plugins-core/lib-hte/src/",
+    "plugins-core/lib-agent-loop/src/",
+    "makakoo/src/",
+    "makakoo-core/src/",
+    "makakoo-mcp/src/",
+)
+# Back-compat alias (old name) — keep until external callers migrate.
+CORE_PATH_PREFIX = CORE_PATH_PREFIXES[0]
 
 
 class ApprovalError(Exception):
@@ -204,17 +218,17 @@ def approve(
     except ValueError:
         rel = Path(str(skill_path))
     rel_str = str(rel).replace(os.sep, "/")
-    if rel_str.startswith(CORE_PATH_PREFIX):
+    if any(rel_str.startswith(p) for p in CORE_PATH_PREFIXES):
         raise ApprovalError(
             f"refusing to merge change to core path: {rel_str}. "
             "Core changes require a hand-written sprint, not an autonomous hypothesis."
         )
 
-    # HARD RULE: sprint must only name files under harvey-os/skills/
+    # HARD RULE: sprint must only name files outside the core plugin/kernel tree.
     sprint_text = sprint_path.read_text()
     claimed_files = _extract_claimed_files(sprint_text)
     for claimed in claimed_files:
-        if claimed.startswith(CORE_PATH_PREFIX):
+        if any(claimed.startswith(p) for p in CORE_PATH_PREFIXES):
             raise ApprovalError(
                 f"sprint claims it will modify core file {claimed}. Refused."
             )

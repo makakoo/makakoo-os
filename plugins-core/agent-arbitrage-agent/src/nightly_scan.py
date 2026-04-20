@@ -24,7 +24,7 @@ BRAIN_BRIDGE = HARVEY_ROOT / "data" / "Brain" / "logseq_bridge.py"
 
 sys.path.insert(
     0,
-    str(HARVEY_ROOT / "harvey-os" / "skills" / "blockchain" / "polymarket" / "scripts"),
+    str(HARVEY_ROOT / "plugins-core" / "blockchain" / "polymarket" / "scripts"),
 )
 
 
@@ -45,11 +45,9 @@ def run_polymarket_query(query: str) -> dict:
             sys.executable,
             str(
                 HARVEY_ROOT
-                / "harvey-os"
-                / "skills"
-                / "blockchain"
-                / "polymarket"
-                / "scripts"
+                / "plugins-core"
+                / "skill-blockchain-polymarket"
+                / "src"
                 / "polymarket.py"
             ),
         ]

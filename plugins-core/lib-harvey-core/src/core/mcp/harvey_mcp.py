@@ -21,14 +21,14 @@ What this exposes:
   - Costs: session and historical cost tracking
 
 Install into Claude Code:
-  claude mcp add harvey -- python3 ~/MAKAKOO/harvey-os/core/mcp/harvey_mcp.py
+  claude mcp add harvey -- python3 ~/MAKAKOO/plugins-core/lib-harvey-core/src/core/mcp/harvey_mcp.py
 
 Install into any MCP client:
   {
     "mcpServers": {
       "harvey": {
         "command": "python3",
-        "args": ["~/MAKAKOO/harvey-os/core/mcp/harvey_mcp.py"]
+        "args": ["~/MAKAKOO/plugins-core/lib-harvey-core/src/core/mcp/harvey_mcp.py"]
       }
     }
   }
@@ -42,9 +42,9 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-# Add harvey-os to path
-HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
+HARVEY_HOME = os.environ.get("MAKAKOO_HOME") or os.environ.get(
+    "HARVEY_HOME", os.path.expanduser("~/MAKAKOO")
+)
 
 log = logging.getLogger("harvey.mcp")
 
@@ -1378,7 +1378,7 @@ def handle_tool(name: str, args: dict) -> str:
         result = subprocess.run(
             [sys.executable, "-m", "core.chat", "status"],
             capture_output=True, text=True,
-            cwd=os.path.join(HARVEY_HOME, "harvey-os"),
+            cwd=HARVEY_HOME,
         )
         return result.stdout or result.stderr or "Could not get status"
 

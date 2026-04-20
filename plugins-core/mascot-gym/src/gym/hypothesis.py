@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, List, Optional
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 ERRORS_DIR = Path(HARVEY_HOME) / "data" / "errors"
 IMPROVEMENTS_DIR = Path(HARVEY_HOME) / "data" / "improvements"
-SKILLS_ROOT = Path(HARVEY_HOME) / "harvey-os" / "skills"
+SKILLS_ROOT = Path(HARVEY_HOME) / "plugins-core"
 
 DEFAULT_TOP_N = 5
 DEFAULT_MIN_SAMPLE_SIZE = 2  # require at least this many entries per cluster
@@ -64,13 +64,11 @@ class HypothesisRecord:
 
 
 def _default_improve_fn() -> Callable:
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from skills.meta.autoimprover.evaluate_skill import improve_gap
     return improve_gap
 
 
 def _default_score_fn() -> Callable:
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from skills.meta.autoimprover.evaluate_skill import evaluate_with_llm
     return evaluate_with_llm
 
@@ -177,7 +175,7 @@ The edit targets the recurring failure captured by cluster `{hyp.cluster_id}`.
 - Run the skill doc lint (existing tooling) after applying.
 
 **Files:**
-- `harvey-os/skills/{hyp.skill}/SKILL.md`
+- `plugins-core/{hyp.skill}/SKILL.md`
 
 **Tests:**
 - Meta-harness scenario scored {hyp.baseline_score} → {hyp.improved_score} (delta +{hyp.delta})

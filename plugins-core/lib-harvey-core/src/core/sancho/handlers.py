@@ -65,9 +65,6 @@ def handle_wiki_lint() -> Dict:
     Checks for orphan pages, missing pages, empty pages, stale journals,
     and hub pages.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
-
     from core.superbrain.wiki import WikiOps
 
     wiki = WikiOps()
@@ -90,9 +87,6 @@ def handle_index_rebuild() -> Dict:
     Generates a categorized, linkable index of all Brain pages
     with summaries and link counts.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
-
     from core.superbrain.wiki import WikiOps
 
     wiki = WikiOps()
@@ -129,8 +123,6 @@ def handle_daily_briefing() -> Dict:
     mascot_aggregate: Dict = {}
     mascot_status = "skipped"
     try:
-        import sys as _sys
-        _sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
         from core.mascots import patrol_all as _patrol_all
 
         mascot_report = _patrol_all()
@@ -177,9 +169,6 @@ def handle_memory_consolidation() -> Dict:
     consolidated.
     """
     import asyncio
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
-
     from core.memory.consolidator import ConsolidationEngine
 
     engine = ConsolidationEngine()
@@ -208,9 +197,6 @@ def handle_memory_promotion() -> Dict:
 
     Inspired by OpenClaw Active Memory (short-term-promotion.ts).
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
-
     from core.memory.memory_promoter import MemoryPromoter
     from core.memory.recall_tracker import RecallTracker
 
@@ -248,9 +234,6 @@ def handle_superbrain_sync_embed() -> Dict:
     outage), this task catches the drift within 24h instead of letting it
     accumulate silently.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
-
     from core.superbrain.superbrain import Superbrain
 
     sb = Superbrain()
@@ -280,9 +263,6 @@ def handle_graph_rebuild() -> Dict:
 
     Interval: 6 hours. Cheap operation (~100ms on 1000 nodes).
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
-
     from core.superbrain.store import SuperbrainStore
 
     store = SuperbrainStore()
@@ -519,8 +499,6 @@ def handle_gym_classify() -> Dict:
     signature, writes clustered.json. Hot path — runs hourly, must not
     call an LLM, must not write to anything outside data/errors/.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from core.gym.classifier import scan_day
 
     summary = scan_day()
@@ -543,8 +521,6 @@ def handle_gym_hypothesize() -> Dict:
     data/improvements/pending/. Slow — this is the cold path. Runs
     once per night behind a 23.5h time_gate + 01:00-04:00 active hours.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from core.gym.hypothesis import generate_hypotheses
 
     hyps = generate_hypotheses()
@@ -573,8 +549,6 @@ def handle_gym_lope_gate() -> Dict:
     second-order noise filter that keeps escalated sprints from reaching
     the human queue.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from core.gym.lope_gate import validate_pending
 
     summary = validate_pending()
@@ -609,8 +583,6 @@ def handle_mascot_patrol() -> Dict:
 
     See core/mascots/patrol.py for the implementation.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from core.mascots import patrol_all
 
     report = patrol_all()
@@ -648,8 +620,6 @@ def handle_gym_morning_report() -> Dict:
     entire pipeline (errors → clusters → hypotheses → verdicts). This
     is the one notification channel — no Slack, no Telegram, Brain only.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from core.gym.lope_gate import build_morning_report
 
     report = build_morning_report()
@@ -679,8 +649,6 @@ def handle_gym_weekly_report() -> Dict:
     classifier consults this blocklist to skip noisy signatures that
     keep generating duds.
     """
-    import sys
-    sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
     from datetime import timedelta
 
     improvements_dir = Path(HARVEY_HOME) / "data" / "improvements"

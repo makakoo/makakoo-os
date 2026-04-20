@@ -3,7 +3,7 @@ mcp_registrar — Phase 3 of harvey:infect.
 
 Registers the existing harvey_mcp.py MCP server with whichever host CLI was
 detected in Phase 1, idempotently and reversibly. The MCP plugin
-(`harvey-os/core/mcp/harvey_mcp.py`) is what gives the host its Harvey
+(`plugins-core/lib-harvey-core/src/core/mcp/harvey_mcp.py`) is what gives the host its Harvey
 muscles; this module is the installer that wires it in.
 
 Per-host configuration matrix (verified in v2.1 sprint):
@@ -243,7 +243,7 @@ class MCPRegistrar:
         Standard MCP server JSON format: command + args + optional env.
         Points at python3 + harvey_mcp.py with HARVEY_HOME pinned in env.
         """
-        mcp_path = self.harvey_home / "harvey-os" / "core" / "mcp" / "harvey_mcp.py"
+        mcp_path = self.harvey_home / "plugins-core" / "lib-harvey-core" / "src" / "core" / "mcp" / "harvey_mcp.py"
         return {
             "command": sys.executable or "python3",
             "args": [str(mcp_path)],

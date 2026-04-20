@@ -12,8 +12,17 @@ from pathlib import Path
 
 import yaml
 
-HARVEY_OS = Path(__file__).resolve().parents[2]  # harvey-os/
-SKILLS_DIR = HARVEY_OS / "skills"
+# Post-harvey-os retirement: skills live as plugin dirs under
+# $MAKAKOO_HOME/plugins-core/; __file__ parents[2] is now src/ under the
+# lib-harvey-core plugin, so resolve MAKAKOO_HOME explicitly.
+import os as _os
+_MAKAKOO_HOME = Path(
+    _os.environ.get("MAKAKOO_HOME")
+    or _os.environ.get("HARVEY_HOME")
+    or _os.path.expanduser("~/MAKAKOO")
+)
+HARVEY_OS = _MAKAKOO_HOME / "plugins-core" / "lib-harvey-core"
+SKILLS_DIR = _MAKAKOO_HOME / "plugins-core"
 REGISTRY_DIR = Path(__file__).parent
 INDEX_PATH = REGISTRY_DIR / "skill_index.json"
 
@@ -206,7 +215,7 @@ def sync_skills_to_gsd_todos(
     from datetime import datetime
 
     HARVEY_ROOT = Path(__file__).resolve().parents[3]  # ~/MAKAKOO
-    SKILLS_ROOT = HARVEY_ROOT / "harvey-os" / "skills"
+    SKILLS_ROOT = HARVEY_ROOT / "plugins-core"
     TODOS_DIR = HARVEY_ROOT / ".planning" / "todos" / "pending"
     TODOS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -291,7 +300,7 @@ created: {timestamp}
 title: "{skill["name"]}"
 area: "{skill["category"]}"
 files:
-  - "harvey-os/skills/{skill["category"]}/{skill["name"]}/"
+  - "plugins-core/{skill["category"]}/{skill["name"]}/"
 ---
 
 ## Problem

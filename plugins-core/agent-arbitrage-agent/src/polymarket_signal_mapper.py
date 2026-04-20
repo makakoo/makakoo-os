@@ -71,7 +71,7 @@ class PolymarketSignalMapper:
         )
         self.session = requests.Session()
         self.session.headers.update(
-            {"Content-Type": "application/json", "User-Agent": "harvey-os/1.0"}
+            {"Content-Type": "application/json", "User-Agent": "makakoo-os/1.0"}
         )
 
     def fetch_all_active_markets(self, limit: int = 100) -> list[dict]:

@@ -31,7 +31,6 @@ import sys
 from typing import Any, Dict, List, Optional
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
 
 log = logging.getLogger("harvey.resumer.run_task")
 

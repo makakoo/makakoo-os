@@ -2,7 +2,7 @@
 """
 Superbrain Global CLI — Available from any directory, any AI CLI.
 
-Install: ln -sf ~/MAKAKOO/harvey-os/core/superbrain/cli.py /usr/local/bin/superbrain
+Install: ln -sf ~/MAKAKOO/plugins-core/lib-harvey-core/src/core/superbrain/cli.py /usr/local/bin/superbrain
 
 Commands:
   superbrain query "question"     # Search + synthesize
@@ -52,9 +52,9 @@ import json
 import os
 import sys
 
-# Ensure harvey-os is on path regardless of working directory
-HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
+HARVEY_HOME = os.environ.get("MAKAKOO_HOME") or os.environ.get(
+    "HARVEY_HOME", os.path.expanduser("~/MAKAKOO")
+)
 
 # Load .env
 env_path = os.path.join(HARVEY_HOME, ".env")

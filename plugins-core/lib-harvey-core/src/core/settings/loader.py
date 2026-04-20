@@ -12,7 +12,7 @@ Precedence (lowest to highest):
 5. FLAG - --settings CLI flag
 6. POLICY - MDM / enterprise policy (highest)
 
-Path: harvey-os/core/settings/loader.py
+Path: plugins-core/lib-harvey-core/src/core/settings/loader.py
 """
 
 from __future__ import annotations

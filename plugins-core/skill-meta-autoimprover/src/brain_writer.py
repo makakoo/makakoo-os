@@ -11,7 +11,7 @@ Memory entries go to:
   data/Brain/pages/harvey_memory.md  (Harvey's observations)
 
 Skill updates go to:
-  harvey-os/skills/<category>/<skill-name>/SKILL.md
+  plugins-core/<category>/<skill-name>/SKILL.md
 
 Entry delimiter: § (section sign, same as Hermes MEMORY.md).
 Character limits: user ~1375 chars, harvey ~2200 chars.
@@ -34,7 +34,7 @@ from typing import Optional, List, Dict, Any
 _HARVEY_HOME = Path(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")))
 BRAIN_DIR = _HARVEY_HOME / "data" / "Brain"
 PAGES_DIR = BRAIN_DIR / "pages"
-HARVEY_OS = _HARVEY_HOME / "harvey-os"
+HARVEY_OS = _HARVEY_HOME
 SKILLS_DIR = HARVEY_OS / "skills"
 LOGSEQ_API = "http://127.0.0.1:12315"
 ENTRY_DELIMITER = "\n§\n"
@@ -499,7 +499,7 @@ class BrainWriter:
         """Create a new skill SKILL.md.
 
         content: full SKILL.md text including YAML frontmatter.
-        Writes to: harvey-os/skills/<category>/<name>/SKILL.md
+        Writes to: plugins-core/<category>/<name>/SKILL.md
 
         Validates:
         - Skill name format (lowercase, max 64 chars, allowed chars)

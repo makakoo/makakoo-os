@@ -15,7 +15,7 @@ Event categories:
 - Cost: COST_TRACKED
 - Startup: STARTUP_PHASE, STARTUP_COMPLETE
 
-Path: harvey-os/core/telemetry/events.py
+Path: plugins-core/lib-harvey-core/src/core/telemetry/events.py
 """
 
 from __future__ import annotations

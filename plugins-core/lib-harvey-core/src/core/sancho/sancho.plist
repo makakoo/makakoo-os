@@ -23,10 +23,10 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>set -a; [ -f "$HOME/.env" ] &amp;&amp; . "$HOME/.env"; set +a; exec python3 __HARVEY_HOME__/harvey-os/core/sancho/engine.py</string>
+        <string>set -a; [ -f "$HOME/.env" ] &amp;&amp; . "$HOME/.env"; set +a; exec python3 __HARVEY_HOME__/plugins-core/lib-harvey-core/src/core/sancho/engine.py</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>__HARVEY_HOME__/harvey-os</string>
+    <string>__HARVEY_HOME__</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HARVEY_HOME</key>
@@ -36,12 +36,10 @@
         <key>PATH</key>
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <!-- PYTHONPATH is load-bearing: engine.py uses `from core.sancho...`
-             imports which require the harvey-os/ dir on sys.path. Without
-             this, launchd crashes silently every hour with ModuleNotFoundError.
-             Discovered 2026-04-14 when Harvey's Mascot GYM went looking
-             for its own runtime and found SANCHO dead. -->
+             imports. Post-harvey-os retirement (2026-04-20), core.* lives
+             inside the lib-harvey-core plugin src/ dir. -->
         <key>PYTHONPATH</key>
-        <string>__HARVEY_HOME__/harvey-os</string>
+        <string>__HARVEY_HOME__/plugins/lib-harvey-core/src:__HARVEY_HOME__/plugins/lib-hte/src</string>
     </dict>
     <key>StartInterval</key>
     <integer>3600</integer>

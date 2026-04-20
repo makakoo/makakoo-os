@@ -2,7 +2,7 @@
 """
 Tests for SessionDB - SQLite session storage with FTS5 full-text search.
 
-Run with: python3 -m pytest harvey-os/core/session/tests_session_db.py -v
+Run with: python3 -m pytest plugins-core/lib-harvey-core/src/core/session/tests_session_db.py -v
 """
 
 import os

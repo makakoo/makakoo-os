@@ -19,7 +19,7 @@ import argparse
 from datetime import datetime, timedelta
 
 # --- Dynamic HARVEY_HOME resolution ---
-# Script is at harvey-os/skills/inbox-triage/inbox_watchdog.py (4 levels below HARVEY_HOME)
+# Script is at plugins-core/inbox-triage/inbox_watchdog.py (4 levels below HARVEY_HOME)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _HH_FALLBACK = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))  # up 3 from SCRIPT_DIR = HARVEY_HOME
 HARVEY_HOME = os.environ.get("HARVEY_HOME", _HH_FALLBACK)
@@ -248,7 +248,7 @@ def run():
             # Sync to brain (import lazily to avoid hard dep on logseq_bridge)
             if not args.dry_run:
                 try:
-                    brain_path = os.path.join(HARVEY_HOME, "harvey-os", "skills", "logseq-brain")
+                    brain_path = os.path.join(HARVEY_HOME, "plugins-core", "logseq-brain")
                     sys.path.insert(0, brain_path)
                     from logseq_bridge import sync_inbound_to_brain
                     sync_inbound_to_brain(

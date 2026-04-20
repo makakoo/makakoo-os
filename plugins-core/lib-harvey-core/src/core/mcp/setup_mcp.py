@@ -18,8 +18,8 @@ import subprocess
 from pathlib import Path
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-MCP_SCRIPT = os.path.join(HARVEY_HOME, "harvey-os", "core", "mcp", "harvey_mcp.py")
-PYTHONPATH_DIR = os.path.join(HARVEY_HOME, "harvey-os")
+MCP_SCRIPT = os.path.join(HARVEY_HOME, "plugins-core", "lib-harvey-core", "src", "core", "mcp", "harvey_mcp.py")
+PYTHONPATH_DIR = HARVEY_HOME
 
 # Env vars passed to every CLI registration so Harvey works for users
 # whose clone lives at a non-default location. Without these the MCP

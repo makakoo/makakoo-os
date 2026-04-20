@@ -23,13 +23,15 @@
         <string>set -a; [ -f "$HOME/.env" ] &amp;&amp; . "$HOME/.env"; set +a; exec python3.11 -m core.chat start</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>__HARVEY_HOME__/harvey-os</string>
+    <string>__HARVEY_HOME__</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HARVEY_HOME</key>
         <string>__HARVEY_HOME__</string>
         <key>MAKAKOO_HOME</key>
         <string>__HARVEY_HOME__</string>
+        <key>PYTHONPATH</key>
+        <string>__HARVEY_HOME__/plugins/lib-harvey-core/src:__HARVEY_HOME__/plugins/lib-hte/src</string>
         <key>PATH</key>
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     </dict>

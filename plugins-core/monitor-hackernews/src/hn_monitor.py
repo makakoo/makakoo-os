@@ -24,7 +24,6 @@ from typing import Dict, List, Optional
 import requests
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
 
 logging.basicConfig(
     level=logging.INFO,

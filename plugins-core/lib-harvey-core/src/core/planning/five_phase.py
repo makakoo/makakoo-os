@@ -16,7 +16,7 @@ Key concepts:
 Note: This is the PLANNING WORKFLOW, not the /gsd-plan-phase implementation.
 This is Claude Code's internal plan mode that the user experiences.
 
-Path: harvey-os/core/planning/five_phase.py
+Path: plugins-core/lib-harvey-core/src/core/planning/five_phase.py
 """
 
 from __future__ import annotations

@@ -22,14 +22,14 @@ from dataclasses import dataclass
 
 # Base paths
 HARVEY_ROOT = Path(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")))
-SKILLS_ROOT = HARVEY_ROOT / "harvey-os" / "skills"
+SKILLS_ROOT = HARVEY_ROOT / "plugins-core"
 AUTOIMPROVER_ROOT = SKILLS_ROOT / "meta" / "autoimprover"
 SKILLS_TO_IMPROVE = AUTOIMPROVER_ROOT / "skills_to_improve.md"
 PROGRAM_MD = AUTOIMPROVER_ROOT / "PROGRAM.md"
 RESULTS_TSV = AUTOIMPROVER_ROOT / "results.tsv"
 
 # Git
-HARVEY_GIT_DIR = HARVEY_ROOT / "harvey-os"
+HARVEY_GIT_DIR = HARVEY_ROOT
 
 
 @dataclass

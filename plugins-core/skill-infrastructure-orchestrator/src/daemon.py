@@ -26,7 +26,7 @@ from pathlib import Path
 HARVEY_HOME = Path(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")))
 PID_FILE = HARVEY_HOME / "data" / "orchestrator" / "daemon.pid"
 LOG_FILE = HARVEY_HOME / "data" / "logs" / "orchestrator.log"
-CONTROLLER_PATH = HARVEY_HOME / "harvey-os" / "skills" / "infrastructure" / "orchestrator" / "controller.py"
+CONTROLLER_PATH = HARVEY_HOME / "plugins-core" / "infrastructure" / "orchestrator" / "controller.py"
 
 PYTHON = sys.executable
 

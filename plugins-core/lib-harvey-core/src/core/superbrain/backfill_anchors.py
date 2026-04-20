@@ -27,7 +27,7 @@ from pathlib import Path
 
 # Allow running as a script from anywhere
 _THIS = Path(__file__).resolve()
-_CORE_DIR = _THIS.parent  # .../harvey-os/core/superbrain/
+_CORE_DIR = _THIS.parent  # .../plugins-core/lib-harvey-core/src/core/superbrain/
 sys.path.insert(0, str(_CORE_DIR))
 
 from anchor_extractor import (  # noqa: E402

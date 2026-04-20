@@ -42,7 +42,7 @@ WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 # Anchor extraction is best-effort — wrapped so the write path never fails
 # on extractor errors. Gated by BRAIN_ANCHOR_ON_SYNC env (default "1").
-# See harvey-os/skills/meta/brain-anchors/SKILL.md.
+# See plugins-core/meta/brain-anchors/SKILL.md.
 try:
     from core.superbrain.anchor_extractor import extract_anchor_safe as _extract_anchor_safe
 except Exception:  # pragma: no cover — import-time safety

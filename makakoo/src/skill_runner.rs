@@ -1,10 +1,11 @@
 //! Python skill subprocess bridge.
 //!
-//! Python skills live under `$MAKAKOO_HOME/harvey-os/skills/` as
-//! directories containing a `SKILL.md` plus one or more runnable
-//! scripts. Rust can't import Python, so the runner spawns `python3`
-//! with the skill's entry file and inherits stdio so the user sees
-//! live output.
+//! Python skills live under `$MAKAKOO_HOME/plugins/<skill-name>/src/` as
+//! plugin directories containing a `SKILL.md` plus one or more runnable
+//! scripts. (Legacy path `$MAKAKOO_HOME/harvey-os/skills/` was retired
+//! 2026-04-20 — see `~/.makakoo/archive/harvey-os-2026-04-20/`.) Rust
+//! can't import Python, so the runner spawns `python3` with the skill's
+//! entry file and inherits stdio so the user sees live output.
 //!
 //! Entry-file discovery order:
 //!
@@ -38,13 +39,13 @@ pub struct SkillRunner {
 }
 
 impl SkillRunner {
-    /// Build a runner rooted at `$MAKAKOO_HOME/harvey-os/skills/`. The
+    /// Build a runner rooted at `$MAKAKOO_HOME/plugins/`. The
     /// runner inherits the current `PATH` and layers in `PYTHONPATH`,
     /// `MAKAKOO_HOME`, and `HARVEY_HOME` so any skill code that imports
     /// `core.whatever` or reads env vars finds what it expects.
     pub fn new() -> Result<Self> {
         let home = makakoo_home();
-        let skills_dir = home.join("harvey-os").join("skills");
+        let skills_dir = home.join("plugins");
         let python = which_python()?;
         let env = build_skill_env(&home, &[]);
         Ok(Self {
@@ -57,7 +58,7 @@ impl SkillRunner {
     /// Build a runner with library plugin paths injected into PYTHONPATH.
     pub fn with_library_paths(library_paths: &[PathBuf]) -> Result<Self> {
         let home = makakoo_home();
-        let skills_dir = home.join("harvey-os").join("skills");
+        let skills_dir = home.join("plugins");
         let python = which_python()?;
         let env = build_skill_env(&home, library_paths);
         Ok(Self {
@@ -138,8 +139,8 @@ impl SkillRunner {
 /// Build the environment map for running Python skills. PYTHONPATH is
 /// built from library-plugin src/ dirs + the existing env value.
 ///
-/// `$MAKAKOO_HOME/harvey-os` is NOT on PYTHONPATH by default. Library
-/// plugins own the `core.*` namespace via `lib-hte` (core.terminal)
+/// The retired `$MAKAKOO_HOME/harvey-os` tree is never placed on PYTHONPATH.
+/// Library plugins own the `core.*` namespace via `lib-hte` (core.terminal)
 /// and `lib-harvey-core` (core.{security,gym,superbrain,agent,dreams,
 /// sancho,chat}). The caller passes library paths from the registry's
 /// `get_library_paths()`; each gets `/src` joined so PEP-420

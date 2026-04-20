@@ -2,7 +2,7 @@
 anchor_extractor — produces structured memory anchors from Brain passages via switchAILocal.
 
 Part of the brain-anchors memory system. See
-`harvey-os/skills/meta/brain-anchors/SKILL.md` for architecture.
+`plugins-core/meta/brain-anchors/SKILL.md` for architecture.
 
 Contract: text in → JSON out with fields {anchor, anchor_level, triples,
 entities, keywords, decision, anchor_hash, anchor_model}.
@@ -103,7 +103,7 @@ Rules:
 
 PRESERVE in the anchor (literal copy from passage when applicable):
 - Exact numbers, dates, version strings, percentages
-- File paths (e.g., harvey-os/skills/meta/X/SKILL.md)
+- File paths (e.g., plugins-core/meta/X/SKILL.md)
 - Command names, tool names, model IDs, API endpoints
 - Error messages or log lines (quoted verbatim inside the sentence)
 - [[WikiLink]] entity names

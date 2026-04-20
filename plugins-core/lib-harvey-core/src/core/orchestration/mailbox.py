@@ -9,7 +9,7 @@ Key features:
 - Atomic flock-based locking for concurrent access
 - Message queuing when agent is running, resume when paused
 
-Path: harvey-os/core/orchestration/mailbox.py
+Path: plugins-core/lib-harvey-core/src/core/orchestration/mailbox.py
 """
 
 from __future__ import annotations

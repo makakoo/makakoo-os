@@ -32,7 +32,6 @@ from pathlib import Path
 import requests
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
 
 from core.chat.config import ChatConfig, load_config
 from core.chat.store import ChatStore

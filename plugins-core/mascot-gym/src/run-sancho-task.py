@@ -27,7 +27,7 @@ from pathlib import Path
 MAKAKOO_HOME = os.environ.get("MAKAKOO_HOME") or os.environ.get(
     "HARVEY_HOME", os.path.expanduser("~/MAKAKOO")
 )
-sys.path.insert(0, str(Path(MAKAKOO_HOME) / "harvey-os"))
+sys.path.insert(0, str(Path(MAKAKOO_HOME) / "plugins-core" / "lib-harvey-core" / "src"))
 
 
 def _load_handler(name: str):

@@ -89,7 +89,7 @@ def run():
         return
 
     # Lazy import logseq_bridge
-    brain_path = os.path.join(HARVEY_HOME, "harvey-os", "skills", "logseq-brain")
+    brain_path = os.path.join(HARVEY_HOME, "plugins-core", "logseq-brain")
     sys.path.insert(0, brain_path)
     try:
         from logseq_bridge import (

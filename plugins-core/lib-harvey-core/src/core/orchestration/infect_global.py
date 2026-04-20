@@ -119,10 +119,11 @@ _BLOCK_RE = re.compile(
 JSON_TAG_PREFIX = f"[harvey:infect-global v{BLOCK_VERSION}]"
 _JSON_TAG_FINGERPRINT = "[harvey:infect-global"
 
-# Canonical bootstrap source lives at $MAKAKOO_HOME/harvey-os/global_bootstrap.md.
+# Canonical bootstrap source lives at
+# $MAKAKOO_HOME/plugins-core/lib-harvey-core/global_bootstrap.md.
 # v3 onward loads from this file so edits don't require touching Python.
 # Fallback to inline string if the file is missing (e.g. running tests
-# outside the repo, or after `harvey-os/` is renamed — defensive).
+# outside the repo — defensive).
 _CANONICAL_BOOTSTRAP_PATH = (
     Path(__file__).resolve().parent.parent.parent / "global_bootstrap.md"
 )

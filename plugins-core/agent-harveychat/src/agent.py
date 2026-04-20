@@ -33,13 +33,18 @@ import sys
 
 
 def _bootstrap_harvey_home() -> str:
-    """Ensure HARVEY_HOME is set + harvey-os is on sys.path before imports."""
-    harvey_home = os.environ.get("HARVEY_HOME")
+    """Ensure HARVEY_HOME is set + lib-harvey-core src dirs are on sys.path.
+
+    Since harvey-os/ retirement (2026-04-20), the core.* Python tree lives at
+    plugins-core/lib-harvey-core/src/core/. The kernel normally sets
+    PYTHONPATH via the plugin env; this helper makes direct `python agent.py`
+    invocations work too.
+    """
+    harvey_home = os.environ.get("HARVEY_HOME") or os.environ.get("MAKAKOO_HOME")
     if not harvey_home:
-        # Default: walk up from this file until we find CLAUDE.md at the root
         here = os.path.abspath(os.path.dirname(__file__))
         candidate = here
-        for _ in range(6):
+        for _ in range(8):
             if os.path.exists(os.path.join(candidate, "CLAUDE.md")):
                 harvey_home = candidate
                 break
@@ -50,10 +55,12 @@ def _bootstrap_harvey_home() -> str:
         if not harvey_home:
             harvey_home = os.path.expanduser("~/MAKAKOO")
         os.environ["HARVEY_HOME"] = harvey_home
+        os.environ.setdefault("MAKAKOO_HOME", harvey_home)
 
-    harvey_os = os.path.join(harvey_home, "harvey-os")
-    if harvey_os not in sys.path:
-        sys.path.insert(0, harvey_os)
+    for rel in ("plugins-core/lib-harvey-core/src", "plugins-core/lib-hte/src"):
+        p = os.path.join(harvey_home, rel)
+        if os.path.isdir(p) and p not in sys.path:
+            sys.path.insert(0, p)
     return harvey_home
 
 

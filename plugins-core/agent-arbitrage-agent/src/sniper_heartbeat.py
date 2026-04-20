@@ -17,7 +17,7 @@ HARVEY_HOME = os.path.expanduser(os.environ.get("HARVEY_HOME", "~/MAKAKOO"))
 LOG_FILE = os.path.join(HARVEY_HOME, "data", "logs", "sniper_heartbeat.log")
 PROCESS_NAME = "btc_5m_sniper.py --live"
 PYTHON_BIN = "/usr/local/opt/python@3.11/bin/python3.11"
-SNIPER_SCRIPT = os.path.join(HARVEY_HOME, "harvey-os", "skills", "btc-sniper", "btc_5m_sniper.py")
+SNIPER_SCRIPT = os.path.join(HARVEY_HOME, "plugins-core", "btc-sniper", "btc_5m_sniper.py")
 SNIPER_LOG = os.path.join(HARVEY_HOME, "data", "logs", "btc_5m_sniper.log")
 
 def log_event(msg):

@@ -10,9 +10,9 @@ Key features (from Claude Code's fileStateCache.ts):
 - Stats tracking: hits, misses, evictions, hit_rate
 
 Integration points:
-- harvey-os/core/registry/skill_registry.py (SKILL.md reads)
-- harvey-os/core/memory/memory_loader.py (Brain page reads)
-- harvey-os/core/memory/logseq_bridge.py (journal reads via filesystem)
+- plugins-core/lib-harvey-core/src/core/registry/skill_registry.py (SKILL.md reads)
+- plugins-core/lib-harvey-core/src/core/memory/memory_loader.py (Brain page reads)
+- plugins-core/lib-harvey-core/src/core/memory/logseq_bridge.py (journal reads via filesystem)
 
 Usage:
     from harvey_os.core.indexing.file_state_cache import FileStateCache, get_file_cache

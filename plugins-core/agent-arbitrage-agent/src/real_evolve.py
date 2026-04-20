@@ -17,7 +17,7 @@ from pathlib import Path
 PAPER_CAPITAL = 100.0
 TAKER_FEE_BPS = 5.0
 HARVEY_HOME = os.path.expanduser(os.environ.get("HARVEY_HOME", "~/MAKAKOO"))
-SCRIPT_DIR = Path(os.path.join(HARVEY_HOME, "harvey-os", "skills", "arbitrage-agent"))
+SCRIPT_DIR = Path(os.path.join(HARVEY_HOME, "plugins-core", "arbitrage-agent"))
 DATA_DIR = Path(os.path.join(HARVEY_HOME, "data", "arbitrage-agent"))
 BEST_PARAMS = DATA_DIR / "v2" / "state" / "best_intraday_params.json"
 JOURNAL_FILE = DATA_DIR / "v2" / "state" / "intraday_journal.jsonl"

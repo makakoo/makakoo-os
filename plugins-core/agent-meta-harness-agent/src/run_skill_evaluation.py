@@ -20,7 +20,7 @@ Usage:
 
     # Compare delta (for autoresearch integration)
     python3 run_skill_evaluation.py --skill dev/writing-skills \
-        --improved-content "$(cat ../harvey-os/skills/dev/writing-skills/SKILL.md)"
+        --improved-content "$(cat ../plugins-core/dev/writing-skills/SKILL.md)"
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -51,9 +52,13 @@ from tbench_integration import TerminalBenchLoader
 
 
 def _run_git(cmd: list) -> subprocess.CompletedProcess:
+    # Post-harvey-os retirement: all skills are git-tracked under MAKAKOO_HOME
+    # (the repo root), not the removed harvey-os/ subtree.
+    makakoo_home = os.environ.get("MAKAKOO_HOME") or os.environ.get("HARVEY_HOME") \
+        or os.path.expanduser("~/MAKAKOO")
     return subprocess.run(
         ["git"] + cmd,
-        cwd=str(Path(__file__).parent.parent / "harvey-os"),
+        cwd=makakoo_home,
         capture_output=True,
         text=True,
     )
@@ -165,7 +170,7 @@ def main():
     )
     parser.add_argument(
         "--skill",
-        help="Skill path relative to harvey-os/skills/, e.g. dev/writing-skills",
+        help="Skill path relative to plugins-core/, e.g. dev/writing-skills",
     )
     parser.add_argument(
         "--scenario", default=DEFAULT_TASK, help="Task description or tbench:<tier>/<n>"

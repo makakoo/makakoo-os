@@ -11,7 +11,7 @@ Features:
 - Dev convenience methods (enable/disable)
 - Persistence to ~/.harvey/feature_flags.json
 
-Path: harvey-os/core/telemetry/feature_flags.py
+Path: plugins-core/lib-harvey-core/src/core/telemetry/feature_flags.py
 """
 
 from __future__ import annotations

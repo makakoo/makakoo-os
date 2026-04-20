@@ -5,7 +5,7 @@ SOUL Vocabulary Extractor — Seeds buddy mascot trait pools from SOUL.md.
 Per the OpenClaw audit lope-team debate (2026-04-11): Olibia's hard-coded
 trait template approach was kept untouched, but the procedural buddy mascot
 generator in `core/buddy/nursery.py` is enriched with vocabulary pulled from
-the canonical Core Tone section in `harvey-os/SOUL.md`.
+the canonical Core Tone section in `plugins-core/lib-harvey-core/SOUL.md`.
 
 This is a *vocabulary seeding* pattern, NOT a voice replacement pattern:
   - Existing whimsical pools stay (preserves the joy of "afraid of semicolons")
@@ -33,13 +33,13 @@ from typing import List, Optional, Tuple
 log = logging.getLogger("harvey.buddy.soul_vocab")
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-DEFAULT_SOUL_PATH = Path(HARVEY_HOME) / "harvey-os" / "SOUL.md"
+DEFAULT_SOUL_PATH = Path(HARVEY_HOME) / "plugins-core" / "lib-harvey-core" / "SOUL.md"
 
 CORE_TONE_HEADER = "## Core Tone"
 NEXT_SECTION_RE = re.compile(r"\n##\s")
 
 # Adjective extraction: matches the canonical "tone is X, Y, Z, [and] W"
-# pattern in harvey-os/SOUL.md. Anchored on "tone is" specifically — broader
+# pattern in plugins-core/lib-harvey-core/SOUL.md. Anchored on "tone is" specifically — broader
 # patterns like bare "are" leak unrelated noun phrases ("are Harvey", "are the
 # boss of all other agents") that aren't adjective lists. The trailing dash/
 # period/newline anchors stop the match at the end of the adjective list so

@@ -7,7 +7,8 @@ Usage:
     python3 multimodal_knowledge.py query "question text"
     python3 multimodal_knowledge.py stats
 
-Loads .env from ~/MAKAKOO/.env and uses harvey-os memory substrate for artifact registry.
+Loads .env from ~/MAKAKOO/.env and uses the core.orchestration.memory_substrate
+artifact registry (lives inside the lib-harvey-core plugin).
 """
 
 import argparse
@@ -35,7 +36,7 @@ RAG_DIR = HARVEY_HOME / "tmp" / "multimodal-rag"
 sys.path.insert(0, str(RAG_DIR))
 
 # Add memory substrate for Layer 6 integration
-MEMORY_SUBSTRATE_DIR = HARVEY_HOME / "harvey-os" / "skills" / "orchestration" / "memory_substrate"
+MEMORY_SUBSTRATE_DIR = HARVEY_HOME / "plugins-core" / "orchestration" / "memory_substrate"
 sys.path.insert(0, str(MEMORY_SUBSTRATE_DIR))
 
 from lib import rag, db

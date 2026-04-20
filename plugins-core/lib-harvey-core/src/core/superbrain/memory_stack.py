@@ -31,7 +31,7 @@ log = logging.getLogger("superbrain.memory_stack")
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 BRAIN_DIR = os.path.join(HARVEY_HOME, "data", "Brain")
-SOUL_PATH = os.path.join(HARVEY_HOME, "harvey-os", "SOUL.md")
+SOUL_PATH = os.path.join(HARVEY_HOME, "plugins-core", "lib-harvey-core", "SOUL.md")
 
 # Token budget (1 token ≈ 4 chars for English text)
 L0_LEAN_CHAR_BUDGET = 160     # ~40 tokens — used when intent is "code"

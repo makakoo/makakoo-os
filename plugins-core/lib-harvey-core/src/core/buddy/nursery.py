@@ -110,7 +110,7 @@ TRAIT_QUIRK = [
 
 
 # S3 (OpenClaw audit, 2026-04-11): TRAIT pools are enriched once on first
-# use with vocabulary extracted from harvey-os/SOUL.md ## Core Tone. The
+# use with vocabulary extracted from plugins-core/lib-harvey-core/SOUL.md ## Core Tone. The
 # enrichment is APPENDED to the base pools — whimsical buddies still get
 # generated, but Harvey's voice signature ("sharp", "concise") can also
 # surface in some procedurally generated mascots.

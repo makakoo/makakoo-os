@@ -31,7 +31,7 @@ from typing import List, Dict, Any, Optional, Callable
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HARVEY_HOME = Path(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")))
-HARVEY_OS = _HARVEY_HOME / "harvey-os"
+HARVEY_OS = _HARVEY_HOME
 HARVEY_DATA = _HARVEY_HOME / "data"
 SKILL_DIR = HARVEY_OS / "skills" / "dev" / "dev-orchestrator"
 DEFAULT_OUTPUT_DIR = HARVEY_DATA / "dev-orchestrator"

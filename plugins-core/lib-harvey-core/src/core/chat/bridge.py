@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-sys.path.insert(0, os.path.join(HARVEY_HOME, "harvey-os"))
 
 from core.chat.config import BridgeConfig
 from core.agent.harvey_agent import HarveyAgent

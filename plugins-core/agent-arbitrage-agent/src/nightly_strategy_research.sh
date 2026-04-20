@@ -4,7 +4,7 @@
 
 HARVEY_HOME="${HARVEY_HOME:-$HOME/HARVEY}"
 PYTHON="/usr/local/opt/python@3.11/bin/python3.11"
-SCRIPT_DIR="$HARVEY_HOME/harvey-os/skills/arbitrage-agent"
+SCRIPT_DIR="$HARVEY_HOME/plugins-core/arbitrage-agent"
 LOG_DIR="$HARVEY_HOME/data/logs"
 
 mkdir -p "$LOG_DIR"

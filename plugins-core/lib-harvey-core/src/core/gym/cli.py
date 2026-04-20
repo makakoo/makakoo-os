@@ -13,7 +13,7 @@ Subcommands:
 
 Hard rules (enforced inside core/gym/approval.py, not just here):
     - `approve ALL` is blocked with a hard error
-    - Rejects to harvey-os/core/* are blocked (human must hand-write)
+    - Rejects to plugins-core/lib-harvey-core/src/core/* are blocked (human must hand-write)
     - Every approval must be explicit per hypothesis id
 """
 
@@ -34,9 +34,12 @@ try:
         stats,
     )
 except ImportError:
-    # Direct execution fallback
+    # Direct execution fallback — post-harvey-os retirement, core.* resolves via
+    # the lib-harvey-core plugin src dir.
     import os
-    sys.path.insert(0, os.path.join(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")), "harvey-os"))
+    _home = os.environ.get("MAKAKOO_HOME") or os.environ.get("HARVEY_HOME") \
+        or os.path.expanduser("~/MAKAKOO")
+    sys.path.insert(0, os.path.join(_home, "plugins-core", "lib-harvey-core", "src"))
     from core.gym.approval import (
         ApprovalError,
         approve,
