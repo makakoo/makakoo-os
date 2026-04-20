@@ -33,6 +33,9 @@ pub enum MakakooError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -50,5 +53,12 @@ impl MakakooError {
 
     pub fn llm(msg: impl Into<String>) -> Self {
         Self::Llm(msg.into())
+    }
+
+    /// Caller-misuse errors — wrong shape, violated precondition, etc.
+    /// Use this (not `internal`) so surface layers can translate to the
+    /// right MCP error code / HTTP 400 instead of 500.
+    pub fn invalid_input(msg: impl Into<String>) -> Self {
+        Self::InvalidInput(msg.into())
     }
 }

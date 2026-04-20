@@ -11,8 +11,18 @@
 //! operate on an `Arc<Mutex<Connection>>` shared with the rest of the
 //! makakoo-core crate so a single sqlite file owns the whole OS.
 //!
-//! This module is intentionally small — it does not speak SMTP, IMAP,
-//! LinkedIn, or the Telegram API. It is a durable buffer with a rule.
+//! Channel adapters (Telegram / email / LinkedIn) live in submodules —
+//! this module remains the durable buffer + state machine only. Adapters
+//! are the only callers of `mark_sent` and each enforces the
+//! Approved-before-Sent invariant at their own boundary.
+
+pub mod email;
+pub mod linkedin;
+pub mod telegram;
+
+pub use email::EmailAdapter;
+pub use linkedin::LinkedInAdapter;
+pub use telegram::{SharedTelegramAdapter, TelegramAdapter};
 
 use std::sync::{Arc, Mutex};
 
