@@ -1,91 +1,141 @@
 # Makakoo OS
 
-> Autonomous cognitive extension for any AI CLI. Persistent memory, multi-agent swarm, brain search, Olibia 🦉.
+[![CI](https://github.com/makakoo/makakoo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/makakoo/makakoo-os/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-blue)
+![Status](https://img.shields.io/badge/status-v0.1.0%20launch-orange)
 
-Makakoo OS is an open-source, MIT-licensed, local-first platform. Many bodies, one mind. Built by contributors from everywhere.
+> **Many bodies. One mind.**
+> Open-source autonomous cognitive extension that gives every AI CLI on your machine the same persistent brain.
 
-**Status:** pre-launch · v0.1.0 · early public cut of the Rust core.
+---
 
-## What this is
+## Why this exists
 
-Makakoo OS turns any agentic host into a single swarm — persistent Logseq-backed memory, multi-agent orchestration, superbrain query (FTS5 + vector + LLM synthesis), image + omni multimodal, outbound channels, and a guardian owl mascot. One install, one set of tools, one cognitive model across every body in the swarm.
+AI agents don't remember. And they definitely don't share memory with each other. Every Claude session starts from zero. Every Gemini conversation is a goldfish. Every CLI has its own fishbowl.
 
-The problem it solves: AI agents don't remember, and they definitely don't share memory with each other. Every session starts from zero. Every agent is a goldfish with its own fishbowl. Makakoo gives every agent the same persistent brain so the assistant at the terminal, the agent on the other laptop, and the autonomous worker on the server all share continuity across tools, machines, projects, and months of context.
+Makakoo OS fixes this. One install, one set of tools, one cognitive model across every AI CLI on your machine — Claude Code, Gemini CLI, Codex, OpenCode, Vibe, Cursor, Qwen — plus IDE assistants (VSCode Copilot, Continue, Cline, JetBrains AI). Persistent Logseq-backed memory, capability-sandboxed plugin architecture, proactive maintenance tasks that run while you sleep.
 
-Many bodies. One mind.
+Your notes, your decisions, your arguments with yourself from three months ago — all retrievable by the next assistant you open, in the same terminal or a different one, without a context-reset ceremony.
 
-## Layout
+## What's in v0.1
 
-This repo contains the Rust workspace that ships the `makakoo` and `makakoo-mcp` binaries.
-
-- `makakoo-core/` — library crate: platform abstraction, config, `LlmClient`, `EmbeddingClient`, rusqlite DB, superbrain (FTS5 + vectors + graph + memory stack + recall + promoter), persistent event bus, SANCHO proactive task engine, nursery + mascots, gimmick compositor, chat + teloxide, wiki, outbound, telemetry, swarm subsystem.
-- `makakoo-mcp/` — MCP stdio server binary. 41 tools. NDJSON JSON-RPC framing. Drop-in replacement for any MCP client (Claude Code, Gemini CLI, Codex, OpenCode, Vibe, Cursor, Qwen).
-- `makakoo/` — umbrella CLI binary. `search`, `query`, `sancho`, `buddy`, `nursery`, `dream`, `promotions`, `skill`, `daemon`, `infect`, `secret`, `mcp`.
-- `distribution/` — packaging config: cargo-dist metadata, Homebrew formula, shell installer. See [distribution/README.md](distribution/README.md).
-
-Skills (Python glue calling ffmpeg, yt-dlp, playwright, instructor, etc) live in a separate companion tree and are invoked via subprocess — `makakoo skill <name>` shells out to `python3`. That's a permanent design decision, not a bridge. See [CROSS-PLATFORM-TODOS.md](CROSS-PLATFORM-TODOS.md) for cross-platform gaps and follow-up work.
-
-## Build
-
-```bash
-cargo build --release --workspace
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Release profile is tuned for size: `lto=true`, `strip=true`, `opt-level="z"`, `codegen-units=1`, `panic="abort"`. Binary sizes as of v0.1.0: `makakoo` ~5.0 MB, `makakoo-mcp` ~4.7 MB.
+| Capability | Status |
+|---|---|
+| Infect 7 AI CLIs with a shared bootstrap block | ✅ macOS + Linux + Windows |
+| 4 IDE-assistant hosts (Copilot / Continue / Cline / JetBrains) | ✅ detection + writers |
+| Persistent Brain (Logseq journals + pages) | ✅ |
+| Superbrain search — FTS5 + vector + LLM synthesis | ✅ |
+| Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ 38 plugins-core plugins |
+| SANCHO proactive task engine (8 native + plugin tasks) | ✅ |
+| Unix domain socket + Windows named-pipe IPC for plugins | ✅ |
+| 5 distros published (minimal, core, sebastian, creator, trader) | ✅ |
+| Shell completion (bash, zsh, fish, elvish, powershell) | ✅ |
+| Signed release artifacts (Apple notarization + Authenticode) | 🟡 runbook ready, certs pending |
+| Homebrew tap / winget submission | 🟡 manifests drafted, submission post-launch |
+| Fresh-VM smokes on all three OSes | 🟡 scripted, human-supervised runs pending |
 
 ## Install
 
-```bash
-# Homebrew — once the tap is live
-brew install makakoo/makakoo/makakoo
+**macOS / Linux** — one-liner (works after v0.1.0 release tag lands):
 
-# One-liner — once the release site is live
-curl -fsSL https://makakoo.com/install.sh | sh
+```sh
+curl -fsSL https://makakoo.com/install | sh
+```
 
-# From source
+**Windows** — PowerShell one-liner (Developer Mode must be on):
+
+```powershell
+iwr -UseBasicParsing https://makakoo.com/install.ps1 | iex
+```
+
+**From source** — works today:
+
+```sh
+git clone https://github.com/makakoo/makakoo-os
+cd makakoo-os
 cargo install --path makakoo
 cargo install --path makakoo-mcp
+makakoo install    # distro + daemon + infect + health
 ```
 
-## Quick start
+**Uninstall** — symmetric inverse:
 
-```bash
-# Search your Brain (requires $MAKAKOO_HOME populated)
-makakoo search "your query" --limit 10
-
-# Ask a question — FTS retrieval + LLM synthesis
-makakoo query "what did I decide about X?"
-
-# Run the MCP server (delegates to makakoo-mcp)
-makakoo mcp
-
-# Install as an auto-starting daemon
-makakoo daemon install
-makakoo daemon status
-
-# Onboard your CLIs with the bootstrap block
-makakoo infect --global --dry-run   # preview
-makakoo infect --global             # write
+```sh
+makakoo uninfect         # strip bootstrap from every CLI slot
+makakoo daemon uninstall # remove the auto-launch agent
+rm -rf ~/.makakoo ~/MAKAKOO
 ```
 
-## Env
+## Quickstart
 
-- `MAKAKOO_HOME` — root dir for Brain, config, logs, databases. Falls back to `HARVEY_HOME`, then `~/MAKAKOO`.
-- `AIL_BASE_URL` — LLM gateway base URL (default `http://localhost:18080/v1`)
-- `AIL_API_KEY` — LLM gateway API key
+```sh
+# Ask your Brain a question — FTS retrieval fused with LLM synthesis
+makakoo query "what did I decide about the database migration?"
 
-## The collective
+# Search the Brain full-text
+makakoo search "polymarket"
 
-Makakoo OS is a community-built open-source project. Not a company. Not a startup. Not a SaaS. Contributions welcome across code, docs, mascots, design, translation, testing, ideas, Q&A, and sponsorship — every category is a first-class citizen.
+# Install a plugin from the shipped core set
+makakoo plugin install skill-research-arxiv --core
+
+# See what's registered (native Rust tasks + manifest-driven plugins)
+makakoo sancho status
+
+# Preview what infect would do, then commit
+makakoo infect --global --dry-run
+makakoo infect --global
+```
+
+## Layout
+
+| Path | Role |
+|---|---|
+| `makakoo-core/` | Engine library — platform, config, LLM client, superbrain (FTS5 + vectors + graph), SANCHO, capability socket + grant resolver + audit log |
+| `makakoo-mcp/` | MCP stdio server — NDJSON JSON-RPC, 40+ tools, drop-in for any MCP client |
+| `makakoo/` | CLI binary — search, query, sancho, plugin, distro, daemon, infect, uninfect, skill, secret, mcp, completion |
+| `makakoo-platform/` | Per-OS adapter — launchd (macOS), systemd (Linux), auto-launch (Windows), POSIX symlinks + Windows Dev Mode symlinks |
+| `makakoo-client/` + `makakoo-client-py/` | Plugin client libraries (Rust + Python) over the capability socket |
+| `plugins-core/` | 38 shipped plugin manifests — skills, watchdogs, monitors, mascot GYM, agent-dreams |
+| `distros/` | 5 distro bundles — minimal, core, sebastian, creator, trader |
+| `install/` | `install.sh` / `install.ps1` + shell completion guide |
+| `distribution/` | Packaging metadata — Homebrew formula, winget manifest, cargo-dist config |
+| `spec/` | Frozen v0.1 architecture + ABI contracts |
+| `docs/` | Release signing runbook, relocate runbook, roadmap |
+
+## Environment variables
+
+- `MAKAKOO_HOME` — root for Brain, config, logs, plugins, state. Defaults to `~/MAKAKOO` today; moves to `~/.makakoo/` per [the relocate runbook](docs/PHASE_H4_RELOCATE.md) post-launch. `HARVEY_HOME` is a legacy alias that resolves to the same dir.
+- `AIL_BASE_URL` — LLM gateway base URL. Default `http://localhost:18080/v1` (switchAILocal).
+- `AIL_API_KEY` — API key for the LLM gateway. Store via `makakoo secret set AIL_API_KEY` — writes to the OS keyring (Keychain / Secret Service / Credential Manager).
+- `MAKAKOO_SOCKET_PATH` — plugin-side canonical env var for the capability socket. Set automatically by `makakoo skill <name>` when spawning a plugin.
+
+## Build from source
+
+```sh
+cargo build --release --workspace
+cargo test --workspace
+cargo clippy -p makakoo-platform --all-targets -- -D warnings
+```
+
+Release profile: `lto=true`, `strip=true`, `opt-level="z"`, `codegen-units=1`, `panic="abort"`. Binary sizes at v0.1.0: `makakoo` ~5 MB, `makakoo-mcp` ~4.7 MB.
+
+## Contributing
+
+This is a community-built open-source project. Contributions welcome across code, docs, mascots, design, translation, testing, ideas, and sponsorship — every category is a first-class citizen. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
 - MIT licensed. Forever.
 - Local-first. Your data lives on your machine. No telemetry.
 - No VC. No acquisition path.
 - Every mascot has a named maintainer. Every contributor is recognised.
 
-See [https://makakoo.com/collective/](https://makakoo.com/collective/).
+## Documentation
+
+- [CHANGELOG](CHANGELOG.md) — user-visible changes per release
+- [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) — Apple notarization + Windows Authenticode runbook
+- [docs/PHASE_H4_RELOCATE.md](docs/PHASE_H4_RELOCATE.md) — `~/MAKAKOO → ~/.makakoo/` runtime-relocation runbook
+- [install/completions/README.md](install/completions/README.md) — shell completion install + dynamic plugin-name wrappers
+- [spec/](spec/) — frozen v0.1 architecture + ABI contracts
 
 ## License
 
