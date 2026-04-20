@@ -1,0 +1,50 @@
+{
+  "dev": {
+    "boost": 1.2,
+    "keywords": ["code", "review", "test", "debug", "build", "fix", "implement", "pr", "merge", "deploy", "git", "commit", "branch"]
+  },
+  "infrastructure": {
+    "boost": 1.2,
+    "keywords": ["deploy", "docker", "cloud", "server", "hosting", "lambda", "ci", "cd", "pipeline", "github", "aws", "fly", "render", "vercel"]
+  },
+  "browser-qa": {
+    "boost": 1.2,
+    "keywords": ["browser", "qa", "test", "browse", "page", "website", "ui", "visual", "screenshot", "canary", "regression"]
+  },
+  "productivity": {
+    "boost": 1.2,
+    "keywords": ["email", "calendar", "gmail", "drive", "docs", "sheets", "notes", "reminders", "inbox", "schedule", "meeting", "task"]
+  },
+  "ai-ml": {
+    "boost": 1.1,
+    "keywords": ["llm", "model", "training", "inference", "embedding", "fine-tune", "vllm", "huggingface", "pytorch", "tensorrt", "llama", "gpt"]
+  },
+  "research": {
+    "boost": 1.1,
+    "keywords": ["research", "search", "arxiv", "paper", "blog", "intel", "forensics", "analysis"]
+  },
+  "career": {
+    "boost": 1.1,
+    "keywords": ["job", "career", "resume", "cv", "linkedin", "interview", "pitch", "network"]
+  },
+  "creative": {
+    "boost": 1.0,
+    "keywords": ["video", "audio", "music", "gif", "meme", "content", "youtube", "song", "art"]
+  },
+  "lifestyle": {
+    "boost": 1.0,
+    "keywords": ["home", "hue", "automation", "pokemon", "minecraft", "hobby", "telephony"]
+  },
+  "blockchain": {
+    "boost": 1.0,
+    "keywords": ["crypto", "polymarket", "solana", "base", "defi", "trading", "blockchain", "on-chain"]
+  },
+  "meta": {
+    "boost": 0.9,
+    "keywords": ["upgrade", "setup", "config", "install", "maintain", "health"]
+  },
+  "orchestration": {
+    "boost": 0.9,
+    "keywords": ["orchestrate", "coordinate", "dispatch", "agent", "workflow"]
+  }
+}
