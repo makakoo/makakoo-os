@@ -29,6 +29,7 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
         PluginCmd::Enable { name } => set_enabled(ctx, &name, true),
         PluginCmd::Disable { name } => set_enabled(ctx, &name, false),
         PluginCmd::Update { name } => update(ctx, &name),
+        PluginCmd::Sync { dry_run } => sync(ctx, dry_run),
     }
 }
 
@@ -306,6 +307,121 @@ fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
         if prior_enabled { "yes" } else { "no (preserved from prior state)" }
     ));
     Ok(0)
+}
+
+/// Batch reinstall every plugin in `plugins-core/` into $MAKAKOO_HOME/plugins/.
+///
+/// Walks the plugins-core/ source tree, reads each plugin's manifest to
+/// pull its prior enabled flag off the current lock (default: enabled),
+/// calls `install_from_path` per-plugin, and restores the enabled flag
+/// if it was disabled. Per-plugin failures (missing manifest, malformed
+/// toml, native-task collision) log + skip rather than aborting the
+/// batch — one bad plugin can't block the rest.
+fn sync(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
+    let plugins_core = plugins_core_root()?;
+    if !plugins_core.is_dir() {
+        output::print_error(format!(
+            "plugins-core not found at {}",
+            plugins_core.display()
+        ));
+        return Ok(1);
+    }
+
+    let prior_lock = PluginsLock::load(ctx.home()).unwrap_or_default();
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(&plugins_core)? {
+        let entry = entry?;
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        if !p.join("plugin.toml").is_file() {
+            continue;
+        }
+        candidates.push(p);
+    }
+    candidates.sort();
+
+    let mut installed = 0usize;
+    let mut skipped = 0usize;
+    let mut failed: Vec<(String, String)> = Vec::new();
+    let mut reenabled = 0usize;
+
+    for src in &candidates {
+        let manifest_path = src.join("plugin.toml");
+        let (manifest, _warn) = match Manifest::load(&manifest_path) {
+            Ok(m) => m,
+            Err(e) => {
+                failed.push((src.display().to_string(), format!("manifest: {e}")));
+                continue;
+            }
+        };
+        let name = manifest.plugin.name.clone();
+
+        if dry_run {
+            println!("  would reinstall {name}");
+            installed += 1;
+            continue;
+        }
+
+        let prior_enabled = prior_lock
+            .get(&name)
+            .map(|e| e.enabled)
+            .unwrap_or(true);
+
+        let req = InstallRequest {
+            source: PluginSource::Path(src.clone()),
+            expected_blake3: None,
+        };
+        match install_from_path(&req, ctx.home()) {
+            Ok(outcome) => {
+                installed += 1;
+                if !prior_enabled {
+                    // Restore disabled flag so sync is state-preserving.
+                    if let Ok(mut lock) = PluginsLock::load(ctx.home()) {
+                        if let Some(mut e) = lock.get(&outcome.name).cloned() {
+                            e.enabled = false;
+                            lock.upsert(e);
+                            let _ = lock.save(ctx.home());
+                            reenabled += 1;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // One plugin fail must not abort the batch.
+                let reason = format!("{e}");
+                if reason.contains("already installed") || reason.contains("identical") {
+                    skipped += 1;
+                } else {
+                    failed.push((name, reason));
+                }
+            }
+        }
+    }
+
+    if dry_run {
+        output::print_info(format!(
+            "{} plugin(s) would be reinstalled (dry run, no changes made)",
+            installed
+        ));
+    } else {
+        output::print_info(format!(
+            "sync done: {} installed, {} skipped (already up-to-date), {} failed, {} disabled-flag preserved",
+            installed,
+            skipped,
+            failed.len(),
+            reenabled
+        ));
+    }
+    if !failed.is_empty() {
+        println!("\n  failures:");
+        for (name, reason) in &failed {
+            println!("    - {name}: {reason}");
+        }
+    }
+    Ok(if failed.is_empty() { 0 } else { 1 })
 }
 
 fn set_enabled(ctx: &CliContext, name: &str, target: bool) -> anyhow::Result<i32> {

@@ -1,5 +1,5 @@
 [plugin]
-name = "skill-orchestration-agent_discovery"
+name = "skill-orchestration-agent-discovery"
 version = "0.1.0"
 kind = "skill"
 language = "python"
@@ -8,7 +8,7 @@ authors = ["Makakoo OS contributors"]
 license = "MIT"
 
 [source]
-path = "plugins-core/skill-orchestration-agent_discovery"
+path = "plugins-core/skill-orchestration-agent-discovery"
 
 [abi]
 skill = "^1.0"

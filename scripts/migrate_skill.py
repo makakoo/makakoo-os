@@ -128,7 +128,7 @@ name = "{plugin_name}"
 version = "0.1.0"
 kind = "skill"
 language = "python"
-summary = "{summary.replace('"', "'")}"
+summary = "{summary.replace(chr(92), chr(92) + chr(92)).replace(chr(34), chr(39))}"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 

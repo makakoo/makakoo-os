@@ -334,6 +334,61 @@ run = "true"
         assert!(lock.plugins[0].blake3.is_some());
     }
 
+    /// Regression: `install_from_path` must preserve nested `src/`
+    /// directories when the source plugin uses the self-contained layout
+    /// (`<plugin>/src/core/terminal/*.py`). Caught live 2026-04-20 when
+    /// we found `$MAKAKOO_HOME/plugins/lib-hte/` had only `plugin.toml`
+    /// with no `src/` — turned out the live install was from the
+    /// pre-self-contained era (manifest-only installs were the shape
+    /// before commit 9bd928f), not a copy_dir bug. This test locks the
+    /// current correct behaviour so any future change to copy_dir or
+    /// stage_and_install that drops nested directories fails loudly.
+    #[test]
+    fn install_preserves_nested_src_dir() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("makakoo");
+        fs::create_dir_all(&home).unwrap();
+
+        // Build source with the self-contained shape:
+        //   src_root/
+        //     plugin.toml
+        //     src/
+        //       core/
+        //         terminal/
+        //           widgets.py
+        let src_root = tmp.path().join("src-nested");
+        fs::create_dir_all(&src_root).unwrap();
+        // kind=skill is fine — the bug being locked is copy_dir recursion,
+        // which is shape-agnostic w.r.t. plugin kind.
+        write_manifest(&src_root, "lib-nested", "");
+        let nested = src_root.join("src").join("core").join("terminal");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("widgets.py"), b"class W: pass\n").unwrap();
+
+        let outcome = install_from_path(
+            &InstallRequest {
+                source: PluginSource::Path(src_root),
+                expected_blake3: None,
+            },
+            &home,
+        )
+        .unwrap();
+
+        // Every directory level must survive the install. A regression
+        // that dropped `src/` (or the `core/` subdir, or the leaf file)
+        // would show up as a missing path here.
+        assert!(outcome.final_dir.join("src").is_dir(),
+            "install dropped top-level src/ dir");
+        assert!(outcome.final_dir.join("src").join("core").is_dir(),
+            "install dropped src/core/ dir");
+        assert!(outcome.final_dir.join("src").join("core").join("terminal").is_dir(),
+            "install dropped src/core/terminal/ dir");
+        let leaf = outcome.final_dir.join("src").join("core").join("terminal").join("widgets.py");
+        assert!(leaf.is_file(), "install dropped the leaf widgets.py file");
+        let bytes = fs::read(&leaf).unwrap();
+        assert_eq!(bytes, b"class W: pass\n", "install mangled file contents");
+    }
+
     #[test]
     fn install_rejects_missing_manifest() {
         let tmp = TempDir::new().unwrap();

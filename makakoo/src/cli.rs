@@ -380,6 +380,21 @@ pub enum PluginCmd {
         /// Plugin name.
         name: String,
     },
+
+    /// Batch-reinstall every plugin from `plugins-core/` into
+    /// `$MAKAKOO_HOME/plugins/`. Used after a bulk source migration
+    /// (e.g. the self-contained-plugins refactor) when the live install
+    /// tree is frozen at the pre-migration shape.
+    ///
+    /// Walks the plugins-core/ source tree, reinstalls each plugin from
+    /// its `[source].path` via `install_from_path`. Preserves existing
+    /// enabled/disabled flags. Skips any plugin whose source is missing
+    /// or malformed rather than aborting the batch.
+    Sync {
+        /// Only report what would be reinstalled — do not modify disk.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// `makakoo distro <subcommand>`.
