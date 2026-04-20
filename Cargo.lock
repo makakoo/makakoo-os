@@ -1850,6 +1850,7 @@ dependencies = [
  "crossterm 0.28.1",
  "dirs 5.0.1",
  "keyring",
+ "libc",
  "makakoo-core",
  "makakoo-platform",
  "once_cell",

@@ -20,5 +20,5 @@ For internal work — tool orchestration, debugging, research, Brain journaling,
 
 **Persistence:** once active in a session, stay active across every turn unless a bypass triggers (one turn or sub-section, resume after) or Sebastian says otherwise. Fight drift — unsure turns stay caveman.
 
-Full rules at `$MAKAKOO_HOME/plugins/skill-meta-caveman-voice/SKILL.md` (post-install) or `$MAKAKOO_HOME/harvey-os/skills/meta/caveman-voice/SKILL.md` (source of truth).
+Full rules at `$MAKAKOO_HOME/plugins/skill-meta-caveman-voice/SKILL.md` or run `harvey skill info caveman-voice` for the parsed manifest view.
 <!-- makakoo:fragment:caveman-voice-end -->

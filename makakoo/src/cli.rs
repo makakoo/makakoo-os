@@ -394,6 +394,15 @@ pub enum PluginCmd {
         /// Only report what would be reinstalled — do not modify disk.
         #[arg(long)]
         dry_run: bool,
+
+        /// Uninstall + reinstall when a plugin already exists. Without
+        /// this flag, sync skips plugins whose target dir is occupied —
+        /// safe default. With `--force`, sync calls `uninstall(name)`
+        /// then `install_from_path()` atomically per-plugin, preserving
+        /// state dirs (no purge). Use when upgrading from the old
+        /// manifest-only install shape to self-contained plugins.
+        #[arg(long)]
+        force: bool,
     },
 }
 

@@ -3,7 +3,7 @@
 //!
 //! Paths mirror `core/orchestration/infect_global.py` exactly so the Rust
 //! rewrite and the Python implementation can operate on the same files
-//! without fighting over format. Bootstrap version is currently **v10**;
+//! without fighting over format. Bootstrap version is currently **v11**;
 //! the regex `BLOCK_RE` still matches any prior version so the rewrite
 //! will upgrade older blocks in place on the next run.
 
@@ -13,15 +13,19 @@ use std::path::PathBuf;
 /// bootstrap body bumps this — anything older is considered stale and will
 /// be replaced in place on next `makakoo infect`.
 ///
+/// v11 (2026-04-20): harvey-os/ references stripped — bootstrap now
+///   points at `harvey skill info`/`$MAKAKOO_HOME/config/persona.json`
+///   and kernel commands instead of python module paths inside
+///   `harvey-os/core/`. Phase 4 of SPRINT-KILL-HARVEYOS-PYTHONPATH.
 /// v10 (2026-04-20): describe-vs-ingest dichotomy + rate-limit rule.
-pub const BLOCK_VERSION: &str = "10";
+pub const BLOCK_VERSION: &str = "11";
 
 /// Start marker written to every markdown slot. Keeps the legacy
 /// `harvey:infect-global` prefix so old installations with v8 blocks are
 /// matched by the upgrade regex and replaced — do NOT rename this to
 /// `makakoo:infect-global` without also teaching [`crate::infect::writer`]
 /// to find both.
-pub const BLOCK_START: &str = "<!-- harvey:infect-global START v10 -->";
+pub const BLOCK_START: &str = "<!-- harvey:infect-global START v11 -->";
 
 /// End marker — the version is NOT included in the end marker (mirrors
 /// Python) so the upgrade regex can match any prior version cleanly.
@@ -29,7 +33,7 @@ pub const BLOCK_END: &str = "<!-- harvey:infect-global END -->";
 
 /// JSON-tag prefix used by the OpenCode slot, which stores the bootstrap as
 /// an entry inside `instructions: [...]` rather than as a fenced block.
-pub const JSON_TAG_PREFIX: &str = "[harvey:infect-global v10]";
+pub const JSON_TAG_PREFIX: &str = "[harvey:infect-global v11]";
 
 /// Fingerprint checked against the first 40 characters of each entry in
 /// the opencode `instructions` array to locate the prior bootstrap.
@@ -131,11 +135,12 @@ mod tests {
     }
 
     #[test]
-    fn markers_versioned_to_v10() {
-        assert_eq!(BLOCK_VERSION, "10");
-        assert!(BLOCK_START.contains("v10"));
-        assert!(JSON_TAG_PREFIX.contains("v10"));
+    fn markers_versioned_to_v11() {
+        assert_eq!(BLOCK_VERSION, "11");
+        assert!(BLOCK_START.contains("v11"));
+        assert!(JSON_TAG_PREFIX.contains("v11"));
         // END marker intentionally has no version — it matches any prior version.
+        assert!(!BLOCK_END.contains("v11"));
         assert!(!BLOCK_END.contains("v10"));
     }
 }

@@ -135,9 +135,15 @@ impl SkillRunner {
     }
 }
 
-/// Build the environment map for running Python skills. Prepends
-/// `$MAKAKOO_HOME/harvey-os` and any library-plugin paths to the
-/// existing PYTHONPATH instead of clobbering it.
+/// Build the environment map for running Python skills. PYTHONPATH is
+/// built from library-plugin src/ dirs + the existing env value.
+///
+/// `$MAKAKOO_HOME/harvey-os` is NOT on PYTHONPATH by default. Library
+/// plugins own the `core.*` namespace via `lib-hte` (core.terminal)
+/// and `lib-harvey-core` (core.{security,gym,superbrain,agent,dreams,
+/// sancho,chat}). The caller passes library paths from the registry's
+/// `get_library_paths()`; each gets `/src` joined so PEP-420
+/// namespace-package layouts resolve.
 ///
 /// This is the single source of truth for skill/plugin env setup —
 /// both `SkillRunner` and the plugin dispatch bridge use this.
@@ -146,12 +152,15 @@ pub fn build_skill_env(home: &Path, library_paths: &[PathBuf]) -> HashMap<String
     env.insert("MAKAKOO_HOME".into(), home.to_string_lossy().into_owned());
     env.insert("HARVEY_HOME".into(), home.to_string_lossy().into_owned());
 
-    // Build PYTHONPATH: library plugins + harvey-os + existing env value.
+    // PYTHONPATH = library plugin src/ dirs + existing env value.
+    // Each library plugin's install root is <plugin_root>, with Python
+    // packages at <plugin_root>/src/ — so that's the import root.
+    // Python silently ignores non-existent PYTHONPATH entries, so a
+    // library plugin whose source doesn't nest under src/ costs nothing.
     let mut parts: Vec<PathBuf> = Vec::new();
     for lp in library_paths {
-        parts.push(lp.clone());
+        parts.push(lp.join("src"));
     }
-    parts.push(home.join("harvey-os"));
     if let Ok(existing) = std::env::var("PYTHONPATH") {
         if !existing.is_empty() {
             parts.extend(std::env::split_paths(&existing));
@@ -573,10 +582,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn build_env_prepends_not_clobbers() {
-        // Temporarily set PYTHONPATH to a known value. We can't use
-        // the crate-level ENV_MUTEX here because that's in the
-        // `makakoo` crate, not this test mod — but this test only
-        // reads the var via build_skill_env, so a scoped set is fine.
         let sentinel = "/usr/lib/existing-path";
         let old = std::env::var("PYTHONPATH").ok();
         std::env::set_var("PYTHONPATH", sentinel);
@@ -584,10 +589,8 @@ mod tests {
         let home = PathBuf::from("/fake/home");
         let env = build_skill_env(&home, &[]);
         let pp = env.get("PYTHONPATH").unwrap();
-        assert!(pp.contains("/fake/home/harvey-os"), "should contain harvey-os");
-        assert!(pp.ends_with(sentinel), "should preserve existing PYTHONPATH at the end");
+        assert!(pp.contains(sentinel), "existing PYTHONPATH must be preserved");
 
-        // Restore.
         match old {
             Some(v) => std::env::set_var("PYTHONPATH", v),
             None => std::env::remove_var("PYTHONPATH"),
@@ -596,25 +599,62 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn build_env_includes_library_paths() {
-        // POSIX-path assertion — Windows would use backslash separators.
-        // Same Phase H.4 Windows-variant story as the sister tests here.
+    fn build_env_includes_library_paths_as_src_dirs() {
         let old = std::env::var("PYTHONPATH").ok();
         std::env::remove_var("PYTHONPATH");
 
         let home = PathBuf::from("/fake/home");
         let lib_paths = vec![
             PathBuf::from("/plugins/lib-hte"),
-            PathBuf::from("/plugins/lib-utils"),
+            PathBuf::from("/plugins/lib-harvey-core"),
         ];
         let env = build_skill_env(&home, &lib_paths);
         let pp = env.get("PYTHONPATH").unwrap();
-        // Check contains instead of hardcoded ':' for cross-platform.
-        assert!(pp.contains("/plugins/lib-hte"), "library paths should be present");
-        assert!(pp.contains("/plugins/lib-utils"), "all library paths included");
-        assert!(pp.contains("/fake/home/harvey-os"), "harvey-os still present");
+        // Library plugins contribute their src/ subdir so `from
+        // core.terminal import ...` resolves against <plugin>/src/core/terminal/.
+        assert!(pp.contains("/plugins/lib-hte/src"), "lib-hte should join src/");
+        assert!(
+            pp.contains("/plugins/lib-harvey-core/src"),
+            "lib-harvey-core should join src/"
+        );
 
-        // Restore.
+        if let Some(v) = old {
+            std::env::set_var("PYTHONPATH", v);
+        }
+    }
+
+    /// Phase-3 lock: `build_skill_env` must NOT prepend
+    /// `$MAKAKOO_HOME/harvey-os` to PYTHONPATH. The hybrid runtime
+    /// where skills imported `from core.*` via the harvey-os submodule
+    /// is retired in favour of the lib-hte + lib-harvey-core library
+    /// plugins owning the `core.*` namespace.
+    ///
+    /// Any future regression that re-adds `home.join("harvey-os")`
+    /// to the PYTHONPATH build path fails this test loudly, which is
+    /// exactly what we want — it shouldn't sneak back in.
+    #[test]
+    #[cfg(unix)]
+    fn build_env_does_not_include_harvey_os_path() {
+        let old = std::env::var("PYTHONPATH").ok();
+        std::env::remove_var("PYTHONPATH");
+
+        let home = PathBuf::from("/fake/home");
+        let env = build_skill_env(&home, &[]);
+        let pp = env.get("PYTHONPATH").map(|s| s.as_str()).unwrap_or("");
+        assert!(
+            !pp.contains("harvey-os"),
+            "PYTHONPATH must not reference harvey-os anymore — got {pp:?}"
+        );
+
+        // Also holds with library paths present.
+        let lib = vec![PathBuf::from("/plugins/lib-hte")];
+        let env2 = build_skill_env(&home, &lib);
+        let pp2 = env2.get("PYTHONPATH").map(|s| s.as_str()).unwrap_or("");
+        assert!(
+            !pp2.contains("harvey-os"),
+            "PYTHONPATH must stay harvey-os-free even with library paths — got {pp2:?}"
+        );
+
         if let Some(v) = old {
             std::env::set_var("PYTHONPATH", v);
         }

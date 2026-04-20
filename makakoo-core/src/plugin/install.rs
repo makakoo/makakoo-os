@@ -44,6 +44,22 @@ pub enum InstallError {
          rename the task in its manifest and retry"
     )]
     NativeTaskCollision { plugin: String, task: String },
+    /// Raised by `plugin sync --force` when the uninstall leg of the
+    /// uninstall-then-reinstall dance fails. Keeps the source error
+    /// intact so callers can distinguish "plugin wasn't there" from
+    /// "lock was corrupt" from "io error wiping the install dir."
+    #[error("uninstall failed for {plugin:?}: {source}")]
+    UninstallFailed {
+        plugin: String,
+        #[source]
+        source: Box<InstallError>,
+    },
+    /// Another process holds the sync lock for this plugin. Raised by
+    /// `plugin sync --force` to prevent racing with a concurrent sync
+    /// (without this guard the retry loop could silently delete what
+    /// the other process just installed).
+    #[error("concurrent sync in progress for plugin {name:?}")]
+    ConcurrentSync { name: String },
 }
 
 /// Where a plugin's source lives. v0.1 only implements `Path`.

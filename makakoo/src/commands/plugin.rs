@@ -7,9 +7,10 @@ use crossterm::style::Stylize;
 use serde_json::json;
 
 use makakoo_core::capability::resolve_grants;
+use makakoo_core::plugin::staging::StagingError;
 use makakoo_core::plugin::{
-    install_from_path, uninstall as core_uninstall, InstallRequest, Manifest, PluginRegistry,
-    PluginSource, PluginsLock,
+    install_from_path, uninstall as core_uninstall, InstallError, InstallRequest, Manifest,
+    PluginRegistry, PluginSource, PluginsLock,
 };
 
 use crate::cli::PluginCmd;
@@ -29,7 +30,7 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
         PluginCmd::Enable { name } => set_enabled(ctx, &name, true),
         PluginCmd::Disable { name } => set_enabled(ctx, &name, false),
         PluginCmd::Update { name } => update(ctx, &name),
-        PluginCmd::Sync { dry_run } => sync(ctx, dry_run),
+        PluginCmd::Sync { dry_run, force } => sync(ctx, dry_run, force),
     }
 }
 
@@ -317,7 +318,7 @@ fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
 /// if it was disabled. Per-plugin failures (missing manifest, malformed
 /// toml, native-task collision) log + skip rather than aborting the
 /// batch — one bad plugin can't block the rest.
-fn sync(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
+fn sync(ctx: &CliContext, dry_run: bool, force: bool) -> anyhow::Result<i32> {
     let plugins_core = plugins_core_root()?;
     if !plugins_core.is_dir() {
         output::print_error(format!(
@@ -374,7 +375,39 @@ fn sync(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
             source: PluginSource::Path(src.clone()),
             expected_blake3: None,
         };
-        match install_from_path(&req, ctx.home()) {
+        let install_result = install_from_path(&req, ctx.home());
+        let install_result = match install_result {
+            Ok(o) => Ok(o),
+            // Guard on the exact variant rather than matching the
+            // display string — immune to future StagingError variants
+            // that happen to mention "already" in their message.
+            Err(InstallError::Staging(StagingError::TargetExists { .. })) if force => {
+                // --force: uninstall + reinstall. Must be race-safe
+                // against another concurrent sync, otherwise the retry
+                // loop could silently wipe a plugin the other process
+                // just placed. Take a per-plugin lock file that lives
+                // for the full uninstall+reinstall window. If it's
+                // already held, surface ConcurrentSync — caller sees
+                // the error in the `failures:` summary and can retry.
+                match acquire_sync_lock(ctx.home(), &name) {
+                    Ok(_lock_guard) => {
+                        match core_uninstall(&name, ctx.home(), false) {
+                            Ok(_) => install_from_path(&req, ctx.home()),
+                            Err(ue) => Err(InstallError::UninstallFailed {
+                                plugin: name.clone(),
+                                source: Box::new(ue),
+                            }),
+                        }
+                        // lock_guard drops at end of match arm,
+                        // releasing the file.
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        };
+
+        match install_result {
             Ok(outcome) => {
                 installed += 1;
                 if !prior_enabled {
@@ -422,6 +455,163 @@ fn sync(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
         }
     }
     Ok(if failed.is_empty() { 0 } else { 1 })
+}
+
+/// RAII lock file for the `plugin sync --force` uninstall+reinstall
+/// window. Written as JSON with PID + timestamp so stale locks from
+/// crashed processes get reaped instead of blocking future syncs
+/// forever (kill -9, panic, power loss all leave zombie empty-files
+/// without liveness metadata — that's what pi flagged in Phase 2 v2
+/// review as the "zombie lock" failure mode).
+///
+/// Acquire sequence:
+///   1. If no lock file → create with our PID + now, return guard.
+///   2. If lock file exists → read + parse. If parse fails or PID is
+///      dead, unlink and retry step 1 once. If PID is alive, return
+///      `ConcurrentSync`.
+///
+/// Drop unlinks the file unconditionally (whether install succeeded
+/// or failed — the lock is just a mutex, not a transaction log).
+#[derive(Debug)]
+struct SyncLockGuard {
+    path: PathBuf,
+}
+
+impl Drop for SyncLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+struct SyncLockFile {
+    pid: u32,
+    acquired_at: u64, // seconds since epoch
+}
+
+/// Best-effort liveness check. POSIX `kill(pid, 0)` returns 0 if the
+/// target process exists and the caller has permission to signal it.
+/// On Windows we conservatively treat every existing lock as live
+/// (Windows sync flow lands with Phase J signing + winget).
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    // kill(pid, 0) — probe without sending a real signal.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return true;
+    }
+    let err = std::io::Error::last_os_error();
+    // EPERM: process exists but we can't signal it — still alive.
+    // ESRCH: no such process — dead.
+    err.raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> bool {
+    true
+}
+
+fn acquire_sync_lock(home: &Path, name: &str) -> Result<SyncLockGuard, InstallError> {
+    let lock_dir = home.join("plugins").join(".stage").join("locks");
+    if let Err(e) = std::fs::create_dir_all(&lock_dir) {
+        return Err(InstallError::Io {
+            path: lock_dir,
+            source: e,
+        });
+    }
+    let lock_path = lock_dir.join(format!("{name}.sync.lock"));
+
+    // Two attempts: first try create_new, then if the existing file
+    // is stale, unlink and try once more.
+    for attempt in 0..2 {
+        match try_create_lock(&lock_path) {
+            Ok(g) => return Ok(g),
+            Err(LockError::Exists) => {
+                // On the first attempt, try to reap a stale lock. On
+                // the second attempt (after we already unlinked once),
+                // the file must have been created by a live peer — give up.
+                if attempt == 1 {
+                    return Err(InstallError::ConcurrentSync {
+                        name: name.to_string(),
+                    });
+                }
+                match read_and_classify_lock(&lock_path) {
+                    LockClassification::Live => {
+                        return Err(InstallError::ConcurrentSync {
+                            name: name.to_string(),
+                        });
+                    }
+                    LockClassification::Stale | LockClassification::Unparseable => {
+                        // Reap and loop for a fresh acquire attempt.
+                        let _ = std::fs::remove_file(&lock_path);
+                    }
+                }
+            }
+            Err(LockError::Io(e)) => {
+                return Err(InstallError::Io {
+                    path: lock_path,
+                    source: e,
+                });
+            }
+        }
+    }
+    // Unreachable — the loop above returns on every path.
+    Err(InstallError::ConcurrentSync {
+        name: name.to_string(),
+    })
+}
+
+enum LockError {
+    Exists,
+    Io(std::io::Error),
+}
+
+enum LockClassification {
+    Live,
+    Stale,
+    Unparseable,
+}
+
+fn try_create_lock(lock_path: &Path) -> Result<SyncLockGuard, LockError> {
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+    {
+        Ok(mut f) => {
+            let body = SyncLockFile {
+                pid: std::process::id(),
+                acquired_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            };
+            let _ = f.write_all(serde_json::to_string(&body).unwrap_or_default().as_bytes());
+            Ok(SyncLockGuard {
+                path: lock_path.to_path_buf(),
+            })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(LockError::Exists),
+        Err(e) => Err(LockError::Io(e)),
+    }
+}
+
+fn read_and_classify_lock(lock_path: &Path) -> LockClassification {
+    let body = match std::fs::read_to_string(lock_path) {
+        Ok(s) => s,
+        Err(_) => return LockClassification::Unparseable,
+    };
+    if body.trim().is_empty() {
+        // Legacy empty-file sentinel from pre-PID-upgrade sync. Stale.
+        return LockClassification::Stale;
+    }
+    let parsed: Result<SyncLockFile, _> = serde_json::from_str(&body);
+    match parsed {
+        Ok(f) if pid_is_alive(f.pid) => LockClassification::Live,
+        Ok(_) => LockClassification::Stale,
+        Err(_) => LockClassification::Unparseable,
+    }
 }
 
 fn set_enabled(ctx: &CliContext, name: &str, target: bool) -> anyhow::Result<i32> {
@@ -529,3 +719,115 @@ pub(crate) fn walk_up_for(start: &Path, needle: &str) -> Option<PathBuf> {
 // Keep a light compile-time touch on unused imports when features change.
 #[allow(dead_code)]
 fn _assert_unused_manifest_import(_m: Manifest) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Locking a plugin name once succeeds. Locking it again before
+    /// the guard drops raises `ConcurrentSync`. Dropping the first
+    /// guard releases the lock so a third acquire succeeds.
+    ///
+    /// Locks the race pi flagged in Phase 2 review: without this guard
+    /// `plugin sync --force` could uninstall + reinstall on top of a
+    /// concurrent sync, silently wiping whatever the other process
+    /// just placed. The guard file forces the second sync to bail out
+    /// visibly with ConcurrentSync rather than racing.
+    #[test]
+    fn acquire_sync_lock_prevents_concurrent_retries() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let first = acquire_sync_lock(&home, "skill-foo").expect("initial lock must succeed");
+
+        let err = acquire_sync_lock(&home, "skill-foo")
+            .expect_err("second lock during held window must error");
+        assert!(
+            matches!(err, InstallError::ConcurrentSync { ref name } if name == "skill-foo"),
+            "expected ConcurrentSync, got {err:?}"
+        );
+
+        // A different name in the same home is independently lockable.
+        let sibling = acquire_sync_lock(&home, "skill-bar").expect("different name must succeed");
+        drop(sibling);
+
+        // Releasing the first guard lets a third acquire succeed.
+        drop(first);
+        let third = acquire_sync_lock(&home, "skill-foo").expect("re-acquire after drop ok");
+        drop(third);
+    }
+
+    /// Zombie-lock recovery: if a lock file exists with a PID that
+    /// is no longer alive (process crashed, kill -9, panic, power
+    /// loss), the next acquire must reap the stale file instead of
+    /// failing forever with ConcurrentSync. pi flagged this as the
+    /// "empty-file sentinel is unreliable in production" issue in
+    /// the Phase 2 v2 review.
+    #[test]
+    #[cfg(unix)]
+    fn acquire_sync_lock_reaps_stale_pid_file() {
+        use std::io::Write;
+
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        // Simulate a zombie lock by writing a JSON file with a PID
+        // that is guaranteed not to exist. 1 is init/launchd which IS
+        // alive, so pick 0 — POSIX reserves 0 for the current process
+        // group and `kill(0, 0)` on macOS returns ESRCH, classifying
+        // the lock as stale.
+        //
+        // More defensive: use a PID 2^31-1 which is above the configured
+        // pid_max on every platform we ship to.
+        let lock_dir = home.join("plugins").join(".stage").join("locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        let lock_path = lock_dir.join("skill-zombie.sync.lock");
+        let stale = SyncLockFile {
+            pid: 2_147_483_640, // above pid_max on any sane kernel
+            acquired_at: 0,
+        };
+        let mut f = std::fs::File::create(&lock_path).unwrap();
+        f.write_all(serde_json::to_string(&stale).unwrap().as_bytes())
+            .unwrap();
+        drop(f);
+        assert!(lock_path.exists(), "pre-test: stale lock must be on disk");
+
+        // Acquire should succeed — it reads the lock, sees the PID is
+        // dead, unlinks, and writes a fresh one in its place.
+        let guard = acquire_sync_lock(&home, "skill-zombie")
+            .expect("stale PID lock must be reaped, not block forever");
+
+        // Double-check: the replacement lock file carries OUR pid.
+        let body = std::fs::read_to_string(&lock_path).unwrap();
+        let parsed: SyncLockFile = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.pid,
+            std::process::id(),
+            "reaped lock must be replaced by current-pid lock"
+        );
+
+        drop(guard);
+    }
+
+    /// Empty legacy lock files (from the v1 sentinel-file scheme
+    /// before pi demanded PID metadata) must also be reaped.
+    #[test]
+    fn acquire_sync_lock_reaps_empty_legacy_lock() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let lock_dir = home.join("plugins").join(".stage").join("locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        let lock_path = lock_dir.join("skill-legacy.sync.lock");
+        std::fs::File::create(&lock_path).unwrap(); // empty file
+
+        let guard = acquire_sync_lock(&home, "skill-legacy")
+            .expect("empty legacy lock file must be treated as stale");
+
+        let body = std::fs::read_to_string(&lock_path).unwrap();
+        assert!(!body.is_empty(), "reaped lock must be replaced with real metadata");
+
+        drop(guard);
+    }
+}

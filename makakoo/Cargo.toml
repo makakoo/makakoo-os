@@ -30,6 +30,9 @@ keyring.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 rusqlite.workspace = true
