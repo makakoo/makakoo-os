@@ -71,20 +71,30 @@ fn resolve_python() -> String {
     "python3".to_string()
 }
 
-/// Resolve `ingest.py` path. Requires both $MAKAKOO_HOME and the file to
-/// exist; otherwise returns a user-facing error.
+/// Resolve `ingest.py` path. Prefers the plugin install
+/// (`$MAKAKOO_HOME/plugins/agent-multimodal-knowledge/src/ingest.py`)
+/// which is the v0.1-public shape; falls back to the legacy path
+/// (`$MAKAKOO_HOME/agents/multimodal-knowledge/ingest.py`) so machines
+/// that haven't yet run `makakoo plugin sync` keep working. If neither
+/// exists, returns a user-facing error that names BOTH candidates so
+/// the caller knows where to drop the file.
 fn resolve_ingest_script() -> Result<PathBuf, String> {
     let home = resolve_makakoo_home()
         .ok_or_else(|| "cannot resolve $MAKAKOO_HOME (and $HOME is unset)".to_string())?;
-    let script = home.join("agents/multimodal-knowledge/ingest.py");
-    if !script.exists() {
-        return Err(format!(
-            "ingest.py not found at {} — did you forget to clone the \
-             multimodal-knowledge agent?",
-            script.display()
-        ));
+    let plugin_path = home.join("plugins/agent-multimodal-knowledge/src/ingest.py");
+    if plugin_path.exists() {
+        return Ok(plugin_path);
     }
-    Ok(script)
+    let legacy_path = home.join("agents/multimodal-knowledge/ingest.py");
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+    Err(format!(
+        "ingest.py not found at {} or {} — install the multimodal-knowledge \
+         agent plugin via `makakoo plugin sync` or `makakoo plugin install --core agent-multimodal-knowledge`",
+        plugin_path.display(),
+        legacy_path.display()
+    ))
 }
 
 /// Normalise and validate the caller-supplied `kind` argument. Returns
@@ -358,15 +368,46 @@ mod tests {
     }
 
     #[test]
-    fn resolve_ingest_script_finds_when_present() {
+    fn resolve_ingest_script_prefers_plugin_path() {
         let tmp = TempDir::new().unwrap();
-        let target = tmp.path().join("agents/multimodal-knowledge");
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(target.join("ingest.py"), "# stub").unwrap();
+        // Drop BOTH candidates so the preference order is observable.
+        let plugin_dir = tmp.path().join("plugins/agent-multimodal-knowledge/src");
+        let legacy_dir = tmp.path().join("agents/multimodal-knowledge");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(plugin_dir.join("ingest.py"), "# plugin").unwrap();
+        std::fs::write(legacy_dir.join("ingest.py"), "# legacy").unwrap();
+
         let old = std::env::var("MAKAKOO_HOME").ok();
         std::env::set_var("MAKAKOO_HOME", tmp.path());
         let found = resolve_ingest_script().unwrap();
-        assert!(found.ends_with("agents/multimodal-knowledge/ingest.py"));
+        assert!(
+            found.ends_with("plugins/agent-multimodal-knowledge/src/ingest.py"),
+            "plugin install must take precedence over legacy agents/ path — got {}",
+            found.display()
+        );
+        match old {
+            Some(v) => std::env::set_var("MAKAKOO_HOME", v),
+            None => std::env::remove_var("MAKAKOO_HOME"),
+        }
+    }
+
+    #[test]
+    fn resolve_ingest_script_falls_back_to_legacy() {
+        // Legacy path only — the plugin hasn't been synced yet. Must still resolve.
+        let tmp = TempDir::new().unwrap();
+        let legacy_dir = tmp.path().join("agents/multimodal-knowledge");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("ingest.py"), "# legacy").unwrap();
+
+        let old = std::env::var("MAKAKOO_HOME").ok();
+        std::env::set_var("MAKAKOO_HOME", tmp.path());
+        let found = resolve_ingest_script().unwrap();
+        assert!(
+            found.ends_with("agents/multimodal-knowledge/ingest.py"),
+            "legacy path must resolve when plugin not yet installed — got {}",
+            found.display()
+        );
         match old {
             Some(v) => std::env::set_var("MAKAKOO_HOME", v),
             None => std::env::remove_var("MAKAKOO_HOME"),
