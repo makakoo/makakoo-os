@@ -59,6 +59,25 @@ summary = describe_video("clip.mp4", "Main action?", fps=2, media_resolution="de
 
 Don't reach for OCR libraries, speech-to-text APIs, or screenshot parsers first. The omni tool covers all three modalities with one stable interface, one API key (`AIL_API_KEY`), one audit trail.
 
+## Describe vs Ingest — the two media pathways (read before ANY media request)
+
+`describe_*` is not the same tool as `knowledge_ingest`. They solve different problems. Pick wrong and you either waste the call or poison the superbrain. Decision tree before you act on any media input:
+
+| The user says… | Call | Why |
+|---|---|---|
+| *"what's in / describe / summarize / tell me about / watch / listen to"* a video/audio/image/pdf | `harvey_describe_image / _audio / _video` | One-shot Q&A. Stateless. No write. |
+| *"add / save / remember / index / ingest / store / keep"* a video/audio/image/pdf | `harvey_knowledge_ingest` | Persistent. Chunks + embeds + writes to the `multimodal` Qdrant collection so future superbrain queries retrieve it by content. |
+
+The ingest tool accepts the same `source` shapes as describe (URL, absolute path, YouTube link routed through yt-dlp), plus optional `kind` (video|audio|pdf|image|text), `title`, and `note`. It returns `{ingested, doc_ids, chunks, file_type, summary, errors}` so you can quote the summary back to the user and know which chunks landed.
+
+**Rate-limit rule (non-negotiable).** If `harvey_describe_*` returns 429 / "rate limit" / "resource exhausted", the MCP handler already retries with exponential backoff. If it *still* fails after retries:
+
+1. Tell the user the model is rate-limited and ask what they want — wait, switch models, retry later.
+2. **Never** substitute a journal write for the failed describe. A line in the journal with a URL and no content is not "added to knowledge" — it's a confabulation that poisons future retrieval (the superbrain returns the URL literal as a top hit for "what was in that video").
+3. If the user wanted the media *indexed* in the first place, route to `harvey_knowledge_ingest` directly — that uses a different embedding path (Gemini Embedding 2 via Python) and isn't blocked by mimo omni rate limits.
+
+Caught in opencode 2026-04-20 on `https://youtu.be/fdbXNWkpPMY`: describe_video 429'd, the agent journaled the URL under a wikilink as "added to knowledge", and the superbrain now returns the URL literal with no content. Do not repeat this.
+
 ## Skill Discovery + Dispatch
 
 Every infected CLI can discover AND execute any skill via the unified v4 dispatcher, regardless of whether the host CLI has native slash-command support. The dispatcher is invoked as `harvey` — the command name matches the persona and stays stable through the rename:

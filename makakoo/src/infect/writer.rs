@@ -84,8 +84,8 @@ pub fn render_opencode_entry(body: &str) -> String {
 }
 
 /// Regex that matches any prior version of the harvey infect block so
-/// upgrades are in-place regardless of whether v6, v7, v8, or v9 was
-/// installed last. Matches exactly what the Python version matches.
+/// upgrades are in-place regardless of which earlier version (v6 … v9)
+/// was installed last. Matches exactly what the Python version matches.
 fn block_regex() -> Regex {
     // Match `<!-- harvey:infect-global START v{anything} --> ... <!-- harvey:infect-global END -->`
     // including any surrounding blank lines.
@@ -110,11 +110,17 @@ fn find_prior_version(text: &str) -> Option<String> {
 
 /// Upsert the markdown bootstrap block into `text`. Returns
 /// (new_text, status, prior_version_if_any).
+///
+/// "Unchanged" means the existing block matches `new_block` byte-for-byte
+/// (trimmed). Version alone is NOT sufficient — content can drift within
+/// a version (e.g. a bootstrap-base.md edit without bumping BLOCK_VERSION),
+/// and we want the next infect to pick that up.
 pub fn upsert_markdown_block(text: &str, new_block: &str) -> (String, SlotStatus, Option<String>) {
     let re = block_regex();
     if let Some(m) = re.find(text) {
         let prior_version = find_prior_version(text);
-        if prior_version.as_deref() == Some(BLOCK_VERSION) {
+        let existing_block = m.as_str().trim_matches('\n');
+        if existing_block == new_block.trim_matches('\n') {
             return (text.to_string(), SlotStatus::Unchanged, prior_version);
         }
         let before = &text[..m.start()];
@@ -377,6 +383,25 @@ mod tests {
     }
 
     #[test]
+    fn upsert_same_version_different_body_is_updated() {
+        // Regression guard: when bootstrap-base.md drifts without a
+        // BLOCK_VERSION bump, infect must still detect the change and
+        // rewrite the slot. Prior behaviour short-circuited on version
+        // alone, which hid a v10 content-edit in Sebastian's install
+        // 2026-04-20.
+        let old_block = render_markdown_block("old body");
+        let new_block = render_markdown_block("BRAND NEW BODY with describe vs ingest guidance");
+        let existing = format!("before\n\n{}\n\nafter\n", old_block);
+        let (out, status, prior) = upsert_markdown_block(&existing, &new_block);
+        assert_eq!(status, SlotStatus::Updated);
+        assert_eq!(prior.as_deref(), Some(BLOCK_VERSION));
+        assert!(out.contains("BRAND NEW BODY"));
+        assert!(!out.contains("old body"));
+        assert!(out.contains("before"));
+        assert!(out.contains("after"));
+    }
+
+    #[test]
     fn atomic_write_creates_parent_dirs() {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("a/b/c/file.md");
@@ -461,7 +486,12 @@ mod tests {
         let parsed: Value = serde_json::from_str(&written).unwrap();
         let arr = parsed["instructions"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
-        assert!(arr[0].as_str().unwrap().contains("[harvey:infect-global v9]"));
+        assert!(
+            arr[0]
+                .as_str()
+                .unwrap()
+                .contains(&format!("[harvey:infect-global v{}]", BLOCK_VERSION))
+        );
         assert_eq!(arr[1].as_str().unwrap(), "user note");
     }
 

@@ -3,23 +3,25 @@
 //!
 //! Paths mirror `core/orchestration/infect_global.py` exactly so the Rust
 //! rewrite and the Python implementation can operate on the same files
-//! without fighting over format. Bootstrap version is bumped to **v9** for
-//! the Rust cutover — the regex `BLOCK_RE` still matches any prior version
-//! so the rewrite will upgrade older blocks in place on the next run.
+//! without fighting over format. Bootstrap version is currently **v10**;
+//! the regex `BLOCK_RE` still matches any prior version so the rewrite
+//! will upgrade older blocks in place on the next run.
 
 use std::path::PathBuf;
 
-/// Marker version used by the Rust rewrite. Bumped from v8 (Python) to
-/// signal the cutover. Anything older is considered stale and will be
-/// replaced in place on next `makakoo infect`.
-pub const BLOCK_VERSION: &str = "9";
+/// Marker version used by the Rust rewrite. Every material change to the
+/// bootstrap body bumps this — anything older is considered stale and will
+/// be replaced in place on next `makakoo infect`.
+///
+/// v10 (2026-04-20): describe-vs-ingest dichotomy + rate-limit rule.
+pub const BLOCK_VERSION: &str = "10";
 
 /// Start marker written to every markdown slot. Keeps the legacy
 /// `harvey:infect-global` prefix so old installations with v8 blocks are
 /// matched by the upgrade regex and replaced — do NOT rename this to
 /// `makakoo:infect-global` without also teaching [`crate::infect::writer`]
 /// to find both.
-pub const BLOCK_START: &str = "<!-- harvey:infect-global START v9 -->";
+pub const BLOCK_START: &str = "<!-- harvey:infect-global START v10 -->";
 
 /// End marker — the version is NOT included in the end marker (mirrors
 /// Python) so the upgrade regex can match any prior version cleanly.
@@ -27,7 +29,7 @@ pub const BLOCK_END: &str = "<!-- harvey:infect-global END -->";
 
 /// JSON-tag prefix used by the OpenCode slot, which stores the bootstrap as
 /// an entry inside `instructions: [...]` rather than as a fenced block.
-pub const JSON_TAG_PREFIX: &str = "[harvey:infect-global v9]";
+pub const JSON_TAG_PREFIX: &str = "[harvey:infect-global v10]";
 
 /// Fingerprint checked against the first 40 characters of each entry in
 /// the opencode `instructions` array to locate the prior bootstrap.
@@ -129,11 +131,11 @@ mod tests {
     }
 
     #[test]
-    fn markers_versioned_to_v9() {
-        assert_eq!(BLOCK_VERSION, "9");
-        assert!(BLOCK_START.contains("v9"));
-        assert!(JSON_TAG_PREFIX.contains("v9"));
+    fn markers_versioned_to_v10() {
+        assert_eq!(BLOCK_VERSION, "10");
+        assert!(BLOCK_START.contains("v10"));
+        assert!(JSON_TAG_PREFIX.contains("v10"));
         // END marker intentionally has no version — it matches any prior version.
-        assert!(!BLOCK_END.contains("v9"));
+        assert!(!BLOCK_END.contains("v10"));
     }
 }

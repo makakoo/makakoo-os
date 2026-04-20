@@ -644,7 +644,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upgrades_old_version_to_v9() {
+    async fn upgrades_old_version_to_current() {
         let tmp = TempDir::new().unwrap();
         // Seed claude slot with a v7 block and some surrounding content.
         let claude_path = tmp.path().join(".claude/CLAUDE.md");
@@ -666,7 +666,7 @@ mod tests {
         assert!(content.contains("# My own notes"));
         assert!(content.contains("After block."));
         assert!(content.contains("You are Harvey."));
-        assert!(content.contains("v9"));
+        assert!(content.contains(&format!("v{}", super::slots::BLOCK_VERSION)));
         assert!(!content.contains("old body"));
     }
 
