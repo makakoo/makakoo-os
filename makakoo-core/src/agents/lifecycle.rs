@@ -311,7 +311,12 @@ impl AgentSupervisor {
     }
 }
 
-#[cfg(test)]
+// Agent-lifecycle tests shell out to the Unix `true` + `sleep`
+// binaries (they're in every POSIX path); Windows would need a
+// `cmd.exe /C ...` rewrite of every sleep_spec / "true" literal.
+// Gate the whole module to Unix for v0.1; Windows siblings land
+// alongside any Windows-specific agent-spawn story.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Duration;
