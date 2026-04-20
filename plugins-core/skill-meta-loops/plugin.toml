@@ -3,7 +3,7 @@ name = "skill-meta-loops"
 version = "0.1.0"
 kind = "skill"
 language = "python"
-summary = "Scheduled task management — session summaries and watchdog loops"
+summary = "loops skill"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 
@@ -17,10 +17,13 @@ skill = "^1.0"
 python = ">=3.8"
 
 [entrypoint]
-run = "python3 -u harvey-os/skills/meta/loops/session_summary.py"
+run = "python3 -u src/session_summary.py"
 
 [capabilities]
-grants = [
-  "brain/write",
-  "net/http",
-]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-meta-loops"
+retention = "keep"

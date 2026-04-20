@@ -214,7 +214,13 @@ pub fn register_plugin_sancho_tasks(reg: &mut SanchoRegistry, plugins: &PluginRe
 /// Build a [`SubprocessHandler`] for a plugin sancho task. Splits the
 /// plugin's `[entrypoint].run` string on whitespace so we can re-inject
 /// `--task <name>` as extra args. Paths in the entrypoint are resolved
-/// relative to the plugin root.
+/// relative to the plugin root:
+///
+/// - Program path is rewritten when it starts with `./` or `.venv`.
+/// - The subprocess CWD is set to `plugin_root` so any relative arg
+///   like `src/run.py` resolves inside the plugin's own bundled
+///   source tree (the v0.1 self-contained layout). `$MAKAKOO_HOME`
+///   stays exported in env so plugins can still reach shared state.
 fn build_subprocess_handler(
     plugin_root: &Path,
     run_cmd: &str,
@@ -230,7 +236,7 @@ fn build_subprocess_handler(
     let mut args: Vec<String> = parts.map(|s| s.to_string()).collect();
     args.push("--task".to_string());
     args.push(task_name.to_string());
-    SubprocessHandler::new(task_name, program_path, args)
+    SubprocessHandler::new(task_name, program_path, args).with_cwd(plugin_root)
 }
 
 /// Build the default production registry. Pass `plugins` to inject

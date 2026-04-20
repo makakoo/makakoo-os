@@ -20,7 +20,7 @@ unix = "install.sh"
 windows = "install.ps1"
 
 [entrypoint]
-run = "python3 -u harvey-os/core/watchdogs/switchailocal_watchdog.py"
+run = "python3 -u src/switchailocal_watchdog.py"
 
 [capabilities]
 grants = [

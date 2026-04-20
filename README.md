@@ -26,7 +26,7 @@ Your notes, your decisions, your arguments with yourself from three months ago �
 | 4 IDE-assistant hosts (Copilot / Continue / Cline / JetBrains) | ✅ detection + writers |
 | Persistent Brain (Logseq journals + pages) | ✅ |
 | Superbrain search — FTS5 + vector + LLM synthesis | ✅ |
-| Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ 38 plugins-core plugins |
+| Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ 38 plugins in `plugins-core/`, 32 fully self-contained (Python bundled) |
 | SANCHO proactive task engine (8 native + plugin tasks) | ✅ |
 | Unix domain socket + Windows named-pipe IPC for plugins | ✅ |
 | 5 distros published (minimal, core, sebastian, creator, trader) | ✅ |

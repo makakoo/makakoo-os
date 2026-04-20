@@ -93,10 +93,19 @@ pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Resul
             let mut cmd = Command::new(&parts[0]);
             cmd.args(&parts[1..]);
             cmd.args(args);
-            cmd.current_dir(&home);
+            // CWD = plugin install root so manifests can use
+            // `run = "python3 -u src/run.py"` and resolve to their own
+            // bundled source. $MAKAKOO_HOME is still exported in env
+            // so plugins can reach shared state (Brain, config, etc.)
+            // via the absolute `$MAKAKOO_HOME/...` path.
+            cmd.current_dir(&plugin.root);
             for (k, v) in &env {
                 cmd.env(k, v);
             }
+            // Expose the plugin's install root explicitly so ad-hoc
+            // shell one-liners inside a plugin can still reach their
+            // own files even from a child process that cd'd elsewhere.
+            cmd.env("MAKAKOO_PLUGIN_ROOT", &plugin.root);
 
             let status = cmd.status().map_err(|e| {
                 anyhow::anyhow!(

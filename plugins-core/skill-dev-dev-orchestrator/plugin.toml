@@ -3,7 +3,7 @@ name = "skill-dev-dev-orchestrator"
 version = "0.1.0"
 kind = "skill"
 language = "python"
-summary = "Parallel multi-component dev orchestrator — spawns subagent processes for independent tasks"
+summary = "Use when Sebastian says 'build X', 'implement Y', or any multi-component development request that can be parallelized across independent tasks"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 
@@ -17,10 +17,13 @@ skill = "^1.0"
 python = ">=3.8"
 
 [entrypoint]
-run = "python3 -u harvey-os/skills/dev/dev-orchestrator/orchestrate.py"
+run = "python3 -u src/orchestrate.py"
 
 [capabilities]
-grants = [
-  "exec/binary:python3",
-  "net/http",
-]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-dev-dev-orchestrator"
+retention = "keep"

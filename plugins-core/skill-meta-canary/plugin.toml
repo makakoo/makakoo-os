@@ -3,7 +3,7 @@ name = "skill-meta-canary"
 version = "0.1.0"
 kind = "skill"
 language = "python"
-summary = "Cross-CLI honesty probe — measures workspace-context capture by re-running prompts in clean vs HARVEY_HOME cwds"
+summary = "Cross-CLI honesty probe. Detects when a host CLI has been semantically captured by its workspace context. Runs the same prompt in both clean and captured cwds and reports the delta."
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 
@@ -17,19 +17,12 @@ skill = "^1.0"
 python = ">=3.8"
 
 [entrypoint]
-run = "python3 -u harvey-os/skills/meta/canary/canary.py"
+run = "python3 -u src/canary.py"
 
-# Canary spawns three other CLIs (opencode/gemini/codex) in subprocess to score
-# their output, then writes JSON results under $MAKAKOO_HOME/data/canary/.
-# fs/read+write are required for the prompt sibling + results dir.
 [capabilities]
-grants = [
-  "exec/binary:opencode",
-  "exec/binary:gemini",
-  "exec/binary:codex",
-  "fs/read:**",
-  "fs/write:**",
-]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
 
 [state]
 dir = "$MAKAKOO_HOME/state/skill-meta-canary"

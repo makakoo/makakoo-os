@@ -20,7 +20,7 @@ unix = "install.sh"
 windows = "install.ps1"
 
 [entrypoint]
-run = "python3 -u harvey-os/agents/hackernews/hn_monitor.py"
+run = "python3 -u src/hn_monitor.py"
 
 [capabilities]
 grants = [

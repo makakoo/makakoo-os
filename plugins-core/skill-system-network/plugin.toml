@@ -3,7 +3,7 @@ name = "skill-system-network"
 version = "0.1.0"
 kind = "skill"
 language = "python"
-summary = "Interactive network diagnostic wizard — 'Is the internet working?'"
+summary = "network skill"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 
@@ -14,17 +14,15 @@ path = "plugins-core/skill-system-network"
 skill = "^1.0"
 
 [depends]
-plugins = ["lib-hte"]
 python = ">=3.8"
 
 [entrypoint]
-run = "python3 -u harvey-os/skills/system/network/network_wizard.py"
+run = "python3 -u src/network_wizard.py"
 
 [capabilities]
-grants = [
-  "net/http",
-  "exec/binary:ping",
-]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
 
 [state]
 dir = "$MAKAKOO_HOME/state/skill-system-network"

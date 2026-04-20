@@ -38,6 +38,21 @@ complement, focused on user-visible changes and migration notes.
   Linux aarch64 + Windows x86_64. Actual release builds + publishing run
   from `.github/workflows/release.yml` on tag push.
 
+### Changed (pre-0.1.0 tag)
+- Plugin subprocess CWD is now the plugin's install root, not
+  `$MAKAKOO_HOME`. Relative paths in `[entrypoint].run` (e.g.
+  `python3 -u src/run.py`) now resolve inside the plugin's own
+  bundled source tree. `$MAKAKOO_HOME` stays exported in env so
+  plugins can still reach shared state via absolute paths.
+- 32 plugins-core entries migrated to the self-contained shape —
+  Python source bundled under `plugins-core/<name>/src/`. Public
+  users installing any shipped plugin get the code bundled; no
+  harvey-os clone required. Helper shipped at
+  `scripts/migrate_skill.py --copy-src`.
+- `$MAKAKOO_PLUGIN_ROOT` now exported to every spawned skill
+  subprocess so ad-hoc shell one-liners can reach their own
+  bundled files even after a `cd` elsewhere.
+
 ### Deferred to a later release
 - Apple notarization + Windows Authenticode signing — awaits signing
   cert acquisition. Runbook in `docs/RELEASE_SIGNING.md`.

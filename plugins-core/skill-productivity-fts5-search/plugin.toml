@@ -17,7 +17,7 @@ skill = "^1.0"
 python = ">=3.8"
 
 [entrypoint]
-run = "python3 -u harvey-os/skills/productivity/fts5_search/search_cli.py"
+run = "python3 -u src/search_cli.py"
 
 [capabilities]
 grants = [

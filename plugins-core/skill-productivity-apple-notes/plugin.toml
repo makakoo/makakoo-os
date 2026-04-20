@@ -17,10 +17,10 @@ skill = "^1.0"
 python = ">=3.8"
 
 [entrypoint]
-run = "python3 -u -m harvey_os.skills.productivity.apple-notes"
+run = "python3 -u -m src.__main__"
 
 [capabilities]
-# Capability grants default empty — conservative for Phase H.4 batch.
+# Capability grants default empty — conservative for batch migration.
 # Add brain/llm/net/state grants manually per skill's real needs.
 grants = []
 

@@ -1,0 +1,3 @@
+# Canary results are local-only — never commit raw responses
+results/
+__pycache__/

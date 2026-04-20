@@ -20,7 +20,7 @@ unix = "install.sh"
 windows = "install.ps1"
 
 [entrypoint]
-run = "python3 -u harvey-os/bin/run-sancho-task.py"
+run = "python3 -u src/run-sancho-task.py"
 
 [capabilities]
 grants = [

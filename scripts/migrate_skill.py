@@ -1,22 +1,37 @@
 #!/usr/bin/env python3
-"""Generate a plugins-core/skill-<cat>-<name>/plugin.toml from an existing
-harvey-os/skills/<cat>/<name>/SKILL.md.
+"""Migrate a harvey-os skill into a self-contained plugins-core plugin.
+
+Two modes:
+
+1. **Manifest-only (default)** — emits `plugin.toml` pointing at
+   `harvey-os/skills/<cat>/<name>/<entry>`. Only works on machines that
+   have the harvey-os submodule checked out (Sebastian's daily driver).
+
+2. **Copy source (`--copy-src`)** — additionally `cp -R`'s the entire
+   skill dir into `plugins-core/skill-<cat>-<name>/src/`. The emitted
+   `plugin.toml` uses a relative `run = "python3 -u src/<entry>"`. The
+   resulting plugin is self-contained: publicly distributable, no
+   harvey-os dependency. This is the v0.1 launch shape.
 
 Usage:
-    python3 scripts/migrate_skill.py <category> <skill_name> [<category> <skill_name> ...]
+    # Manifest-only:
+    python3 scripts/migrate_skill.py <cat> <name>
 
-Reads the SKILL.md frontmatter for description + optional entry/grants,
-emits a minimal-but-valid plugin.toml pointing at the existing Python
-code in harvey-os/skills/. This is the Phase H.4 batch-migration path:
-the manifest is the migration, not a rewrite.
+    # Self-contained (v0.1 public shape):
+    python3 scripts/migrate_skill.py --copy-src <cat> <name> [<cat> <name>...]
+
+    # Force re-migration over an existing plugin dir:
+    python3 scripts/migrate_skill.py --copy-src --force research arxiv
 
 Safe to re-run — refuses to overwrite an existing plugin dir unless
-`--force` is passed.
+`--force` is passed. `--copy-src` without `--force` also refuses if
+`<plugin>/src/` already exists.
 """
 from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -55,7 +70,12 @@ def find_entrypoint(skill_dir: Path) -> str:
     return ""
 
 
-def migrate_one(category: str, skill_name: str, force: bool) -> tuple[str, str]:
+def migrate_one(
+    category: str,
+    skill_name: str,
+    force: bool,
+    copy_src: bool,
+) -> tuple[str, str]:
     src = HARVEY_OS_SKILLS / category / skill_name
     if not src.is_dir():
         return ("skip", f"harvey-os/skills/{category}/{skill_name} not found")
@@ -68,19 +88,39 @@ def migrate_one(category: str, skill_name: str, force: bool) -> tuple[str, str]:
     plugin_name = f"skill-{category}-{skill_name}"
     dest = PLUGINS_CORE / plugin_name
     plugin_toml = dest / "plugin.toml"
+    src_subdir = dest / "src"
 
     if plugin_toml.exists() and not force:
         return ("exists", str(plugin_toml))
 
     dest.mkdir(parents=True, exist_ok=True)
 
-    # Default capability set — no grants. Skills that need brain/llm/net
-    # should hand-edit after the batch migration; v0.1 conservative.
-    entry_cmd = (
-        f'python3 -u harvey-os/skills/{category}/{skill_name}/{entry}'
-        if entry
-        else f"python3 -u -m harvey_os.skills.{category}.{skill_name}"
-    )
+    # --copy-src: mirror the harvey-os skill dir into plugins-core/<name>/src/
+    # Self-contained plugin = publicly distributable with no harvey-os dependency.
+    if copy_src:
+        if src_subdir.exists():
+            if not force:
+                return ("src-exists", str(src_subdir))
+            shutil.rmtree(src_subdir)
+        shutil.copytree(src, src_subdir)
+
+    # Pick the run command based on mode.
+    if copy_src:
+        if entry:
+            entry_cmd = f"python3 -u src/{entry}"
+        else:
+            # Fallback: `-m` style against the copied src tree. Requires
+            # a PYTHONPATH set by the CLI's build_skill_env.
+            entry_cmd = f"python3 -u -m src.__main__"
+    else:
+        if entry:
+            entry_cmd = (
+                f"python3 -u harvey-os/skills/{category}/{skill_name}/{entry}"
+            )
+        else:
+            entry_cmd = (
+                f"python3 -u -m harvey_os.skills.{category}.{skill_name}"
+            )
 
     plugin_toml.write_text(
         f'''[plugin]
@@ -105,7 +145,7 @@ python = ">=3.8"
 run = "{entry_cmd}"
 
 [capabilities]
-# Capability grants default empty — conservative for Phase H.4 batch.
+# Capability grants default empty — conservative for batch migration.
 # Add brain/llm/net/state grants manually per skill's real needs.
 grants = []
 
@@ -114,13 +154,18 @@ dir = "$MAKAKOO_HOME/state/{plugin_name}"
 retention = "keep"
 '''
     )
-    return ("wrote", str(plugin_toml))
+    mode = "copy-src" if copy_src else "ref"
+    return (f"wrote-{mode}", str(plugin_toml))
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("pairs", nargs="+", help="category skill_name pairs")
-    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="Overwrite existing plugin dir + src/ subdir")
+    ap.add_argument("--copy-src", action="store_true",
+                    help="Copy harvey-os source into plugins-core/<name>/src/ "
+                         "so the plugin is publicly distributable")
     args = ap.parse_args()
 
     if len(args.pairs) % 2 != 0:
@@ -129,8 +174,8 @@ def main() -> int:
 
     for i in range(0, len(args.pairs), 2):
         cat, name = args.pairs[i], args.pairs[i + 1]
-        status, detail = migrate_one(cat, name, args.force)
-        print(f"  {status:<6} {cat}/{name}  → {detail}")
+        status, detail = migrate_one(cat, name, args.force, args.copy_src)
+        print(f"  {status:<16} {cat}/{name}  → {detail}")
     return 0
 
 
