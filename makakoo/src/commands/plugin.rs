@@ -26,6 +26,8 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
             blake3,
         } => install(ctx, &source, core, blake3),
         PluginCmd::Uninstall { name, purge } => uninstall(ctx, &name, purge),
+        PluginCmd::Enable { name } => set_enabled(ctx, &name, true),
+        PluginCmd::Disable { name } => set_enabled(ctx, &name, false),
     }
 }
 
@@ -51,6 +53,7 @@ fn list(ctx: &CliContext, as_json: bool) -> anyhow::Result<i32> {
                     "kind": format!("{:?}", p.manifest.plugin.kind),
                     "language": format!("{:?}", p.manifest.plugin.language),
                     "root": p.root.display().to_string(),
+                    "enabled": p.enabled,
                     "blake3": lock_entry.and_then(|e| e.blake3.clone()),
                     "source": lock_entry.map(|e| e.source.clone()),
                 })
@@ -75,15 +78,22 @@ fn list(ctx: &CliContext, as_json: bool) -> anyhow::Result<i32> {
         Cell::new("version").fg(TableColor::Cyan),
         Cell::new("kind").fg(TableColor::Cyan),
         Cell::new("language").fg(TableColor::Cyan),
+        Cell::new("enabled").fg(TableColor::Cyan),
         Cell::new("source").fg(TableColor::Cyan),
     ]);
     for p in registry.plugins() {
         let entry = lock.get(&p.manifest.plugin.name);
+        let enabled_cell = if p.enabled {
+            Cell::new("yes").fg(TableColor::Green)
+        } else {
+            Cell::new("no").fg(TableColor::Yellow)
+        };
         t.add_row(vec![
             Cell::new(&p.manifest.plugin.name).fg(TableColor::White),
             Cell::new(p.manifest.plugin.version.to_string()),
             Cell::new(format!("{:?}", p.manifest.plugin.kind)),
             Cell::new(format!("{:?}", p.manifest.plugin.language)),
+            enabled_cell,
             Cell::new(
                 entry
                     .map(|e| e.source.clone())
@@ -112,6 +122,7 @@ fn info(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
     }
     println!("  kind:     {:?}", m.plugin.kind);
     println!("  language: {:?}", m.plugin.language);
+    println!("  enabled:  {}", if plugin.enabled { "yes" } else { "no (soft-disabled)" });
     println!("  root:     {}", plugin.root.display());
     if let Some(ref lic) = m.plugin.license {
         println!("  license:  {lic}");
@@ -220,6 +231,51 @@ fn install(
             Ok(1)
         }
     }
+}
+
+fn set_enabled(ctx: &CliContext, name: &str, target: bool) -> anyhow::Result<i32> {
+    let mut lock = PluginsLock::load(ctx.home())?;
+
+    // Require the plugin to exist in the registry OR in the lock so a
+    // typo ("makakoo plugin enable watchdoh") can't silently create a
+    // dangling entry. Lock-only matches are allowed (user disabled a
+    // plugin whose directory they then manually removed).
+    let registry = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
+    let in_registry = registry.get(name).is_some();
+    let in_lock = lock.get(name).is_some();
+    if !in_registry && !in_lock {
+        output::print_error(format!("plugin not installed: {name}"));
+        return Ok(1);
+    }
+
+    let Some(entry) = lock.get(name).cloned() else {
+        output::print_error(format!(
+            "plugin {name} has no plugins.lock entry — reinstall to create one before toggling"
+        ));
+        return Ok(1);
+    };
+
+    if entry.enabled == target {
+        output::print_info(format!(
+            "{name} already {}",
+            if target { "enabled" } else { "disabled" }
+        ));
+        return Ok(0);
+    }
+
+    let mut updated = entry;
+    updated.enabled = target;
+    lock.upsert(updated);
+    lock.save(ctx.home())?;
+
+    output::print_info(format!(
+        "{name} {}",
+        if target { "enabled" } else { "disabled" }
+    ));
+    if !target {
+        output::print_info("restart the daemon (or next sancho tick) to deregister tasks");
+    }
+    Ok(0)
 }
 
 fn uninstall(ctx: &CliContext, name: &str, purge: bool) -> anyhow::Result<i32> {

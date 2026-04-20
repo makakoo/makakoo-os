@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tracing::{debug, warn};
 
+use super::lock::PluginsLock;
 use super::manifest::{Manifest, ManifestError, ParseWarnings};
 use super::resolver::{resolve_load_order, ResolverError};
 
@@ -45,11 +46,18 @@ pub enum RegistryError {
 
 /// One loaded plugin: manifest + the directory it lives in (so the kernel
 /// can resolve relative paths like entrypoints and install scripts).
+///
+/// `enabled` mirrors the corresponding `plugins.lock` entry's flag —
+/// plugins with `enabled = false` are still loaded (so `plugin list`
+/// surfaces them) but subsystems like the SANCHO walker and MCP gateway
+/// skip them. Plugins with no lock entry (fresh manifest, not yet
+/// installed through `makakoo plugin install`) default to enabled.
 #[derive(Debug, Clone)]
 pub struct LoadedPlugin {
     pub manifest: Manifest,
     pub root: PathBuf,
     pub warnings: Vec<String>,
+    pub enabled: bool,
 }
 
 /// The result of walking a plugins directory. Plugins are in load order
@@ -92,12 +100,29 @@ impl PluginRegistry {
 
     /// Discover every plugin under `$MAKAKOO_HOME/plugins/`. Returns an
     /// empty registry if the directory doesn't exist (fresh install).
+    ///
+    /// Overlays the `plugins.lock` enabled flags so subsystems that walk
+    /// the registry can skip plugins that `makakoo plugin disable <name>`
+    /// turned off. Plugins with no lock entry stay enabled (the registry
+    /// is the authoritative "installed" set; the lock is a metadata
+    /// overlay that may lag by one install cycle).
     pub fn load_default(makakoo_home: &Path) -> Result<Self, RegistryError> {
         let dir = makakoo_home.join("plugins");
         if !dir.exists() {
             return Ok(Self::default());
         }
-        Self::load_from(&dir)
+        let mut reg = Self::load_from(&dir)?;
+        // Lock-file overlay is best-effort — a missing or malformed lock
+        // mustn't block boot. Plugins default to enabled if we can't
+        // resolve their lock entry.
+        if let Ok(lock) = PluginsLock::load(makakoo_home) {
+            for plugin in reg.plugins.iter_mut() {
+                if let Some(entry) = lock.get(&plugin.manifest.plugin.name) {
+                    plugin.enabled = entry.enabled;
+                }
+            }
+        }
+        Ok(reg)
     }
 
     /// Discover every plugin under `dir`. Subdirectories named `.stage/`
@@ -189,6 +214,7 @@ impl PluginRegistry {
                     manifest: m,
                     root,
                     warnings: warnings.0,
+                    enabled: true,
                 }
             })
             .collect();

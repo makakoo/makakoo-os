@@ -135,6 +135,13 @@ pub fn native_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
 /// modeling mistake we tolerate gracefully).
 pub fn register_plugin_sancho_tasks(reg: &mut SanchoRegistry, plugins: &PluginRegistry) {
     for plugin in plugins.plugins() {
+        // Soft toggle: plugins disabled via `makakoo plugin disable`
+        // are still discovered (so `plugin list` and `plugin info` can
+        // surface them) but skip task registration. Re-enable restores
+        // them on the next registry load without reinstalling.
+        if !plugin.enabled {
+            continue;
+        }
         let Some(run_cmd) = plugin.manifest.entrypoint.run.clone() else {
             continue;
         };
@@ -419,6 +426,79 @@ tasks = [{ name = "dream", interval = "3600s" }]
         );
         // When dedup lands in Phase D (`makakoo plugin install` should reject
         // name collisions), flip this assertion to `assert_eq!(dream_count, 1)`.
+    }
+
+    #[test]
+    fn disabled_plugin_does_not_register_sancho_tasks() {
+        // When a plugin is soft-disabled via `makakoo plugin disable`, its
+        // plugins.lock entry carries enabled = false. `PluginRegistry::load_default`
+        // overlays that flag; `register_plugin_sancho_tasks` skips such plugins.
+        // Re-enabling restores registration on the next load.
+        use crate::plugin::{lock_path, LockEntry, PluginsLock};
+        use chrono::Utc;
+
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        seed_plugin(
+            home,
+            "togglable",
+            r#"
+[plugin]
+name = "togglable"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+
+[source]
+path = "."
+
+[abi]
+sancho-task = "^1.0"
+
+[entrypoint]
+run = "python3 -m togglable"
+
+[sancho]
+tasks = [{ name = "togglable_tick", interval = "3600s" }]
+"#,
+        );
+
+        // Fresh: no lock file, plugin defaults to enabled, task registers.
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        let reg = default_registry(make_ctx(home), &plugins);
+        assert_eq!(reg.len(), 9, "fresh install — 8 native + 1 plugin task");
+
+        // Disable via lock file: task must drop out.
+        let mut lock = PluginsLock::default();
+        lock.upsert(LockEntry {
+            name: "togglable".into(),
+            version: "1.0.0".into(),
+            blake3: None,
+            source: "test".into(),
+            installed_at: Utc::now(),
+            enabled: false,
+        });
+        lock.save(home).unwrap();
+        assert!(lock_path(home).exists());
+
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        assert!(
+            !plugins.get("togglable").unwrap().enabled,
+            "registry must reflect lock's enabled=false"
+        );
+        let reg = default_registry(make_ctx(home), &plugins);
+        assert_eq!(reg.len(), 8, "disabled plugin must not register");
+
+        // Re-enable: task comes back without reinstalling.
+        let mut lock = PluginsLock::load(home).unwrap();
+        let mut entry = lock.get("togglable").unwrap().clone();
+        entry.enabled = true;
+        lock.upsert(entry);
+        lock.save(home).unwrap();
+
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        let reg = default_registry(make_ctx(home), &plugins);
+        assert_eq!(reg.len(), 9, "re-enable restores the task");
     }
 
     #[test]

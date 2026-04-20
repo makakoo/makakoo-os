@@ -312,6 +312,22 @@ pub enum PluginCmd {
         #[arg(long)]
         purge: bool,
     },
+
+    /// Soft-enable a previously-disabled plugin without reinstalling.
+    /// The plugin directory stays untouched; the `plugins.lock` entry
+    /// flips `enabled = true` and the next registry load picks it up.
+    Enable {
+        /// Plugin name.
+        name: String,
+    },
+
+    /// Soft-disable a plugin without uninstalling. SANCHO task
+    /// registration + MCP tool exposure + infect fragment emission all
+    /// skip the plugin on the next registry load; nothing on disk changes.
+    Disable {
+        /// Plugin name.
+        name: String,
+    },
 }
 
 /// `makakoo distro <subcommand>`.

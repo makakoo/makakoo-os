@@ -68,6 +68,18 @@ pub struct LockEntry {
     /// `git:https://github.com/x/y@v1.0`, `local:/tmp/plug`. Human-read.
     pub source: String,
     pub installed_at: DateTime<Utc>,
+    /// Soft on/off switch. `false` means the plugin is installed on disk
+    /// but suppressed by `makakoo plugin disable <name>` — SANCHO task
+    /// registration + MCP tool exposure + infect fragment emission all
+    /// skip disabled plugins. `true` (default) is the normal case; older
+    /// lock files that predate the field deserialize as enabled so no
+    /// one-time migration is needed.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Canonical lock path under `$MAKAKOO_HOME`.
@@ -160,7 +172,40 @@ mod tests {
             blake3: Some("a".repeat(64)),
             source: "path:plugins-core/test".into(),
             installed_at: Utc::now(),
+            enabled: true,
         }
+    }
+
+    #[test]
+    fn missing_enabled_field_deserializes_as_enabled() {
+        // Older plugins.lock files written before D.1 do not carry the
+        // `enabled` field. They MUST deserialize as enabled (not disabled)
+        // so a kernel upgrade doesn't silently turn every plugin off.
+        let legacy = r#"
+[[plugin]]
+name = "legacy-plugin"
+version = "1.0.0"
+source = "path:plugins-core/legacy"
+installed_at = "2026-04-20T00:00:00Z"
+"#;
+        let lock: PluginsLock = toml::from_str(legacy).unwrap();
+        assert_eq!(lock.plugins.len(), 1);
+        assert!(
+            lock.plugins[0].enabled,
+            "legacy lock entries must default to enabled=true"
+        );
+    }
+
+    #[test]
+    fn enabled_field_round_trips_through_save() {
+        let tmp = TempDir::new().unwrap();
+        let mut lock = PluginsLock::default();
+        let mut e = entry("toggler", "1.0.0");
+        e.enabled = false;
+        lock.upsert(e);
+        lock.save(tmp.path()).unwrap();
+        let reloaded = PluginsLock::load(tmp.path()).unwrap();
+        assert!(!reloaded.get("toggler").unwrap().enabled);
     }
 
     #[test]

@@ -115,7 +115,9 @@ pub fn install_from_path(
         req.expected_blake3.as_deref(),
     )?;
 
-    // 4) Record in plugins.lock.
+    // 4) Record in plugins.lock. Fresh installs start enabled;
+    //    reinstalls of a previously-disabled plugin reset to enabled
+    //    (a user who wanted it off must re-run `makakoo plugin disable`).
     let mut lock = PluginsLock::load(makakoo_home)?;
     lock.upsert(LockEntry {
         name: outcome.name.clone(),
@@ -123,6 +125,7 @@ pub fn install_from_path(
         blake3: Some(outcome.computed_blake3.clone()),
         source: format!("path:{}", src_path.display()),
         installed_at: Utc::now(),
+        enabled: true,
     });
     lock.save(makakoo_home)?;
 
