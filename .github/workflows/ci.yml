@@ -35,20 +35,36 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Linux system deps (dbus for keyring)
+      - name: Install Linux system deps (dbus + gnome-keyring for Secret Service)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
+          sudo apt-get install -y libdbus-1-dev pkg-config gnome-keyring dbus-x11
 
       - name: Build workspace
         run: cargo build --workspace --locked
 
+      # On Linux, the `keyring` crate routes through Secret Service which
+      # requires both a DBus session and an unlocked gnome-keyring-daemon.
+      # `dbus-run-session` provides the session; we unlock with an empty
+      # password and start the daemon before handing off to cargo test.
+      # macOS uses the real Keychain and needs no setup.
       - name: Test workspace
-        run: cargo test --workspace --locked
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            dbus-run-session -- bash -c '
+              echo -n "" | gnome-keyring-daemon --unlock > /dev/null 2>&1
+              eval $(echo -n "" | gnome-keyring-daemon --start --components=secrets 2>/dev/null)
+              export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+              cargo test --workspace --locked
+            '
+          else
+            cargo test --workspace --locked
+          fi
 
       # Platform adapter daemon round-trip — Phase B Gate 1 hard requirement.
       # Runs on native macOS (launchd) and native Linux (systemd user).
+      # This test touches no keyring so it doesn't need the dbus-run-session wrapper.
       - name: Integration test — daemon round-trip
         run: cargo test -p makakoo-platform --test daemon_roundtrip --locked
 
