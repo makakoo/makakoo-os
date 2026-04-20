@@ -1007,11 +1007,16 @@ mod tests {
             reader.read_line(&mut buf),
         )
         .await;
-        // Either: EOF right away (read_line returns Ok(0)), or the
-        // server never replied (timeout). Both prove the handshake
-        // rejected us.
+        // All three prove the handshake rejected us:
+        //   * Ok(Ok(0))           — server closed cleanly, EOF (macOS path)
+        //   * Ok(Err(_))          — socket reset mid-read (Linux ECONNRESET,
+        //                           errno 104; the server drops the peer
+        //                           before flushing a close frame)
+        //   * Err(_)              — we hit the outer timeout, server never
+        //                           replied
         match res {
             Ok(Ok(0)) => {}
+            Ok(Err(_)) => {}
             Err(_) => {}
             Ok(Ok(n)) if buf.trim().is_empty() => assert_eq!(n, 0),
             other => panic!("expected rejection, got {other:?}"),
