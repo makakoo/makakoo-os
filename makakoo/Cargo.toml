@@ -12,6 +12,7 @@ makakoo-core = { path = "../makakoo-core" }
 makakoo-platform = { path = "../makakoo-platform" }
 tokio.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 crossterm.workspace = true
 comfy-table.workspace = true
 tracing.workspace = true

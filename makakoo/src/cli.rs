@@ -268,6 +268,28 @@ pub enum Commands {
         #[arg(long)]
         skip_infect: bool,
     },
+
+    /// Emit a shell completion script for the chosen shell.
+    ///
+    /// Write the output to the shell's completion path to enable
+    /// tab completion for `makakoo` subcommands, flags, and distro
+    /// names. Example installs:
+    ///
+    ///   zsh:  makakoo completion zsh  > ~/.zfunc/_makakoo
+    ///         (ensure `fpath+=~/.zfunc` in .zshrc before compinit)
+    ///
+    ///   bash: makakoo completion bash > /usr/local/etc/bash_completion.d/makakoo
+    ///         (or ~/.local/share/bash-completion/completions/makakoo on Linux)
+    ///
+    ///   fish: makakoo completion fish > ~/.config/fish/completions/makakoo.fish
+    ///
+    /// For dynamic completion of installed plugin names, pair with
+    /// `makakoo plugin list --json | jq -r '.[].name'` in a shell-
+    /// specific completion function (documented in install/completions/).
+    Completion {
+        /// Target shell. Supported: bash, zsh, fish, elvish, powershell.
+        shell: clap_complete::Shell,
+    },
 }
 
 /// `makakoo plugin <subcommand>`.

@@ -102,7 +102,16 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Distro { cmd } => distro::run(ctx, cmd).await,
         cmd @ Commands::Install { .. } => install::dispatch(ctx, cmd).await,
         Commands::Migrate { dry_run } => migrate::run(ctx, dry_run).await,
+        Commands::Completion { shell } => dispatch_completion(shell),
     }
+}
+
+fn dispatch_completion(shell: clap_complete::Shell) -> anyhow::Result<i32> {
+    use clap::CommandFactory;
+    let mut cmd = crate::cli::Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+    Ok(0)
 }
 
 fn dispatch_secret(cmd: crate::cli::SecretCmd) -> anyhow::Result<i32> {

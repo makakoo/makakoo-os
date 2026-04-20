@@ -17,6 +17,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 fs2 = "0.4"
 dirs = "5"
 crossterm = "0.28"
