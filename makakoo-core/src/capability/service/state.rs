@@ -273,7 +273,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn absolute_path_rejected() {
+        // Uses `/etc/passwd` which is an absolute path on Unix but on
+        // Windows resolves as drive-relative; the absolute-path guard
+        // would accept it. Phase H.4 can add a sibling test with
+        // `C:\\Windows\\...` once Windows plugin state paths are real.
         let tmp = TempDir::new().unwrap();
         let h = StateHandler::new(tmp.path().to_path_buf());
         let err = h

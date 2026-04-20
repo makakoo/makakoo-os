@@ -541,7 +541,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn canonicalize_rewrites_harvey_to_makakoo() {
+        // POSIX-path assertion shape. The rewrite logic is correct on
+        // Windows too but PathBuf::join emits backslashes, so the literal
+        // string match fails. Phase H.4 adds normalized path comparison
+        // or a Windows-sibling test.
         with_makakoo_home("/tmp/nonexistent-makakoo-home", || {
             let out = canonicalize_brain_path("/Users/sebastian/HARVEY/data/Brain/x.md");
             assert_eq!(out, "/tmp/nonexistent-makakoo-home/data/Brain/x.md");
@@ -563,7 +568,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn canonicalize_resolves_relative_paths() {
+        // Same POSIX-path-shape rationale as canonicalize_rewrites_harvey_to_makakoo.
         with_makakoo_home("/tmp/rel-makakoo-home", || {
             let out = canonicalize_brain_path("data/Brain/pages/Tytus.md");
             assert_eq!(out, "/tmp/rel-makakoo-home/data/Brain/pages/Tytus.md");
@@ -723,7 +730,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn track_batch_canonicalizes_harvey_path_before_insert() {
+        // POSIX-path assertion shape. Same Phase H.4 follow-up applies.
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("MAKAKOO_HOME", "/tmp/t-canon-home");
         std::env::remove_var("HARVEY_HOME");

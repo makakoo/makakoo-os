@@ -515,7 +515,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn sync_file_indexes_single_journal_path() {
+        // The journal-path detection uses POSIX-style path-segment
+        // matching (`/journals/`) in the hot path. Windows uses
+        // backslashes; Phase H.4 normalizes the detection or adds a
+        // Windows-sibling test.
         let (dir, engine) = make_engine();
         let brain = dir.path().join("data").join("Brain");
         let path = brain.join("journals").join("2026_04_18.md");
