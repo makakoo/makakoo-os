@@ -29,6 +29,7 @@ use crate::llm::{ChatMessage as LlmMessage, LlmClient};
 
 use super::artifacts::{Artifact, ArtifactKind, ArtifactStore};
 use super::coordinator::{AgentCoordinator, SubagentSpec, SubagentStatus};
+use super::team::TeamRoster;
 
 /// Default chat-completion model for dispatched subagents. Matches the
 /// rest of makakoo-core.
@@ -62,6 +63,30 @@ pub struct SwarmRunStatus {
     pub status: String,
     pub artifact_count: usize,
     pub latest_result: Option<Value>,
+}
+
+/// Request to dispatch an entire team roster as a coordinated run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamDispatchRequest {
+    /// Roster to run (see `TeamComposition::available_names`).
+    pub team: String,
+    /// User-level prompt — applied to every role via `input_template`.
+    pub prompt: String,
+    /// Optional parallelism override (research_team only).
+    #[serde(default)]
+    pub parallelism: Option<usize>,
+    /// Optional model override for every subagent.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Response from a team dispatch — one `run_id` covers every member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamDispatchResponse {
+    pub run_id: String,
+    pub team: String,
+    pub subagent_ids: Vec<String>,
+    pub total_members: usize,
 }
 
 static GLOBAL_GATEWAY: OnceCell<Arc<SwarmGateway>> = OnceCell::new();
@@ -286,6 +311,80 @@ impl SwarmGateway {
         })
     }
 
+    /// Dispatch an entire team roster under one `run_id`. Every member
+    /// becomes a subagent; dependencies are expressed via `depends_on_roles`
+    /// and must be respected by the caller when awaiting results. This
+    /// method fires all subagents concurrently and returns immediately —
+    /// ordering/join is the caller's responsibility.
+    pub async fn dispatch_team(
+        &self,
+        roster: &TeamRoster,
+        req: TeamDispatchRequest,
+    ) -> Result<TeamDispatchResponse> {
+        let run_id = format!("swarm-team-{}-{}", roster.name, mint_run_suffix());
+        let model = req
+            .model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DISPATCH_MODEL.to_string());
+
+        // Team plan artifact — single upfront record for the whole team.
+        let plan = Artifact {
+            id: 0,
+            kind: ArtifactKind::Plan,
+            run_id: run_id.clone(),
+            parent_id: None,
+            agent: format!("team::{}", roster.name),
+            content: req.prompt.clone(),
+            metadata: json!({
+                "team": roster.name,
+                "members": roster.members.len(),
+                "total_steps": roster.total_steps(),
+                "model": model,
+            }),
+            created_at: chrono::Utc::now(),
+        };
+        let _ = self.artifacts.write(plan)?;
+
+        let _ = self.bus.publish(
+            "swarm.team.start",
+            "swarm-gateway",
+            json!({
+                "run_id": run_id,
+                "team": roster.name,
+                "members": roster.members.len(),
+            }),
+        );
+
+        let mut subagent_ids: Vec<String> = Vec::new();
+        for member in &roster.members {
+            for instance_ix in 0..member.count {
+                let name = if member.count > 1 {
+                    format!("{}#{instance_ix}", member.role)
+                } else {
+                    member.role.clone()
+                };
+                let task = format!("{} :: {}", member.agent, member.action);
+                let prompt = compose_member_prompt(member, &req.prompt);
+                let child = DispatchRequest {
+                    name,
+                    task,
+                    prompt,
+                    model: Some(model.clone()),
+                    parent_run_id: Some(run_id.clone()),
+                };
+                let resp = self.dispatch(child).await?;
+                subagent_ids.push(resp.subagent_id);
+            }
+        }
+
+        Ok(TeamDispatchResponse {
+            run_id,
+            team: roster.name.clone(),
+            subagent_ids: subagent_ids.clone(),
+            total_members: subagent_ids.len(),
+        })
+    }
+
     /// Access the underlying coordinator.
     pub fn coordinator(&self) -> &Arc<AgentCoordinator> {
         &self.coordinator
@@ -295,6 +394,23 @@ impl SwarmGateway {
     pub fn artifacts(&self) -> &Arc<ArtifactStore> {
         &self.artifacts
     }
+}
+
+fn compose_member_prompt(member: &super::team::TeamMember, user_prompt: &str) -> String {
+    // The Python agent_team builds a formatted dict via `input_template`;
+    // in the Rust path we just append the user prompt plus role context
+    // so the subagent's LLM has enough to act on.
+    format!(
+        "Role: {role} (agent={agent}, action={action}).\n\n{user}",
+        role = if member.role.is_empty() {
+            &member.agent
+        } else {
+            &member.role
+        },
+        agent = member.agent,
+        action = member.action,
+        user = user_prompt,
+    )
 }
 
 fn status_str(s: &SubagentStatus) -> String {
@@ -443,5 +559,74 @@ mod tests {
         let (_dir, gw) = build_gateway(&mock).await;
         let err = gw.run_status("not-a-run").await.unwrap_err();
         assert!(matches!(err, MakakooError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn dispatch_team_spawns_every_member() {
+        use crate::swarm::team::TeamComposition;
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "ack"}}]
+            })))
+            .mount(&mock)
+            .await;
+        let (_dir, gw) = build_gateway(&mock).await;
+        let roster = TeamComposition::research_team(3);
+        let resp = gw
+            .dispatch_team(
+                &roster,
+                TeamDispatchRequest {
+                    team: roster.name.clone(),
+                    prompt: "find me signals".into(),
+                    parallelism: None,
+                    model: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.team, "research_team");
+        // research_team(3) = 3 researchers + 1 synthesizer + 1 storage = 5.
+        assert_eq!(resp.total_members, 5);
+        assert_eq!(resp.subagent_ids.len(), 5);
+        for sid in &resp.subagent_ids {
+            let _ = gw.coordinator.wait(sid).await;
+        }
+        let arts = gw.artifacts.by_run(&resp.run_id).unwrap();
+        assert!(
+            arts.iter().any(|a| a.kind == ArtifactKind::Plan
+                && a.agent == "team::research_team"),
+            "missing team-level Plan artifact",
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_team_minimal_single_member() {
+        use crate::swarm::team::TeamComposition;
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "ok"}}]
+            })))
+            .mount(&mock)
+            .await;
+        let (_dir, gw) = build_gateway(&mock).await;
+        let roster = TeamComposition::minimal_team();
+        let resp = gw
+            .dispatch_team(
+                &roster,
+                TeamDispatchRequest {
+                    team: roster.name.clone(),
+                    prompt: "ping".into(),
+                    parallelism: None,
+                    model: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.total_members, 1);
+        let _ = gw.coordinator.wait(&resp.subagent_ids[0]).await;
     }
 }

@@ -167,7 +167,21 @@ impl PluginRegistry {
                 );
                 continue;
             }
-            let (manifest, warnings) = Manifest::load(&manifest_path)?;
+            // Graceful degrade (v0.2 A.1): one malformed plugin.toml used to
+            // kill kernel boot via `?` propagation. Now we warn and skip —
+            // a broken plugin is far better than a dead daemon.
+            let (manifest, warnings) = match Manifest::load(&manifest_path) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    warn!(
+                        plugin_path = %path.display(),
+                        manifest = %manifest_path.display(),
+                        error = %err,
+                        "skipping plugin — manifest failed to parse",
+                    );
+                    continue;
+                }
+            };
 
             // Rule 14/15/16 rely on plugin name uniqueness too — check
             // before we add to the pile.
@@ -381,6 +395,51 @@ tasks = [{{ name = "shared_task", interval = "5m" }}]
         seed(&plugins, "bb", &body("bb"));
         let err = PluginRegistry::load_default(tmp.path()).unwrap_err();
         assert!(matches!(err, RegistryError::DuplicateSanchoTask { .. }));
+    }
+
+    /// v0.2 A.1 regression guard: a single malformed `plugin.toml` must NOT
+    /// prevent the rest of the registry from loading. Before this fix,
+    /// `Manifest::load(...)?` short-circuited `load_from` and one broken
+    /// plugin killed kernel boot for every subsystem (SANCHO, MCP gateway,
+    /// infect renderer). Now we warn and skip.
+    #[test]
+    fn malformed_plugin_is_skipped_not_fatal() {
+        let tmp = TempDir::new().unwrap();
+        let plugins = tmp.path().join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+
+        // Good plugin.
+        seed(&plugins, "alpha", &skill("alpha", "1.0.0", &[]));
+
+        // Three flavors of malformed neighbours:
+        //   - outright TOML syntax error
+        //   - parses as TOML but manifest schema rejects it
+        //   - empty file
+        seed(&plugins, "broken-syntax", "[plugin\nname = oops\n");
+        seed(
+            &plugins,
+            "broken-schema",
+            "[plugin]\nname = \"broken-schema\"\nversion = \"1.0.0\"\n# no kind/source\n",
+        );
+        seed(&plugins, "broken-empty", "");
+
+        // And one more healthy plugin AFTER the broken ones in read order to
+        // prove we don't just stop at the first fault.
+        seed(&plugins, "zeta", &skill("zeta", "1.0.0", &[]));
+
+        let reg = PluginRegistry::load_default(tmp.path())
+            .expect("kernel boot must not fail on malformed manifests");
+        let names: BTreeSet<&str> = reg
+            .plugins()
+            .iter()
+            .map(|p| p.manifest.plugin.name.as_str())
+            .collect();
+        assert!(names.contains("alpha"), "alpha missing: {names:?}");
+        assert!(names.contains("zeta"), "zeta missing: {names:?}");
+        assert!(!names.contains("broken-syntax"));
+        assert!(!names.contains("broken-schema"));
+        assert!(!names.contains("broken-empty"));
+        assert_eq!(reg.len(), 2, "only the healthy pair should load");
     }
 
     /// Walk the repo-shipped `plugins-core/` tree and assert every
