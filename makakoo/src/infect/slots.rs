@@ -69,8 +69,8 @@ impl CliSlot {
     }
 }
 
-/// Canonical 7-slot list. Verified against
-/// `core/orchestration/infect_global.py::SLOTS` 2026-04-14.
+/// Canonical 8-slot list (v0.2 B.1: pi added 2026-04-21). Verified against
+/// `plugins-core/lib-harvey-core/src/core/orchestration/infect_global.py::SLOTS`.
 pub const SLOTS: &[CliSlot] = &[
     CliSlot {
         name: "claude",
@@ -107,6 +107,15 @@ pub const SLOTS: &[CliSlot] = &[
         rel_path: ".qwen/QWEN.md",
         format: SlotFormat::Markdown,
     },
+    // pi (badlogic/pi-mono) — 8th host, added in v0.2 Phase B.1.
+    // Bootstrap lives at `.pi/AGENTS.md`, memory is symlinked to the
+    // shared auto-memory dir alongside every other slot via
+    // `infect::memory::sync_slot_memory_symlink`.
+    CliSlot {
+        name: "pi",
+        rel_path: ".pi/AGENTS.md",
+        format: SlotFormat::Markdown,
+    },
 ];
 
 #[cfg(test)]
@@ -114,13 +123,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seven_slots_match_python() {
-        assert_eq!(SLOTS.len(), 7);
+    fn eight_slots_match_python() {
+        assert_eq!(SLOTS.len(), 8);
         let names: Vec<&str> = SLOTS.iter().map(|s| s.name).collect();
         assert_eq!(
             names,
-            vec!["claude", "gemini", "codex", "opencode", "vibe", "cursor", "qwen"]
+            vec![
+                "claude", "gemini", "codex", "opencode", "vibe", "cursor",
+                "qwen", "pi"
+            ]
         );
+    }
+
+    #[test]
+    fn pi_slot_targets_agents_md() {
+        let pi = SLOTS
+            .iter()
+            .find(|s| s.name == "pi")
+            .expect("pi slot must exist in the 8-slot list");
+        assert_eq!(pi.rel_path, ".pi/AGENTS.md");
+        assert!(matches!(pi.format, SlotFormat::Markdown));
     }
 
     #[test]

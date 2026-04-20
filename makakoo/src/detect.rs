@@ -443,14 +443,14 @@ mod tests {
     }
 
     #[test]
-    fn probe_covers_all_seven_slots() {
+    fn probe_covers_all_eight_slots() {
         let tmp = TempDir::new().unwrap();
         let all = detect_all(tmp.path());
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 8);
         let names: Vec<&str> = all.iter().map(|h| h.name).collect();
         assert_eq!(
             names,
-            vec!["claude", "gemini", "codex", "opencode", "vibe", "cursor", "qwen"]
+            vec!["claude", "gemini", "codex", "opencode", "vibe", "cursor", "qwen", "pi"]
         );
     }
 }

@@ -667,13 +667,13 @@ mod tests {
     const TEST_BODY: &str = "# Makakoo OS — Global Bootstrap\n\nYou are Harvey.\n";
 
     #[tokio::test]
-    async fn run_with_fake_home_installs_all_seven() {
+    async fn run_with_fake_home_installs_all_eight() {
         let tmp = TempDir::new().unwrap();
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, false)
             .await
             .unwrap();
-        assert_eq!(report.results.len(), 7);
-        assert_eq!(report.installed_count(), 7);
+        assert_eq!(report.results.len(), 8);
+        assert_eq!(report.installed_count(), 8);
         assert_eq!(report.error_count(), 0);
         // Verify each slot exists on disk.
         for slot in SLOTS {
@@ -688,7 +688,7 @@ mod tests {
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, true)
             .await
             .unwrap();
-        assert_eq!(report.results.len(), 7);
+        assert_eq!(report.results.len(), 8);
         for r in &report.results {
             assert!(matches!(r.status, SlotStatus::DryRun));
             assert!(!r.path.exists());
@@ -704,7 +704,7 @@ mod tests {
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, false)
             .await
             .unwrap();
-        assert_eq!(report.unchanged_count(), 7);
+        assert_eq!(report.unchanged_count(), 8);
         assert_eq!(report.installed_count(), 0);
     }
 
@@ -723,9 +723,9 @@ mod tests {
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, false)
             .await
             .unwrap();
-        // Claude got updated, the other 6 got installed.
+        // Claude got updated, the other 7 got installed.
         assert_eq!(report.updated_count(), 1);
-        assert_eq!(report.installed_count(), 6);
+        assert_eq!(report.installed_count(), 7);
 
         let content = std::fs::read_to_string(&claude_path).unwrap();
         assert!(content.contains("# My own notes"));
@@ -736,10 +736,10 @@ mod tests {
     }
 
     #[test]
-    fn planned_paths_lists_seven_absolute() {
+    fn planned_paths_lists_eight_absolute() {
         let tmp = TempDir::new().unwrap();
         let planned = planned_paths(tmp.path());
-        assert_eq!(planned.len(), 7);
+        assert_eq!(planned.len(), 8);
         for (_, p) in &planned {
             assert!(p.starts_with(tmp.path()));
         }
