@@ -14,6 +14,7 @@ use std::path::PathBuf;
 ///
 /// Precedence: `$MAKAKOO_HOME` → `$HARVEY_HOME` (legacy alias) →
 /// OS-native default per D10 in the architecture spec.
+#[allow(clippy::needless_return)]
 pub fn makakoo_home() -> PathBuf {
     if let Ok(p) = std::env::var("MAKAKOO_HOME") {
         if !p.is_empty() {
