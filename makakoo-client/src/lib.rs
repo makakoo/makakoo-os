@@ -12,15 +12,32 @@
 //! existing Brain + LLM subsystems. This crate's API surface is
 //! append-only: older plugins keep compiling as new methods arrive.
 
+//! ## Platform support
+//!
+//! v0.1 ships a real Unix domain socket client. On non-Unix targets
+//! (Windows, Redox) the crate compiles — every import beyond stdlib
+//! is `#[cfg(unix)]` — but every entrypoint returns
+//! `ClientError::Unsupported` at runtime. Windows named-pipe support
+//! lands alongside the kernel's Windows named-pipe path in a later
+//! phase; the kernel side already has `#[cfg(windows)]` support in
+//! `makakoo-core::capability::socket`, so the client lag is the
+//! remaining piece.
+
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(unix)]
 use base64::engine::general_purpose::STANDARD as BASE64;
+#[cfg(unix)]
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(unix)]
 use tokio::sync::Mutex;
 
 #[derive(Debug, Error)]
@@ -54,6 +71,8 @@ pub enum ClientError {
     Disconnected,
     #[error("server returned neither result nor error")]
     BadResponse,
+    #[error("capability client not supported on this platform (Windows named-pipe support lands post-v0.1)")]
+    Unsupported,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +108,7 @@ struct ResponseError {
 /// A connected client handle. Every RPC serializes through an internal
 /// lock so concurrent calls from the same `Client` don't interleave
 /// writes on the socket.
+#[cfg(unix)]
 pub struct Client {
     socket: PathBuf,
     stream: Mutex<Connection>,
@@ -96,11 +116,37 @@ pub struct Client {
     correlation_id: Option<String>,
 }
 
+/// Non-Unix stub. `connect`/`connect_from_env` return
+/// `ClientError::Unsupported`; every other method is absent so the
+/// compile-error clearly points at the platform gap rather than
+/// silently succeeding.
+#[cfg(not(unix))]
+pub struct Client {
+    _path: PathBuf,
+}
+
+#[cfg(not(unix))]
+impl Client {
+    pub async fn connect(_path: impl AsRef<Path>) -> Result<Self, ClientError> {
+        Err(ClientError::Unsupported)
+    }
+
+    pub async fn connect_from_env() -> Result<Self, ClientError> {
+        Err(ClientError::Unsupported)
+    }
+
+    pub fn socket(&self) -> &Path {
+        &self._path
+    }
+}
+
+#[cfg(unix)]
 struct Connection {
     reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     writer: tokio::net::unix::OwnedWriteHalf,
 }
 
+#[cfg(unix)]
 impl Client {
     /// Connect to the socket at `path`.
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self, ClientError> {
