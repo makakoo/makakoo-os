@@ -594,6 +594,70 @@ pub fn planned_paths(home: &Path) -> Vec<(&'static str, PathBuf)> {
         .collect()
 }
 
+/// Uninfect global CLI slots — strip the bootstrap block from every
+/// slot (or the `target` subset). Mirrors `infect --global`, inverts
+/// the write. Returns the exit code the top-level CLI should propagate
+/// (`0` on clean, `1` on any slot error).
+pub async fn uninfect_global(target: Vec<String>, dry_run: bool) -> Result<i32> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?;
+    uninfect_global_with_home(&home, target, dry_run).await
+}
+
+/// Core of `uninfect_global` — takes `home` so tests can point at a
+/// tempdir. Returns the exit code and writes a human-readable summary
+/// to stdout.
+pub async fn uninfect_global_with_home(
+    home: &Path,
+    target: Vec<String>,
+    dry_run: bool,
+) -> Result<i32> {
+    let filter: Option<&[String]> = if target.is_empty() {
+        None
+    } else {
+        Some(target.as_slice())
+    };
+
+    let mut results: Vec<SlotWriteResult> = Vec::new();
+    for slot in SLOTS.iter() {
+        if let Some(t) = filter {
+            if !t.iter().any(|name| name == slot.name) {
+                continue;
+            }
+        }
+        let result = writer::remove_bootstrap_from_slot(slot, home, dry_run);
+        results.push(result);
+    }
+
+    // Pretty summary — mirrors InfectReport::human_summary shape.
+    println!(
+        "makakoo uninfect ({} slots{})",
+        results.len(),
+        if dry_run { ", dry-run" } else { "" },
+    );
+    let mut errors = 0usize;
+    for r in &results {
+        let tag = match &r.status {
+            SlotStatus::Updated => "removed",
+            SlotStatus::Unchanged => "not-infected",
+            SlotStatus::DryRun => "would-remove",
+            SlotStatus::Error(_) => "error",
+            SlotStatus::Installed => "installed", // unreachable on uninfect path
+        };
+        println!(
+            "  {:<12} {:<14} {}",
+            r.slot_name,
+            tag,
+            r.path.display()
+        );
+        if let SlotStatus::Error(e) = &r.status {
+            println!("    ! {e}");
+            errors += 1;
+        }
+    }
+
+    Ok(if errors > 0 { 1 } else { 0 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

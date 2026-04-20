@@ -103,6 +103,9 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         cmd @ Commands::Install { .. } => install::dispatch(ctx, cmd).await,
         Commands::Migrate { dry_run } => migrate::run(ctx, dry_run).await,
         Commands::Completion { shell } => dispatch_completion(shell),
+        Commands::Uninfect { target, dry_run } => {
+            crate::infect::uninfect_global(target, dry_run).await
+        }
     }
 }
 

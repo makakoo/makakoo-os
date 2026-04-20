@@ -212,6 +212,24 @@ pub enum Commands {
         ignore_derivatives: bool,
     },
 
+    /// Uninfect CLI global slots — strip the Makakoo bootstrap block
+    /// from every detected AI CLI host's global instructions file.
+    ///
+    /// Symmetric inverse of `makakoo infect --global`. Removes the
+    /// marker-delimited block, deletes the instructions file if it
+    /// would be left empty (infect created it → uninfect removes it),
+    /// preserves any prose the user wrote around the block.
+    Uninfect {
+        /// Restrict to a comma-separated subset of targets
+        /// (claude,gemini,codex,opencode,vibe,qwen,cursor).
+        #[arg(long, value_delimiter = ',')]
+        target: Vec<String>,
+
+        /// Preview what would be removed without touching any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Manage secrets in the OS keyring.
     Secret {
         #[command(subcommand)]

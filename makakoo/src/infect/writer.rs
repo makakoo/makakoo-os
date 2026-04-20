@@ -108,6 +108,35 @@ fn find_prior_version(text: &str) -> Option<String> {
         .map(|g| g.as_str().to_string())
 }
 
+/// Remove the markdown bootstrap block from `text`. Returns
+/// (new_text, removed). `removed` is true iff a block was found and
+/// stripped. Idempotent — running this against text that has already
+/// been uninfected is a no-op.
+pub fn remove_markdown_block(text: &str) -> (String, bool) {
+    let re = block_regex();
+    if let Some(m) = re.find(text) {
+        let before = &text[..m.start()];
+        let after = &text[m.end()..];
+        let mut out = String::with_capacity(before.len() + after.len());
+        out.push_str(before);
+        // Trim duplicate trailing newlines we may have left behind —
+        // the block captures its own surrounding blank lines, so the
+        // seam usually stitches cleanly, but users' prior content may
+        // already end with one newline that we want to keep.
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        if !after.is_empty() && after.starts_with('\n') && out.ends_with('\n') {
+            out.push_str(&after[1..]);
+        } else {
+            out.push_str(after);
+        }
+        (out, true)
+    } else {
+        (text.to_string(), false)
+    }
+}
+
 /// Upsert the markdown bootstrap block into `text`. Returns
 /// (new_text, status, prior_version_if_any).
 ///
@@ -159,6 +188,201 @@ pub fn write_bootstrap_to_slot(
     match slot.format {
         SlotFormat::Markdown => write_markdown(slot, &path, bootstrap_body, dry_run),
         SlotFormat::OpencodeJson => write_opencode(slot, &path, bootstrap_body, dry_run),
+    }
+}
+
+/// Remove the bootstrap block from a single slot. Mirrors
+/// [`write_bootstrap_to_slot`] — markdown slots strip the block, the
+/// opencode JSON slot removes the tagged instructions entry. Returns
+/// a result with:
+/// - `SlotStatus::Updated` when a block was present and removed,
+/// - `SlotStatus::Unchanged` when no block was found (nothing to do),
+/// - `SlotStatus::DryRun` when `dry_run=true` and a removal would occur,
+/// - `SlotStatus::Error(..)` on IO / parse failures.
+pub fn remove_bootstrap_from_slot(
+    slot: &CliSlot,
+    home: &Path,
+    dry_run: bool,
+) -> SlotWriteResult {
+    let path = slot.absolute(home);
+    match slot.format {
+        SlotFormat::Markdown => remove_markdown(slot, &path, dry_run),
+        SlotFormat::OpencodeJson => remove_opencode(slot, &path, dry_run),
+    }
+}
+
+fn remove_markdown(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResult {
+    if !path.exists() {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    }
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("read {}: {e}", path.display())),
+                prior_version: None,
+            }
+        }
+    };
+    let prior_version = find_prior_version(&existing);
+    let (new_text, removed) = remove_markdown_block(&existing);
+    if !removed {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    }
+    if dry_run {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::DryRun,
+            prior_version,
+        };
+    }
+    // If nothing is left, delete the file outright — infect created it,
+    // uninfect removes it. If the user had their own prose, keep it.
+    let trimmed = new_text.trim();
+    let result: anyhow::Result<()> = if trimmed.is_empty() {
+        std::fs::remove_file(path).map_err(anyhow::Error::from)
+    } else {
+        atomic_write(path, &new_text)
+    };
+    match result {
+        Ok(()) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Updated,
+            prior_version,
+        },
+        Err(e) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Error(e.to_string()),
+            prior_version,
+        },
+    }
+}
+
+fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResult {
+    if !path.exists() {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    }
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("read {}: {e}", path.display())),
+                prior_version: None,
+            }
+        }
+    };
+    let mut data: Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("invalid opencode JSON: {e}")),
+                prior_version: None,
+            }
+        }
+    };
+    let Some(obj) = data.as_object_mut() else {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    };
+    let Some(instructions) = obj.get_mut("instructions") else {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    };
+    let Some(arr) = instructions.as_array_mut() else {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    };
+    // Locate + capture the prior version before removing.
+    let prior_idx = arr.iter().position(|v| {
+        v.as_str()
+            .map(|s| s.get(..40).unwrap_or(s).contains(JSON_TAG_FINGERPRINT))
+            .unwrap_or(false)
+    });
+    let Some(idx) = prior_idx else {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    };
+    let prior_version =
+        opencode_entry_version(arr[idx].as_str().unwrap_or_default());
+    arr.remove(idx);
+    // Drop the instructions array entirely if we emptied it — keeps
+    // the user's config file tidy instead of leaving an empty array.
+    if arr.is_empty() {
+        obj.remove("instructions");
+    }
+
+    if dry_run {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::DryRun,
+            prior_version,
+        };
+    }
+    let serialized = match serde_json::to_string_pretty(&data) {
+        Ok(s) => s + "\n",
+        Err(e) => {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("serialize opencode JSON: {e}")),
+                prior_version,
+            }
+        }
+    };
+    match atomic_write(path, &serialized) {
+        Ok(()) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Updated,
+            prior_version,
+        },
+        Err(e) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Error(e.to_string()),
+            prior_version,
+        },
     }
 }
 
@@ -500,5 +724,118 @@ mod tests {
         let p = expand_tilde("~/foo/bar").unwrap();
         assert!(p.starts_with(dirs::home_dir().unwrap()));
         assert!(p.ends_with("foo/bar"));
+    }
+
+    #[test]
+    fn remove_markdown_block_strips_the_block() {
+        let block = render_markdown_block(BODY);
+        let existing = format!("user prose above\n\n{}\n\nuser prose below\n", block);
+        let (out, removed) = remove_markdown_block(&existing);
+        assert!(removed);
+        assert!(!out.contains("harvey:infect-global"));
+        assert!(out.contains("user prose above"));
+        assert!(out.contains("user prose below"));
+    }
+
+    #[test]
+    fn remove_markdown_block_idempotent_when_absent() {
+        let existing = "just user prose, no block\n";
+        let (out, removed) = remove_markdown_block(existing);
+        assert!(!removed);
+        assert_eq!(out, existing);
+    }
+
+    #[test]
+    fn remove_bootstrap_from_slot_deletes_file_when_only_block_was_present() {
+        let tmp = TempDir::new().unwrap();
+        let slot = CliSlot {
+            name: "test",
+            rel_path: ".test/NOTES.md",
+            format: SlotFormat::Markdown,
+        };
+        // First infect (normal path), then uninfect.
+        write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        let path = slot.absolute(tmp.path());
+        assert!(path.exists(), "infect should have created the slot");
+
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Updated);
+        assert!(!path.exists(), "infect-only slot should be removed after uninfect");
+    }
+
+    #[test]
+    fn remove_bootstrap_from_slot_preserves_user_prose() {
+        let tmp = TempDir::new().unwrap();
+        let slot = CliSlot {
+            name: "test",
+            rel_path: ".test/MIXED.md",
+            format: SlotFormat::Markdown,
+        };
+        let path = slot.absolute(tmp.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Seed file with user prose, then infect on top of it, then uninfect.
+        std::fs::write(&path, "my private project notes\n").unwrap();
+        write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        let mid = std::fs::read_to_string(&path).unwrap();
+        assert!(mid.contains("my private project notes"));
+        assert!(mid.contains("harvey:infect-global"));
+
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Updated);
+        assert!(path.exists(), "file with user prose must survive uninfect");
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("my private project notes"));
+        assert!(!after.contains("harvey:infect-global"));
+    }
+
+    #[test]
+    fn remove_bootstrap_from_slot_dry_run_is_noop() {
+        let tmp = TempDir::new().unwrap();
+        let slot = CliSlot {
+            name: "test",
+            rel_path: ".test/DRY.md",
+            format: SlotFormat::Markdown,
+        };
+        write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        let path = slot.absolute(tmp.path());
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), true);
+        assert_eq!(result.status, SlotStatus::DryRun);
+        // File untouched.
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn remove_bootstrap_from_slot_unchanged_when_not_infected() {
+        let tmp = TempDir::new().unwrap();
+        let slot = CliSlot {
+            name: "test",
+            rel_path: ".test/ABSENT.md",
+            format: SlotFormat::Markdown,
+        };
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Unchanged);
+    }
+
+    #[test]
+    fn remove_bootstrap_from_opencode_slot_drops_tagged_entry() {
+        let tmp = TempDir::new().unwrap();
+        let slot = CliSlot {
+            name: "opencode",
+            rel_path: ".test/opencode.json",
+            format: SlotFormat::OpencodeJson,
+        };
+        // Infect the opencode slot, confirm the entry landed.
+        write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        let path = slot.absolute(tmp.path());
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(JSON_TAG_FINGERPRINT));
+
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Updated);
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(!after.contains(JSON_TAG_FINGERPRINT));
     }
 }
