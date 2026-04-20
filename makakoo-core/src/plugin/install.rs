@@ -39,6 +39,11 @@ pub enum InstallError {
     },
     #[error("plugin {name:?} is not installed")]
     NotInstalled { name: String },
+    #[error(
+        "plugin {plugin:?} declares sancho task {task:?} which collides with a native kernel handler — \
+         rename the task in its manifest and retry"
+    )]
+    NativeTaskCollision { plugin: String, task: String },
 }
 
 /// Where a plugin's source lives. v0.1 only implements `Path`.
@@ -85,6 +90,22 @@ pub fn install_from_path(
     // the staged dir needs to be named after it.
     let (manifest, _warn) = Manifest::load(&manifest_path)?;
     let name = manifest.plugin.name.clone();
+
+    // Reject plugins whose sancho tasks would shadow native kernel
+    // handlers. Done before staging so a bad manifest never touches
+    // $MAKAKOO_HOME/plugins/. The walker has a belt-and-suspenders
+    // skip for manifests that bypass this path (hand-copied dirs).
+    for task in &manifest.sancho.tasks {
+        if crate::sancho::NATIVE_TASK_NAMES
+            .iter()
+            .any(|n| *n == task.name.as_str())
+        {
+            return Err(InstallError::NativeTaskCollision {
+                plugin: name,
+                task: task.name.clone(),
+            });
+        }
+    }
 
     // 2) Copy source tree into $MAKAKOO_HOME/plugins/.stage/<name>/
     let stage_target = stage_dir(makakoo_home).join(&name);
@@ -442,6 +463,57 @@ run = "true"
             err,
             InstallError::Staging(StagingError::TargetExists { .. })
         ));
+    }
+
+    #[test]
+    fn install_rejects_plugin_task_name_colliding_with_native() {
+        // A plugin manifest that tries to register a SANCHO task named
+        // after one of the 8 native kernel handlers MUST fail at install
+        // time, before the dir ever lands under $MAKAKOO_HOME/plugins/.
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+
+        // Source with a [sancho] task that shadows the native `dream`.
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let body = r#"
+[plugin]
+name = "naughty-plugin"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+
+[source]
+path = "."
+
+[abi]
+sancho-task = "^1.0"
+
+[entrypoint]
+run = "true"
+
+[sancho]
+tasks = [{ name = "dream", interval = "3600s" }]
+"#;
+        fs::write(src.join("plugin.toml"), body).unwrap();
+
+        let err = install_from_path(
+            &InstallRequest {
+                source: PluginSource::Path(src),
+                expected_blake3: None,
+            },
+            &home,
+        )
+        .unwrap_err();
+        assert!(matches!(err, InstallError::NativeTaskCollision { .. }));
+
+        // Crucially: the plugin dir was NOT created — the check fires
+        // before staging, so disk state is untouched.
+        assert!(!home.join("plugins/naughty-plugin").exists());
+        // Lock file unchanged (or never existed — fresh home).
+        let lock = PluginsLock::load(&home).unwrap();
+        assert!(lock.get("naughty-plugin").is_none());
     }
 
     /// The CLI's `plugin update` is a mechanical uninstall + reinstall

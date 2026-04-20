@@ -69,6 +69,30 @@ pub fn parse_interval(spec: &str, default: Duration) -> Duration {
 /// breakdown without rebuilding the native registry twice.
 pub const NATIVE_TASK_COUNT: usize = 8;
 
+/// The eight native SANCHO task names the kernel owns. A plugin whose
+/// manifest declares `[[sancho.tasks]].name` matching any of these
+/// shadows the kernel handler, which would either double-register (two
+/// handlers firing for the same name) or silently replace the native
+/// implementation with a subprocess.
+///
+/// Both paths are bugs. `install_from_path` rejects plugins that would
+/// collide before they ever land on disk; `register_plugin_sancho_tasks`
+/// skips them defensively if a manifest somehow arrives by bypassing
+/// `plugin install` (e.g. hand-copied into `$MAKAKOO_HOME/plugins/`).
+///
+/// Locked by `native_task_names_match_registry` test — adding a 9th
+/// native handler without updating this list fails the build.
+pub const NATIVE_TASK_NAMES: &[&str] = &[
+    "dream",
+    "wiki_lint",
+    "index_rebuild",
+    "daily_briefing",
+    "memory_consolidation",
+    "memory_promotion",
+    "superbrain_sync_embed",
+    "dynamic_checklist",
+];
+
 /// Build the kernel's native SANCHO registry — 8 pure-Rust handlers that
 /// ship with the kernel and never come from a plugin.
 pub fn native_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
@@ -146,6 +170,23 @@ pub fn register_plugin_sancho_tasks(reg: &mut SanchoRegistry, plugins: &PluginRe
             continue;
         };
         for task in &plugin.manifest.sancho.tasks {
+            // Defensive collision check — `install_from_path` already
+            // rejects plugins whose task names shadow native handlers.
+            // This branch only fires if a manifest arrived by bypassing
+            // the installer (hand-copied into $MAKAKOO_HOME/plugins/).
+            // Skipping preserves the native handler; the warning makes
+            // the situation visible in logs without crashing the boot.
+            if NATIVE_TASK_NAMES.iter().any(|n| *n == task.name.as_str()) {
+                tracing::warn!(
+                    plugin = %plugin.manifest.plugin.name,
+                    task = %task.name,
+                    "skipping plugin task that collides with native SANCHO handler — \
+                     native implementation wins. Rename the plugin task or run \
+                     `makakoo plugin uninstall {}` to clear the conflict.",
+                    plugin.manifest.plugin.name,
+                );
+                continue;
+            }
             let handler = build_subprocess_handler(&plugin.root, &run_cmd, &task.name);
             let mut gates: Vec<Arc<dyn Gate>> = Vec::new();
             gates.push(Arc::new(TimeGate::new(parse_interval(
@@ -381,18 +422,16 @@ tasks = [{ name = "watchdog_infect", interval = "21600s" }]
     }
 
     #[test]
-    fn no_task_name_collision_between_native_and_plugin() {
-        // A plugin manifest that declares the same task name as a native
-        // kernel handler is a silent double-registration bug. The registry
-        // doesn't currently dedup, so the plugin-derived subprocess would
-        // run in parallel with the native Rust implementation. This test
-        // locks the invariant that plugin task names MUST be disjoint
-        // from native names. If a future native handler shadows a plugin
-        // task (or vice versa), the test fails and forces a rename.
+    fn walker_skips_plugin_task_that_shadows_native_handler() {
+        // Belt-and-suspenders defense: `install_from_path` rejects
+        // collision-bearing plugins before they land on disk, but if
+        // a manifest arrives by hand-copy into $MAKAKOO_HOME/plugins/,
+        // the walker still refuses to register the shadowing task and
+        // logs a warning. The native handler keeps running; the plugin
+        // just loses its shadowed entry.
         let dir = TempDir::new().unwrap();
         let home = dir.path();
 
-        // Seed a plugin that tries to shadow the native `dream` handler.
         seed_plugin(
             home,
             "naughty-plugin",
@@ -421,11 +460,31 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let names: Vec<&str> = reg.tasks().iter().map(|t| t.handler.name()).collect();
         let dream_count = names.iter().filter(|n| **n == "dream").count();
         assert_eq!(
-            dream_count, 2,
-            "current behaviour: shadow plugin registers alongside native; dedup is Phase D work"
+            dream_count, 1,
+            "walker must skip plugin tasks that shadow native handler names"
         );
-        // When dedup lands in Phase D (`makakoo plugin install` should reject
-        // name collisions), flip this assertion to `assert_eq!(dream_count, 1)`.
+        // Registry total: 8 native + 0 plugin-derived (shadowed task dropped).
+        assert_eq!(
+            reg.len(),
+            8,
+            "naughty plugin's single task is shadowed, so no plugin tasks register"
+        );
+    }
+
+    #[test]
+    fn native_task_names_match_registry() {
+        // The NATIVE_TASK_NAMES constant and the actual native_registry()
+        // drift silently if a new handler ships without touching the list.
+        // This test reads every handler's reported name and compares it
+        // element-wise to the constant. Ordering matters — bump the const
+        // in the same order when adding a handler.
+        let dir = TempDir::new().unwrap();
+        let reg = native_registry(make_ctx(dir.path()));
+        let actual: Vec<&str> = reg.tasks().iter().map(|t| t.handler.name()).collect();
+        assert_eq!(actual.len(), NATIVE_TASK_NAMES.len());
+        for (got, expected) in actual.iter().zip(NATIVE_TASK_NAMES.iter()) {
+            assert_eq!(got, expected);
+        }
     }
 
     #[test]
