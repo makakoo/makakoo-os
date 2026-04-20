@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-dev-ship"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "|"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-dev-ship"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m harvey_os.skills.dev.ship"
+
+[capabilities]
+# Capability grants default empty — conservative for Phase H.4 batch.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-dev-ship"
+retention = "keep"

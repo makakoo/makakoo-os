@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-blockchain-solana"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Query Solana blockchain data with USD pricing — wallet balances, token portfolios with values, transaction details, NFTs, whale detection, and live network stats. Uses Solana RPC + CoinGecko. No API key required."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-blockchain-solana"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m harvey_os.skills.blockchain.solana"
+
+[capabilities]
+# Capability grants default empty — conservative for Phase H.4 batch.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-blockchain-solana"
+retention = "keep"

@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-infrastructure-github-auth"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Set up GitHub authentication for the agent using git (universally available) or the gh CLI. Covers HTTPS tokens, SSH keys, credential helpers, and gh auth — with a detection flow to pick the right method automatically."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-infrastructure-github-auth"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m harvey_os.skills.infrastructure.github-auth"
+
+[capabilities]
+# Capability grants default empty — conservative for Phase H.4 batch.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-infrastructure-github-auth"
+retention = "keep"
