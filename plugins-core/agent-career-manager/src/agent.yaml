@@ -1,0 +1,30 @@
+name: career-manager
+version: "1.0"
+description: Automates job search, active outreach, and career operations
+type: cron
+status: active
+schedule: "0 9 * * 1-5"
+
+runtime:
+  command: python3
+  entrypoint: active_search.py
+  workdir: agents/career-manager
+  args: []
+
+tools:
+  - name: advise
+    description: Return the career advisor's latest recommendation
+  - name: active_search_digest
+    description: Return the latest active-search digest
+
+comm:
+  type: mailbox
+  channel: agents.career
+
+state:
+  dir: data/career-manager
+  schema: files
+
+requires:
+  - gws-cli
+  - switchAILocal

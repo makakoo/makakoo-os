@@ -1,0 +1,51 @@
+name: marketing-blog
+version: "1.0"
+description: Jekyll blog post generator for jevvellabsblog — structured launch posts for products, features, sprints
+type: on-demand
+status: active
+
+runtime:
+  command: bash
+  entrypoint: run.sh
+  workdir: agents/marketing-blog
+  args: []
+
+tools:
+  - name: generate_post
+    description: Generate a single Jekyll blog post from a brief + angle
+  - name: generate_campaign
+    description: Generate N posts for N audiences from one campaign brief
+
+comm:
+  type: cli
+  channel: agents.marketing-blog
+
+state:
+  dir: data/marketing-blog
+  schema: files
+
+requires:
+  - switchAILocal
+  - jevvellabsblog git repo (for publishing)
+
+inputs:
+  brief_path:
+    type: path
+    description: Path to campaign brief markdown
+    required: true
+  audience:
+    type: string
+    description: Target audience (dev, marketing-ops, finance, consulting, legal, research, general)
+    default: dev
+  angle:
+    type: string
+    description: Specific angle/hook for this post (launch | deep-dive | origin | feature-spotlight | use-case)
+    default: launch
+  product:
+    type: string
+    description: Product name (e.g., lope, harvey, tytus)
+    required: true
+  word_count:
+    type: integer
+    description: Target word count
+    default: 1200

@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-meta-harness-agent"
+version = "0.1.0"
+kind = "agent"
+language = "python"
+summary = "Experimental meta-agent — spawns and supervises ad-hoc task agents"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-meta-harness-agent"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "python3 -u src/agent.py"
+stop = "pkill -f agent.py"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-meta-harness-agent"
+retention = "keep"

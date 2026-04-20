@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-pg-watchdog"
+version = "1.0.0"
+kind = "agent"
+language = "python"
+summary = "Periodic PostgreSQL health checks and schema drift detection"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-pg-watchdog"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "python3 -u src/pg_watchdog.py"
+stop = "pkill -f pg_watchdog.py"
+health = "true"
+
+[capabilities]
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-pg-watchdog"
+retention = "keep"

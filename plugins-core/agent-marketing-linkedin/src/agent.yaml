@@ -1,0 +1,42 @@
+name: marketing-linkedin
+version: "1.0"
+description: LinkedIn post generator — 10-post wheel covering launch, insight, feature, personality, use-case, lore, origin, proof, CTA, community
+type: on-demand
+status: active
+
+runtime:
+  command: bash
+  entrypoint: run.sh
+  workdir: agents/marketing-linkedin
+  args: []
+
+tools:
+  - name: generate_post
+    description: Generate a single LinkedIn post from a brief + theme
+  - name: generate_wheel
+    description: Generate the full 10-post wheel from one brief
+
+comm:
+  type: cli
+  channel: agents.marketing-linkedin
+
+state:
+  dir: data/marketing-linkedin
+  schema: files
+
+requires:
+  - switchAILocal
+
+inputs:
+  brief_path:
+    type: path
+    description: Path to campaign brief markdown
+    required: true
+  product:
+    type: string
+    description: Product name
+    required: true
+  theme:
+    type: string
+    description: One of the 10 canonical themes (see themes.md)
+    default: launch-day

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  HarveyChat LaunchAgent — Telegram gateway, auto-starts on login.
+
+  Install:
+    cp agents/harveychat/com.harvey.harveychat.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.harvey.harveychat.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.harvey.harveychat.plist
+    rm ~/Library/LaunchAgents/com.harvey.harveychat.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.harvey.harveychat</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3.11</string>
+        <string>/Users/sebastian/HARVEY/agents/harveychat/agent.py</string>
+        <string>start</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/sebastian/HARVEY/harvey-os</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HARVEY_HOME</key>
+        <string>/Users/sebastian/HARVEY</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/sebastian/HARVEY/data/chat/harveychat.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/sebastian/HARVEY/data/chat/harveychat.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

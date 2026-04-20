@@ -1,0 +1,29 @@
+name: multimodal-knowledge
+version: "1.0"
+description: Multimodal RAG — Gemini Embedding 2 for images, video, audio, PDFs → Qdrant
+type: cli
+status: active
+
+runtime:
+  command: python3
+  entrypoint: query.py
+  workdir: agents/multimodal-knowledge
+  args: []
+
+tools:
+  - name: multimodal_search
+    description: Semantic search across images, video, audio, and PDFs
+  - name: multimodal_ingest
+    description: Ingest a new multimodal asset into the Qdrant collection
+
+comm:
+  type: in-process
+  channel: agents.multimodal
+
+state:
+  dir: data/multimodal-knowledge
+  schema: files
+
+requires:
+  - GEMINI_API_KEY
+  - qdrant

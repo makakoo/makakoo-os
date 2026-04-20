@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-marketing-blog"
+version = "1.0.0"
+kind = "agent"
+language = "shell"
+summary = "Jekyll blog post generator for jevvellabsblog — structured launch posts for products, features, sprints"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-marketing-blog"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "bash src/run.sh"
+stop = "pkill -f run.sh"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-marketing-blog"
+retention = "keep"

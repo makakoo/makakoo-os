@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-marketing-twitter"
+version = "1.0.0"
+kind = "agent"
+language = "shell"
+summary = "Twitter/X launch thread generator — 10-14 tweets under 280 chars each, structured hook → demo → why → features → CTA"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-marketing-twitter"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "bash src/run.sh"
+stop = "pkill -f run.sh"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-marketing-twitter"
+retention = "keep"

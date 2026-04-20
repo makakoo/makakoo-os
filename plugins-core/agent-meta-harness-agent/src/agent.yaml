@@ -1,0 +1,28 @@
+name: meta-harness-agent
+version: "0.1"
+description: Experimental meta-agent — spawns and supervises ad-hoc task agents
+type: cli
+status: experimental
+
+runtime:
+  command: python3
+  entrypoint: agent.py
+  workdir: agents/meta-harness-agent
+  args: []
+
+tools:
+  - name: spawn
+    description: Spawn a child harness agent for a specific task
+  - name: status
+    description: Report current harness agent state
+
+comm:
+  type: in-process
+  channel: agents.meta_harness
+
+state:
+  dir: data/meta-harness-agent
+  schema: files
+
+requires:
+  - switchAILocal

@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-harveychat"
+version = "1.0.0"
+kind = "agent"
+language = "python"
+summary = "Harvey's external messaging gateway — Telegram, (future) WhatsApp, Slack"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-harveychat"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "python3.11 -u src/agent.py start --daemon"
+stop = "pkill -f agent.py"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-harveychat"
+retention = "keep"

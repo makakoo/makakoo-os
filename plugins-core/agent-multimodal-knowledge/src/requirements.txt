@@ -1,0 +1,5 @@
+google-genai
+qdrant-client
+numpy
+requests
+python-dotenv

@@ -1,0 +1,28 @@
+name: knowledge-extractor
+version: "1.0"
+description: Extracts structured knowledge from raw sources (web, papers, transcripts)
+type: cli
+status: active
+
+runtime:
+  command: python3
+  entrypoint: extractor.py
+  workdir: agents/knowledge-extractor
+  args: []
+
+tools:
+  - name: extract
+    description: Extract knowledge from a URL or file path and return structured output
+  - name: mine_recent
+    description: Run the miner over recently-seen sources
+
+comm:
+  type: in-process
+  channel: agents.knowledge_extractor
+
+state:
+  dir: data/knowledge-extractor
+  schema: files
+
+requires:
+  - switchAILocal

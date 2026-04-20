@@ -1,0 +1,43 @@
+name: harveychat
+version: "1.0"
+description: Harvey's external messaging gateway — Telegram, (future) WhatsApp, Slack
+type: body-adapter
+status: active
+
+runtime:
+  command: /usr/local/bin/python3.11
+  entrypoint: agent.py
+  workdir: agents/harveychat
+  args: ["start", "--daemon"]
+
+tools:
+  - name: brain_search
+    description: Search Harvey's Brain via Superbrain
+  - name: brain_write
+    description: Write a line to today's journal
+  - name: get_emails
+    description: Fetch recent Gmail messages
+  - name: get_calendar
+    description: Today's calendar events
+  - name: write_file
+    description: Write text files into the Harvey sandbox
+  - name: markdown_to_pdf
+    description: Convert markdown to PDF via pandoc+pdflatex
+  - name: browse_url
+    description: Fetch and summarize a public URL
+  - name: generate_image
+    description: Generate an image via MiniMax image-01
+  - name: run_command
+    description: Run safe read-only shell commands
+
+comm:
+  type: mailbox
+  channel: agents.harveychat
+
+state:
+  dir: data/chat
+  schema: sqlite
+
+requires:
+  - TELEGRAM_BOT_TOKEN
+  - switchAILocal

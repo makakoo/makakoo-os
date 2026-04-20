@@ -1,0 +1,29 @@
+name: pg-watchdog
+version: "1.0"
+description: Periodic PostgreSQL health checks and schema drift detection
+type: cron
+status: active
+schedule: "*/15 * * * *"
+
+runtime:
+  command: python3
+  entrypoint: pg_watchdog.py
+  workdir: agents/pg-watchdog
+  args: []
+
+tools:
+  - name: pg_health
+    description: Return the latest PostgreSQL health snapshot
+  - name: pg_drift
+    description: Return detected schema drift vs baseline
+
+comm:
+  type: mailbox
+  channel: agents.pg_watchdog
+
+state:
+  dir: data/pg-watchdog
+  schema: files
+
+requires:
+  - postgres

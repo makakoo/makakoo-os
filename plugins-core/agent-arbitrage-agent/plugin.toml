@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-arbitrage-agent"
+version = "1.0.0"
+kind = "agent"
+language = "python"
+summary = "Monitors Polymarket CLOB for negative-risk arbitrage opportunities"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-arbitrage-agent"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "python3 -u src/agent.py"
+stop = "pkill -f agent.py"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-arbitrage-agent"
+retention = "keep"
