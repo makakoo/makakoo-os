@@ -328,6 +328,18 @@ pub enum PluginCmd {
         /// Plugin name.
         name: String,
     },
+
+    /// Re-fetch + reinstall the plugin from its recorded source.
+    ///
+    /// v0.1 only understands `path:` sources (the kind `plugin install`
+    /// + `distro install` write). Git URL + tarball sources land with
+    /// Phase F. Preserves the plugin's enabled / disabled flag across
+    /// the reinstall — if you had disabled it, `update` keeps it disabled.
+    /// State directories are preserved (no `--purge`).
+    Update {
+        /// Plugin name.
+        name: String,
+    },
 }
 
 /// `makakoo distro <subcommand>`.

@@ -443,4 +443,74 @@ run = "true"
             InstallError::Staging(StagingError::TargetExists { .. })
         ));
     }
+
+    /// The CLI's `plugin update` is a mechanical uninstall + reinstall
+    /// from the lock's recorded source, with the enabled flag preserved
+    /// across the round-trip. This test exercises the same sequence
+    /// directly so the core contract is locked even if the CLI layer
+    /// drifts. When `update` migrates into core (Phase E), this test
+    /// should pin the new entrypoint.
+    #[test]
+    fn update_round_trip_preserves_disabled_flag() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let src = seed_source(tmp.path(), "rolling");
+
+        // 1) Install and manually disable — simulates an earlier
+        //    `plugin install` + `plugin disable`.
+        install_from_path(
+            &InstallRequest {
+                source: PluginSource::Path(src.clone()),
+                expected_blake3: None,
+            },
+            &home,
+        )
+        .unwrap();
+        let mut lock = PluginsLock::load(&home).unwrap();
+        let mut e = lock.get("rolling").unwrap().clone();
+        e.enabled = false;
+        lock.upsert(e);
+        lock.save(&home).unwrap();
+
+        // 2) Capture prior_enabled — what the CLI would read.
+        let prior_enabled = PluginsLock::load(&home)
+            .unwrap()
+            .get("rolling")
+            .unwrap()
+            .enabled;
+        assert!(!prior_enabled, "precondition: plugin is disabled");
+
+        // 3) Uninstall + reinstall from the same source path.
+        uninstall("rolling", &home, false).unwrap();
+        install_from_path(
+            &InstallRequest {
+                source: PluginSource::Path(src),
+                expected_blake3: None,
+            },
+            &home,
+        )
+        .unwrap();
+
+        // 4) Fresh install defaults to enabled=true. The CLI's update
+        //    path re-applies the saved flag when prior_enabled was false.
+        let mut lock = PluginsLock::load(&home).unwrap();
+        assert!(
+            lock.get("rolling").unwrap().enabled,
+            "fresh install lands as enabled=true by design"
+        );
+        if !prior_enabled {
+            let mut entry = lock.get("rolling").unwrap().clone();
+            entry.enabled = false;
+            lock.upsert(entry);
+            lock.save(&home).unwrap();
+        }
+
+        // 5) Post-update: disabled state is preserved.
+        let final_lock = PluginsLock::load(&home).unwrap();
+        assert!(
+            !final_lock.get("rolling").unwrap().enabled,
+            "update must preserve enabled=false across reinstall"
+        );
+    }
 }

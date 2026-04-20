@@ -28,6 +28,7 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
         PluginCmd::Uninstall { name, purge } => uninstall(ctx, &name, purge),
         PluginCmd::Enable { name } => set_enabled(ctx, &name, true),
         PluginCmd::Disable { name } => set_enabled(ctx, &name, false),
+        PluginCmd::Update { name } => update(ctx, &name),
     }
 }
 
@@ -231,6 +232,80 @@ fn install(
             Ok(1)
         }
     }
+}
+
+fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
+    // 1) Read the existing lock entry — it carries the recorded source
+    //    path and the current enabled flag. Both must survive the
+    //    reinstall round-trip.
+    let lock = PluginsLock::load(ctx.home())?;
+    let Some(entry) = lock.get(name).cloned() else {
+        output::print_error(format!("plugin not installed: {name}"));
+        return Ok(1);
+    };
+
+    // 2) Only `path:` sources are supported in v0.1. Git URL + tarball
+    //    sources are a Phase F concern — they need a resolver layer the
+    //    kernel doesn't ship yet.
+    let Some(source_path) = entry.source.strip_prefix("path:") else {
+        output::print_error(format!(
+            "plugin {name} has a non-path source ({}) — `plugin update` only supports path: in v0.1; git URL and tarball sources land in Phase F",
+            entry.source
+        ));
+        return Ok(1);
+    };
+    let source_path = PathBuf::from(source_path);
+    if !source_path.exists() {
+        output::print_error(format!(
+            "recorded source path {} no longer exists — reinstall manually via `makakoo plugin install <path>`",
+            source_path.display()
+        ));
+        return Ok(1);
+    }
+
+    let prior_enabled = entry.enabled;
+
+    // 3) Uninstall without purge — keep the state dir. A user who wants
+    //    a full reset runs `plugin uninstall --purge` + `plugin install`.
+    if let Err(e) = core_uninstall(name, ctx.home(), false) {
+        output::print_error(format!("uninstall step failed: {e}"));
+        return Ok(1);
+    }
+
+    // 4) Reinstall from the recorded source.
+    let req = InstallRequest {
+        source: PluginSource::Path(source_path.clone()),
+        expected_blake3: None,
+    };
+    let outcome = match install_from_path(&req, ctx.home()) {
+        Ok(o) => o,
+        Err(e) => {
+            output::print_error(format!(
+                "reinstall failed — plugin is currently uninstalled: {e}"
+            ));
+            return Ok(1);
+        }
+    };
+
+    // 5) Reapply the saved enabled flag if it was disabled. Fresh
+    //    installs land as enabled=true by design (see install.rs), so
+    //    the state roundtrips only when prior_enabled was false.
+    if !prior_enabled {
+        let mut lock = PluginsLock::load(ctx.home())?;
+        if let Some(mut e) = lock.get(name).cloned() {
+            e.enabled = false;
+            lock.upsert(e);
+            lock.save(ctx.home())?;
+        }
+    }
+
+    output::print_info(format!(
+        "updated {} → blake3 {} (enabled: {})",
+        outcome.name,
+        outcome.computed_blake3,
+        if prior_enabled { "yes" } else { "no (preserved from prior state)" }
+    ));
+    Ok(0)
 }
 
 fn set_enabled(ctx: &CliContext, name: &str, target: bool) -> anyhow::Result<i32> {
