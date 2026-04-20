@@ -11,7 +11,7 @@ use std::time::Duration;
 use comfy_table::{presets::UTF8_FULL, Cell, Color as TableColor, Table};
 
 use makakoo_core::plugin::PluginRegistry;
-use makakoo_core::sancho::{default_registry, SanchoContext, SanchoEngine};
+use makakoo_core::sancho::{default_registry, SanchoContext, SanchoEngine, NATIVE_TASK_COUNT};
 
 use crate::cli::SanchoCmd;
 use crate::context::CliContext;
@@ -62,9 +62,11 @@ async fn status(ctx: &CliContext) -> anyhow::Result<i32> {
     let engine = build_engine(ctx).await?;
     let state = engine.state();
     let guard = state.lock().await;
+    let total = engine.task_count();
+    let manifest = total.saturating_sub(NATIVE_TASK_COUNT);
     output::print_info(format!(
-        "sancho: {} registered task(s)",
-        engine.task_count()
+        "sancho: {total} registered task(s) ({native} native + {manifest} manifest)",
+        native = NATIVE_TASK_COUNT,
     ));
     if guard.last_run.is_empty() {
         output::print_info("(no task has run yet this process)");

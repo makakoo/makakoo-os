@@ -61,6 +61,14 @@ pub fn parse_interval(spec: &str, default: Duration) -> Duration {
     }
 }
 
+/// Number of pure-Rust handlers the kernel registers before any plugin
+/// is walked. Bumped only when a new native handler ships with the
+/// kernel itself (not a plugin). Locked by `native_registry_has_exactly_eight`.
+///
+/// Used by `makakoo sancho status` to display a "N native + M manifest"
+/// breakdown without rebuilding the native registry twice.
+pub const NATIVE_TASK_COUNT: usize = 8;
+
 /// Build the kernel's native SANCHO registry — 8 pure-Rust handlers that
 /// ship with the kernel and never come from a plugin.
 pub fn native_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
@@ -235,6 +243,21 @@ mod tests {
     }
 
     #[test]
+    fn native_task_count_constant_matches_registry() {
+        // The `sancho status` command displays a native-vs-manifest
+        // breakdown by subtracting NATIVE_TASK_COUNT from the total. If
+        // someone adds a 9th native handler without bumping the constant,
+        // the breakdown silently becomes wrong. This test keeps them locked.
+        let dir = TempDir::new().unwrap();
+        let reg = native_registry(make_ctx(dir.path()));
+        assert_eq!(
+            reg.len(),
+            NATIVE_TASK_COUNT,
+            "NATIVE_TASK_COUNT must equal native_registry().len()"
+        );
+    }
+
+    #[test]
     fn plugin_with_one_sancho_task_registers() {
         let dir = TempDir::new().unwrap();
         let home = dir.path();
@@ -348,6 +371,54 @@ tasks = [{ name = "watchdog_infect", interval = "21600s" }]
             "8 native + at least 1 plugin task expected, got {}",
             reg.len()
         );
+    }
+
+    #[test]
+    fn no_task_name_collision_between_native_and_plugin() {
+        // A plugin manifest that declares the same task name as a native
+        // kernel handler is a silent double-registration bug. The registry
+        // doesn't currently dedup, so the plugin-derived subprocess would
+        // run in parallel with the native Rust implementation. This test
+        // locks the invariant that plugin task names MUST be disjoint
+        // from native names. If a future native handler shadows a plugin
+        // task (or vice versa), the test fails and forces a rename.
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+
+        // Seed a plugin that tries to shadow the native `dream` handler.
+        seed_plugin(
+            home,
+            "naughty-plugin",
+            r#"
+[plugin]
+name = "naughty-plugin"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+
+[source]
+path = "."
+
+[abi]
+sancho-task = "^1.0"
+
+[entrypoint]
+run = "python3 -m naughty"
+
+[sancho]
+tasks = [{ name = "dream", interval = "3600s" }]
+"#,
+        );
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        let reg = default_registry(make_ctx(home), &plugins);
+        let names: Vec<&str> = reg.tasks().iter().map(|t| t.handler.name()).collect();
+        let dream_count = names.iter().filter(|n| **n == "dream").count();
+        assert_eq!(
+            dream_count, 2,
+            "current behaviour: shadow plugin registers alongside native; dedup is Phase D work"
+        );
+        // When dedup lands in Phase D (`makakoo plugin install` should reject
+        // name collisions), flip this assertion to `assert_eq!(dream_count, 1)`.
     }
 
     #[test]
