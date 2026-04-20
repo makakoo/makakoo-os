@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod infect;
 pub mod journal;
+pub mod knowledge;
 pub mod multimodal;
 pub mod nursery;
 pub mod outbound;
@@ -52,4 +53,9 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
 
     // Infect — project-scoped harvey install from chat.
     registry.register(Arc::new(infect::HarveyInfectLocalHandler::new(ctx.clone())));
+
+    // Knowledge ingest — structured media → multimodal Qdrant collection.
+    registry.register(Arc::new(knowledge::HarveyKnowledgeIngestHandler::new(
+        ctx.clone(),
+    )));
 }
