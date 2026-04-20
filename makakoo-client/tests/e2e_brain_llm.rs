@@ -4,6 +4,11 @@
 //! Brain tests use a real SuperbrainStore + tempdir. LLM tests spin up
 //! a wiremock HTTP server that the LlmClient / EmbeddingClient talk to
 //! so we validate the full socket → handler → gateway → response chain.
+//!
+//! Unix-only — same reasoning as e2e_socket.rs (Client currently
+//! requires AF_UNIX; Windows named-pipe client arrives post-v0.1).
+
+#![cfg(unix)]
 
 use std::sync::Arc;
 

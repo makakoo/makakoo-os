@@ -378,7 +378,12 @@ fn contains_bootstrap_marker(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(test)]
+// Drift tests cover Unix symlink behaviour specifically (the MCP
+// memory/ + skills/ symlink audit + repair paths only apply where
+// the kernel writes real POSIX symlinks). Windows symlink coverage
+// belongs to makakoo-platform's Windows adapter tests + the Phase F
+// VM smoke, not here.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;

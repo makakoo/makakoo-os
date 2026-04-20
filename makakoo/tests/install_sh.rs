@@ -5,7 +5,14 @@
 //! (skipping the GitHub download path) so the extract + move + chmod
 //! flow is exercised on every `cargo test`.
 //!
-//! Skips on non-Unix or if `bash` is not on PATH.
+//! **Compiled only on Unix** — install.sh is a bash script; the
+//! Windows counterpart (install.ps1) has its own PowerShell-based
+//! test harness that would go into a sibling `install_ps1.rs`
+//! compiled only on Windows. Skipping here via a file-level cfg
+//! keeps Windows CI green without polluting every test body with
+//! cfg forks.
+
+#![cfg(unix)]
 
 use std::path::PathBuf;
 

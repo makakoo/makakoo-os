@@ -4,6 +4,11 @@
 //!
 //! Covers Gate 4c: an allowed call succeeds, a denied call returns
 //! `ClientError::Denied`, and the audit log has the expected entries.
+//!
+//! Unix-only — the client's real connect path is Unix domain socket
+//! today. Windows named-pipe support for the client lands later.
+
+#![cfg(unix)]
 
 use std::sync::Arc;
 

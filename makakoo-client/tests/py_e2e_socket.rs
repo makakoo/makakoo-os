@@ -20,6 +20,11 @@
 //!
 //! Skips gracefully if `python3` is not on PATH (e.g. a stripped CI
 //! container). Runs on every macOS + Linux host with stdlib Python 3.
+//!
+//! Unix-only at compile time — the Python client uses AF_UNIX sockets;
+//! a Windows named-pipe Python client arrives post-v0.1.
+
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
