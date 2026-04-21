@@ -63,6 +63,39 @@ class PermsError(Exception):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Conversational channels (v0.3.1 Phase C)
+# ═══════════════════════════════════════════════════════════════
+
+#: Plugin identifiers that represent a live human conversational turn.
+#: Grants from these surfaces MUST carry a non-empty ``origin_turn_id``
+#: binding the grant to the turn that issued the human "yes". An empty
+#: ``origin_turn_id`` from one of these plugins is treated as a
+#: prompt-injection signature: a legitimate tool-call would carry the
+#: host-supplied turn id; a fabricated one wouldn't.
+#:
+#: Values match the slugs documented in ``spec/USER_GRANTS.md §11.1``
+#: (and the shell-rc exports in global_bootstrap v12+).
+#:
+#: **Additive only.** Do not remove existing entries — the drift-gate
+#: test in ``test_user_grants_enforcement.py`` expects every known
+#: conversational host to appear here. New chat surfaces must be
+#: appended.
+CONVERSATIONAL_CHANNELS: frozenset[str] = frozenset({
+    "claude-code",
+    "gemini-cli",
+    "codex",
+    "opencode",
+    "vibe",
+    "cursor",
+    "qwen",
+    "pi",
+    "harveychat",
+    "harveychat-telegram",
+    "harveychat-web",
+})
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Guardrails — duration + scope
 # ═══════════════════════════════════════════════════════════════
 
@@ -267,6 +300,20 @@ def _audit_grant_denial(args: "GrantArgs", correlation_id: str) -> None:
 def do_grant(args: GrantArgs, *, now: Optional[datetime] = None) -> str:
     """Core grant flow. Returns the quotable reply string."""
     now = now or datetime.now(tz=timezone.utc)
+
+    # v0.3.1 Phase C — conversational channels require a non-empty
+    # origin_turn_id. The check runs before scope/duration so that
+    # prompt-injected calls fail fast with a provenance signal, not
+    # a guardrail one. CLI + sancho-native are intentionally out of
+    # the set — they don't carry a human turn.
+    if args.plugin in CONVERSATIONAL_CHANNELS and not args.origin_turn_id:
+        _audit_grant_denial(args, "reason:missing_origin_turn_id")
+        raise PermsError(
+            f"origin_turn_id required on conversational channels "
+            f"(plugin={args.plugin}); this grant call appears to be "
+            "agent-initiated without a human turn binding"
+        )
+
     try:
         abs_path = validate_and_expand_scope(args.path)
     except PermsError:

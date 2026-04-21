@@ -34,6 +34,7 @@ from core.capability.audit_client import (
     log_fs_write,
 )
 from core.capability.perms_core import (
+    CONVERSATIONAL_CHANNELS,
     GrantArgs,
     ListArgs,
     PermsError,
@@ -47,6 +48,7 @@ from core.capability.perms_core import (
 )
 
 __all__ = [
+    "CONVERSATIONAL_CHANNELS",
     "Grant",
     "GrantArgs",
     "ListArgs",
