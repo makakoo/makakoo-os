@@ -376,15 +376,18 @@ def tool_brain_search(query: str) -> str:
 def _resolve_write_path(path: str) -> Optional[str]:
     """Resolve a write target and verify it's inside a whitelisted root.
 
-    Returns the absolute path on success, None if the path escapes the
-    sandbox. Prevents the agent from writing to arbitrary filesystem
-    locations even if it's tricked with `..` or a full alternate path.
+    Returns the real absolute path on success, None if the path escapes
+    the sandbox. Prevents the agent from writing to arbitrary filesystem
+    locations even if it's tricked with `..`, a full alternate path, or
+    a symlink pointing outside the sandbox. `realpath` resolves symlinks
+    on both sides of the `commonpath` check so a link like
+    `~/MAKAKOO/tmp/escape -> /etc` cannot smuggle a write to /etc/passwd.
     """
     if not path:
         return None
-    expanded = os.path.abspath(os.path.expanduser(path))
+    expanded = os.path.realpath(os.path.expanduser(path))
     for root in WRITE_FILE_ROOTS:
-        root_abs = os.path.abspath(os.path.expanduser(root))
+        root_abs = os.path.realpath(os.path.expanduser(root))
         try:
             if os.path.commonpath([expanded, root_abs]) == root_abs:
                 return expanded

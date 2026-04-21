@@ -189,6 +189,72 @@ This is granted automatically to any plugin that declares
 `[infect.fragments]` in its manifest. No need to list it in
 `[capabilities].grants`.
 
+### 1.11 Permissions (user-managed runtime layer)
+
+Added in v0.3. §1.1–§1.10 describe the **manifest** layer — grants
+declared by a plugin and accepted by the user at install time. §1.11
+adds a second layer — grants issued by the user at **runtime** against
+already-installed plugins (or against the kernel's own default agent).
+
+| Verb | Scope | Meaning |
+|---|---|---|
+| `perms/grant`  | path glob | Issue a new user-managed `fs/write` grant |
+| `perms/revoke` | — | Revoke a previously-issued user-managed grant (by id) |
+
+**Neither verb is declared in plugin manifests.** They exist only so
+the audit log can record *the act of granting* / *revoking* with the
+same vocabulary it uses for everything else. The calls originate from
+the CLI (`makakoo perms grant|revoke`) or from the conversational MCP
++ HARVEY_TOOLS handlers (`grant_write_access`, `revoke_write_access`).
+
+**The three-layer additive model:**
+
+```
++-----------------------------------------------------------+
+| LAYER 3 — User grants (runtime)                           |
+|   $MAKAKOO_HOME/config/user_grants.json                   |
+|   Time-limited or permanent, CLI/chat-managed.            |
++-----------------------------------------------------------+
+| LAYER 2 — Manifest grants (per-plugin install-time)       |
+|   [capabilities].grants in plugin.toml                    |
+|   Scoped per §1.1–§1.10. Accepted by user on install.     |
++-----------------------------------------------------------+
+| LAYER 1 — Baseline (kernel default)                       |
+|   ~/MAKAKOO/data/{reports,drafts} and ~/MAKAKOO/tmp       |
+|   plus /tmp — always allowed for the default agent.       |
++-----------------------------------------------------------+
+```
+
+Precedence is **additive, never subtractive.** A write is allowed if
+*any* layer matches. Layer 3 never removes Layer 2 grants; uninstalling
+a plugin does not void user grants Sebastian issued against that path.
+
+**Two-reader / two-writer contract:** `user_grants.json` is read AND
+written by BOTH Python (HarveyChat `HARVEY_TOOLS` path, agent enforcement)
+AND Rust (`makakoo perms` CLI, MCP handlers, SANCHO purge task). The
+writer contract lives in `spec/USER_GRANTS.md` (sidecar-lock protocol,
+atomic temp-rename, corrupt-file tolerance). See §USER_GRANTS.md §writers.
+
+**Scope grammar** matches §1.5 `fs/write:<glob>` exactly. Globs use `*`
+/ `**`; `~` and `$MAKAKOO_HOME` expand at grant-time (not check-time).
+
+**Where enforcement lives in v0.3:** Python `_resolve_write_path()` in
+`lib-harvey-core`. Rust is currently read-only (CLI + MCP handlers
+mutate the store; the Unix-socket capability gate from §4 is Phase E/2,
+v0.4+). When the v0.4 socket gate ships, it reads the same JSON and
+merges it into the grant table built by §2 — no throwaway code.
+
+**Backwards compatibility:** absent `user_grants.json` = baseline-only
+behavior, byte-identical to pre-v0.3. Writes outside the baseline are
+rejected with an error string that suggests the exact `makakoo perms
+grant` command to run. `rm $MAKAKOO_HOME/config/user_grants.json` is
+the emergency-rollback lever.
+
+See `spec/USER_GRANTS.md` for the file format, lock protocol, CLI
+reference, conversational MCP + HARVEY_TOOLS reference, audit-event
+schema, and failure-mode matrix. See `spec/USER_GRANTS_THREAT_MODEL.md`
+for the per-surface authN analysis + residual-risk register.
+
 ## 2. The grant resolution algorithm
 
 At plugin start, the kernel:

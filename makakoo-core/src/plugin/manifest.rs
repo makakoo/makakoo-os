@@ -38,6 +38,8 @@ pub const KNOWN_VERBS: &[&str] = &[
     "net/tcp",
     "net/udp",
     "net/ws",
+    "perms/grant",
+    "perms/revoke",
     "sancho/register",
     "secrets/read",
     "secrets/write",
@@ -51,6 +53,7 @@ pub const SCOPE_REQUIRED_VERBS: &[&str] = &[
     "fs/read",
     "fs/write",
     "mcp/register",
+    "perms/grant",
     "sancho/register",
     "secrets/read",
     "secrets/write",
@@ -815,6 +818,67 @@ start = ".venv/bin/python -m x --start"
         );
         let err = Manifest::parse(&body, &p()).unwrap_err();
         assert!(format!("{err}").contains("requires a scope"));
+    }
+
+    #[test]
+    fn known_verbs_sorted() {
+        // Binary-search helpers rely on KNOWN_VERBS being lexicographically
+        // sorted. If you add a verb, keep the slice sorted.
+        for pair in KNOWN_VERBS.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "KNOWN_VERBS not sorted: {:?} >= {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        for pair in SCOPE_REQUIRED_VERBS.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "SCOPE_REQUIRED_VERBS not sorted: {:?} >= {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn scope_required_verbs_subset_of_known() {
+        for v in SCOPE_REQUIRED_VERBS {
+            assert!(
+                KNOWN_VERBS.contains(v),
+                "SCOPE_REQUIRED_VERBS has {v:?} but KNOWN_VERBS does not"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_perms_grant_with_scope() {
+        let body = format!(
+            "{}\n[capabilities]\ngrants = [\"perms/grant:~/code/**\"]\n",
+            minimal()
+        );
+        let (_m, _w) = Manifest::parse(&body, &p()).unwrap();
+    }
+
+    #[test]
+    fn rejects_perms_grant_without_scope() {
+        let body = format!(
+            "{}\n[capabilities]\ngrants = [\"perms/grant\"]\n",
+            minimal()
+        );
+        let err = Manifest::parse(&body, &p()).unwrap_err();
+        assert!(format!("{err}").contains("requires a scope"));
+    }
+
+    #[test]
+    fn accepts_perms_revoke_unscoped() {
+        // perms/revoke is revoke-by-id — no scope required.
+        let body = format!(
+            "{}\n[capabilities]\ngrants = [\"perms/revoke\"]\n",
+            minimal()
+        );
+        let (_m, _w) = Manifest::parse(&body, &p()).unwrap();
     }
 
     #[test]
