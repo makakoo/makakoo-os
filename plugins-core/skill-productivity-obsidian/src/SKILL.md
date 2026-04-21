@@ -1,66 +1,76 @@
 ---
 name: obsidian
-description: Read, search, and create notes in the Obsidian vault.
+description: Read, search, and create notes in any Obsidian vault.
 ---
 
-# Obsidian Vault
+# Obsidian Vault Plugin
 
-**Location:** Set via `OBSIDIAN_VAULT_PATH` environment variable (e.g. in `~/.hermes/.env`).
+Read, search, and create notes in any Obsidian vault. Separate from Makakoo Brain.
 
-If unset, defaults to `~/Documents/Obsidian Vault`.
-
-Note: Vault paths may contain spaces - always quote them.
-
-## Read a note
+## Configuration
 
 ```bash
-VAULT="${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}"
-cat "$VAULT/Note Name.md"
+# Set your Obsidian vault path
+export OBSIDIAN_VAULT_PATH=~/Documents/MyVault
+
+# Or use Makakoo Brain as vault
+export OBSIDIAN_VAULT_PATH=~/MAKAKOO/data/Brain
 ```
 
-## List notes
+## Usage
 
 ```bash
-VAULT="${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}"
+# Show vault status
+makakoo skill obsidian status
 
-# All notes
-find "$VAULT" -name "*.md" -type f
+# List all notes
+makakoo skill obsidian list
 
-# In a specific folder
-ls "$VAULT/Subfolder/"
+# List in folder
+makakoo skill obsidian list projects/
+
+# Read a note
+makakoo skill obsidian read "Project Name"
+
+# Search notes
+makakoo skill obsidian search "keyword"
+
+# Create a note
+makakoo skill obsidian create "New Note" "# Title\n\nContent here"
+
+# Add to today's journal
+makakoo skill obsidian journal "Did something important"
+
+# Sync from Makakoo Brain
+makakoo skill obsidian sync
 ```
 
-## Search
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `status` | Show vault status |
+| `list [folder]` | List all notes or notes in folder |
+| `read <name>` | Read a note |
+| `search <query>` | Search notes by content |
+| `create <name> <content>` | Create a new note |
+| `journal <content>` | Add to today's journal |
+| `sync` | Sync from Makakoo Brain |
+| `help` | Show help |
+
+## Vault Format
+
+Uses standard Obsidian markdown:
+- Frontmatter: `key:: value`
+- Wikilinks: `[[Page Name]]`
+- Tags: `#tag`
+- Bullet points: `- item`
+
+## Sync Feature
 
 ```bash
-VAULT="${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}"
-
-# By filename
-find "$VAULT" -name "*.md" -iname "*keyword*"
-
-# By content
-grep -rli "keyword" "$VAULT" --include="*.md"
+# Sync Makakoo Brain pages to Obsidian vault
+makakoo skill obsidian sync
 ```
 
-## Create a note
-
-```bash
-VAULT="${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}"
-cat > "$VAULT/New Note.md" << 'ENDNOTE'
-# Title
-
-Content here.
-ENDNOTE
-```
-
-## Append to a note
-
-```bash
-VAULT="${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}"
-echo "
-New content here." >> "$VAULT/Existing Note.md"
-```
-
-## Wikilinks
-
-Obsidian links notes with `[[Note Name]]` syntax. When creating notes, use these to link related content.
+This copies pages from `~/MAKAKOO/data/Brain/pages/` to `OBSIDIAN_VAULT_PATH/brain-sync/`

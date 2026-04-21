@@ -3,7 +3,7 @@ name = "skill-productivity-obsidian"
 version = "0.1.0"
 kind = "skill"
 language = "python"
-summary = "Read, search, and create notes in the Obsidian vault."
+summary = "Read, search, and create notes in any Obsidian vault."
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 
@@ -20,9 +20,9 @@ python = ">=3.8"
 run = "python3 -u -m src.__main__"
 
 [capabilities]
-# Capability grants default empty — conservative for batch migration.
-# Add brain/llm/net/state grants manually per skill's real needs.
-grants = []
+grants = [
+  "state/plugin",
+]
 
 [state]
 dir = "$MAKAKOO_HOME/state/skill-productivity-obsidian"
