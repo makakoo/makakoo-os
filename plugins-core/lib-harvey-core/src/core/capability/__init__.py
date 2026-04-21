@@ -27,14 +27,22 @@ from core.capability.rate_limit import (
     check_and_increment,
     default_rate_limit_path,
 )
+from core.capability.audit_client import (
+    default_audit_path,
+    log_audit,
+    log_fs_write,
+)
 
 __all__ = [
     "Grant",
     "UserGrantsFile",
     "RateLimitExceeded",
     "check_and_increment",
+    "default_audit_path",
     "default_grants_path",
     "default_rate_limit_path",
     "escape_audit_field",
+    "log_audit",
+    "log_fs_write",
     "new_grant_id",
 ]

@@ -128,13 +128,15 @@ response. Text-only responses to file requests are a BUG.
 You have real file-writing capability via `write_file` and
 `markdown_to_pdf`. Both are sandboxed to the following directories:
 
-  - `~/MAKAKOO/data/reports/`  — finished reports, research deliverables
-  - `~/MAKAKOO/data/drafts/`   — in-progress drafts, scratch work
-  - `~/MAKAKOO/tmp/`           — temporary files
-  - `/tmp/`                   — system temp
+{allowed_paths}
 
-Any other path is rejected. You cannot write to ~/research/, ~/Documents/,
-Sebastian's source tree, or anywhere outside the sandbox.
+Any other path is rejected. If Sebastian asks you to write outside
+this list, say so and offer to call `grant_write_access('<path>', '1h')`
+instead of silently failing. Never invent a grant that Sebastian did
+not confirm. The baseline entries above are always available; any
+user-grant entries (shown as globs) auto-expire — they're Sebastian's
+runtime extensions managed via `makakoo perms grant` or the
+conversational `grant_write_access` tool.
 
 ### The correct pattern for "give me a report" / "attach the PDF"
 
@@ -211,6 +213,51 @@ User: "Attach me my CV"
   - User: "list my photos" → `run_command("ls ~/pics/")`
 """
 
+def render_system_prompt(
+    channel: str = "telegram",
+    grants: "Optional[Any]" = None,
+) -> str:
+    """Fill the `{allowed_paths}` + `{channel}` placeholders from the
+    current grant store.
+
+    Invoked once per new assistant turn so mid-session `grant_write_access`
+    calls become visible in the next prompt regeneration — see SPRINT.md
+    §C.6. Keeps the template deliberately short: a bullet list of roots
+    (baseline + active grants), no audit detail, no per-turn timestamps.
+
+    `grants` may be a pre-loaded `UserGrantsFile` (tests), else we load
+    from the canonical path. A load failure degrades gracefully to the
+    baseline roots — never crashes the prompt pipeline.
+    """
+    try:
+        from core.agent.harvey_agent import effective_write_file_roots
+        roots = effective_write_file_roots(grants)
+    except Exception as e:
+        log.warning("render_system_prompt: falling back to baseline (%s)", e)
+        roots = [
+            "~/MAKAKOO/data/reports",
+            "~/MAKAKOO/data/drafts",
+            "~/MAKAKOO/tmp",
+            "/tmp",
+        ]
+
+    bullets: list[str] = []
+    for r in roots:
+        if r.endswith("**"):
+            bullets.append(f"  - `{r}`  — runtime grant (expires automatically)")
+        elif r.endswith("*"):
+            bullets.append(f"  - `{r}`  — runtime grant (single-segment)")
+        else:
+            trailing = "" if r.endswith("/") else "/"
+            bullets.append(f"  - `{r}{trailing}`  — baseline")
+    allowed_paths = "\n".join(bullets) if bullets else "  (no writable paths configured)"
+
+    return HARVEY_SYSTEM_PROMPT.format(
+        channel=channel,
+        allowed_paths=allowed_paths,
+    )
+
+
 # Minimal system prompt for Anthropic fallback (no tools)
 ANTHROPIC_FALLBACK_PROMPT = """You are Harvey, Sebastian Schkudlara's autonomous cognitive extension.
 Responding via {channel} (mobile messaging).
@@ -243,8 +290,8 @@ class HarveyBridge:
         )
 
     def _build_system_prompt(self, channel: str = "telegram") -> str:
-        """Build tool-aware system prompt."""
-        return HARVEY_SYSTEM_PROMPT.format(channel=channel)
+        """Build tool-aware system prompt (grants refreshed every turn)."""
+        return render_system_prompt(channel=channel)
 
     # Regex that catches the common "I can't do files" hallucinations the
     # LLM sometimes produces when its context gets contaminated by prior
@@ -436,7 +483,7 @@ class HarveyBridge:
         for attempt in range(RETRY_MAX_ATTEMPTS):
             try:
                 response = self._try_switchai_direct(
-                    HARVEY_SYSTEM_PROMPT.format(channel=channel),
+                    render_system_prompt(channel=channel),
                     self._build_messages(message, trimmed_history),
                 )
                 if response:

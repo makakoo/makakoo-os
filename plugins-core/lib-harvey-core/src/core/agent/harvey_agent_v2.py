@@ -31,7 +31,12 @@ import requests
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 
 # Reuse the tool registry + dispatch from v1 — no need to duplicate 1000 lines
-from core.agent.harvey_agent import HARVEY_TOOLS, TOOL_DISPATCH, execute_tool
+from core.agent.harvey_agent import (
+    HARVEY_TOOLS,
+    TOOL_DISPATCH,
+    execute_tool,
+    render_harvey_tools,
+)
 
 log = logging.getLogger("harvey.agent.v2")
 
@@ -258,7 +263,9 @@ class HarveyAgentV2:
             "stream": False,
         }
         if include_tools:
-            payload["tools"] = HARVEY_TOOLS
+            # Render per-turn so write_file's description reflects current
+            # baseline + active-grant union (Phase C.5).
+            payload["tools"] = render_harvey_tools()
 
         for attempt in range(MAX_API_RETRIES):
             try:

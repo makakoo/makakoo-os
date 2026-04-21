@@ -24,15 +24,42 @@ HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 log = logging.getLogger("harvey.agent")
 
 MAX_TOOL_ROUNDS = 40
-# Safe whitelist of directories write_file + markdown_to_pdf can touch.
-# Keeps the write surface contained — the agent cannot overwrite source
-# code, configs, or Sebastian's personal files. Extend cautiously.
-WRITE_FILE_ROOTS = (
-    os.path.join(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")), "data", "reports"),
-    os.path.join(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")), "data", "drafts"),
-    os.path.join(os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO")), "tmp"),
-    "/tmp",
-)
+# Safe whitelist of directories write_file + markdown_to_pdf can touch
+# *before* any runtime user grants are added (spec/CAPABILITIES.md §1.11
+# "Layer 1"). Sebastian extends this layer only by locked-decision
+# review; the usual path for "let me write here for an hour" goes
+# through Layer 3 — `makakoo perms grant <path>` or the conversational
+# `grant_write_access` MCP + HARVEY_TOOLS handler.
+#
+# The concrete roots are computed at call time so a process whose
+# MAKAKOO_HOME changes mid-run (tests, dev shells) sees the right
+# baseline. Production has a single stable HOME and the result is
+# equivalent to the module constant shipped in v0.2.
+
+
+def _baseline_write_file_roots() -> tuple[str, ...]:
+    home = (
+        os.environ.get("MAKAKOO_HOME")
+        or os.environ.get("HARVEY_HOME")
+        or os.path.expanduser("~/MAKAKOO")
+    )
+    return (
+        os.path.join(home, "data", "reports"),
+        os.path.join(home, "data", "drafts"),
+        os.path.join(home, "tmp"),
+        "/tmp",
+    )
+
+
+#: Import-time snapshot kept for v0.2 compat and the
+#: `test_write_file_roots_include_expected_dirs` assertion. Phase C
+#: enforcement reads `_baseline_write_file_roots()` directly so the
+#: live env is authoritative.
+BASELINE_WRITE_FILE_ROOTS = _baseline_write_file_roots()
+
+# Back-compat alias — v0.2 callers still import this name.
+# Remove after Phase D ships and external plugins migrate.
+WRITE_FILE_ROOTS = BASELINE_WRITE_FILE_ROOTS
 
 # ═══════════════════════════════════════════════════════════════
 #  Tool Definitions (OpenAI function-calling format)
@@ -337,6 +364,75 @@ HARVEY_TOOLS = [
 ]
 
 
+def _format_write_roots_for_prompt(roots: list[str]) -> str:
+    """Short, LLM-readable list for tool descriptions + system prompts.
+
+    Paths are shown with a trailing slash so the model reads them as
+    directories. Baselines show an absolute path; grant globs show the
+    glob (e.g. `~/foo/**`). Caller is responsible for deciding which
+    slice of `effective_write_file_roots()` to show.
+    """
+    bits: list[str] = []
+    for r in roots:
+        shown = r if r.endswith(("/", "**", "*")) else r + "/"
+        bits.append(shown)
+    return ", ".join(bits)
+
+
+def render_harvey_tools(
+    grants: "Optional['UserGrantsFile']" = None,
+) -> list[dict]:
+    """Return a per-turn copy of `HARVEY_TOOLS` with `write_file` +
+    `markdown_to_pdf` descriptions regenerated from the current grant
+    store.
+
+    The baseline `HARVEY_TOOLS` constant stays stable so importers
+    that don't care about runtime grants keep working. HarveyChat and
+    any caller that wants the dynamic view calls this factory once per
+    agent turn (cheap — grants file is ~1 KB typical, lock-free read).
+    See `spec/USER_GRANTS.md §4` for the glob grammar the descriptions
+    reference.
+    """
+    import copy
+    tools = copy.deepcopy(HARVEY_TOOLS)
+    roots = effective_write_file_roots(grants)
+    allowed_list = _format_write_roots_for_prompt(roots)
+    example = roots[0] if roots else "~/MAKAKOO/data/reports"
+    if not example.endswith(("/", "**", "*")):
+        example = example + "/"
+    example = example.rstrip("/") + "/diffusion_research.md"
+
+    for tool in tools:
+        fn = tool.get("function") or {}
+        name = fn.get("name")
+        if name == "write_file":
+            fn["description"] = (
+                "Write text content to a file inside Harvey's allowed "
+                f"write directories ({allowed_list}). The allowlist is "
+                "a union of the hardcoded baseline AND any active entries "
+                "in $MAKAKOO_HOME/config/user_grants.json — Sebastian can "
+                "extend it with `makakoo perms grant <path>` or by saying "
+                "\"grant yourself access to X for 1h\" in chat. Returns "
+                "the absolute path written. REQUIRED before markdown_to_pdf "
+                "or before emitting [[SEND_FILE:...]] markers."
+            )
+            params = fn.setdefault("parameters", {}).setdefault("properties", {})
+            if "path" in params:
+                params["path"]["description"] = (
+                    f"Target file path. Must be inside one of: {allowed_list}. "
+                    f"Example: '{example}'"
+                )
+        elif name == "markdown_to_pdf":
+            fn["description"] = (
+                "Convert an existing markdown file to PDF using pandoc + "
+                "pdflatex. Use this AFTER write_file to turn a markdown "
+                "report into a PDF the user can receive as a Telegram "
+                "attachment. Both input and output paths must land inside "
+                f"the allowed write directories ({allowed_list})."
+            )
+    return tools
+
+
 # ═══════════════════════════════════════════════════════════════
 #  Tool Execution Functions
 # ═══════════════════════════════════════════════════════════════
@@ -373,43 +469,193 @@ def tool_brain_search(query: str) -> str:
         return f"Brain search error: {e}"
 
 
-def _resolve_write_path(path: str) -> Optional[str]:
-    """Resolve a write target and verify it's inside a whitelisted root.
+def effective_write_file_roots(
+    grants: "Optional['UserGrantsFile']" = None,
+    plugin: Optional[str] = None,
+) -> list[str]:
+    """Return baseline + active user-grant scope globs.
 
-    Returns the real absolute path on success, None if the path escapes
-    the sandbox. Prevents the agent from writing to arbitrary filesystem
-    locations even if it's tricked with `..`, a full alternate path, or
-    a symlink pointing outside the sandbox. `realpath` resolves symlinks
-    on both sides of the `commonpath` check so a link like
-    `~/MAKAKOO/tmp/escape -> /etc` cannot smuggle a write to /etc/passwd.
+    Used for tool-description rendering (see `render_harvey_tools`) and
+    the HarveyChat bridge prompt (see `core.chat.bridge.render_system_prompt`).
+    For enforcement, call `_resolve_write_path` — it consults both layers
+    directly so display drift can never diverge from the actual gate.
+
+    `plugin` is accepted for forward compatibility with v0.4 per-plugin
+    scoping; today the baseline doesn't vary by caller.
+    """
+    roots: list[str] = list(_baseline_write_file_roots())
+    if grants is None:
+        try:
+            from core.capability import UserGrantsFile
+            grants = UserGrantsFile.load()
+        except Exception as e:  # pragma: no cover
+            log.warning("user_grants load failed during display render: %s", e)
+            return roots
+    try:
+        for g in grants.active_grants():
+            if g.scope.startswith("fs/write:"):
+                roots.append(g.scope[len("fs/write:"):])
+    except Exception as e:  # pragma: no cover
+        log.warning("user_grants.active_grants failed: %s", e)
+    return roots
+
+
+def _resolve_write_path(path: str) -> Optional[str]:
+    """Resolve a write target, verify it's covered by a baseline root OR
+    an active user grant, and emit one `fs/write` audit entry.
+
+    Returns the realpath-resolved target on success, None on rejection.
+    The realpath + commonpath pair (Phase A.1) blocks symlink escape —
+    a link inside the sandbox pointing to `/etc/` cannot smuggle a
+    write. See `spec/CAPABILITIES.md §1.11` for the three-layer model
+    and `spec/USER_GRANTS.md §4` for the glob grammar.
     """
     if not path:
+        # Audit as denied for completeness; empty paths are caller bugs.
+        try:
+            from core.capability import log_fs_write
+            log_fs_write(
+                requested_path="",
+                resolved_path=None,
+                scope_granted=None,
+                result="denied",
+            )
+        except Exception:  # pragma: no cover
+            pass
         return None
+
     expanded = os.path.realpath(os.path.expanduser(path))
-    for root in WRITE_FILE_ROOTS:
+
+    # Layer 1 — baseline roots.
+    for root in _baseline_write_file_roots():
         root_abs = os.path.realpath(os.path.expanduser(root))
         try:
             if os.path.commonpath([expanded, root_abs]) == root_abs:
+                _emit_write_audit(
+                    requested=path,
+                    resolved=expanded,
+                    scope_granted=f"baseline:{root_abs}",
+                    allowed=True,
+                )
                 return expanded
         except ValueError:
-            # Different drives on Windows — can't happen on macOS/Linux
+            # Different drives on Windows — not a target platform.
             continue
+
+    # Layer 3 — runtime user grants.
+    try:
+        from core.capability import UserGrantsFile
+        grants = UserGrantsFile.load()
+        match = grants.match_write_path(expanded)
+        if match is not None:
+            _emit_write_audit(
+                requested=path,
+                resolved=expanded,
+                scope_granted=match.id,
+                allowed=True,
+            )
+            return expanded
+    except Exception as e:
+        # Corrupt grant file or I/O error — deny the write, log the
+        # error, and fall through to the rejection audit below.
+        log.warning("user_grants resolve failed: %s", e)
+
+    _emit_write_audit(
+        requested=path,
+        resolved=expanded,
+        scope_granted=None,
+        allowed=False,
+    )
     return None
+
+
+def _emit_write_audit(
+    *,
+    requested: str,
+    resolved: Optional[str],
+    scope_granted: Optional[str],
+    allowed: bool,
+) -> None:
+    """Thin wrapper so the audit client import is lazy and optional.
+
+    Missing / broken audit never fails a write — the audit log is a
+    best-effort record, not part of the enforcement boundary.
+    """
+    try:
+        from core.capability import log_fs_write
+        log_fs_write(
+            requested_path=requested,
+            resolved_path=resolved,
+            scope_granted=scope_granted,
+            result="allowed" if allowed else "denied",
+        )
+    except Exception as e:  # pragma: no cover
+        log.warning("audit emit for %r failed: %s", requested, e)
+
+
+def _suggest_grant_parent(requested: str) -> str:
+    """Return a reasonable directory to suggest granting access to.
+
+    For `/Users/sebastian/code/proj/README.md` → `/Users/sebastian/code/proj/`.
+    For a bare file (`foo.md`) → the expanded cwd dir.
+    """
+    expanded = os.path.realpath(os.path.expanduser(requested))
+    parent = os.path.dirname(expanded) or expanded
+    # Keep trailing slash so the LLM reads it as a directory scope.
+    if not parent.endswith(os.sep):
+        parent = parent + os.sep
+    return parent
+
+
+def _write_file_rejection_message(path: str) -> str:
+    """Build the rejection string for `tool_write_file` / `tool_markdown_to_pdf`.
+
+    Spec: SPRINT.md C.7. Lists baseline + active grants so the LLM
+    can quote them to Sebastian, and suggests the exact CLI one-liner
+    to unblock the write.
+    """
+    try:
+        from core.capability import UserGrantsFile
+        grants = UserGrantsFile.load()
+        active = grants.active_grants()
+    except Exception:
+        active = []
+
+    baseline_list = ", ".join(_baseline_write_file_roots())
+    if active:
+        grant_lines = [
+            f"    • {g.scope} (grant {g.id})"
+            for g in active
+            if g.scope.startswith("fs/write:")
+        ]
+        grants_block = "\n".join(grant_lines) if grant_lines else "  (none)"
+    else:
+        grants_block = "  (none)"
+
+    suggested = _suggest_grant_parent(path)
+    return (
+        f"write_file rejected: {path!r} is outside the allowed "
+        f"baseline roots and active grants.\n"
+        f"  Baseline: {baseline_list}\n"
+        f"  Active grants:\n{grants_block}\n"
+        f"Grant access with: makakoo perms grant '{suggested}' --for 1h"
+    )
 
 
 def tool_write_file(path: str, content: str) -> str:
     """Write text content to a file inside a sandboxed directory.
 
-    Allowed roots are HARVEY_HOME/data/reports, HARVEY_HOME/data/drafts,
-    HARVEY_HOME/tmp, and /tmp. Any other path is rejected.
+    Allowed targets are (1) the hardcoded baseline roots
+    HARVEY_HOME/data/reports, HARVEY_HOME/data/drafts, HARVEY_HOME/tmp,
+    and /tmp — and (2) any path covered by an active entry in
+    $MAKAKOO_HOME/config/user_grants.json (managed via `makakoo perms`
+    or the conversational `grant_write_access` tool). Paths outside
+    both layers are rejected with a pointer to the CLI one-liner that
+    would grant access.
     """
     resolved = _resolve_write_path(path)
     if resolved is None:
-        allowed = ", ".join(WRITE_FILE_ROOTS)
-        return (
-            f"write_file rejected: {path!r} is outside the allowed "
-            f"directories ({allowed})."
-        )
+        return _write_file_rejection_message(path)
     try:
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
         with open(resolved, "w", encoding="utf-8") as f:
@@ -437,10 +683,7 @@ def tool_markdown_to_pdf(md_path: str, pdf_path: str = "") -> str:
 
     md_resolved = _resolve_write_path(md_path)
     if md_resolved is None:
-        return (
-            f"markdown_to_pdf rejected: input {md_path!r} is outside "
-            f"the allowed directories."
-        )
+        return "markdown_to_pdf input " + _write_file_rejection_message(md_path)
     if not os.path.exists(md_resolved):
         return f"markdown_to_pdf error: input file not found: {md_resolved}"
 
@@ -448,10 +691,7 @@ def tool_markdown_to_pdf(md_path: str, pdf_path: str = "") -> str:
         pdf_path = os.path.splitext(md_resolved)[0] + ".pdf"
     pdf_resolved = _resolve_write_path(pdf_path)
     if pdf_resolved is None:
-        return (
-            f"markdown_to_pdf rejected: output {pdf_path!r} is outside "
-            f"the allowed directories."
-        )
+        return "markdown_to_pdf output " + _write_file_rejection_message(pdf_path)
 
     try:
         os.makedirs(os.path.dirname(pdf_resolved), exist_ok=True)
@@ -1866,7 +2106,9 @@ class HarveyAgent:
             }
 
             if include_tools:
-                payload["tools"] = HARVEY_TOOLS
+                # Render dynamically so write_file's description reflects
+                # the current baseline + active-grant union (Phase C.5).
+                payload["tools"] = render_harvey_tools()
 
             r = requests.post(
                 f"{self.llm_url}/chat/completions",
