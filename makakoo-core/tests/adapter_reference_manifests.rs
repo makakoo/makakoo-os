@@ -42,13 +42,16 @@ fn every_reference_adapter_parses() {
     assert_eq!(
         names,
         vec![
+            "claude-api".to_string(),
             "hermes".to_string(),
+            "llama-cpp-server".to_string(),
             "ollama".to_string(),
+            "openai-api".to_string(),
             "openclaw".to_string(),
             "openrouter".to_string(),
             "tytus-pod".to_string(),
         ],
-        "five reference adapters must parse; got {:?}",
+        "eight reference adapters must parse; got {:?}",
         names
     );
 }
@@ -71,5 +74,5 @@ fn reference_adapters_have_unique_canonical_hashes() {
     for window in hashes.windows(2) {
         assert_ne!(window[0].1, window[1].1, "hash collision: {window:?}");
     }
-    assert_eq!(hashes.len(), 5);
+    assert_eq!(hashes.len(), 8);
 }

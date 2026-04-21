@@ -38,12 +38,14 @@ pub async fn run(ctx: &CliContext, cmd: AdapterCmd) -> anyhow::Result<i32> {
         AdapterCmd::Install {
             source,
             bundled,
+            pack,
             allow_unsigned,
             accept_re_trust,
             skip_health_check,
         } => install(
             &source,
             bundled,
+            pack,
             allow_unsigned,
             accept_re_trust,
             skip_health_check,
@@ -278,6 +280,7 @@ fn read_stdin_prompt() -> anyhow::Result<String> {
 fn install(
     source: &str,
     bundled: bool,
+    pack: bool,
     allow_unsigned: bool,
     accept_re_trust: bool,
     skip_health_check: bool,
@@ -299,6 +302,11 @@ fn install(
     } else {
         PathBuf::from(source)
     };
+
+    if pack {
+        return install_pack(&source_dir, &root, opts);
+    }
+
     match install_from_path(&source_dir, &root, opts) {
         Ok(report) => {
             println!(
@@ -336,6 +344,74 @@ fn install(
     }
 }
 
+/// Walk a pack root — every immediate subdir containing `adapter.toml`
+/// becomes one install. Each adapter's own signature + trust rules still
+/// apply individually (Phase F: `makakoo-adapters-core` ships this way).
+fn install_pack(
+    pack_root: &Path,
+    root: &InstallRoot,
+    opts: InstallOptions,
+) -> anyhow::Result<i32> {
+    if !pack_root.is_dir() {
+        output::print_error(format!(
+            "pack root {} is not a directory",
+            pack_root.display()
+        ));
+        return Ok(1);
+    }
+    let mut ok: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    let entries = match fs::read_dir(pack_root) {
+        Ok(e) => e,
+        Err(e) => {
+            output::print_error(format!("pack read failed: {e}"));
+            return Ok(1);
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if !path.join("adapter.toml").is_file() {
+            continue;
+        }
+        match install_from_path(&path, root, opts) {
+            Ok(r) => {
+                println!(
+                    "  {} {} v{}",
+                    "✅".green(),
+                    r.adapter_name.clone().bold(),
+                    r.version
+                );
+                ok.push(r.adapter_name);
+            }
+            Err(e) => {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("<dir>");
+                println!("  {} {}: {}", "❌".red(), name.bold(), format!("{e}").red());
+                failed.push(name.to_string());
+            }
+        }
+    }
+    println!(
+        "{}",
+        format!(
+            "pack install: {} ok, {} failed",
+            ok.len(),
+            failed.len()
+        )
+        .bold()
+    );
+    if failed.is_empty() {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
+}
+
 fn update(name: &str, accept_re_trust: bool) -> anyhow::Result<i32> {
     // Phase-D update: read the registered manifest's install.source and
     // re-run the install from the same source. Local paths are the
@@ -368,6 +444,7 @@ fn update(name: &str, accept_re_trust: bool) -> anyhow::Result<i32> {
             };
             install(
                 source.to_string_lossy().as_ref(),
+                false,
                 false,
                 true,
                 accept_re_trust,

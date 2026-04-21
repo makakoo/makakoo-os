@@ -678,13 +678,18 @@ pub enum AdapterCmd {
     /// Install an adapter. `<source>` is either a local directory
     /// containing `adapter.toml` or a bundled reference adapter name
     /// (with `--bundled`). URL installs (git / https-tarball / pypi /
-    /// npm) ship after Phase D.
+    /// npm) ship after Phase D. `--pack` treats `<source>` as a pack
+    /// root and installs every `<subdir>/adapter.toml` under it.
     Install {
         /// Path to a local adapter dir, or a bundled adapter name.
         source: String,
         /// Treat `source` as a bundled reference adapter name.
         #[arg(long)]
         bundled: bool,
+        /// Treat `source` as an adapters-core-style pack: walk every
+        /// `<subdir>/adapter.toml` under it and install each.
+        #[arg(long)]
+        pack: bool,
         /// Allow unsigned URL installs (local paths are always allowed).
         #[arg(long)]
         allow_unsigned: bool,
@@ -1292,6 +1297,7 @@ mod tests {
                 AdapterCmd::Install {
                     source,
                     bundled,
+                    pack,
                     allow_unsigned,
                     accept_re_trust,
                     skip_health_check,
@@ -1300,9 +1306,31 @@ mod tests {
         {
             assert_eq!(source, "openclaw");
             assert!(bundled);
+            assert!(!pack);
             assert!(!allow_unsigned);
             assert!(!accept_re_trust);
             assert!(skip_health_check);
+        } else {
+            panic!("expected Adapter::Install");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_install_pack() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "adapter",
+            "install",
+            "./adapters-core",
+            "--pack",
+            "--skip-health-check",
+        ])
+        .unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Install { pack, .. },
+        } = cli.command
+        {
+            assert!(pack);
         } else {
             panic!("expected Adapter::Install");
         }

@@ -216,6 +216,181 @@ fn migrate_config_emits_toml_per_provider() {
 }
 
 #[test]
+fn pack_install_registers_every_subdir_with_adapter_toml() {
+    let (home, adapters, trust) = new_scratch();
+    // Build a fake pack with 3 adapters (one without adapter.toml — must
+    // be silently skipped).
+    let pack = home.path().join("my-pack");
+    for name in ["alpha", "beta"] {
+        let d = pack.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("adapter.toml"),
+            format!(
+                r#"[adapter]
+name = "{name}"
+version = "0.1.0"
+manifest_schema = 1
+description = "{name}"
+
+[compatibility]
+bridge_version = "^2.0"
+protocols = ["openai-chat-v1"]
+
+[transport]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:9/v1"
+
+[auth]
+scheme = "none"
+
+[output]
+format = "lope-verdict-block"
+
+[capabilities]
+supports_roles = ["validator"]
+
+[install]
+source_type = "local"
+
+[security]
+requires_network = false
+sandbox_profile = "network-io"
+"#,
+            ),
+        )
+        .unwrap();
+    }
+    // Stray dir that does NOT contain adapter.toml — must be ignored.
+    std::fs::create_dir_all(pack.join("README.d")).unwrap();
+    std::fs::write(pack.join("README.d/README.md"), "# not an adapter").unwrap();
+
+    let out = run_makakoo(
+        &adapters,
+        &trust,
+        &[
+            "adapter",
+            "install",
+            pack.to_str().unwrap(),
+            "--pack",
+            "--skip-health-check",
+        ],
+    );
+    let body = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "pack install failed: {body}");
+    assert!(body.contains("alpha"), "missing alpha in output: {body}");
+    assert!(body.contains("beta"), "missing beta in output: {body}");
+    assert!(body.contains("2 ok, 0 failed"), "summary line: {body}");
+
+    // Both manifests live under registered/.
+    assert!(adapters.join("registered/alpha.toml").is_file());
+    assert!(adapters.join("registered/beta.toml").is_file());
+}
+
+#[test]
+fn pack_install_surfaces_per_adapter_failures() {
+    let (home, adapters, trust) = new_scratch();
+    let pack = home.path().join("broken-pack");
+    // One good adapter.
+    let good = pack.join("good");
+    std::fs::create_dir_all(&good).unwrap();
+    std::fs::write(
+        good.join("adapter.toml"),
+        r#"[adapter]
+name = "good"
+version = "0.1.0"
+manifest_schema = 1
+description = "ok"
+
+[compatibility]
+bridge_version = "^2.0"
+protocols = ["openai-chat-v1"]
+
+[transport]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:9/v1"
+
+[auth]
+scheme = "none"
+
+[output]
+format = "lope-verdict-block"
+
+[capabilities]
+supports_roles = ["validator"]
+
+[install]
+source_type = "local"
+
+[security]
+requires_network = false
+sandbox_profile = "network-io"
+"#,
+    )
+    .unwrap();
+    // One broken adapter — bad ref (branch not tag).
+    let bad = pack.join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::write(
+        bad.join("adapter.toml"),
+        r#"[adapter]
+name = "bad"
+version = "0.1.0"
+manifest_schema = 1
+description = "broken"
+
+[compatibility]
+bridge_version = "^2.0"
+protocols = ["openai-chat-v1"]
+
+[transport]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:9/v1"
+
+[auth]
+scheme = "none"
+
+[output]
+format = "lope-verdict-block"
+
+[capabilities]
+supports_roles = ["validator"]
+
+[install]
+source_type = "git"
+source = "https://example.com/x.git"
+ref = "main"
+
+[security]
+requires_network = false
+sandbox_profile = "network-io"
+"#,
+    )
+    .unwrap();
+
+    let out = run_makakoo(
+        &adapters,
+        &trust,
+        &[
+            "adapter",
+            "install",
+            pack.to_str().unwrap(),
+            "--pack",
+            "--skip-health-check",
+            "--allow-unsigned",
+        ],
+    );
+    assert!(!out.status.success(), "must exit nonzero on per-adapter fail");
+    let body = String::from_utf8_lossy(&out.stdout);
+    assert!(body.contains("good"), "good missing: {body}");
+    assert!(body.contains("bad"), "bad missing: {body}");
+    assert!(body.contains("1 ok, 1 failed"), "summary line: {body}");
+    // good lands, bad does not.
+    assert!(adapters.join("registered/good.toml").is_file());
+    assert!(!adapters.join("registered/bad.toml").exists());
+}
+
+#[test]
 fn export_produces_reinstallable_tarball() {
     let (home, adapters, trust) = new_scratch();
     // Install a bundled adapter first.
