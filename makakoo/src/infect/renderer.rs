@@ -257,4 +257,69 @@ default = "fragments/default.md"
         let loaded = load_or_render(&empty_registry(), tmp.path(), None).unwrap();
         assert_eq!(loaded, cached);
     }
+
+    #[test]
+    fn real_plugins_core_tree_renders_skill_discovery_fragment() {
+        // Locks the v0.5 Phase E integration: the
+        // `bootstrap-fragment-skill-discovery` plugin's body MUST land
+        // in the rendered bootstrap. Teaches every infected CLI to
+        // call `skill_discover` before claiming a capability —
+        // load-bearing for the "don't fabricate tools" discipline.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let plugins_core = std::path::PathBuf::from(manifest_dir)
+            .parent()
+            .unwrap()
+            .join("plugins-core");
+        let plugin_dir = plugins_core.join("bootstrap-fragment-skill-discovery");
+        assert!(
+            plugin_dir.join("plugin.toml").is_file(),
+            "bootstrap-fragment-skill-discovery plugin.toml missing at {}",
+            plugin_dir.display()
+        );
+        assert!(
+            plugin_dir.join("fragments/default.md").is_file(),
+            "bootstrap fragment file missing"
+        );
+
+        let tmp = TempDir::new().unwrap();
+        let home_plugins = tmp
+            .path()
+            .join("plugins")
+            .join("bootstrap-fragment-skill-discovery");
+        std::fs::create_dir_all(home_plugins.join("fragments")).unwrap();
+        std::fs::copy(
+            plugin_dir.join("plugin.toml"),
+            home_plugins.join("plugin.toml"),
+        )
+        .unwrap();
+        std::fs::copy(
+            plugin_dir.join("fragments/default.md"),
+            home_plugins.join("fragments/default.md"),
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(tmp.path().join("plugins").as_path())
+            .expect("registry should load");
+        let result = render(&registry, tmp.path(), None).unwrap();
+
+        // Pin the load-bearing phrases — trigger patterns + hard rule
+        // + the tool name. If any of these disappear, the renderer
+        // change is eating guidance the LLM needs.
+        assert!(
+            result.contains("skill_discover"),
+            "rendered bootstrap must reference the MCP tool name"
+        );
+        assert!(
+            result.contains("Capability discovery"),
+            "rendered bootstrap must include the capability-discovery section header"
+        );
+        assert!(
+            result.contains("Trigger patterns"),
+            "rendered bootstrap must include the trigger-pattern section"
+        );
+        assert!(
+            result.contains("Hard rule"),
+            "rendered bootstrap must include the don't-fabricate hard rule"
+        );
+    }
 }
