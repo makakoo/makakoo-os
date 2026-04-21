@@ -88,19 +88,24 @@ def run():
     if not facts:
         return
 
-    # Lazy import logseq_bridge
-    brain_path = os.path.join(HARVEY_HOME, "plugins-core", "logseq-brain")
-    sys.path.insert(0, brain_path)
+    # Direct import — core.memory.brain_bridge lives in lib-harvey-core
+    # and is already on PYTHONPATH via the kernel's skill_runner env.
     try:
-        from logseq_bridge import (
+        from core.memory.brain_bridge import (
             create_page, append_block, upsert_property,
-            log_to_today_journal, sync_inbound_to_brain
+            upsert_page_properties, page_exists,
+            log_to_today_journal, sync_inbound_to_brain,
         )
     except ImportError as e:
-        log(f"Failed to import logseq_bridge: {e}")
-        log("Integrator requires logseq-brain skill — install it first")
-        sys.path.pop(0)
+        log(f"Failed to import core.memory.brain_bridge: {e}")
+        log("Integrator requires lib-harvey-core — install with `makakoo plugin install lib-harvey-core`")
         return
+
+    def create_or_upsert(page, props, content):
+        """Idempotent page create: upsert props if page exists, else create fresh."""
+        if page_exists(page):
+            return upsert_page_properties(page, props)
+        return create_page(page, props, content)
 
     created = []
     errors = []
@@ -130,7 +135,7 @@ def run():
                 page_info = create_person_page(name, desc, source="knowledge-extraction")
 
             if page_info and not args.dry_run:
-                create_page(page_info["page"], page_info["props"], page_info.get("content", ""))
+                create_or_upsert(page_info["page"], page_info["props"], page_info.get("content", ""))
             if page_info:
                 created.append(f"page: {page_info['page']}")
         except Exception as e:
@@ -141,7 +146,7 @@ def run():
         try:
             page_info = create_event_page(event_str)
             if page_info and not args.dry_run:
-                create_page(page_info["page"], page_info["props"], page_info.get("content", ""))
+                create_or_upsert(page_info["page"], page_info["props"], page_info.get("content", ""))
             if page_info:
                 created.append(f"event: {page_info['page']}")
         except Exception as e:

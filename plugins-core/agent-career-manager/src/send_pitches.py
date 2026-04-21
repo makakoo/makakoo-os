@@ -62,9 +62,10 @@ def mark_as_sent(draft):
         
     print(f"✅ Updated CRM status for {draft['company']}.")
     
-    # Sync to brain
+    # Sync to brain — sync_to_brain is a sibling module in the same plugin.
     try:
-        sys.path.append(os.path.join(os.path.dirname(SCRIPT_DIR), "career-manager"))
+        if SCRIPT_DIR not in sys.path:
+            sys.path.insert(0, SCRIPT_DIR)
         from sync_to_brain import sync_company_to_brain
         
         # Extract contact to keep it intact in the Brain page
@@ -87,9 +88,10 @@ def mark_as_error(draft, error_msg):
         
     print(f"❌ Updated CRM status to Error for {draft['company']}.")
     
-    # Sync to brain
+    # Sync to brain — sync_to_brain is a sibling module in the same plugin.
     try:
-        sys.path.append(os.path.join(os.path.dirname(SCRIPT_DIR), "career-manager"))
+        if SCRIPT_DIR not in sys.path:
+            sys.path.insert(0, SCRIPT_DIR)
         from sync_to_brain import sync_company_to_brain
         
         contact_match = re.search(r'\*\*Contact:\*\*\s*(.+)', content)

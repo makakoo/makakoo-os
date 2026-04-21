@@ -89,8 +89,10 @@ def draft_pitch(company_name, job_title=None, skills_matched=None, contact="Hiri
     print(f"✅ Draft created for {company_name} in {history_path}")
     print(f"   Using template: '{template_name}'")
     
-    # Sync company to Brain
+    # Sync company to Brain — sync_to_brain is a sibling module.
     try:
+        if SCRIPT_DIR not in sys.path:
+            sys.path.insert(0, SCRIPT_DIR)
         from sync_to_brain import sync_company_to_brain
         print(f"  🧠 Syncing CRM state to Brain: Company - {company_name}")
         sync_company_to_brain(company_name, history_content, status="Drafting", contact=contact)
