@@ -1008,4 +1008,123 @@ command = ".venv/bin/pytest"
         assert_eq!(m.capabilities.grants.len(), 6);
         assert!(w.is_empty());
     }
+
+    // ── v0.2 E.5 — parser fuzz (property style) ────────────────────────
+    //
+    // `Manifest::parse` is a plugin-authored trust boundary: every
+    // third-party plugin.toml goes through it, and a single panic takes
+    // down `plugin sync` / `infect --verify`. These tests pound it with
+    // structurally-evil inputs and assert the parser only returns
+    // `Result::Err(_)` — never panics.
+    //
+    // Rather than ship a cargo-fuzz dependency (which needs `cargo install
+    // cargo-fuzz` + a nightly harness), we use a deterministic PRNG to
+    // generate 10,000 inputs per run. That's fast enough to stay in the
+    // unit-test suite and still catches the class of bugs cargo-fuzz
+    // would surface (unbalanced brackets, overflows, encoding tricks).
+
+    struct PseudoRng(u64);
+    impl PseudoRng {
+        fn next(&mut self) -> u64 {
+            // xorshift64* — deterministic, zero deps, good enough for fuzzing.
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0.wrapping_mul(0x2545F4914F6CDD1D)
+        }
+        fn range(&mut self, upper: usize) -> usize {
+            (self.next() as usize) % upper.max(1)
+        }
+        fn byte(&mut self) -> u8 {
+            (self.next() & 0xff) as u8
+        }
+    }
+
+    fn random_body(rng: &mut PseudoRng) -> String {
+        let shape = rng.range(8);
+        let size = rng.range(512) + 4;
+        match shape {
+            // Garbage bytes (mostly ASCII so the string is preserved).
+            0 => (0..size)
+                .map(|_| {
+                    let b = rng.byte() & 0x7f;
+                    if b < 0x20 && b != b'\n' && b != b'\t' { b'?' } else { b }
+                })
+                .map(char::from)
+                .collect(),
+            // Looks like TOML but unbalanced brackets.
+            1 => "[plugin\nname = \"x\"\n".repeat(rng.range(5) + 1),
+            // Deeply nested arrays.
+            2 => {
+                let depth = rng.range(50) + 1;
+                "[".repeat(depth)
+            }
+            // Extremely long string value.
+            3 => format!("[plugin]\nname = \"{}\"\n", "a".repeat(size)),
+            // Unicode & escape tricks.
+            4 => "[plugin]\nname = \"\\u0000\\uFFFF\\u{10FFFF}\"\n".into(),
+            // Empty string.
+            5 => String::new(),
+            // Just whitespace / newlines.
+            6 => "\n\r\t  ".repeat(size / 5 + 1),
+            // Valid TOML but wrong types everywhere.
+            _ => format!(
+                "[plugin]\nname = {num}\nversion = [1,2,3]\nkind = true\n",
+                num = rng.range(10_000)
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_never_panics_on_random_bodies() {
+        // Deterministic seed so a CI failure is reproducible by line number.
+        let mut rng = PseudoRng(0xC0FFEE_DEAD_BEEF);
+        let origin = p();
+        for i in 0..10_000 {
+            let body = random_body(&mut rng);
+            // SAFETY: we only care that parse doesn't panic. Any
+            // Ok/Err outcome is fine — the parser did its job.
+            let res = std::panic::catch_unwind(|| {
+                let _ = Manifest::parse(&body, &origin);
+            });
+            assert!(
+                res.is_ok(),
+                "Manifest::parse panicked on iteration {i} with body (first 200 bytes): {:?}",
+                &body.chars().take(200).collect::<String>()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_never_panics_on_deliberately_malformed_toml() {
+        // Specific patterns known to break naive TOML parsers over the
+        // years. Pinned rather than random so the test documents the
+        // intent of each hostile input.
+        let origin = p();
+        let hostile = [
+            "",                                          // empty
+            "\0\0\0",                                    // nulls
+            "[",                                         // incomplete
+            "[[[[[",                                     // very deep
+            "name = \"",                                 // unterminated string
+            "[plugin]\nname = \"\\uD800\"",              // unpaired surrogate
+            "[plugin]\nname = 0x7FFFFFFFFFFFFFFF",       // int overflow territory
+            "[plugin]\nname = 1.0e99999",                // float overflow
+            "[plugin]\nkind = \"skill\"\n[[plugin]]",    // table/array clash
+            "[plugin]\r\n\x1bname = \"x\"",              // ANSI escape
+            &"#".repeat(100_000),                        // massive comment
+            &"[x]\n".repeat(10_000),                     // repeated sections
+        ];
+        for (i, body) in hostile.iter().enumerate() {
+            let r = std::panic::catch_unwind(|| {
+                let _ = Manifest::parse(body, &origin);
+            });
+            assert!(
+                r.is_ok(),
+                "hostile input #{i} panicked (len={}): {:?}",
+                body.len(),
+                &body.chars().take(60).collect::<String>()
+            );
+        }
+    }
 }
