@@ -274,6 +274,12 @@ a silent security regression.
 
 ---
 
+## See it in action
+
+[`swarm-in-action.md`](swarm-in-action.md) captures a real session
+driving three adapters (pi + switchailocal + tytus-cli) across three
+transport kinds for one decision — with full transcripts.
+
 ## Reference
 
 - **v0.6 sprint spec:** `development/sprints/MAKAKOO-OS-V0.6-AGENTIC-PLUG/SPRINT.md`
