@@ -15,6 +15,7 @@
 pub mod install;
 pub mod lock;
 pub mod manifest;
+pub mod python_venv;
 pub mod registry;
 pub mod resolver;
 pub mod staging;
@@ -25,6 +26,7 @@ pub use install::{
     InstallRequest, PluginSource, ProbeDrift, UpstreamProbe,
 };
 pub use lock::{lock_path, LockEntry, LockError, LockMeta, PluginsLock};
+pub use python_venv::{ensure_venv, EnsureVenvReport, InstallSpec, VenvError, VenvSpec};
 pub use manifest::{
     AbiTable, CapabilitiesTable, DependsTable, EntrypointTable, InfectTable, InstallTable,
     Manifest, ManifestError, McpTable, McpToolSpec, PluginKind, PluginLanguage, PluginTable,

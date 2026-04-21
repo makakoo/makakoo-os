@@ -287,6 +287,24 @@ pub enum Commands {
         skip_infect: bool,
     },
 
+    /// Manage user-managed write permissions — the runtime Layer-3 of
+    /// the three-layer capability model (spec/CAPABILITIES.md §1.11).
+    ///
+    /// Grants extend Harvey's baseline sandbox without re-compiling or
+    /// restarting the daemon. Default duration is 1 hour — pass
+    /// `--for permanent` only for stable, reviewed access.
+    ///
+    ///   makakoo perms list                                   # show active grants
+    ///   makakoo perms grant ~/work/                          # 1h default
+    ///   makakoo perms grant ~/work/ --for 24h --label today  # time-limited
+    ///   makakoo perms revoke g_20260421_abcd1234             # by id
+    ///   makakoo perms purge                                  # drop expired
+    ///   makakoo perms audit --since 1h                       # recent activity
+    Perms {
+        #[command(subcommand)]
+        cmd: PermsCmd,
+    },
+
     /// Manage JSONL session trees — list, inspect, fork, label, rewind,
     /// export. Gated by `kernel.session_tree = true` in
     /// `$MAKAKOO_HOME/config/kernel.toml` (default OFF).
@@ -435,6 +453,15 @@ pub enum PluginCmd {
         json: bool,
     },
 
+    /// Hidden: kernel-internal helpers a plugin's install.sh can invoke.
+    /// Exposed for `makakoo-venv-bootstrap` — not part of the public
+    /// CLI contract.
+    #[command(hide = true)]
+    Internal {
+        #[command(subcommand)]
+        cmd: PluginInternalCmd,
+    },
+
     /// Batch-reinstall every plugin from `plugins-core/` into
     /// `$MAKAKOO_HOME/plugins/`. Used after a bulk source migration
     /// (e.g. the self-contained-plugins refactor) when the live install
@@ -457,6 +484,39 @@ pub enum PluginCmd {
         /// manifest-only install shape to self-contained plugins.
         #[arg(long)]
         force: bool,
+    },
+}
+
+/// Hidden plugin-internal subcommands. Stable wire contract for shell
+/// helpers like `makakoo-venv-bootstrap`; not documented publicly.
+#[derive(Subcommand, Debug)]
+pub enum PluginInternalCmd {
+    /// Create + populate a per-plugin Python venv. Reads the target
+    /// directory from `$MAKAKOO_PLUGIN_DIR` (set by the installer when
+    /// it invokes `[install].unix`).
+    VenvBootstrap {
+        /// `editable` (default) | `pip` | `git`. `editable` runs
+        /// `pip install -e .` against the plugin dir. `pip` requires
+        /// `--spec`. `git` requires `--url` (optionally `--rev`).
+        #[arg(long, default_value = "editable")]
+        mode: String,
+
+        /// Raw pip spec — only meaningful with `--mode pip`.
+        /// e.g. `-r requirements.txt` or `requests==2.31`.
+        #[arg(long)]
+        spec: Option<String>,
+
+        /// Git URL — only meaningful with `--mode git`.
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Git ref (tag or 40-char SHA) — only meaningful with `--mode git`.
+        #[arg(long)]
+        rev: Option<String>,
+
+        /// Python binary (default `python3`).
+        #[arg(long, default_value = "python3")]
+        python: String,
     },
 }
 
@@ -634,6 +694,97 @@ pub enum SessionCmd {
         /// Destination file. Default: stdout.
         #[arg(long)]
         out: Option<std::path::PathBuf>,
+    },
+}
+
+/// `makakoo perms <subcommand>`. Manages the runtime user-grant layer
+/// (`$MAKAKOO_HOME/config/user_grants.json`). See `spec/USER_GRANTS.md`
+/// for the file format and `spec/CAPABILITIES.md §1.11` for the
+/// three-layer model.
+#[derive(Subcommand, Debug)]
+pub enum PermsCmd {
+    /// List active grants (omit `--all` to hide expired).
+    List {
+        /// Emit JSON instead of a human table.
+        #[arg(long)]
+        json: bool,
+        /// Include expired grants in the output.
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Issue a new write grant. Default duration is 1 hour per LD#11.
+    ///
+    /// Scope refusal: `/`, `~`, `~/`, `$HOME`, empty, bare `*`, bare
+    /// `**` are rejected at this handler regardless of who asks.
+    /// Permanent grants outside `$MAKAKOO_HOME` require `--yes-really`.
+    Grant {
+        /// Path to grant write access to. `~` and `$VAR` expand at
+        /// grant-time (not check-time).
+        path: String,
+        /// Duration: `30m` | `1h` | `24h` | `7d` | `permanent`.
+        /// Natural-language phrases ("for an hour") are rejected in
+        /// v1 per lope F12 / LD#15 — deferred to v0.3.1.
+        #[arg(long = "for", default_value = "1h")]
+        duration: String,
+        /// Free-text label (≤ 80 chars; control chars stripped).
+        #[arg(long)]
+        label: Option<String>,
+        /// Caller-surface attribution. Defaults to `cli`.
+        #[arg(long, default_value = "cli")]
+        plugin: String,
+        /// Create the target directory if it doesn't exist.
+        #[arg(long)]
+        mkdir: bool,
+        /// Confirm a permanent grant outside `$MAKAKOO_HOME`.
+        #[arg(long = "yes-really")]
+        yes_really: bool,
+    },
+
+    /// Revoke a grant by id, or by unambiguous path.
+    Revoke {
+        /// Grant id (e.g. `g_20260421_abcd1234`).
+        id: Option<String>,
+        /// Alternative: revoke by scope path. Must match exactly
+        /// one active grant.
+        #[arg(long)]
+        path: Option<String>,
+        /// Emit JSON confirmation.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Drop expired grants from the store. Writes a `perms/revoke`
+    /// audit entry per expired grant (reason=`expired`).
+    Purge {
+        /// Emit JSON (list of removed grant ids).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show recent audit entries for `perms/*` and `fs/write` verbs.
+    Audit {
+        /// Only entries newer than this duration (e.g. `1h`, `24h`, `7d`).
+        #[arg(long)]
+        since: Option<String>,
+        /// Filter by plugin attribution.
+        #[arg(long)]
+        plugin: Option<String>,
+        /// Filter by grant id (matches `scope_granted`).
+        #[arg(long)]
+        grant: Option<String>,
+        /// Emit JSON (one entry per array element).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show detail for one grant by id.
+    Show {
+        /// Grant id.
+        id: String,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1130,6 +1281,61 @@ mod tests {
         } else {
             panic!("expected Plugin::Install");
         }
+    }
+
+    #[test]
+    fn parse_plugin_internal_venv_bootstrap_editable() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "plugin",
+            "internal",
+            "venv-bootstrap",
+            "--mode",
+            "editable",
+        ])
+        .unwrap();
+        let Commands::Plugin {
+            cmd:
+                PluginCmd::Internal {
+                    cmd: PluginInternalCmd::VenvBootstrap { mode, .. },
+                },
+        } = cli.command
+        else {
+            panic!("expected Plugin::Internal::VenvBootstrap");
+        };
+        assert_eq!(mode, "editable");
+    }
+
+    #[test]
+    fn parse_plugin_internal_venv_bootstrap_git_with_rev() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "plugin",
+            "internal",
+            "venv-bootstrap",
+            "--mode",
+            "git",
+            "--url",
+            "https://github.com/x/y",
+            "--rev",
+            "v1.2.3",
+        ])
+        .unwrap();
+        let Commands::Plugin {
+            cmd:
+                PluginCmd::Internal {
+                    cmd:
+                        PluginInternalCmd::VenvBootstrap {
+                            mode, url, rev, ..
+                        },
+                },
+        } = cli.command
+        else {
+            panic!("expected Plugin::Internal::VenvBootstrap");
+        };
+        assert_eq!(mode, "git");
+        assert_eq!(url.as_deref(), Some("https://github.com/x/y"));
+        assert_eq!(rev.as_deref(), Some("v1.2.3"));
     }
 
     #[test]

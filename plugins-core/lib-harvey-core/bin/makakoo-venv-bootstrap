@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# makakoo-venv-bootstrap — shell sugar around `makakoo plugin internal venv-bootstrap`.
+#
+# Usage (from a plugin's install.sh):
+#   makakoo-venv-bootstrap                        # pip install -e . in the plugin dir
+#   makakoo-venv-bootstrap editable               # same
+#   makakoo-venv-bootstrap pip "-r requirements.txt"
+#   makakoo-venv-bootstrap git https://github.com/x/y
+#   makakoo-venv-bootstrap git https://github.com/x/y@v1.2.3
+#
+# Honors $MAKAKOO_PLUGIN_DIR (set by the installer). Python defaults to
+# python3 but can be overridden via $MAKAKOO_VENV_PYTHON.
+
+set -euo pipefail
+
+MODE="${1:-editable}"
+shift || true
+
+PYTHON="${MAKAKOO_VENV_PYTHON:-python3}"
+BIN="${MAKAKOO_BIN:-makakoo}"
+
+if [[ -z "${MAKAKOO_PLUGIN_DIR:-}" ]]; then
+    echo "makakoo-venv-bootstrap: \$MAKAKOO_PLUGIN_DIR is unset — must be invoked from a plugin install.sh" >&2
+    exit 2
+fi
+
+case "$MODE" in
+    editable)
+        exec "$BIN" plugin internal venv-bootstrap --mode editable --python "$PYTHON"
+        ;;
+    pip)
+        SPEC="${1:-}"
+        if [[ -z "$SPEC" ]]; then
+            echo "makakoo-venv-bootstrap pip requires a pip spec arg" >&2
+            exit 2
+        fi
+        exec "$BIN" plugin internal venv-bootstrap --mode pip --spec "$SPEC" --python "$PYTHON"
+        ;;
+    git)
+        URL_AT_REV="${1:-}"
+        if [[ -z "$URL_AT_REV" ]]; then
+            echo "makakoo-venv-bootstrap git requires <url>[@<rev>]" >&2
+            exit 2
+        fi
+        # Split on LAST '@' so ssh-style URLs (git@host:…) don't get mangled.
+        if [[ "$URL_AT_REV" == *@* ]] && [[ "$URL_AT_REV" != *://* || "${URL_AT_REV##*://}" == *@* ]]; then
+            URL="${URL_AT_REV%@*}"
+            REV="${URL_AT_REV##*@}"
+            exec "$BIN" plugin internal venv-bootstrap --mode git --url "$URL" --rev "$REV" --python "$PYTHON"
+        else
+            exec "$BIN" plugin internal venv-bootstrap --mode git --url "$URL_AT_REV" --python "$PYTHON"
+        fi
+        ;;
+    *)
+        echo "makakoo-venv-bootstrap: unknown mode '$MODE' (valid: editable, pip, git)" >&2
+        exit 2
+        ;;
+esac

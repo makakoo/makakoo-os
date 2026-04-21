@@ -43,6 +43,88 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
         }
         PluginCmd::Outdated { json } => outdated(ctx, json),
         PluginCmd::Sync { dry_run, force } => sync(ctx, dry_run, force),
+        PluginCmd::Internal { cmd } => internal(ctx, cmd),
+    }
+}
+
+fn internal(ctx: &CliContext, cmd: crate::cli::PluginInternalCmd) -> anyhow::Result<i32> {
+    match cmd {
+        crate::cli::PluginInternalCmd::VenvBootstrap {
+            mode,
+            spec,
+            url,
+            rev,
+            python,
+        } => internal_venv_bootstrap(ctx, &mode, spec, url, rev, &python),
+    }
+}
+
+/// `makakoo plugin internal venv-bootstrap` — the wire contract for
+/// `plugins-core/lib-harvey-core/bin/makakoo-venv-bootstrap`. Reads
+/// `$MAKAKOO_PLUGIN_DIR` to locate the target plugin.
+fn internal_venv_bootstrap(
+    _ctx: &CliContext,
+    mode: &str,
+    spec: Option<String>,
+    url: Option<String>,
+    rev: Option<String>,
+    python: &str,
+) -> anyhow::Result<i32> {
+    use makakoo_core::plugin::{ensure_venv, InstallSpec, VenvSpec};
+
+    let plugin_dir = match std::env::var("MAKAKOO_PLUGIN_DIR") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => {
+            output::print_error(
+                "venv-bootstrap: $MAKAKOO_PLUGIN_DIR is not set. \
+                 This command must be invoked from a plugin's [install].unix script.",
+            );
+            return Ok(2);
+        }
+    };
+
+    let install_spec = match mode {
+        "editable" => InstallSpec::Editable,
+        "pip" => match spec {
+            Some(s) => InstallSpec::Pip(s),
+            None => {
+                output::print_error("venv-bootstrap --mode pip requires --spec=<raw-pip-spec>");
+                return Ok(2);
+            }
+        },
+        "git" => match url {
+            Some(u) => InstallSpec::Git { url: u, rev },
+            None => {
+                output::print_error("venv-bootstrap --mode git requires --url=<repo-url>");
+                return Ok(2);
+            }
+        },
+        other => {
+            output::print_error(format!(
+                "venv-bootstrap: unknown --mode {other:?} (valid: editable, pip, git)"
+            ));
+            return Ok(2);
+        }
+    };
+
+    match ensure_venv(&VenvSpec {
+        plugin_dir: plugin_dir.clone(),
+        python: python.to_string(),
+        install_spec,
+    }) {
+        Ok(report) => {
+            output::print_info(format!(
+                "venv ready at {} (created: {}, python: {})",
+                report.venv_dir.display(),
+                report.created,
+                report.python_bin.display()
+            ));
+            Ok(0)
+        }
+        Err(e) => {
+            output::print_error(format!("venv-bootstrap failed: {e}"));
+            Ok(1)
+        }
     }
 }
 
