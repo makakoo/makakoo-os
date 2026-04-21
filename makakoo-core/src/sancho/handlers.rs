@@ -829,6 +829,108 @@ impl SanchoHandler for SwarmDispatchHandler {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+//  10. PermsPurgeHandler (v0.3 user grants)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Drop expired user grants from `$MAKAKOO_HOME/config/user_grants.json`
+/// and emit one `perms/revoke` audit entry per removed grant with
+/// `correlation_id="reason:expired"`.
+///
+/// The CLI `makakoo perms purge` (Phase D) shares the same `UserGrants`
+/// backend — the only divergence is this handler's plugin attribution
+/// (`sancho-native`) and its audit-log correlation marker.
+///
+/// No-op when the file is missing or already clean. Idempotent: two
+/// ticks in a row emit audit entries only for grants that were still
+/// active on the first tick.
+pub struct PermsPurgeHandler;
+
+impl PermsPurgeHandler {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for PermsPurgeHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SanchoHandler for PermsPurgeHandler {
+    fn name(&self) -> &str {
+        "perms_purge_tick"
+    }
+
+    async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
+        use crate::capability::audit::{AuditEntry, AuditLog, AuditResult};
+        use crate::capability::user_grants::UserGrants;
+        use chrono::Utc;
+
+        let start = Instant::now();
+        let now = Utc::now();
+
+        let mut grants = UserGrants::load(&ctx.home);
+        let removed = grants.purge_expired(now);
+        if removed.is_empty() {
+            let report = HandlerReport::ok(
+                "perms_purge_tick",
+                "0 expired",
+                start.elapsed(),
+            );
+            publish_report(ctx, &report);
+            return Ok(report);
+        }
+
+        if let Err(e) = grants.save() {
+            return Ok(HandlerReport::failed(
+                "perms_purge_tick",
+                format!("save failed: {e}"),
+                start.elapsed(),
+            ));
+        }
+
+        let audit = match AuditLog::open_default(&ctx.home) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                tracing::warn!("perms_purge_tick: audit log open failed: {e}");
+                None
+            }
+        };
+        if let Some(audit) = audit.as_ref() {
+            for g in &removed {
+                let entry = AuditEntry {
+                    ts: now,
+                    plugin: "sancho-native".to_string(),
+                    plugin_version: env!("CARGO_PKG_VERSION").to_string(),
+                    verb: "perms/revoke".to_string(),
+                    scope_requested: g.scope.clone(),
+                    scope_granted: Some(g.id.clone()),
+                    result: AuditResult::Allowed,
+                    duration_ms: None,
+                    bytes_in: None,
+                    bytes_out: None,
+                    correlation_id: Some("reason:expired".to_string()),
+                };
+                if let Err(e) = audit.append(&entry) {
+                    tracing::warn!("perms_purge_tick: audit append failed for {}: {e}", g.id);
+                }
+            }
+        }
+
+        let msg = format!("{} expired", removed.len());
+        let _ = append_journal_line(
+            &ctx.home,
+            &format!("- [[SANCHO]] perms_purge_tick: {msg}"),
+        );
+        let report = HandlerReport::ok("perms_purge_tick", msg, start.elapsed());
+        publish_report(ctx, &report);
+        Ok(report)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 //  Tests
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1058,5 +1160,143 @@ mod tests {
         let report = handler.run(&ctx).await.unwrap();
         assert!(report.ok);
         assert!(report.message.contains("queue empty"), "msg: {}", report.message);
+    }
+
+    // ─── PermsPurgeHandler (Phase F) ──────────────────────────────
+
+    #[tokio::test]
+    async fn perms_purge_removes_expired_keeps_active_and_emits_audit() {
+        use crate::capability::user_grants::{default_path, UserGrant, UserGrants};
+        use chrono::{Duration as ChronoDuration, Utc};
+
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+        let now = Utc::now();
+
+        // Seed three grants: two expired, one active.
+        let p = default_path(&ctx.home);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut u = UserGrants::empty_at(p);
+        for (id, offset_minutes) in
+            [("g_expired_a", -30i64), ("g_expired_b", -1), ("g_active_c", 60)]
+        {
+            u.add(UserGrant {
+                id: id.into(),
+                scope: format!("fs/write:/tmp/{id}/**"),
+                created_at: now - ChronoDuration::minutes(120),
+                expires_at: Some(now + ChronoDuration::minutes(offset_minutes)),
+                label: "seed".into(),
+                granted_by: "sebastian".into(),
+                plugin: "cli".into(),
+                origin_turn_id: "".into(),
+            });
+        }
+        u.save().unwrap();
+
+        let h = PermsPurgeHandler::new();
+        let report = h.run(&ctx).await.unwrap();
+        assert!(report.ok);
+        assert!(report.message.contains("2 expired"), "msg: {}", report.message);
+
+        // Disk shows only the active grant.
+        let loaded = UserGrants::load(&ctx.home);
+        assert_eq!(loaded.grants.len(), 1);
+        assert_eq!(loaded.grants[0].id, "g_active_c");
+
+        // Audit log has one perms/revoke entry per expired grant, each
+        // carrying correlation_id="reason:expired" and plugin="sancho-native".
+        let audit_path = ctx.home.join("logs").join("audit.jsonl");
+        let contents = fs::read_to_string(&audit_path).unwrap();
+        let lines: Vec<&str> = contents.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 2, "expected 2 audit entries; got: {contents}");
+        for line in lines {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(v["plugin"], "sancho-native");
+            assert_eq!(v["verb"], "perms/revoke");
+            assert_eq!(v["result"], "allowed");
+            assert_eq!(v["correlation_id"], "reason:expired");
+            let gid = v["scope_granted"].as_str().unwrap();
+            assert!(gid.starts_with("g_expired_"), "got scope_granted={gid}");
+        }
+    }
+
+    #[tokio::test]
+    async fn perms_purge_idempotent_no_op_on_clean_store() {
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+
+        // No grants file at all.
+        let h = PermsPurgeHandler::new();
+        let r1 = h.run(&ctx).await.unwrap();
+        assert!(r1.ok);
+        assert!(r1.message.contains("0 expired"), "msg: {}", r1.message);
+
+        // Second tick back-to-back: still 0 expired, no audit rows.
+        let r2 = h.run(&ctx).await.unwrap();
+        assert!(r2.ok);
+        assert!(r2.message.contains("0 expired"), "msg: {}", r2.message);
+
+        let audit_path = ctx.home.join("logs").join("audit.jsonl");
+        if audit_path.exists() {
+            let contents = fs::read_to_string(&audit_path).unwrap();
+            assert!(
+                contents.trim().is_empty(),
+                "audit log should be empty on no-op ticks; got: {contents}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn perms_purge_tick_collision_plugin_is_skipped_by_walker() {
+        // Belt-and-suspenders: if a rogue plugin ships a sancho task
+        // named "perms_purge_tick", the walker MUST skip it so the
+        // native handler stays authoritative.
+        use crate::plugin::PluginRegistry;
+        use crate::sancho::{default_registry, SanchoContext};
+
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let plugin_dir = home.join("plugins").join("rogue-perms");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"
+[plugin]
+name = "rogue-perms"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+
+[source]
+path = "."
+
+[abi]
+sancho-task = "^1.0"
+
+[entrypoint]
+run = "python3 -m rogue"
+
+[sancho]
+tasks = [{ name = "perms_purge_tick", interval = "60s" }]
+"#,
+        )
+        .unwrap();
+
+        let plugins = PluginRegistry::load_default(home).unwrap();
+        let store_path = home.join("b.db");
+        let bus_path = home.join("bus.db");
+        let store = Arc::new(SuperbrainStore::open(&store_path).unwrap());
+        let bus = PersistentEventBus::open(&bus_path).unwrap();
+        let llm = Arc::new(LlmClient::new());
+        let emb = Arc::new(EmbeddingClient::new());
+        let ctx = Arc::new(SanchoContext::new(store, bus, llm, emb, home.to_path_buf()));
+
+        let reg = default_registry(ctx, &plugins);
+        let names: Vec<&str> = reg.tasks().iter().map(|t| t.handler.name()).collect();
+        let count = names.iter().filter(|n| **n == "perms_purge_tick").count();
+        assert_eq!(
+            count, 1,
+            "walker must skip rogue plugin that shadows perms_purge_tick; names={names:?}"
+        );
     }
 }

@@ -25,7 +25,8 @@ pub use gates::{
 pub use handlers::{
     DailyBriefingHandler, DreamHandler, DynamicChecklistHandler, FakeLlmCall,
     IndexRebuildHandler, LlmCall, MemoryConsolidationHandler, MemoryPromotionHandler,
-    SubprocessHandler, SuperbrainSyncEmbedHandler, SwarmDispatchHandler, WikiLintHandler,
+    PermsPurgeHandler, SubprocessHandler, SuperbrainSyncEmbedHandler,
+    SwarmDispatchHandler, WikiLintHandler,
 };
 pub use registry::{HandlerReport, SanchoContext, SanchoHandler, SanchoRegistry, TaskRegistration};
 
@@ -67,9 +68,9 @@ pub fn parse_interval(spec: &str, default: Duration) -> Duration {
 ///
 /// Used by `makakoo sancho status` to display a "N native + M manifest"
 /// breakdown without rebuilding the native registry twice.
-pub const NATIVE_TASK_COUNT: usize = 9;
+pub const NATIVE_TASK_COUNT: usize = 10;
 
-/// The eight native SANCHO task names the kernel owns. A plugin whose
+/// Native SANCHO task names the kernel owns. A plugin whose
 /// manifest declares `[[sancho.tasks]].name` matching any of these
 /// shadows the kernel handler, which would either double-register (two
 /// handlers firing for the same name) or silently replace the native
@@ -80,7 +81,7 @@ pub const NATIVE_TASK_COUNT: usize = 9;
 /// skips them defensively if a manifest somehow arrives by bypassing
 /// `plugin install` (e.g. hand-copied into `$MAKAKOO_HOME/plugins/`).
 ///
-/// Locked by `native_task_names_match_registry` test — adding a 9th
+/// Locked by `native_task_names_match_registry` test — adding a new
 /// native handler without updating this list fails the build.
 pub const NATIVE_TASK_NAMES: &[&str] = &[
     "dream",
@@ -92,6 +93,7 @@ pub const NATIVE_TASK_NAMES: &[&str] = &[
     "superbrain_sync_embed",
     "dynamic_checklist",
     "swarm_dispatch",
+    "perms_purge_tick",
 ];
 
 /// Build the kernel's native SANCHO registry — 8 pure-Rust handlers that
@@ -150,6 +152,15 @@ pub fn native_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
     reg.register(
         Arc::new(SwarmDispatchHandler::new()),
         vec![Arc::new(TimeGate::new(Duration::from_secs(60)))],
+    );
+    // v0.3 F — expired user-grant purge. 15-minute cadence (SPRINT §4.F)
+    // is fast enough that a grant whose duration just elapsed becomes
+    // unreachable to the write handler well inside one conversational
+    // turn, but slow enough that the audit log stays quiet on a machine
+    // with no grants in flight.
+    reg.register(
+        Arc::new(PermsPurgeHandler::new()),
+        vec![Arc::new(TimeGate::new(Duration::from_secs(900)))],
     );
     reg
 }
