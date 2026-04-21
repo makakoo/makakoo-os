@@ -51,6 +51,7 @@ async fn smoke_three_subagents_complete_and_write_artifacts() {
                 prompt: format!("do thing {i}"),
                 model: None,
                 parent_run_id: None,
+                adapter: None,
             })
             .await
             .expect("dispatch accepted");

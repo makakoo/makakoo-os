@@ -24,7 +24,125 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-BASE_DIR = Path.home() / "HARVEY" / "data" / "openclaw-bridge"
+def _resolve_makakoo_home() -> Path:
+    """$MAKAKOO_HOME with $HARVEY_HOME as legacy fallback, then ~/MAKAKOO.
+
+    Matches the same precedence the Rust kernel uses. Stays private to
+    the module so call sites never reach into env directly.
+    """
+    for key in ("MAKAKOO_HOME", "HARVEY_HOME"):
+        if (v := os.environ.get(key)):
+            return Path(v).expanduser()
+    return Path.home() / "MAKAKOO"
+
+
+BASE_DIR = _resolve_makakoo_home() / "data" / "openclaw-bridge"
+
+
+# ──────────────────────────────────────────────────────────────
+# Phase E.4 — Universal-bridge path.
+#
+# When a `openclaw` adapter is registered in ~/.makakoo/adapters/registered/,
+# delegate() routes through `makakoo adapter call openclaw` instead of the
+# legacy OpenClaw CLI executor. Call sites are preserved; only the transport
+# changes.
+# ──────────────────────────────────────────────────────────────
+
+def _adapters_root() -> Path:
+    if (v := os.environ.get("MAKAKOO_ADAPTERS_HOME")):
+        return Path(v).expanduser()
+    return Path.home() / ".makakoo" / "adapters"
+
+
+def _adapter_registered(name: str) -> bool:
+    return (_adapters_root() / "registered" / f"{name}.toml").is_file()
+
+
+def _makakoo_bin() -> Optional[str]:
+    import shutil
+    explicit = os.environ.get("MAKAKOO_BIN")
+    if explicit and os.path.isfile(explicit):
+        return explicit
+    return shutil.which("makakoo")
+
+
+def _delegate_via_universal_bridge(prompt: str, timeout: int) -> "DelegationResult":
+    """Shell out to `makakoo adapter call openclaw` with the prompt on
+    stdin; hydrate the JSON ValidatorResult into a DelegationResult."""
+    from time import time as _now
+    started = _now()
+    bin_path = _makakoo_bin()
+    if not bin_path:
+        return DelegationResult(
+            task=prompt[:100],
+            session_id="",
+            trigger="adapter",
+            routing_reason="adapter.universal_bridge",
+            duration_ms=int((_now() - started) * 1000),
+            result_type="error",
+            text="",
+            error="makakoo binary not on PATH (install makakoo-os CLI)",
+        )
+    try:
+        proc = subprocess.run(
+            [bin_path, "adapter", "call", "openclaw", "--timeout", str(timeout)],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 30,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired:
+        return DelegationResult(
+            task=prompt[:100],
+            session_id="",
+            trigger="adapter",
+            routing_reason="adapter.universal_bridge",
+            duration_ms=int((_now() - started) * 1000),
+            result_type="error",
+            text="",
+            error=f"adapter call timeout after {timeout}s",
+        )
+    if proc.returncode != 0:
+        return DelegationResult(
+            task=prompt[:100],
+            session_id="",
+            trigger="adapter",
+            routing_reason="adapter.universal_bridge",
+            duration_ms=int((_now() - started) * 1000),
+            result_type="error",
+            text=proc.stdout or "",
+            error=(proc.stderr or "").strip()[:500] or f"exit {proc.returncode}",
+        )
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        return DelegationResult(
+            task=prompt[:100],
+            session_id="",
+            trigger="adapter",
+            routing_reason="adapter.universal_bridge",
+            duration_ms=int((_now() - started) * 1000),
+            result_type="error",
+            text=proc.stdout[:500],
+            error=f"invalid JSON from makakoo adapter call: {e}",
+        )
+    verdict = payload.get("verdict") or {}
+    text = str(verdict.get("rationale", "") or payload.get("raw_response", ""))
+    result_type = "text"
+    err = payload.get("error") or ""
+    if verdict.get("status") == "INFRA_ERROR" or err:
+        result_type = "error"
+    return DelegationResult(
+        task=prompt[:100],
+        session_id="",
+        trigger="adapter",
+        routing_reason="adapter.universal_bridge",
+        duration_ms=int((_now() - started) * 1000),
+        result_type=result_type,
+        text=text,
+        error=err or None,
+    )
 STATE_FILE = BASE_DIR / "state.json"
 SESSIONS_DIR = BASE_DIR / "sessions"
 LOGS_DIR = BASE_DIR / "logs"
@@ -477,12 +595,40 @@ class OpenClawBridge:
         """
         Route a task to OpenClaw.
 
+        v0.3: prefer the Makakoo universal-bridge adapter
+        (~/.makakoo/adapters/registered/openclaw.toml) when available,
+        falling back to the legacy OpenClaw CLI executor otherwise. Old
+        call sites see an unchanged DelegationResult shape.
+
         Returns DelegationResult with synthesized response.
         """
         # Get or create session
         session_id = self._get_active_session()
 
-        # Execute
+        # v0.3 Phase E.4 — universal-bridge path. Opt out via
+        # OPENCLAW_BRIDGE_LEGACY=1.
+        if (
+            os.environ.get("OPENCLAW_BRIDGE_LEGACY") != "1"
+            and _adapter_registered("openclaw")
+        ):
+            result = _delegate_via_universal_bridge(
+                prompt=prompt,
+                timeout=timeout or self.state.default_timeout,
+            )
+            result.trigger = trigger
+            result.routing_reason = routing_reason or trigger
+            if session_id:
+                self.session_manager.append_turn(session_id, "user", prompt)
+                self.session_manager.append_turn(session_id, "assistant", result.text)
+                self.state.session_id = session_id
+                self.state.last_used = datetime.utcnow().isoformat() + "Z"
+                self.state.save()
+            self.audit.log(result)
+            if log_to_brain:
+                self.audit.log_to_brain(result)
+            return result
+
+        # Legacy path — direct OpenClaw CLI.
         result = self.executor.execute(
             prompt=prompt,
             session_id=session_id,

@@ -71,6 +71,7 @@ impl HarveySwarmRunHandler {
         let name = optional_string(&params, "name").unwrap_or_else(|| "subagent".to_string());
         let model = optional_string(&params, "model");
         let parent_run_id = optional_string(&params, "parent_run_id");
+        let adapter = optional_string(&params, "adapter");
 
         let resp = state
             .gateway
@@ -80,6 +81,7 @@ impl HarveySwarmRunHandler {
                 prompt,
                 model,
                 parent_run_id,
+                adapter,
             })
             .await
             .map_err(|e| RpcError::internal(format!("swarm dispatch failed: {e}")))?;

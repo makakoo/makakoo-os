@@ -45,6 +45,11 @@ pub struct DispatchRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub parent_run_id: Option<String>,
+    /// When set, this dispatch bypasses the internal LlmClient and runs
+    /// against a registered adapter via the universal-bridge pipeline.
+    /// The Result artifact carries the verdict's rationale as content.
+    #[serde(default)]
+    pub adapter: Option<String>,
 }
 
 /// Immediate dispatch acknowledgement.
@@ -183,8 +188,11 @@ impl SwarmGateway {
             context: json!({
                 "run_id": run_id,
                 "model": model,
+                "adapter": req.adapter.clone(),
             }),
         };
+
+        let adapter_for_runner = req.adapter.clone();
 
         let subagent_id = self.coordinator.spawn(spec, move |s| {
             let artifacts = Arc::clone(&artifacts);
@@ -193,7 +201,73 @@ impl SwarmGateway {
             let run_id = run_id_for_runner.clone();
             let agent = agent_for_runner.clone();
             let model = model_for_runner.clone();
+            let adapter = adapter_for_runner.clone();
             async move {
+                // Adapter-backed dispatch path — runs against a registered
+                // universal-bridge adapter instead of the LlmClient. The
+                // Result artifact content is the verdict's rationale so
+                // downstream consumers (run_status, tests) read one stable
+                // shape regardless of which path produced it.
+                if let Some(adapter_name) = adapter {
+                    use crate::adapter::{call_adapter, AdapterRegistry, CallContext};
+                    let registry = match AdapterRegistry::load_default() {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return Err(crate::error::MakakooError::internal(format!(
+                                "adapter registry unavailable: {e}"
+                            )));
+                        }
+                    };
+                    let manifest = match registry.get(&adapter_name) {
+                        Some(r) => r.manifest.clone(),
+                        None => {
+                            return Err(crate::error::MakakooError::internal(format!(
+                                "adapter `{adapter_name}` not registered"
+                            )));
+                        }
+                    };
+                    let ctx = CallContext::default().with_timeout(120);
+                    let result = call_adapter(&manifest, &s.prompt, ctx).await;
+                    let content = result.verdict.rationale.clone();
+                    let status = result.verdict.status.as_str().to_string();
+                    let art = Artifact {
+                        id: 0,
+                        kind: ArtifactKind::Result,
+                        run_id: run_id.clone(),
+                        parent_id: None,
+                        agent: agent.clone(),
+                        content: content.clone(),
+                        metadata: json!({
+                            "adapter": adapter_name,
+                            "status": status,
+                            "confidence": result.verdict.confidence,
+                        }),
+                        created_at: chrono::Utc::now(),
+                    };
+                    if let Err(e) = artifacts.write(art) {
+                        tracing::warn!(
+                            target: "makakoo.swarm",
+                            "adapter dispatch artifact write failed: {e}"
+                        );
+                    }
+                    let _ = bus.publish(
+                        "swarm.dispatch.complete",
+                        "swarm-gateway",
+                        json!({
+                            "run_id": run_id,
+                            "agent": agent,
+                            "adapter": adapter_name,
+                            "status": status,
+                        }),
+                    );
+                    return Ok(json!({
+                        "run_id": run_id,
+                        "adapter": adapter_name,
+                        "status": status,
+                        "content": content,
+                    }));
+                }
+
                 let messages = vec![LlmMessage::user(s.prompt.clone())];
                 match llm.chat(&model, messages).await {
                     Ok(content) => {
@@ -371,6 +445,7 @@ impl SwarmGateway {
                     prompt,
                     model: Some(model.clone()),
                     parent_run_id: Some(run_id.clone()),
+                    adapter: None,
                 };
                 let resp = self.dispatch(child).await?;
                 subagent_ids.push(resp.subagent_id);
@@ -477,6 +552,7 @@ mod tests {
                 prompt: "please say hi".into(),
                 model: None,
                 parent_run_id: None,
+                adapter: None,
             })
             .await
             .unwrap();
@@ -511,6 +587,7 @@ mod tests {
                 prompt: "crash please".into(),
                 model: None,
                 parent_run_id: None,
+                adapter: None,
             })
             .await
             .unwrap();
@@ -542,6 +619,7 @@ mod tests {
                 prompt: "go".into(),
                 model: None,
                 parent_run_id: None,
+                adapter: None,
             })
             .await
             .unwrap();

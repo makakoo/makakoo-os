@@ -250,6 +250,7 @@ mod tests {
                 prompt: "go".into(),
                 model: None,
                 parent_run_id: None,
+                adapter: None,
             },
         )
         .unwrap();
