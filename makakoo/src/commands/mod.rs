@@ -109,7 +109,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             crate::infect::uninfect_global(target, dry_run).await
         }
         Commands::Session { cmd } => session::run(ctx, cmd).await,
-        Commands::Adapter { cmd } => adapter::run(ctx, cmd),
+        Commands::Adapter { cmd } => adapter::run(ctx, cmd).await,
     }
 }
 

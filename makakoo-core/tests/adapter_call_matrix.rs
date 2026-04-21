@@ -10,7 +10,6 @@
 //! PATH (never happens on macOS/Linux dev machines but keeps CI honest).
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use makakoo_core::adapter::{call_adapter, CallContext, Manifest, VerdictStatus};
 use wiremock::matchers::{header, header_exists, method, path as wm_path};

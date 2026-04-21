@@ -674,6 +674,103 @@ pub enum AdapterCmd {
         #[arg(long)]
         bundled: bool,
     },
+
+    /// Install an adapter. `<source>` is either a local directory
+    /// containing `adapter.toml` or a bundled reference adapter name
+    /// (with `--bundled`). URL installs (git / https-tarball / pypi /
+    /// npm) ship after Phase D.
+    Install {
+        /// Path to a local adapter dir, or a bundled adapter name.
+        source: String,
+        /// Treat `source` as a bundled reference adapter name.
+        #[arg(long)]
+        bundled: bool,
+        /// Allow unsigned URL installs (local paths are always allowed).
+        #[arg(long)]
+        allow_unsigned: bool,
+        /// Accept the capability diff without the interactive prompt
+        /// (used for scripted re-trusts).
+        #[arg(long)]
+        accept_re_trust: bool,
+        /// Skip the install-time health check (dev loop only).
+        #[arg(long)]
+        skip_health_check: bool,
+    },
+
+    /// Re-run install against the currently-registered adapter's source.
+    /// Detects capability / security drift and prompts (or honors
+    /// --accept-re-trust).
+    Update {
+        /// Adapter name.
+        name: String,
+        /// Accept the diff without prompt.
+        #[arg(long)]
+        accept_re_trust: bool,
+    },
+
+    /// Remove a registered adapter. Clears the trust entry. With
+    /// `--purge`, also wipes the adapter's state dir under
+    /// `~/.makakoo/adapters/state/<name>/`.
+    Remove {
+        /// Adapter name.
+        name: String,
+        /// Also delete the adapter's state dir.
+        #[arg(long)]
+        purge: bool,
+    },
+
+    /// Enable a previously-disabled adapter (soft toggle — manifest
+    /// stays on disk, the `disabled` marker is dropped).
+    Enable { name: String },
+
+    /// Disable an adapter without uninstalling it. Consumers (lope,
+    /// swarm, chat) skip disabled adapters on their next registry read.
+    Disable { name: String },
+
+    /// Show a status table for every registered adapter: last call
+    /// outcome, last call timestamp, last error.
+    Status {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Diagnose an adapter — env presence, auth smoke, health-check,
+    /// signature verify. Each check reports ✅ or ❌ with a remediation
+    /// hint.
+    Doctor {
+        /// Adapter name.
+        name: String,
+        /// Emit JSON instead of the human-readable table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Fuzzy name filter across registered + bundled adapters.
+    Search {
+        /// Free-form substring query.
+        query: String,
+    },
+
+    /// Migrate legacy lope-config providers → adapter manifests.
+    /// Reads the given `~/.lope/config.json` (or equivalent), emits one
+    /// `.toml` per provider entry into the registered dir.
+    MigrateConfig {
+        /// Path to a lope config.json file with a `providers` array.
+        #[arg(value_name = "PATH")]
+        path: std::path::PathBuf,
+    },
+
+    /// Dump a registered adapter's manifest as a signed tarball
+    /// (adapter.toml + adapter.toml.sig). When `--sign` is omitted, the
+    /// tarball contains only the manifest.
+    Export {
+        /// Adapter name.
+        name: String,
+        /// Output path (defaults to `./<name>.tar.gz`).
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
 }
 
 #[cfg(test)]
@@ -1135,5 +1232,287 @@ mod tests {
         } else {
             panic!("expected Distro::Install");
         }
+    }
+
+    // ───────────────────────── Adapter subcommand parsing ──────────────────────────
+
+    #[test]
+    fn parse_adapter_list() {
+        let cli = Cli::try_parse_from(["makakoo", "adapter", "list"]).unwrap();
+        match cli.command {
+            Commands::Adapter {
+                cmd:
+                    AdapterCmd::List {
+                        json: false,
+                        include_bundled: false,
+                    },
+            } => {}
+            _ => panic!("expected Adapter::List"),
+        }
+    }
+
+    #[test]
+    fn parse_adapter_list_with_flags() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "adapter",
+            "list",
+            "--json",
+            "--include-bundled",
+        ])
+        .unwrap();
+        if let Commands::Adapter {
+            cmd:
+                AdapterCmd::List {
+                    json,
+                    include_bundled,
+                },
+        } = cli.command
+        {
+            assert!(json);
+            assert!(include_bundled);
+        } else {
+            panic!("expected Adapter::List");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_install_bundled() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "adapter",
+            "install",
+            "openclaw",
+            "--bundled",
+            "--skip-health-check",
+        ])
+        .unwrap();
+        if let Commands::Adapter {
+            cmd:
+                AdapterCmd::Install {
+                    source,
+                    bundled,
+                    allow_unsigned,
+                    accept_re_trust,
+                    skip_health_check,
+                },
+        } = cli.command
+        {
+            assert_eq!(source, "openclaw");
+            assert!(bundled);
+            assert!(!allow_unsigned);
+            assert!(!accept_re_trust);
+            assert!(skip_health_check);
+        } else {
+            panic!("expected Adapter::Install");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_install_allow_unsigned() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "adapter",
+            "install",
+            "./my-adapter",
+            "--allow-unsigned",
+        ])
+        .unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Install { allow_unsigned, .. },
+        } = cli.command
+        {
+            assert!(allow_unsigned);
+        } else {
+            panic!("expected Adapter::Install");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_update() {
+        let cli =
+            Cli::try_parse_from(["makakoo", "adapter", "update", "openclaw", "--accept-re-trust"])
+                .unwrap();
+        if let Commands::Adapter {
+            cmd:
+                AdapterCmd::Update {
+                    name,
+                    accept_re_trust,
+                },
+        } = cli.command
+        {
+            assert_eq!(name, "openclaw");
+            assert!(accept_re_trust);
+        } else {
+            panic!("expected Adapter::Update");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_remove_with_purge() {
+        let cli =
+            Cli::try_parse_from(["makakoo", "adapter", "remove", "openclaw", "--purge"]).unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Remove { name, purge },
+        } = cli.command
+        {
+            assert_eq!(name, "openclaw");
+            assert!(purge);
+        } else {
+            panic!("expected Adapter::Remove");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_enable_disable() {
+        let e = Cli::try_parse_from(["makakoo", "adapter", "enable", "foo"]).unwrap();
+        matches!(
+            e.command,
+            Commands::Adapter {
+                cmd: AdapterCmd::Enable { .. },
+            }
+        );
+        let d = Cli::try_parse_from(["makakoo", "adapter", "disable", "foo"]).unwrap();
+        matches!(
+            d.command,
+            Commands::Adapter {
+                cmd: AdapterCmd::Disable { .. },
+            }
+        );
+    }
+
+    #[test]
+    fn parse_adapter_status_json() {
+        let cli = Cli::try_parse_from(["makakoo", "adapter", "status", "--json"]).unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Status { json },
+        } = cli.command
+        {
+            assert!(json);
+        } else {
+            panic!("expected Adapter::Status");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_doctor() {
+        let cli = Cli::try_parse_from(["makakoo", "adapter", "doctor", "openclaw"]).unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Doctor { name, json },
+        } = cli.command
+        {
+            assert_eq!(name, "openclaw");
+            assert!(!json);
+        } else {
+            panic!("expected Adapter::Doctor");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_search() {
+        let cli = Cli::try_parse_from(["makakoo", "adapter", "search", "claw"]).unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Search { query },
+        } = cli.command
+        {
+            assert_eq!(query, "claw");
+        } else {
+            panic!("expected Adapter::Search");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_migrate_config() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "adapter",
+            "migrate-config",
+            "/home/me/.lope/config.json",
+        ])
+        .unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::MigrateConfig { path },
+        } = cli.command
+        {
+            assert_eq!(path.to_str().unwrap(), "/home/me/.lope/config.json");
+        } else {
+            panic!("expected Adapter::MigrateConfig");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_export() {
+        let cli = Cli::try_parse_from([
+            "makakoo", "adapter", "export", "openclaw", "--out", "/tmp/openclaw.tgz",
+        ])
+        .unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Export { name, out },
+        } = cli.command
+        {
+            assert_eq!(name, "openclaw");
+            assert_eq!(out.unwrap().to_str().unwrap(), "/tmp/openclaw.tgz");
+        } else {
+            panic!("expected Adapter::Export");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_call_with_prompt() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "adapter",
+            "call",
+            "openclaw",
+            "--prompt",
+            "hello",
+            "--timeout",
+            "120",
+            "--bundled",
+        ])
+        .unwrap();
+        if let Commands::Adapter {
+            cmd:
+                AdapterCmd::Call {
+                    name,
+                    prompt,
+                    timeout,
+                    bundled,
+                },
+        } = cli.command
+        {
+            assert_eq!(name, "openclaw");
+            assert_eq!(prompt.as_deref(), Some("hello"));
+            assert_eq!(timeout, 120);
+            assert!(bundled);
+        } else {
+            panic!("expected Adapter::Call");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_info_json() {
+        let cli = Cli::try_parse_from(["makakoo", "adapter", "info", "openclaw", "--json"])
+            .unwrap();
+        if let Commands::Adapter {
+            cmd: AdapterCmd::Info { name, json },
+        } = cli.command
+        {
+            assert_eq!(name, "openclaw");
+            assert!(json);
+        } else {
+            panic!("expected Adapter::Info");
+        }
+    }
+
+    #[test]
+    fn parse_adapter_spec() {
+        let cli = Cli::try_parse_from(["makakoo", "adapter", "spec"]).unwrap();
+        matches!(
+            cli.command,
+            Commands::Adapter {
+                cmd: AdapterCmd::Spec,
+            }
+        );
     }
 }

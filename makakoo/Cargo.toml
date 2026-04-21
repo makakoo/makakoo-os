@@ -29,6 +29,9 @@ regex.workspace = true
 keyring.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
+reqwest.workspace = true
+flate2.workspace = true
+tar.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
