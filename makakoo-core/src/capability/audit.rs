@@ -223,6 +223,85 @@ impl AuditLog {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Query historical audit entries within `[since, until]`, optionally
+    /// filtered by `verb_filter` (substring match against AuditEntry.verb).
+    ///
+    /// Reads the live file plus any rotated `audit.jsonl.<ts>` siblings
+    /// in the same directory — the rotation policy means a 7-day window
+    /// can span 1-2 archives. Returns entries in **ascending** ts order.
+    ///
+    /// Implementation: streams each candidate file line by line, parses,
+    /// filters in-memory. For multi-GB historical queries the caller
+    /// should switch to a SQLite-backed audit store; this is good enough
+    /// for the "what touched outbound/* in the last hour?" interactive case.
+    pub fn query(
+        &self,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+        verb_filter: Option<&str>,
+    ) -> Result<Vec<AuditEntry>, RotationError> {
+        // Make sure buffered writes from the live file are visible.
+        if let Ok(mut guard) = self.writer.lock() {
+            let _ = guard.flush();
+        }
+
+        let mut sources: Vec<PathBuf> = Vec::new();
+        if self.path.exists() {
+            sources.push(self.path.clone());
+        }
+        if let Some(parent) = self.path.parent() {
+            let live_name = self
+                .path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("audit.jsonl");
+            let prefix = format!("{live_name}.");
+            if let Ok(entries) = fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    if name.starts_with(&prefix) {
+                        sources.push(p);
+                    }
+                }
+            }
+        }
+
+        let mut hits: Vec<AuditEntry> = Vec::new();
+        for src in sources {
+            let f = match File::open(&src) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            use std::io::{BufRead, BufReader as StdBufReader};
+            let reader = StdBufReader::new(f);
+            for line in reader.lines().map_while(|l| l.ok()) {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let entry: AuditEntry = match serde_json::from_str(line) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                if entry.ts < since || entry.ts > until {
+                    continue;
+                }
+                if let Some(needle) = verb_filter {
+                    if !entry.verb.contains(needle) {
+                        continue;
+                    }
+                }
+                hits.push(entry);
+            }
+        }
+
+        hits.sort_by_key(|e| e.ts);
+        Ok(hits)
+    }
 }
 
 /// Remove `audit.jsonl.<ts>` siblings older than `retention_days`. No-op
@@ -395,5 +474,86 @@ mod tests {
         for l in lines {
             serde_json::from_str::<AuditEntry>(l).unwrap();
         }
+    }
+
+    fn entry_at(verb: &str, ts: DateTime<Utc>) -> AuditEntry {
+        let mut e = entry(verb, AuditResult::Allowed);
+        e.ts = ts;
+        e
+    }
+
+    #[test]
+    fn query_returns_entries_in_window_sorted_ascending() {
+        let tmp = TempDir::new().unwrap();
+        let log = AuditLog::open_default(tmp.path()).unwrap();
+        let now = Utc::now();
+        let day = chrono::Duration::days(1);
+        // Write three entries at t-2, t-1, t-0 (out-of-order on purpose)
+        log.append(&entry_at("brain/read", now - day)).unwrap();
+        log.append(&entry_at("net/http", now - day * 2)).unwrap();
+        log.append(&entry_at("brain/write", now)).unwrap();
+
+        let hits = log.query(now - day * 3, now + day, None).unwrap();
+        assert_eq!(hits.len(), 3);
+        // Ascending by ts.
+        assert!(hits[0].ts < hits[1].ts);
+        assert!(hits[1].ts < hits[2].ts);
+        assert_eq!(hits[0].verb, "net/http");
+        assert_eq!(hits[2].verb, "brain/write");
+    }
+
+    #[test]
+    fn query_filters_by_verb_substring() {
+        let tmp = TempDir::new().unwrap();
+        let log = AuditLog::open_default(tmp.path()).unwrap();
+        let now = Utc::now();
+        log.append(&entry("brain/read", AuditResult::Allowed)).unwrap();
+        log.append(&entry("brain/write", AuditResult::Allowed)).unwrap();
+        log.append(&entry("net/http", AuditResult::Allowed)).unwrap();
+
+        let brain_only = log.query(
+            now - chrono::Duration::hours(1),
+            now + chrono::Duration::hours(1),
+            Some("brain/"),
+        ).unwrap();
+        assert_eq!(brain_only.len(), 2);
+        assert!(brain_only.iter().all(|e| e.verb.starts_with("brain/")));
+    }
+
+    #[test]
+    fn query_excludes_entries_outside_window() {
+        let tmp = TempDir::new().unwrap();
+        let log = AuditLog::open_default(tmp.path()).unwrap();
+        let now = Utc::now();
+        log.append(&entry_at("brain/read", now - chrono::Duration::hours(2))).unwrap();
+        log.append(&entry_at("brain/write", now)).unwrap();
+
+        let recent = log.query(
+            now - chrono::Duration::hours(1),
+            now + chrono::Duration::hours(1),
+            None,
+        ).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].verb, "brain/write");
+    }
+
+    #[test]
+    fn query_spans_rotated_archives() {
+        let tmp = TempDir::new().unwrap();
+        let log = AuditLog::open_default(tmp.path()).unwrap()
+            .with_rotation_threshold(256);
+        let now = Utc::now();
+        // Write enough to rotate, then more.
+        log.append(&entry_at("brain/read", now - chrono::Duration::hours(2))).unwrap();
+        log.append(&entry_at("brain/read", now - chrono::Duration::hours(1))).unwrap();
+        // Should now have 1 archive + 1 live file.
+        log.append(&entry_at("brain/write", now)).unwrap();
+
+        let hits = log.query(
+            now - chrono::Duration::days(1),
+            now + chrono::Duration::days(1),
+            None,
+        ).unwrap();
+        assert!(hits.len() >= 3, "expected ≥3 hits across rotated files, got {}", hits.len());
     }
 }
