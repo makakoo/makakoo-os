@@ -1,0 +1,32 @@
+{
+  "description": "Drift-gate vectors for Python ↔ Rust rate-limit decrement semantics. Both sides load this file and replay each sequence. Any divergence fails both suites in lockstep.",
+  "schema_version": 1,
+  "sequences": [
+    {
+      "name": "grant_revoke_cycle",
+      "ops": [
+        {"op": "increment", "offset_s": 0, "expected_count": 1},
+        {"op": "decrement", "offset_s": 1, "expected_count": 0},
+        {"op": "decrement", "offset_s": 2, "expected_count": 0}
+      ]
+    },
+    {
+      "name": "window_rollover_cancels_decrement",
+      "ops": [
+        {"op": "increment", "offset_s": 0, "expected_count": 1},
+        {"op": "decrement", "offset_s": 3700, "expected_count": 1}
+      ]
+    },
+    {
+      "name": "fifty_cycle_no_lockout",
+      "ops_template": {
+        "_50_of": [
+          {"op": "increment"},
+          {"op": "decrement"}
+        ]
+      },
+      "expected_count_after": 0,
+      "then_increment_succeeds": true
+    }
+  ]
+}

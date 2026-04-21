@@ -440,6 +440,12 @@ fn revoke(
     }
     u.save()?;
 
+    // Release one slot on the per-hour create bucket (v0.3.1 Phase A).
+    // Revoke is an explicit user-intent undo; purge is NOT a decrement
+    // path (would let slow-drip grants defeat the cap).
+    rate_limit::decrement(ctx.home(), Utc::now())
+        .with_context(|| "decrementing rate-limit counter")?;
+
     // Audit emit (scope_requested carries the id so the log can be
     // joined with the original grant entry).
     emit_perms_audit(

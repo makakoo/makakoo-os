@@ -25,6 +25,7 @@ from core.capability.user_grants import (
 from core.capability.rate_limit import (
     RateLimitExceeded,
     check_and_increment,
+    decrement as rate_limit_decrement,
     default_rate_limit_path,
 )
 from core.capability.audit_client import (
@@ -66,5 +67,6 @@ __all__ = [
     "log_audit",
     "log_fs_write",
     "new_grant_id",
+    "rate_limit_decrement",
     "revoke_success_msg",
 ]

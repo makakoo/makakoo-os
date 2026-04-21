@@ -72,10 +72,19 @@ def _now_utc() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
-def _load(path: Path) -> _WindowState:
-    """Tolerant load — missing or corrupt file resets to empty window."""
+def _load(path: Path, now: datetime | None = None) -> _WindowState:
+    """Tolerant load — missing or corrupt file resets to empty window.
+
+    `now` seeds `window_start` on a fresh/corrupt reset. Passing it
+    explicitly keeps the Python mirror aligned with the Rust helper
+    (`makakoo-core::capability::rate_limit::load`) which takes the
+    timestamp as an argument — the shared drift-gate fixture tests
+    rely on this alignment.
+    """
+    if now is None:
+        now = _now_utc()
     if not path.exists():
-        return _WindowState(window_start=_now_utc(), creates_in_window=0)
+        return _WindowState(window_start=now, creates_in_window=0)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         ws = datetime.fromisoformat(data["window_start"].replace("Z", "+00:00"))
@@ -91,7 +100,7 @@ def _load(path: Path) -> _WindowState:
             path,
             e,
         )
-        return _WindowState(window_start=_now_utc(), creates_in_window=0)
+        return _WindowState(window_start=now, creates_in_window=0)
 
 
 def _save(path: Path, state: _WindowState) -> None:
@@ -143,7 +152,7 @@ def check_and_increment(
     with open(lock_path, "w", encoding="utf-8") as lock_fd:
         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
         try:
-            state = _load(path)
+            state = _load(path, now)
             window_age = now - state.window_start
             if window_age >= timedelta(seconds=WINDOW_SECONDS):
                 state = _WindowState(window_start=now, creates_in_window=0)
@@ -160,6 +169,47 @@ def check_and_increment(
                 )
 
             state.creates_in_window += 1
+            _save(path, state)
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+
+
+def decrement(
+    *,
+    path: Path | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Release one grant-create slot on revoke (never on purge).
+
+    Uses the same sidecar-lock discipline as ``check_and_increment``.
+    No-op under every race / rollover condition — never raises:
+
+    * file missing → nothing to decrement
+    * counter already at 0 → floor, no change
+    * window expired (``now - window_start >= WINDOW_SECONDS``) → the
+      next ``check_and_increment`` will reset the window anyway, so
+      decrementing now is moot
+    """
+    if path is None:
+        path = default_rate_limit_path()
+    if now is None:
+        now = _now_utc()
+
+    if not path.exists():
+        return
+
+    lock_path = path.with_suffix(".json.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as lock_fd:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        try:
+            state = _load(path, now)
+            window_age = now - state.window_start
+            if window_age >= timedelta(seconds=WINDOW_SECONDS):
+                return
+            if state.creates_in_window <= 0:
+                return
+            state.creates_in_window -= 1
             _save(path, state)
         finally:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)

@@ -184,6 +184,64 @@ pub fn check_and_increment(
     result
 }
 
+/// Release one slot from the per-hour create bucket. Called on
+/// revoke — NEVER on purge (spec/USER_GRANTS.md v1.1 §7; purge as a
+/// decrement path would let slow-drip grants defeat the cap).
+///
+/// All race / rollover conditions are no-ops — this function never
+/// returns `Err` under normal operation:
+///
+/// * counter file missing → nothing to decrement
+/// * counter already at 0 → floor, no change
+/// * window expired (`now - window_start >= WINDOW_SECONDS`) → next
+///   `check_and_increment` will reset; decrementing now is moot
+pub fn decrement(
+    home: &Path,
+    now: DateTime<Utc>,
+) -> Result<(), RateLimitError> {
+    let path = default_path(home);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let lock_path = lock_path_for(&path);
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent).map_err(|source| RateLimitError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let lock_fd = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|source| RateLimitError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    lock_fd
+        .lock_exclusive()
+        .map_err(|source| RateLimitError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+
+    let result: Result<(), RateLimitError> = (|| {
+        let mut state = load(&path, now);
+        if now - state.window_start >= Duration::seconds(WINDOW_SECONDS) {
+            return Ok(());
+        }
+        if state.creates_in_window == 0 {
+            return Ok(());
+        }
+        state.creates_in_window -= 1;
+        save(&path, &state).map_err(|e| RateLimitError::Exceeded(e.to_string()))
+    })();
+
+    let _ = FileExt::unlock(&lock_fd);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +301,145 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 4, 21, 9, 0, 0).unwrap();
         fs::write(default_path(h.path()), b"not json at all").unwrap();
         check_and_increment(0, h.path(), now).unwrap();
+    }
+
+    #[test]
+    fn decrement_on_empty_counter_is_noop() {
+        let h = home();
+        let now = Utc.with_ymd_and_hms(2026, 4, 21, 9, 0, 0).unwrap();
+        // Counter file missing — decrement is a silent no-op.
+        decrement(h.path(), now).unwrap();
+        assert!(!default_path(h.path()).exists());
+        // Now prime the file at 0 via a roll-over path, then decrement
+        // again — still zero, still no error.
+        check_and_increment(0, h.path(), now).unwrap();
+        decrement(h.path(), now).unwrap();
+        decrement(h.path(), now).unwrap();
+        let state: WindowState = serde_json::from_slice(
+            &fs::read(default_path(h.path())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(state.creates_in_window, 0);
+    }
+
+    #[test]
+    fn decrement_after_window_expired_is_noop() {
+        let h = home();
+        let t0 = Utc.with_ymd_and_hms(2026, 4, 21, 9, 0, 0).unwrap();
+        // Prime the file with counter=1 at t0.
+        check_and_increment(0, h.path(), t0).unwrap();
+        // Decrement an hour later — window has rolled off; we leave
+        // the stale state intact because the next increment will reset
+        // it anyway.
+        let t1 = t0 + Duration::minutes(61);
+        decrement(h.path(), t1).unwrap();
+        let state: WindowState = serde_json::from_slice(
+            &fs::read(default_path(h.path())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state.creates_in_window, 1,
+            "decrement past window should not touch stale counter"
+        );
+    }
+
+    #[test]
+    fn decrement_inside_window_reduces_count() {
+        let h = home();
+        let now = Utc.with_ymd_and_hms(2026, 4, 21, 9, 0, 0).unwrap();
+        for _ in 0..5 {
+            check_and_increment(0, h.path(), now).unwrap();
+        }
+        decrement(h.path(), now).unwrap();
+        let state: WindowState = serde_json::from_slice(
+            &fs::read(default_path(h.path())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(state.creates_in_window, 4);
+    }
+
+    #[test]
+    fn increment_then_decrement_roundtrip() {
+        let h = home();
+        let now = Utc.with_ymd_and_hms(2026, 4, 21, 9, 0, 0).unwrap();
+        // 50 grant/revoke cycles should leave the counter exactly at
+        // zero and still allow a 51st increment (mirrors the Phase A
+        // dogfood scenario).
+        for _ in 0..50 {
+            check_and_increment(0, h.path(), now).unwrap();
+            decrement(h.path(), now).unwrap();
+        }
+        let state: WindowState = serde_json::from_slice(
+            &fs::read(default_path(h.path())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(state.creates_in_window, 0);
+        // 51st increment still succeeds — not rate-limited.
+        check_and_increment(0, h.path(), now).unwrap();
+    }
+
+    #[test]
+    fn shared_fixture_vectors_match_python() {
+        // Drift-gate test — loads the same JSON fixture Python loads
+        // and replays each sequence. If either side drifts (different
+        // semantics, field rename), both suites fail in lockstep.
+        let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../plugins-core/lib-harvey-core/tests/fixtures/rate_limit_decrement_vectors.json");
+        let bytes = fs::read(&fixture_path).unwrap_or_else(|e| {
+            panic!("cannot read {}: {}", fixture_path.display(), e)
+        });
+        let fixture: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        let t0 = Utc.with_ymd_and_hms(2026, 4, 21, 9, 0, 0).unwrap();
+        for seq in fixture["sequences"].as_array().unwrap() {
+            let h = home();
+            let name = seq["name"].as_str().unwrap().to_string();
+
+            if let Some(ops) = seq["ops"].as_array() {
+                for op in ops {
+                    let offset = op["offset_s"].as_i64().unwrap_or(0);
+                    let now = t0 + Duration::seconds(offset);
+                    match op["op"].as_str().unwrap() {
+                        "increment" => {
+                            check_and_increment(0, h.path(), now).unwrap()
+                        }
+                        "decrement" => decrement(h.path(), now).unwrap(),
+                        other => panic!("unknown op in {}: {}", name, other),
+                    }
+                    if let Some(expected) = op["expected_count"].as_u64() {
+                        let actual = if default_path(h.path()).exists() {
+                            let state: WindowState = serde_json::from_slice(
+                                &fs::read(default_path(h.path())).unwrap(),
+                            )
+                            .unwrap();
+                            state.creates_in_window as u64
+                        } else {
+                            0
+                        };
+                        assert_eq!(
+                            actual, expected,
+                            "{}: expected count {}, got {}",
+                            name, expected, actual
+                        );
+                    }
+                }
+            } else if seq.get("ops_template").is_some() {
+                // `fifty_cycle_no_lockout` — grant+revoke 50 times,
+                // then assert counter is at 0 and a fresh increment
+                // still succeeds.
+                for _ in 0..50 {
+                    check_and_increment(0, h.path(), t0).unwrap();
+                    decrement(h.path(), t0).unwrap();
+                }
+                let state: WindowState = serde_json::from_slice(
+                    &fs::read(default_path(h.path())).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state.creates_in_window, 0, "{}", name);
+                if seq["then_increment_succeeds"].as_bool().unwrap_or(false) {
+                    check_and_increment(0, h.path(), t0).unwrap();
+                }
+            }
+        }
     }
 }

@@ -43,6 +43,7 @@ from core.capability import (
     log_audit,
     new_grant_id,
 )
+from core.capability import rate_limit
 from core.capability.user_grants import Grant
 
 # Shared with Rust `makakoo_core::capability::rate_limit` via file-on-disk
@@ -356,6 +357,11 @@ def do_revoke(args: RevokeArgs, *, now: Optional[datetime] = None) -> str:
         raise PermsError(
             f"race: grant {target.id} already removed; re-check `list`"
         )
+
+    # Release one slot on the per-hour create bucket — revoke is an
+    # explicit user intent to undo (purge is deliberately NOT a
+    # decrement path; that would let slow-drip grants defeat the cap).
+    rate_limit.decrement(now=now)
 
     log_audit(
         verb="perms/revoke",

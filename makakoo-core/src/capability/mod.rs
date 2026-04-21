@@ -32,8 +32,9 @@ pub use audit::{AuditEntry, AuditLog, AuditResult, RotationError};
 pub use audit_escape::escape_audit_field;
 pub use grants::{resolve_grants, GrantCheck, GrantTable, ResolveError};
 pub use rate_limit::{
-    check_and_increment as rate_limit_check_and_increment, RateLimitError,
-    MAX_ACTIVE_GRANTS, MAX_CREATES_PER_HOUR,
+    check_and_increment as rate_limit_check_and_increment,
+    decrement as rate_limit_decrement, RateLimitError, MAX_ACTIVE_GRANTS,
+    MAX_CREATES_PER_HOUR,
 };
 pub use service::{
     CompositeHandler, EnvSecretBackend, InMemorySecretBackend, SecretBackend,
