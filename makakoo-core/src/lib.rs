@@ -27,6 +27,7 @@ pub mod platform;
 pub mod plugin;
 pub mod sancho;
 pub mod session;
+pub mod source_fetch;
 pub mod superbrain;
 pub mod swarm;
 pub mod telemetry;

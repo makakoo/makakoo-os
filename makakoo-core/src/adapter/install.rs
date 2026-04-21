@@ -31,6 +31,7 @@ use super::sign::{verify_manifest_bytes, SignError};
 use super::trust::{
     diff_manifest, trust_entry_from_manifest, ManifestDiff, TrustLedger,
 };
+use crate::source_fetch::{self, FetchError, SourceSpec};
 
 const REGISTERED_DIRNAME: &str = "registered";
 const STAGING_DIRNAME: &str = "staging";
@@ -59,8 +60,10 @@ pub enum InstallError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Trust(#[from] super::trust::TrustError),
-    #[error("source_type `{0}` not yet supported (Phase D ships git + tarball + pypi + npm)")]
+    #[error("source_type `{0}` not yet supported (pypi + npm + binary land in v0.5)")]
     SourceTypeUnsupported(&'static str),
+    #[error("source fetch failed: {0}")]
+    SourceFetch(#[from] FetchError),
 }
 
 /// Rootdirs used during install. Derived from `~/.makakoo/adapters/`
@@ -345,7 +348,7 @@ pub fn install_from_tarball_bytes(
     opts: InstallOptions,
 ) -> Result<InstallReport, InstallError> {
     // Hash check first — never trust unverified archive bytes.
-    let actual = sha256_hex(tarball);
+    let actual = source_fetch::sha256_hex(tarball);
     if actual != declared_sha256 {
         return Err(InstallError::Sha256Mismatch {
             expected: declared_sha256.to_string(),
@@ -354,11 +357,59 @@ pub fn install_from_tarball_bytes(
     }
     // Extract into a temp staging dir, then delegate to install_from_path.
     let tmp = tempfile::tempdir().map_err(|e| InstallError::Staging(e.to_string()))?;
-    extract_tarball(tarball, tmp.path())?;
+    source_fetch::extract_tarball(tarball, tmp.path())
+        .map_err(|e| InstallError::Staging(e))?;
     // Walk to the top-level dir containing adapter.toml (many tarballs
     // wrap their content in a single subdir).
     let source_dir = locate_manifest_dir(tmp.path())?;
     install_from_path(source_dir, root, opts)
+}
+
+/// Install an adapter from a git URL at a pinned ref. Delegates to
+/// `source_fetch::fetch()` for the actual clone + resolve-sha, then
+/// promotes through the standard `install_from_path` pipeline.
+///
+/// `allow_unstable` must be `true` for non-tag-non-SHA refs (e.g. `main`).
+/// Returns the usual `InstallReport` with `.canonical_hash` set to the
+/// manifest hash (not the git SHA — the git SHA lives in the trust ledger
+/// source field for audit).
+pub fn install_from_git(
+    url: &str,
+    ref_: &str,
+    allow_unstable: bool,
+    root: &InstallRoot,
+    opts: InstallOptions,
+) -> Result<InstallReport, InstallError> {
+    let fetched = source_fetch::fetch(&SourceSpec::Git {
+        url: url.to_string(),
+        ref_: ref_.to_string(),
+        allow_unstable,
+    })?;
+    // Some repos wrap their manifest in a subdir (mono-repo adapters); be
+    // tolerant of that layout via the same locator we use for tarballs.
+    let source_dir = locate_manifest_dir(&fetched.staging_dir)?;
+    let outcome = install_from_path(source_dir, root, opts);
+    // Staging dir is a tempdir we promoted from — clean up regardless.
+    let _ = fs::remove_dir_all(&fetched.staging_dir);
+    outcome
+}
+
+/// Install an adapter from an HTTPS tarball URL. Downloads, verifies
+/// sha256, extracts, promotes through `install_from_path`.
+pub fn install_from_tarball_url(
+    url: &str,
+    sha256: &str,
+    root: &InstallRoot,
+    opts: InstallOptions,
+) -> Result<InstallReport, InstallError> {
+    let fetched = source_fetch::fetch(&SourceSpec::HttpsTarball {
+        url: url.to_string(),
+        sha256: sha256.to_string(),
+    })?;
+    let source_dir = locate_manifest_dir(&fetched.staging_dir)?;
+    let outcome = install_from_path(source_dir, root, opts);
+    let _ = fs::remove_dir_all(&fetched.staging_dir);
+    outcome
 }
 
 /// Remove a registered adapter. `purge=true` deletes both the manifest
@@ -403,41 +454,6 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
         } else {
             fs::copy(&from, &to)?;
         }
-    }
-    Ok(())
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(bytes);
-    let digest = h.finalize();
-    let mut out = String::with_capacity(64);
-    for b in digest.iter() {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{:02x}", b);
-    }
-    out
-}
-
-fn extract_tarball(bytes: &[u8], into: &Path) -> Result<(), InstallError> {
-    use flate2::read::GzDecoder;
-    use std::io::Cursor;
-    use tar::Archive;
-
-    let cursor = Cursor::new(bytes);
-    // Accept both gzipped and plain tarballs. Peek magic bytes.
-    if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
-        let gz = GzDecoder::new(cursor);
-        let mut archive = Archive::new(gz);
-        archive
-            .unpack(into)
-            .map_err(|e| InstallError::Staging(format!("tarball extract: {e}")))?;
-    } else {
-        let mut archive = Archive::new(cursor);
-        archive
-            .unpack(into)
-            .map_err(|e| InstallError::Staging(format!("tarball extract: {e}")))?;
     }
     Ok(())
 }
@@ -825,6 +841,6 @@ signed_by = "unit-test""#,
     fn sha256_hex_matches_expected() {
         let bytes = b"hello world";
         let expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        assert_eq!(sha256_hex(bytes), expected);
+        assert_eq!(source_fetch::sha256_hex(bytes), expected);
     }
 }

@@ -23,8 +23,8 @@ pub mod trust;
 
 pub use call::{call_adapter, call_adapter_with_default_timeout, AdapterCallError};
 pub use install::{
-    install_from_path, install_from_tarball_bytes, uninstall, DiffSummary, InstallError,
-    InstallOptions, InstallReport, InstallRoot,
+    install_from_git, install_from_path, install_from_tarball_bytes, install_from_tarball_url,
+    uninstall, DiffSummary, InstallError, InstallOptions, InstallReport, InstallRoot,
 };
 pub use manifest::{
     AdapterKind, AdapterRole, AdapterTable, AuthScheme, AuthTable, CapabilitiesTable,
