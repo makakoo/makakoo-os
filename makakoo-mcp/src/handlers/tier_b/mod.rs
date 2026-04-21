@@ -6,6 +6,7 @@
 //! fully constructed.
 
 pub mod agents;
+pub mod browse;
 pub mod infect;
 pub mod journal;
 pub mod knowledge;
@@ -67,4 +68,9 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     registry.register(Arc::new(pi::PiSessionExportHandler::new(ctx.clone())));
     registry.register(Arc::new(pi::PiSetModelHandler::new(ctx.clone())));
     registry.register(Arc::new(pi::PiSteerHandler::new(ctx.clone())));
+
+    // v0.4 Phase E: browser-harness CDP driver. Registered unconditionally;
+    // falls back to a clear RPC error if the agent-browser-harness plugin
+    // isn't installed under $MAKAKOO_HOME/plugins/.
+    registry.register(Arc::new(browse::HarveyBrowseHandler::new(ctx.clone())));
 }
