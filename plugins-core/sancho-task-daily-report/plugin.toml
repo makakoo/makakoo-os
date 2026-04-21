@@ -1,0 +1,35 @@
+[plugin]
+name = "sancho-task-daily-report"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "End-of-day report — compiles today's Brain entries into a single summary page"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-daily-report"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+run = "python3 -u plugins/sancho-task-daily-report/src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:~/MAKAKOO/data/Brain",
+    "fs/write:~/MAKAKOO/data/Brain",
+    "brain/write",
+    "llm/chat",
+]
+
+[sancho]
+tasks = [{ name = "daily_report", interval = "24h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-daily-report"
+retention = "keep"

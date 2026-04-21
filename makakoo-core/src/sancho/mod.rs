@@ -67,7 +67,7 @@ pub fn parse_interval(spec: &str, default: Duration) -> Duration {
 ///
 /// Used by `makakoo sancho status` to display a "N native + M manifest"
 /// breakdown without rebuilding the native registry twice.
-pub const NATIVE_TASK_COUNT: usize = 8;
+pub const NATIVE_TASK_COUNT: usize = 9;
 
 /// The eight native SANCHO task names the kernel owns. A plugin whose
 /// manifest declares `[[sancho.tasks]].name` matching any of these
@@ -91,6 +91,7 @@ pub const NATIVE_TASK_NAMES: &[&str] = &[
     "memory_promotion",
     "superbrain_sync_embed",
     "dynamic_checklist",
+    "swarm_dispatch",
 ];
 
 /// Build the kernel's native SANCHO registry — 8 pure-Rust handlers that
@@ -142,6 +143,13 @@ pub fn native_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
             Arc::new(TimeGate::new(Duration::from_secs(3600))),
             Arc::new(ActiveHoursGate::new(8, 22)),
         ],
+    );
+    // v0.2 D.4/C.6 — swarm dispatch queue drainer. Runs every 60s so
+    // producers enqueueing work don't wait for a long cadence. The
+    // handler no-ops if the queue is empty, so the cadence is cheap.
+    reg.register(
+        Arc::new(SwarmDispatchHandler::new()),
+        vec![Arc::new(TimeGate::new(Duration::from_secs(60)))],
     );
     reg
 }
@@ -284,16 +292,16 @@ mod tests {
         let reg = default_registry(make_ctx(dir.path()), &plugins);
         assert_eq!(
             reg.len(),
-            8,
-            "fresh install with no plugins should yield exactly 8 native tasks"
+            NATIVE_TASK_COUNT,
+            "fresh install with no plugins should yield exactly NATIVE_TASK_COUNT native tasks"
         );
     }
 
     #[test]
-    fn native_registry_has_exactly_eight() {
+    fn native_registry_count_matches_const() {
         let dir = TempDir::new().unwrap();
         let reg = native_registry(make_ctx(dir.path()));
-        assert_eq!(reg.len(), 8);
+        assert_eq!(reg.len(), NATIVE_TASK_COUNT);
     }
 
     #[test]
@@ -340,7 +348,7 @@ tasks = [{ name = "pg_watchdog", interval = "900s" }]
         );
         let plugins = PluginRegistry::load_default(home).unwrap();
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), 9, "8 native + 1 plugin task");
+        assert_eq!(reg.len(), NATIVE_TASK_COUNT + 1, "native + 1 plugin task");
     }
 
     #[test]
@@ -380,7 +388,7 @@ tasks = [
         );
         let plugins = PluginRegistry::load_default(home).unwrap();
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), 13, "8 native + 5 gym tasks");
+        assert_eq!(reg.len(), NATIVE_TASK_COUNT + 5, "native + 5 gym tasks");
     }
 
     #[test]
@@ -421,8 +429,8 @@ tasks = [{ name = "watchdog_infect", interval = "21600s" }]
             "expected watchdog_infect in registered tasks; got {names:?}"
         );
         assert!(
-            reg.len() >= 9,
-            "8 native + at least 1 plugin task expected, got {}",
+            reg.len() >= NATIVE_TASK_COUNT + 1,
+            "native + at least 1 plugin task expected, got {}",
             reg.len()
         );
     }
@@ -469,10 +477,10 @@ tasks = [{ name = "dream", interval = "3600s" }]
             dream_count, 1,
             "walker must skip plugin tasks that shadow native handler names"
         );
-        // Registry total: 8 native + 0 plugin-derived (shadowed task dropped).
+        // Registry total: NATIVE_TASK_COUNT + 0 plugin-derived (shadowed task dropped).
         assert_eq!(
             reg.len(),
-            8,
+            NATIVE_TASK_COUNT,
             "naughty plugin's single task is shadowed, so no plugin tasks register"
         );
     }
@@ -531,7 +539,7 @@ tasks = [{ name = "togglable_tick", interval = "3600s" }]
         // Fresh: no lock file, plugin defaults to enabled, task registers.
         let plugins = PluginRegistry::load_default(home).unwrap();
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), 9, "fresh install — 8 native + 1 plugin task");
+        assert_eq!(reg.len(), NATIVE_TASK_COUNT + 1, "fresh install — native + 1 plugin task");
 
         // Disable via lock file: task must drop out.
         let mut lock = PluginsLock::default();
@@ -552,7 +560,7 @@ tasks = [{ name = "togglable_tick", interval = "3600s" }]
             "registry must reflect lock's enabled=false"
         );
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), 8, "disabled plugin must not register");
+        assert_eq!(reg.len(), NATIVE_TASK_COUNT, "disabled plugin must not register");
 
         // Re-enable: task comes back without reinstalling.
         let mut lock = PluginsLock::load(home).unwrap();
@@ -563,7 +571,7 @@ tasks = [{ name = "togglable_tick", interval = "3600s" }]
 
         let plugins = PluginRegistry::load_default(home).unwrap();
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), 9, "re-enable restores the task");
+        assert_eq!(reg.len(), NATIVE_TASK_COUNT + 1, "re-enable restores the task");
     }
 
     #[test]

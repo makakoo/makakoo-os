@@ -1,0 +1,35 @@
+[plugin]
+name = "sancho-task-crm-pipeline"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Career CRM tick — walk new leads, update lead Brain pages, surface hot prospects"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-crm-pipeline"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+plugins = ["agent-career-manager ^1.0"]
+
+[entrypoint]
+run = "python3 -u plugins/sancho-task-crm-pipeline/src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:~/MAKAKOO/data/career",
+    "fs/write:~/MAKAKOO/data/career",
+    "brain/write",
+]
+
+[sancho]
+tasks = [{ name = "crm_pipeline", interval = "2h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-crm-pipeline"
+retention = "keep"

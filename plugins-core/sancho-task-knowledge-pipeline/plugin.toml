@@ -1,0 +1,36 @@
+[plugin]
+name = "sancho-task-knowledge-pipeline"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Daily knowledge ingest + extraction + integration pass"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-knowledge-pipeline"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+plugins = ["agent-knowledge-extractor ^0.1", "agent-multimodal-knowledge ^0.1"]
+
+[entrypoint]
+run = "python3 -u plugins/sancho-task-knowledge-pipeline/src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:~/MAKAKOO/data",
+    "fs/write:~/MAKAKOO/data/Brain",
+    "brain/write",
+    "llm/chat",
+]
+
+[sancho]
+tasks = [{ name = "knowledge_pipeline", interval = "24h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-knowledge-pipeline"
+retention = "keep"
