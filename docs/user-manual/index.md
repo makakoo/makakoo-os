@@ -1,0 +1,140 @@
+# Makakoo CLI Reference
+
+Complete reference for all `makakoo` commands.
+
+## Synopsis
+
+```bash
+makakoo <command> [options] [arguments]
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| [query](makakoo-query.md) | Search the Brain with LLM synthesis |
+| [search](makakoo-search.md) | Full-text search the Brain |
+| [infect](makakoo-infect.md) | Infect AI CLIs with shared brain |
+| [uninfect](makakoo-uninfect.md) | Remove infection from CLIs |
+| [plugin](makakoo-plugin.md) | Install and manage plugins |
+| [sancho](makakoo-sancho.md) | Manage proactive tasks |
+| [daemon](makakoo-daemon.md) | Control the background daemon |
+| [distro](makakoo-distro.md) | Manage distro bundles |
+| [secret](makakoo-secret.md) | Manage secrets |
+| [status](makakoo-status.md) | Show system status |
+| [completion](makakoo-completion.md) | Shell completion setup |
+| [adapter](makakoo-adapter.md) | Manage AI adapters |
+| [mcp](makakoo-mcp.md) | MCP server management |
+
+## Global Options
+
+| Flag | Description |
+|------|-------------|
+| `-h, --help` | Show help |
+| `-v, --verbose` | Enable verbose output |
+| `--version` | Show version |
+
+## Examples
+
+### Query the Brain
+
+```bash
+# Ask a question
+makakoo query "what did I decide about the database?"
+
+# Search with filters
+makakoo query "trading strategies" --model ail-compound
+```
+
+### Search Full-Text
+
+```bash
+# Basic search
+makakoo search "polymarket"
+
+# Limit results
+makakoo search "arbitrage" --limit 10
+```
+
+### Manage Plugins
+
+```bash
+# List installed plugins
+makakoo plugin list
+
+# Install a plugin
+makakoo plugin install skill-research-arxiv --core
+
+# Update plugins
+makakoo plugin update
+
+# Disable/enable
+makakoo plugin disable my-plugin
+makakoo plugin enable my-plugin
+```
+
+### SANCHO Tasks
+
+```bash
+# Show all tasks
+makakoo sancho status
+
+# Trigger a task manually
+makakoo sancho run dream
+
+# Show task history
+makakoo sancho history --limit 20
+```
+
+### Secrets
+
+```bash
+# Set a secret
+makakoo secret set POLYMARKET_API_KEY
+
+# List secrets
+makakoo secret list
+
+# Delete a secret
+makakoo secret delete POLYMARKET_API_KEY
+```
+
+### Daemon
+
+```bash
+# Check daemon status
+makakoo daemon status
+
+# Restart daemon
+makakoo daemon restart
+
+# View logs
+makakoo daemon logs --lines 50
+```
+
+### Infection
+
+```bash
+# Preview infection
+makakoo infect --global --dry-run
+
+# Apply infection
+makakoo infect --global
+
+# Infect specific CLIs
+makakoo infect --target claude,gemini
+
+# Remove infection
+makakoo uninfect --global
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Invalid arguments |
+| 3 | Permission denied |
+| 4 | Resource not found |
+| 5 | Daemon not running |
