@@ -249,15 +249,145 @@ in `spec/CAPABILITIES.md §3`. Verbs used:
 
 ## 10. CLI reference
 
-*Stub — populated in Phase G.2 as Phase D lands the Rust CLI implementation.*
+`makakoo perms <subcommand>` — implemented in `makakoo/src/commands/perms.rs`
+(Phase D). All subcommands accept `--json` (where data applies) and
+exit 0 on success, non-zero on refusal.
+
+| Subcommand | Args | Behavior |
+|---|---|---|
+| `list` | `[--json] [--all]` | Active grants; `--all` includes expired |
+| `grant` | `<path> [--for <dur>] [--label <s>] [--plugin <name>] [--mkdir] [--yes-really]` | Default 1h; `--mkdir` creates missing dir; `--yes-really` required for permanent outside `$MAKAKOO_HOME` |
+| `revoke` | `<id>` or `--path <p>` | `--path` must match unambiguously |
+| `purge` | `[--json]` | Drop expired; emits one `perms/revoke` audit per expired grant |
+| `audit` | `[--since <dur>] [--plugin <n>] [--grant <id>] [--json]` | Default window 24h; reads `audit.jsonl` |
+| `show` | `<id> [--json]` | Full detail |
+
+**Duration grammar:** `30m | 1h | 24h | 7d | permanent`. See §7 rate limits.
+
+**Scope refusal:** `/`, `~`, `~/`, `$HOME`, empty, `*`, `**`, `.`, `./`,
+`$HOME/`, `~/**`, `$HOME/**` rejected at the handler.
 
 ## 11. MCP + HARVEY_TOOLS reference
 
-*Stub — populated in Phase G.2 as Phase E lands the conversational tools.*
+Three tools are registered on BOTH sides (LD#13 — HarveyChat/Telegram
+never traverses MCP):
 
-## 12. CLI-chat UX
+| Tool | MCP Rust handler | Python HARVEY_TOOLS | Signature |
+|---|---|---|---|
+| `grant_write_access` | `makakoo-mcp/src/handlers/tier_b/perms.rs::GrantWriteAccessHandler` | `harvey_agent.tool_grant_write_access` | `(path, duration?="1h", label?, confirm?, user_turn_id?)` |
+| `revoke_write_access` | `RevokeWriteAccessHandler` | `tool_revoke_write_access` | `(grant_id?, path?)` — at least one required; `path="last"`/`"latest"` picks newest |
+| `list_write_grants` | `ListWriteGrantsHandler` | `tool_list_write_grants` | `(include_expired?=false)` |
 
-*Stub — populated in Phase E.10 (canonical conversational flows from SPRINT.md §12).*
+Both registrations delegate to the canonical Python logic at
+`core/capability/perms_core.py` (HARVEY_TOOLS path) or a parallel
+Rust impl in the handler file (MCP path). Both share guardrails +
+rate-limit + audit emit; the shared drift-gate fixture at
+`tests/fixtures/grant_tool_vectors.json` is exercised by:
+
+- Python: `tests/test_harvey_tools_perms.py::test_shared_scenarios`
+- Rust:   `handlers::tier_b::perms::tests::shared_fixture_drift_gate`
+
+### 11.1 Caller identity (Phase E.3 wiring)
+
+The audit `plugin` field is populated from the `HARVEY_PLUGIN` env var:
+
+| Surface | env-var source | value |
+|---|---|---|
+| HarveyChat local bridge | `bridge.py::send()` | `harveychat` |
+| Telegram via HarveyChat | `bridge.py::send()` (channel="telegram") | `harveychat-telegram` |
+| Claude Code, Gemini CLI, Codex, OpenCode, Vibe, Cursor, qwen, pi | per-CLI shell-rc exports in infected bootstrap v12 | `<slug>` (e.g. `claude-code`, `gemini-cli`) |
+| `makakoo perms` CLI | hardcoded | `cli` |
+| SANCHO native purge task | hardcoded | `sancho-native` |
+
+### 11.2 Telegram allowlist gate (E.5)
+
+When `HARVEY_PLUGIN == "harveychat-telegram"`, the Python
+`grant_write_access` wrapper reads `HARVEY_TELEGRAM_CHAT_ID` from the
+env and checks it against `chat.config.telegram.allowed_chat_ids` /
+`allowed_user_ids`. Non-allowlisted chats get:
+
+```
+authz: chat_id <id> not in Telegram allowlist; use 'telegram:access approve' first
+```
+
+and a `perms/grant` audit entry with `result=denied`, `plugin=harveychat-telegram`.
+Fully-permissive configs (both allowlists empty) match `TelegramChannel._is_allowed`
+semantics — everything passes.
+
+### 11.3 Reply string templates (E.8)
+
+Tool returns are short + quotable. Agents MUST quote verbatim — do
+not rewrite. Examples:
+
+- grant success: `Granted. ~/foo/** writable until 14:45 CEST. Revoke: makakoo perms revoke g_20260421_abc12def`
+- revoke success: `Revoked g_20260421_abc12def. ~/foo/** no longer writable.`
+- list (1 active): `Baseline: ~/MAKAKOO/data/reports, .... 1 active grant: ~/foo/** until 14:45 CEST. 0 expired today.`
+- scope too broad: `scope '~' is too broad — grant a specific subdirectory`
+- permanent outside HOME without confirm: `permanent grant outside $MAKAKOO_HOME (/tmp/x) requires confirm="yes-really"`
+- rate limited (active cap): `rate limit: 20 active grants (max 20); revoke some or wait`
+- rate limited (create cap): `rate limit: 50 grants created in the last hour (max 50); wait a bit`
+
+## 12. CLI-chat UX — the four canonical flows
+
+These four patterns are what `MAKAKOO-OS-V0.3-USER-GRANTS` was
+designed to enable. Every phase gate implicitly measures against them.
+
+### Flow 1 — Reactive grant after rejection (most common)
+
+```
+Sebastian: "Harvey, update the sprint at development/sprints/foo/ with today's progress"
+Harvey:    [tries write_file("~/MAKAKOO/development/sprints/foo/SPRINT.md", ...)]
+           [receives sandbox rejection with the suggested grant line]
+           "Sandbox blocks development/sprints/foo/. Grant me 1h access?"
+Sebastian: "yes"
+Harvey:    [calls grant_write_access("~/MAKAKOO/development/sprints/foo/", "1h", "sprint doc edit")]
+           [retries write_file, succeeds]
+           "Done. Access until 10:45. Anything else?"
+```
+
+### Flow 2 — Proactive grant (intent-first)
+
+```
+Sebastian: "grant yourself access to marketing/lope for today, I want you editing freely"
+Harvey:    [calls grant_write_access("~/MAKAKOO/marketing/lope/", "24h", "marketing session")]
+           "Granted. ~/MAKAKOO/marketing/lope/** writable until 10:30 CEST tomorrow. Revoke: makakoo perms revoke g_20260421_aaaa1111"
+```
+
+### Flow 3 — Revoke
+
+```
+Sebastian: "revoke that marketing grant"
+Harvey:    [calls revoke_write_access(path="~/MAKAKOO/marketing/lope/")]
+           "Revoked g_20260421_aaaa1111. ~/MAKAKOO/marketing/lope/** no longer writable."
+```
+
+### Flow 4 — List (audit in conversation)
+
+```
+Sebastian: "what can you write to right now?"
+Harvey:    [calls list_write_grants()]
+           "Baseline: ~/MAKAKOO/data/reports, ~/MAKAKOO/data/drafts, ~/MAKAKOO/tmp, /tmp. 2 active grants: ~/MAKAKOO/marketing/lope/** until 10:30 CEST, ~/MAKAKOO/development/sprints/foo/** until 10:45 CEST. 3 expired today."
+```
+
+### Rejected flows — handler-level refusals
+
+```
+Sebastian: "grant yourself all of ~/"
+Harvey:    [calls grant_write_access("~/", "1h")]
+           [handler refuses]
+           "Scope '~' is too broad — I'd have access to everything. Want me to grant a specific subdirectory instead?"
+```
+
+```
+Agent:     [hallucinates that Sebastian confirmed]
+           [calls grant_write_access("~/code/", "permanent")]
+           [handler refuses: permanent + outside $MAKAKOO_HOME without confirm="yes-really"]
+           → returns: "permanent grant outside $MAKAKOO_HOME (~/code/) requires confirm='yes-really'"
+```
+
+The handler refusal is the security boundary, NOT the tool
+description. Prompt-injection that fakes user confirmation cannot
+bypass the scope + rate-limit + permanent-outside-HOME guardrails.
 
 ## 13. Writers
 

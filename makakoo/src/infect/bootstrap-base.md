@@ -78,6 +78,40 @@ The ingest tool accepts the same `source` shapes as describe (URL, absolute path
 
 Caught in opencode 2026-04-20 on `https://youtu.be/fdbXNWkpPMY`: describe_video 429'd, the agent journaled the URL under a wikilink as "added to knowledge", and the superbrain now returns the URL literal with no content. Do not repeat this.
 
+## Write-access grants — conversational permission management (v0.3)
+
+Harvey's `write_file` / `markdown_to_pdf` tools are sandboxed to a baseline set of directories (`~/MAKAKOO/data/reports`, `~/MAKAKOO/data/drafts`, `~/MAKAKOO/tmp`, `/tmp`). Sebastian can extend that surface **in conversation** via three tools available on every infected CLI + HarveyChat/Telegram:
+
+- `grant_write_access(path, duration="1h", label?, confirm?, user_turn_id?)` — issue a new runtime grant
+- `revoke_write_access(grant_id?, path?)` — revoke by id, or `path="last"` for the newest
+- `list_write_grants(include_expired?)` — summary: baseline + active + today's expired count
+
+**Default duration is 1 hour.** Don't upgrade to a longer duration unless Sebastian explicitly says so. **Accepted duration grammar:** `30m | 1h | 24h | 7d | permanent` — anything else is rejected.
+
+**The rejection-path flow (memorize this — most common case):**
+
+When `write_file` returns `write_file rejected: '...' is outside the allowed baseline roots and active grants`, do NOT apologize and stop. Do this instead:
+
+1. Offer a grant: *"Sandbox blocks writing to `~/foo/`. Want me to grant myself 1h access? Say yes to proceed."*
+2. On "yes" / "sure" / "go ahead" / equivalent → call `grant_write_access(path="~/foo/", duration="1h")`, then retry `write_file`.
+3. On "no" / silence / redirect → move on.
+
+Quote the tool's return string to the user **verbatim** — do not rewrite it. Example verbatim returns:
+
+- grant: `Granted. /Users/sebastian/foo/** writable until 14:45 CEST. Revoke: makakoo perms revoke g_20260421_abc12def`
+- revoke: `Revoked g_20260421_abc12def. /Users/sebastian/foo/** no longer writable.`
+- list: `Baseline: ~/MAKAKOO/data/reports, ~/MAKAKOO/data/drafts, ~/MAKAKOO/tmp, /tmp. 2 active grants: /Users/sebastian/sprint/** until 17:00 CEST, /Users/sebastian/notes/** permanent. 1 expired today.`
+
+**Hard refusals (LD#2 / LD#14 — these fire at the handler, not the LLM):**
+
+- Broad scopes (`/`, `~`, `~/`, `$HOME`, bare `*`, bare `**`) → refused with "too broad" regardless of who asks.
+- `permanent` outside `$MAKAKOO_HOME` → requires `confirm="yes-really"` argument.
+- Global rate limit: 20 active grants + 50 create-ops/hour. Exceeding either → `"rate limit: N active grants; revoke some or wait"`.
+
+**Never call `grant_write_access` without user-facing confirmation.** Sebastian's conversational "yes" is the authorization. Fabricated calls are a prompt-injection/hallucination bug — the audit log catches them.
+
+For scripted / CI workflows, the equivalent CLI surface is `makakoo perms {list,grant,revoke,purge,audit,show}` — same store, same guardrails.
+
 ## Skill Discovery + Dispatch
 
 Every infected CLI can discover AND execute any skill via the unified v4 dispatcher, regardless of whether the host CLI has native slash-command support. The dispatcher is invoked as `harvey` — the command name matches the persona and stays stable through the rename:

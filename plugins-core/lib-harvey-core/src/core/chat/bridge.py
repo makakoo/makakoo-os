@@ -392,6 +392,16 @@ class HarveyBridge:
             task_id: Task ID for checkpointing — passed into HarveyAgent.process()
             store: TaskStore instance for checkpoint writes
         """
+        # Phase E.3 — surface identity for audit + the Telegram allowlist
+        # gate on grant_write_access. Telegram chat_id propagation
+        # (HARVEY_TELEGRAM_CHAT_ID) is done by the adapter that calls us
+        # for Telegram — in v1 the chat_id is set via a separate env
+        # write by the channel before it enqueues the message; the gap
+        # is acceptable because non-Telegram surfaces short-circuit.
+        os.environ["HARVEY_PLUGIN"] = (
+            "harveychat-telegram" if channel == "telegram" else "harveychat"
+        )
+
         system_prompt = self._build_system_prompt(channel)
 
         # Trim history to max

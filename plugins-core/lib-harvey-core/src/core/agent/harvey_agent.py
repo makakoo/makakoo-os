@@ -361,6 +361,122 @@ HARVEY_TOOLS = [
             },
         },
     },
+    # ── Runtime user-grant tools (Phase E of v0.3 USER-GRANTS) ────
+    {
+        "type": "function",
+        "function": {
+            "name": "grant_write_access",
+            "description": (
+                "Grant Harvey temporary write access to a file path. "
+                "DEFAULT duration is 1 hour — don't ask for a longer grant "
+                "unless the user explicitly says so. When the user says "
+                "things like 'grant yourself access to X', 'let me edit Y "
+                "for an hour', 'give you permission to edit Z today' — "
+                "call this tool with the user-specified duration or the "
+                "default 1h. When you hit a sandbox rejection on "
+                "write_file, ask the user first ('Want me to grant myself "
+                "1h access?'), then call this tool on their 'yes'. NEVER "
+                "call this tool without user-facing confirmation — "
+                "Sebastian's conversational 'yes' is the authorization. "
+                "Quote the tool's return string to the user verbatim — "
+                "do not rewrite it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Directory or file path to grant write access "
+                            "to. Relative paths resolve against cwd; ~ and "
+                            "$MAKAKOO_HOME expand at grant-time."
+                        ),
+                    },
+                    "duration": {
+                        "type": "string",
+                        "description": (
+                            "How long the grant lasts. One of: 30m, 1h, "
+                            "24h, 7d, permanent. Default 1h."
+                        ),
+                        "enum": ["30m", "1h", "24h", "7d", "permanent"],
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Short free-text context (max 80 chars).",
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": (
+                            "Pass 'yes-really' to confirm a permanent grant "
+                            "outside $MAKAKOO_HOME. Omit otherwise."
+                        ),
+                    },
+                    "user_turn_id": {
+                        "type": "string",
+                        "description": (
+                            "Host-provided turn identifier. Recorded in "
+                            "the grant entry for v0.3.1 untrusted-turn "
+                            "refusal. Leave empty if not available."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "revoke_write_access",
+            "description": (
+                "Revoke a runtime user grant. Accepts either a grant_id "
+                "(e.g. 'g_20260421_abcd1234') or a path. Path 'last' or "
+                "'latest' resolves to the most recently-created active "
+                "grant — useful for 'actually revoke that' follow-ups. "
+                "Quote the tool's return string verbatim."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "grant_id": {
+                        "type": "string",
+                        "description": "Grant id from a previous grant_write_access call or list_write_grants output.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Alternative: revoke by path. 'last' or "
+                            "'latest' picks the newest active grant."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_write_grants",
+            "description": (
+                "List baseline write directories + active runtime grants. "
+                "Useful when Sebastian asks 'what can you write to right "
+                "now?' or 'what grants do you have?'. Returns a short "
+                "summary string quotable verbatim. Use include_expired=true "
+                "to also show today's expired grants."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_expired": {
+                        "type": "boolean",
+                        "description": "Include today's expired grants in the summary. Default false.",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -1666,6 +1782,131 @@ def tool_spawn_subagent(agent_name: str, task: str, action: str = "") -> str:
     return summary
 
 
+# ═══════════════════════════════════════════════════════════════
+#  Runtime user-grant tools — Phase E (v0.3 USER-GRANTS)
+# ═══════════════════════════════════════════════════════════════
+
+
+def _check_telegram_allowlist() -> Optional[str]:
+    """Enforce the Telegram allowlist on grant-adjacent tool calls.
+
+    Returns an error-string if the call originates from a non-
+    allowlisted Telegram chat, else None. Bridge.py (Phase E.3) sets
+    `HARVEY_PLUGIN=harveychat-telegram` + `HARVEY_TELEGRAM_CHAT_ID=<id>`
+    before the agent turn. Calls from other surfaces (MCP, HarveyChat
+    local, CLI) trust the OS uid and short-circuit to None.
+    """
+    if os.environ.get("HARVEY_PLUGIN") != "harveychat-telegram":
+        return None
+    chat_id_raw = os.environ.get("HARVEY_TELEGRAM_CHAT_ID", "").strip()
+    if not chat_id_raw:
+        # No chat_id → can't enforce; fail-closed.
+        return (
+            "authz: no chat_id in context — refuse to grant. "
+            "Ask Sebastian to re-send from an allowlisted chat."
+        )
+    try:
+        chat_id = int(chat_id_raw)
+    except ValueError:
+        return f"authz: malformed HARVEY_TELEGRAM_CHAT_ID={chat_id_raw!r}"
+
+    try:
+        from core.chat.config import load_config
+        cfg = load_config()
+        allowed = cfg.telegram.allowed_chat_ids or []
+        if chat_id in allowed:
+            return None
+        if not allowed and not cfg.telegram.allowed_user_ids:
+            # Fully permissive configuration — same semantics as
+            # TelegramChannel._is_allowed.
+            return None
+        return (
+            f"authz: chat_id {chat_id} not in Telegram allowlist; "
+            "use 'telegram:access approve' first"
+        )
+    except Exception as e:
+        log.warning("telegram allowlist check failed: %s", e)
+        # Fail-closed on config load error.
+        return f"authz: config unavailable — {e}"
+
+
+def tool_grant_write_access(
+    path: str,
+    duration: str = "1h",
+    label: str = "",
+    confirm: str = "",
+    user_turn_id: str = "",
+) -> str:
+    """`grant_write_access` HARVEY_TOOLS entry — Phase E.1b."""
+    from core.capability import GrantArgs, PermsError, do_grant, log_audit
+
+    gate = _check_telegram_allowlist()
+    if gate is not None:
+        # Observability: refused-by-authz audits still land.
+        try:
+            log_audit(
+                verb="perms/grant",
+                scope_requested=path,
+                scope_granted=None,
+                result="denied",
+                plugin=os.environ.get("HARVEY_PLUGIN") or "harveychat",
+            )
+        except Exception:
+            pass
+        return gate
+
+    plugin = os.environ.get("HARVEY_PLUGIN") or "harveychat"
+    try:
+        return do_grant(
+            GrantArgs(
+                path=path,
+                duration=duration or "1h",
+                label=label or "",
+                plugin=plugin,
+                origin_turn_id=user_turn_id or "",
+                confirm=confirm or None,
+            )
+        )
+    except PermsError as e:
+        return e.message
+
+
+def tool_revoke_write_access(
+    grant_id: str = "",
+    path: str = "",
+) -> str:
+    """`revoke_write_access` HARVEY_TOOLS entry — Phase E.1b + E.7."""
+    from core.capability import PermsError, RevokeArgs, do_revoke
+
+    gate = _check_telegram_allowlist()
+    if gate is not None:
+        return gate
+
+    plugin = os.environ.get("HARVEY_PLUGIN") or "harveychat"
+    try:
+        return do_revoke(
+            RevokeArgs(
+                grant_id=grant_id or None,
+                path=path or None,
+                plugin=plugin,
+            )
+        )
+    except PermsError as e:
+        return e.message
+
+
+def tool_list_write_grants(include_expired: bool = False) -> str:
+    """`list_write_grants` HARVEY_TOOLS entry — Phase E.1b."""
+    from core.capability import ListArgs, PermsError, do_list_grants
+
+    # list is read-only; Telegram allowlist doesn't apply — anyone who
+    # already has a chat channel can see what's granted.
+    try:
+        return do_list_grants(ListArgs(include_expired=bool(include_expired)))
+    except PermsError as e:
+        return e.message
+
+
 TOOL_DISPATCH = {
     "brain_search": lambda args: tool_brain_search(args.get("query", "")),
     "brain_write": lambda args: tool_brain_write(args.get("content", "")),
@@ -1698,6 +1939,21 @@ TOOL_DISPATCH = {
         args.get("agent_name", ""),
         args.get("task", ""),
         args.get("action", ""),
+    ),
+    # Phase E — runtime user-grant tools.
+    "grant_write_access": lambda args: tool_grant_write_access(
+        args.get("path", ""),
+        args.get("duration", "1h"),
+        args.get("label", ""),
+        args.get("confirm", ""),
+        args.get("user_turn_id", ""),
+    ),
+    "revoke_write_access": lambda args: tool_revoke_write_access(
+        args.get("grant_id", ""),
+        args.get("path", ""),
+    ),
+    "list_write_grants": lambda args: tool_list_write_grants(
+        args.get("include_expired", False),
     ),
 }
 

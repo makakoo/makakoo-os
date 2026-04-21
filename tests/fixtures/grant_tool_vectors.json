@@ -1,0 +1,155 @@
+{
+  "//": "Shared grant-tool behavior fixture for Phase E.9. Exercised by tests/test_harvey_tools_perms.py (Python HARVEY_TOOLS path) and makakoo-mcp/tests/perms_handler.rs (MCP Rust path). Any drift — different error text, different success-reply wording, different guardrail behavior — fails CI. See SPRINT.md §4.E.9 and LD#13.",
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "name": "grant_default_duration_is_1h",
+      "tool": "grant_write_access",
+      "input": {
+        "path": "<HOME>/workzone",
+        "mkdir_target": true
+      },
+      "expect": {
+        "ok": true,
+        "reply_contains": ["Granted.", "writable", "Revoke: makakoo perms revoke g_"]
+      }
+    },
+    {
+      "name": "grant_explicit_24h",
+      "tool": "grant_write_access",
+      "input": {
+        "path": "<HOME>/long-project",
+        "duration": "24h",
+        "mkdir_target": true
+      },
+      "expect": {
+        "ok": true,
+        "reply_contains": ["Granted.", "/long-project/**", "writable"]
+      }
+    },
+    {
+      "name": "grant_slash_refused",
+      "tool": "grant_write_access",
+      "input": {"path": "/"},
+      "expect": {
+        "ok": false,
+        "reply_contains": ["too broad", "subdirectory"]
+      }
+    },
+    {
+      "name": "grant_home_refused",
+      "tool": "grant_write_access",
+      "input": {"path": "~"},
+      "expect": {
+        "ok": false,
+        "reply_contains": ["too broad"]
+      }
+    },
+    {
+      "name": "grant_wildcard_refused",
+      "tool": "grant_write_access",
+      "input": {"path": "**"},
+      "expect": {
+        "ok": false,
+        "reply_contains": ["too broad"]
+      }
+    },
+    {
+      "name": "grant_permanent_outside_home_needs_confirm",
+      "tool": "grant_write_access",
+      "input": {
+        "path": "/tmp/makakoo-e-test-permanent",
+        "duration": "permanent",
+        "mkdir_target": true
+      },
+      "expect": {
+        "ok": false,
+        "reply_contains": ["permanent", "yes-really"]
+      }
+    },
+    {
+      "name": "grant_permanent_with_confirm_succeeds",
+      "tool": "grant_write_access",
+      "input": {
+        "path": "/tmp/makakoo-e-test-permanent-ok",
+        "duration": "permanent",
+        "confirm": "yes-really",
+        "mkdir_target": true
+      },
+      "expect": {
+        "ok": true,
+        "reply_contains": ["Granted.", "permanent"]
+      }
+    },
+    {
+      "name": "grant_invalid_duration_refused",
+      "tool": "grant_write_access",
+      "input": {
+        "path": "<HOME>/zone-b",
+        "duration": "for an hour",
+        "mkdir_target": true
+      },
+      "expect": {
+        "ok": false,
+        "reply_contains": ["unsupported duration", "30m"]
+      }
+    },
+    {
+      "name": "revoke_by_id_after_grant",
+      "tool": "revoke_write_access",
+      "seed_grant": {
+        "path": "<HOME>/revoke-by-id",
+        "duration": "1h"
+      },
+      "input_from_seed": {"grant_id": "$GRANT_ID"},
+      "expect": {
+        "ok": true,
+        "reply_contains": ["Revoked", "no longer writable"]
+      }
+    },
+    {
+      "name": "revoke_by_last",
+      "tool": "revoke_write_access",
+      "seed_grant": {
+        "path": "<HOME>/revoke-by-last",
+        "duration": "1h"
+      },
+      "input": {"path": "last"},
+      "expect": {
+        "ok": true,
+        "reply_contains": ["Revoked", "revoke-by-last"]
+      }
+    },
+    {
+      "name": "revoke_unknown_id_errors",
+      "tool": "revoke_write_access",
+      "input": {"grant_id": "g_19700101_deadbeef"},
+      "expect": {
+        "ok": false,
+        "reply_contains": ["no grant with id"]
+      }
+    },
+    {
+      "name": "list_empty_mentions_baseline_and_no_active",
+      "tool": "list_write_grants",
+      "input": {},
+      "expect": {
+        "ok": true,
+        "reply_contains": ["Baseline:", "No active grants"]
+      }
+    },
+    {
+      "name": "list_after_grant_surfaces_it",
+      "tool": "list_write_grants",
+      "seed_grant": {
+        "path": "<HOME>/listzone",
+        "duration": "1h"
+      },
+      "input": {},
+      "expect": {
+        "ok": true,
+        "reply_contains": ["Baseline:", "1 active grant", "/listzone/**"]
+      }
+    }
+  ]
+}

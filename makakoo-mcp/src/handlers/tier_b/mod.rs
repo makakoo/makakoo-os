@@ -13,6 +13,7 @@ pub mod knowledge;
 pub mod multimodal;
 pub mod nursery;
 pub mod outbound;
+pub mod perms;
 pub mod pi;
 pub mod sancho;
 pub mod wiki;
@@ -73,4 +74,9 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     // falls back to a clear RPC error if the agent-browser-harness plugin
     // isn't installed under $MAKAKOO_HOME/plugins/.
     registry.register(Arc::new(browse::HarveyBrowseHandler::new(ctx.clone())));
+
+    // v0.3 USER-GRANTS Phase E: conversational runtime user-grant tools.
+    registry.register(Arc::new(perms::GrantWriteAccessHandler::new(ctx.clone())));
+    registry.register(Arc::new(perms::RevokeWriteAccessHandler::new(ctx.clone())));
+    registry.register(Arc::new(perms::ListWriteGrantsHandler::new(ctx.clone())));
 }
