@@ -27,7 +27,10 @@ from pathlib import Path
 MAKAKOO_HOME = os.environ.get("MAKAKOO_HOME") or os.environ.get(
     "HARVEY_HOME", os.path.expanduser("~/MAKAKOO")
 )
-sys.path.insert(0, str(Path(MAKAKOO_HOME) / "plugins-core" / "lib-harvey-core" / "src"))
+# Post v0.2 migration (2026-04-20): the `core.*` package now lives inside
+# the `lib-harvey-core` plugin. Prepend its src/ so `core.sancho` +
+# `core.gym` resolve for the in-process SANCHO handler dispatch below.
+sys.path.insert(0, str(Path(MAKAKOO_HOME) / "plugins" / "lib-harvey-core" / "src"))
 
 
 def _load_handler(name: str):

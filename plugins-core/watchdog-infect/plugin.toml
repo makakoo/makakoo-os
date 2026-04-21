@@ -17,7 +17,7 @@ python = ">=3.11"
 binaries = ["makakoo"]
 
 [entrypoint]
-run = "python3 -u plugins/watchdog-infect/watchdog.py"
+run = "python3 -u watchdog.py"
 
 [capabilities]
 grants = [

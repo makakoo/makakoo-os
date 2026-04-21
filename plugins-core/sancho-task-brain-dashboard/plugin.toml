@@ -17,7 +17,7 @@ sancho-task = "^1.0"
 python = ">=3.9"
 
 [entrypoint]
-run = "python3 -u plugins/sancho-task-brain-dashboard/src/tick.py"
+run = "python3 -u src/tick.py"
 
 [capabilities]
 grants = [

@@ -18,7 +18,7 @@ python = ">=3.9"
 plugins = ["agent-career-manager ^1.0"]
 
 [entrypoint]
-run = "python3 -u plugins/sancho-task-crm-pipeline/src/tick.py"
+run = "python3 -u src/tick.py"
 
 [capabilities]
 grants = [

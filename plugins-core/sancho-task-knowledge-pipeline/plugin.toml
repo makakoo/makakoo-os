@@ -18,7 +18,7 @@ python = ">=3.9"
 plugins = ["agent-knowledge-extractor ^0.1", "agent-multimodal-knowledge ^0.1"]
 
 [entrypoint]
-run = "python3 -u plugins/sancho-task-knowledge-pipeline/src/tick.py"
+run = "python3 -u src/tick.py"
 
 [capabilities]
 grants = [

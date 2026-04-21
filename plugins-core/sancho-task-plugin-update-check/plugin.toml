@@ -18,7 +18,7 @@ python = ">=3.9"
 binaries = ["makakoo"]
 
 [entrypoint]
-run = "python3 -u plugins/sancho-task-plugin-update-check/src/tick.py"
+run = "python3 -u src/tick.py"
 
 [capabilities]
 grants = [
