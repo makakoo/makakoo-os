@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 
 use makakoo_core::capability::{
     rate_limit, user_grants::UserGrant, AuditEntry, AuditLog, AuditResult,
@@ -188,8 +188,43 @@ fn expand_shell_vars(s: &str) -> String {
 //  Rendering helpers (D.5 JSON mode + human table)
 // ═══════════════════════════════════════════════════════════════
 
-fn render_grants_json(grants: &[&UserGrant]) -> anyhow::Result<String> {
-    Ok(serde_json::to_string_pretty(grants)?)
+/// v0.3.3 Phase C — machine-readable output for `makakoo perms list
+/// --json`. Replaces the pre-v0.3.3 shape (a flat array of grant
+/// records) with a structured envelope so scripts can distinguish
+/// active grants from baseline roots from "today's expired"
+/// accounting. The shape is also a 1:1 match for the MCP
+/// `list_write_grants` tool's response (v0.3 / v0.3.2) so CI that
+/// consumes both paths uses the same parser.
+///
+/// Schema (frozen as `schema_version: 1`):
+///
+/// ```json
+/// {
+///   "schema_version": 1,
+///   "baseline": ["...", "..."],
+///   "active":   [<grant>, ...],
+///   "expired_today_count": N,
+///   "all": true | false
+/// }
+/// ```
+///
+/// When `--all` is passed, `active` contains every grant in the
+/// store (including today's expired) and `expired_today_count` is 0
+/// — the `all` flag tells callers which mode produced the output.
+fn render_grants_json(
+    grants: &[&UserGrant],
+    baseline: &[String],
+    expired_today_count: usize,
+    all: bool,
+) -> anyhow::Result<String> {
+    let envelope = serde_json::json!({
+        "schema_version": 1,
+        "baseline": baseline,
+        "active": grants,
+        "expired_today_count": expired_today_count,
+        "all": all,
+    });
+    Ok(serde_json::to_string_pretty(&envelope)?)
 }
 
 fn render_grants_table(grants: &[&UserGrant], now: DateTime<Utc>) -> String {
@@ -250,11 +285,58 @@ fn list(ctx: &CliContext, json: bool, all: bool) -> anyhow::Result<i32> {
         u.active_grants(now)
     };
     if json {
-        println!("{}", render_grants_json(&shown)?);
+        // v0.3.3 Phase C — include baseline roots + today's-expired
+        // count so the envelope matches what MCP `list_write_grants`
+        // already returns. Callers get one stable schema across
+        // surfaces.
+        let baseline = baseline_roots_for(ctx.home());
+        let expired_today = if all {
+            0
+        } else {
+            count_expired_today(&u, now)
+        };
+        println!(
+            "{}",
+            render_grants_json(&shown, &baseline, expired_today, all)?
+        );
     } else {
         print!("{}", render_grants_table(&shown, now));
     }
     Ok(0)
+}
+
+/// Baseline write-file roots — matches the hardcoded set in
+/// `makakoo_core::agent::baseline_roots` and the Python
+/// `_baseline_write_file_roots` helper. Exposed via the `list --json`
+/// envelope so callers can distinguish the three permission layers
+/// without cross-referencing docs.
+fn baseline_roots_for(home: &std::path::Path) -> Vec<String> {
+    vec![
+        home.join("data/reports").to_string_lossy().to_string(),
+        home.join("data/drafts").to_string_lossy().to_string(),
+        home.join("tmp").to_string_lossy().to_string(),
+        "/tmp".to_string(),
+    ]
+}
+
+fn count_expired_today(
+    u: &UserGrants,
+    now: DateTime<Utc>,
+) -> usize {
+    let today_midnight = DateTime::<Utc>::from_naive_utc_and_offset(
+        chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), now.day())
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap(),
+        Utc,
+    );
+    u.grants
+        .iter()
+        .filter(|g| match g.expires_at {
+            Some(e) => e >= today_midnight && e < now,
+            None => false,
+        })
+        .count()
 }
 
 #[allow(clippy::too_many_arguments)]

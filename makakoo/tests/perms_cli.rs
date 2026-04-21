@@ -79,15 +79,78 @@ fn empty_list_prints_no_grants_and_exits_zero() {
 }
 
 #[test]
-fn empty_list_json_is_array() {
+fn empty_list_json_is_v033_envelope() {
+    // v0.3.3 Phase C: `perms list --json` emits a structured envelope
+    // `{schema_version, baseline, active, expired_today_count, all}`.
+    // Previously it emitted a flat array — that shape was never
+    // officially documented (docs called --json "deferred to v0.3.3"),
+    // so the schema change is additive from a contract-freeze POV.
     let dir = mk_home();
     let home = home_resolved(&dir);
     let out = run(&["perms", "list", "--json"], &home);
     let stdout = ok_stdout(&out);
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("valid json");
-    let arr = parsed.as_array().expect("top-level array");
-    assert!(arr.is_empty());
+    let obj = parsed.as_object().expect("top-level object");
+    assert_eq!(obj["schema_version"], serde_json::json!(1));
+    assert!(
+        obj["baseline"].as_array().unwrap().len() >= 4,
+        "baseline should include 4 canonical roots"
+    );
+    assert!(
+        obj["active"]
+            .as_array()
+            .expect("active array")
+            .is_empty()
+    );
+    assert_eq!(obj["expired_today_count"], serde_json::json!(0));
+    assert_eq!(obj["all"], serde_json::json!(false));
+}
+
+#[test]
+fn populated_list_json_returns_grant_records_in_active() {
+    let dir = mk_home();
+    let home = home_resolved(&dir);
+    let target = home.join("json-zone");
+    std::fs::create_dir_all(&target).unwrap();
+    run(&["perms", "grant", target.to_str().unwrap(), "--for", "1h"], &home);
+
+    let out = run(&["perms", "list", "--json"], &home);
+    let stdout = ok_stdout(&out);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .expect("valid json");
+    let active = parsed["active"]
+        .as_array()
+        .expect("active array");
+    assert_eq!(active.len(), 1);
+    // Grant records carry the full v0.3.3 field set — including
+    // `owner`, which v0.3.3 Phase A introduced.
+    let g = &active[0];
+    for key in &["id", "scope", "created_at", "expires_at", "plugin", "owner"] {
+        assert!(g.get(key).is_some(), "grant record missing {key}: {g:?}");
+    }
+    assert_eq!(
+        g["plugin"], serde_json::json!("cli"),
+        "CLI-created grant carries plugin='cli'"
+    );
+    assert_eq!(
+        g["owner"], serde_json::json!("cli"),
+        "owner defaults to plugin at grant time"
+    );
+}
+
+#[test]
+fn list_all_flag_surfaces_in_envelope() {
+    let dir = mk_home();
+    let home = home_resolved(&dir);
+    let out = run(&["perms", "list", "--json", "--all"], &home);
+    let stdout = ok_stdout(&out);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .expect("valid json");
+    assert_eq!(parsed["all"], serde_json::json!(true));
+    // When --all is passed, expired_today_count is 0 — everything
+    // is in `active` regardless of expiry status.
+    assert_eq!(parsed["expired_today_count"], serde_json::json!(0));
 }
 
 #[test]
