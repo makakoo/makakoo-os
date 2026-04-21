@@ -229,8 +229,19 @@ Recommended for bootstrap portability:
   `plugins-core/lib-harvey-core/skills/<name>/SKILL.md`).
 - Internal architecture: `docs/index.md`.
 
+## Reverse direction
+
+You have an agent you want **Makakoo to consume** (instead of the
+other way around). See [`bring-your-own-agent.md`](bring-your-own-agent.md) —
+one adapter.toml file, four template shapes (OpenAI-compat / subprocess
+/ MCP stdio / peer-Makakoo-over-HTTP), scaffolded via
+`makakoo adapter gen`.
+
 ## Changelog
 
 - **2026-04-21 (v0.5 Phase D)** — First ship. LangChain snippet
   dogfooded in a fresh `/tmp/makakoo-langchain` venv; Chrome CDP
   + agent-browser-harness validated against `https://example.com`.
+- **2026-04-21 (v0.6 Phase D)** — Cross-linked to
+  `bring-your-own-agent.md`. Companion of this guide: how to make
+  your agent a first-class swarm participant Makakoo can reach.
