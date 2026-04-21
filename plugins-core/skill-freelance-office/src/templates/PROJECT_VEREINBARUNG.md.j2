@@ -1,0 +1,58 @@
+# Projektvereinbarung — {{ project_title }}
+
+zwischen
+
+**{{ from_name }}**{% if from_dba %} ({{ from_dba }}){% endif %}
+{{ from_email }}
+
+und
+
+**{{ to_name }}**
+{{ to_email }}
+
+---
+
+## 1. Leistungsgegenstand
+
+{{ description }}
+
+## 2. Vergütung
+
+- Tagessatz: **€{{ "%.2f"|format(day_rate) }} netto** (8 Stunden)
+- Vereinbarte Tage: **{{ total_days }}**
+- Gesamtvolumen: **€{{ "%.2f"|format(total_net) }} netto**
+{% if reverse_charge %}- Reverse Charge gem. Art. 196 MwSt-SystRL.
+{% elif kleinunternehmer %}- Ohne USt-Ausweis gem. § 19 UStG.
+{% else %}- +19% USt.
+{% endif %}{% if advance_payment %}- Vorauszahlung: {{ advance_payment }}.{% endif %}
+
+## 3. Meilensteine
+
+| # | Name | Beschreibung | Ziel |
+|---|------|--------------|------|
+{% for m in meilensteine -%}
+| {{ loop.index }} | {{ m.name }} | {{ m.description }} | {{ m.due_date }} |
+{% endfor %}
+
+## 4. Zahlungsbedingungen
+
+- {{ payment_terms_days }} Tage netto, per Überweisung.
+- Rechnungsstellung meilensteinbasiert oder monatlich rückwirkend.
+
+## 5. Laufzeit und Kündigung
+
+- Projektbeginn: {{ started }}
+- Projektende: geplant nach Abschluss des letzten Meilensteins.
+- Beidseitige Kündigung mit 14 Tagen Frist möglich.
+
+## 6. Vertraulichkeit
+
+Beide Parteien verpflichten sich zur Vertraulichkeit über sämtliche im Rahmen der Zusammenarbeit ausgetauschten Informationen. Eine separate NDA kann die Konditionen erweitern.
+
+---
+
+**Ort, Datum:** _____________________
+
+**{{ from_name }}:** _____________________
+
+**{{ to_name }}:** _____________________

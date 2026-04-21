@@ -1,0 +1,52 @@
+# Client: {{ slug }}
+
+> Klone dieses Verzeichnis für jeden neuen Client: `cp -r _template clients/<slug>`
+
+---
+
+## Stammdaten
+
+```yaml
+slug: "{{ slug }}"
+name: "{{ name }}"
+website: ""
+sector: "{{ sector }}"
+contact_person: ""
+contact_email: "{{ contact_email }}"
+ust_id: "{{ ust_id }}"
+
+b2b: {{ 'true' if b2b else 'false' }}
+client_country: "{{ client_country }}"
+
+started: "{{ started }}"
+contract_signed: false
+current_status: "prospecting"
+```
+
+---
+
+## Verhandelte Konditionen
+
+```yaml
+day_rate_agreed: {{ day_rate_agreed }}
+hourly_rate_agreed: {{ hourly_rate_agreed }}
+currency: "{{ currency }}"
+payment_terms_days: {{ payment_terms_days }}
+advance_payment: ""
+
+custom_terms: |
+  -
+```
+
+---
+
+## Kommunikation & Tooling
+
+- **Plattform:** _______________
+- **Rechnungsstellung:** _______________
+
+---
+
+## Wichtige Notizen
+
+- _______________

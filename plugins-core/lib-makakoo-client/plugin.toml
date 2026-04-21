@@ -1,0 +1,17 @@
+[plugin]
+name = "lib-makakoo-client"
+version = "0.1.0"
+kind = "library"
+language = "python"
+summary = "Python client for the Makakoo kernel capability socket. Thin wrapper around makakoo-client-py that exposes it as a library plugin so every skill/agent plugin can `from makakoo_client import Client` over the standard PYTHONPATH."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/lib-makakoo-client"
+
+[depends]
+python = ">=3.9"
+
+[capabilities]
+grants = []

@@ -1,0 +1,77 @@
+# Project Tracker: {{ project_title }}
+
+> Ein Projekt-Template pro Engagement. Jeder Vertrag = ein Projektordner.
+
+---
+
+## ⚡ Status Board
+
+```
+Phase: [ ] Prospekt    [ ] Verhandlung    [x] Active    [ ] Abnahme    [ ] Closed
+Contract: [ ] NDA    [ ] Projektvereinbarung    [ ] Start-Briefing done
+First invoice: [ ] Sent    [ ] Paid
+```
+
+---
+
+## 📋 Projekt-Steckbrief
+
+```yaml
+client_slug: "{{ client_slug }}"
+project_slug: "{{ project_slug }}"
+title: "{{ project_title }}"
+started: "{{ started }}"
+ended: ""
+role: ""
+stack: ""
+
+agreed_days: {{ agreed_days }}
+spent_days: 0
+remaining_days: {{ agreed_days }}
+
+agreed_rate: {{ day_rate }}
+total_contract_value: {{ total_contract_value }}
+invoiced: 0
+paid: 0
+outstanding: 0
+```
+
+---
+
+## 🤝 Vertragsstatus
+
+| Dokument | Status | Datum |
+|----------|--------|-------|
+| NDA | ❌ | — |
+| Projektvereinbarung | 📋 | {{ started }} |
+| Start-Briefing | ❌ | — |
+
+---
+
+## 📅 Meilensteine & Timeline
+
+| # | Meilenstein | Beschreibung | Ziel | Status | Rechnung |
+|---|-------------|-------------|------|--------|---------|
+| 1 | _______________ | _______________ | YYYY-MM-DD | ⏳ | [ ] |
+
+---
+
+## ⏱️ Stundenerfassung
+
+> 1 Tag = 8 Stunden. Jeden Freitag aktualisieren.
+
+| KW | Mo | Di | Mi | Do | Fr | Sa | So | Summe | Notiz |
+|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|------:|-------|
+
+---
+
+## 💰 Rechnungen
+
+| # | INV-Nr. | Betrag (netto) | Datum | Fällig | Bezahlt |
+|---|---------|---------------:|-------|--------|---------|
+
+---
+
+## 📝 Learnings & Notes
+
+- _______________

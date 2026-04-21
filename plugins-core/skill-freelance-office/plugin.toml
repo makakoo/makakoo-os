@@ -1,0 +1,31 @@
+[plugin]
+name = "skill-freelance-office"
+version = "0.2.0"
+kind = "skill"
+language = "python"
+summary = "Multi-country freelance accounting plugin. DE + AR + ES + US tax regimes in-tree (drop a core/tax/<cc>.py to add more). Per-office registry + --office selector. One install hosts many offices, each with own tax rules, locale, currency, and ledger."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-freelance-office"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+grants = [
+    "fs/read:~/freelance-office",
+    "fs/write:~/freelance-office",
+    "brain/write",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-freelance-office"
+retention = "keep"

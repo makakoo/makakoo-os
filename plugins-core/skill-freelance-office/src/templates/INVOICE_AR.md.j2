@@ -1,0 +1,59 @@
+# FACTURA {{ invoice_number }}
+
+**EMISOR**
+{{ from_name }}{% if from_dba %} ({{ from_dba }}){% endif %}
+{{ from_email }}{% if from_ust_id %}
+CUIT: {{ from_ust_id }}{% endif %}
+
+**CLIENTE**
+{{ to_name }}
+{{ to_email }}{% if to_ust_id %}
+CUIT: {{ to_ust_id }}{% endif %}
+
+---
+
+| Campo | Valor |
+|-------|-------|
+| N.º de Factura | **{{ invoice_number }}** |
+| Fecha de emisión | {{ issued }} |
+| Período de servicio | {{ leistungszeitraum }} |
+| Vencimiento | {{ due }} |
+| Proyecto | {{ project_slug }} |
+
+## Detalle del Servicio
+
+| Ítem | Descripción | Cantidad | Precio unitario | Total |
+|------|-------------|---------:|----------------:|------:|
+| 1 | {{ description }} |{% if days_billed %} {{ days_billed }} días | $ {{ "%.2f"|format(day_rate) }} |{% else %} 1 | $ {{ "%.2f"|format(net) }} |{% endif %} **$ {{ "%.2f"|format(net) }}** |
+
+---
+
+|  |  |
+|--|--|
+| Subtotal (neto) | $ {{ "%.2f"|format(net) }} |
+{% if reverse_charge %}| IVA | — (operación exenta) |
+| **Total** | **$ {{ "%.2f"|format(net) }}** |
+{% elif apply_vat %}| IVA 21% | $ {{ "%.2f"|format(ust) }} |
+| **Total (bruto)** | **$ {{ "%.2f"|format(brutto) }}** |
+{% else %}| IVA | no corresponde (Monotributo) |
+| **Total** | **$ {{ "%.2f"|format(net) }}** |
+
+_Emisor adherido al régimen de Monotributo — factura sin IVA discriminado._
+{% endif %}
+
+## Condiciones de Pago
+
+Pago a {{ payment_terms_days }} días fecha factura, mediante transferencia a:
+
+```
+{{ from_name }}
+Banco: {{ bank_name }}
+CBU / Alias: {{ bank_iban }}
+CUIT: {{ from_ust_id }}
+```
+
+Concepto: **{{ invoice_number }}**
+
+---
+
+_Gracias por confiar en nuestros servicios._
