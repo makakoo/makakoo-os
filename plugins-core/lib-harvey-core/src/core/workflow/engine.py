@@ -239,8 +239,10 @@ class WorkflowEngine:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            HARVEY_HOME = Path(os.environ.get("HARVEY_HOME", str(Path.home() / "MAKAKOO")))
-            db_path = str(HARVEY_HOME / "data" / "workflow" / "workflows.db")
+            home = os.environ.get("MAKAKOO_HOME") or os.environ.get("HARVEY_HOME")
+            if not home:
+                home = str(Path.home() / "MAKAKOO")
+            db_path = str(Path(home) / "data" / "workflow" / "workflows.db")
 
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path, check_same_thread=False)
