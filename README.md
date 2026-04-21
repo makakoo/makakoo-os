@@ -85,6 +85,10 @@ makakoo sancho status
 # Preview what infect would do, then commit
 makakoo infect --global --dry-run
 makakoo infect --global
+
+# Grant an agent temporary write access to a directory outside the baseline
+makakoo perms grant ~/code/scratch/ --for 1h
+makakoo perms list
 ```
 
 ## Layout
@@ -135,6 +139,8 @@ This is a community-built open-source project. Contributions welcome across code
 - [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) — Apple notarization + Windows Authenticode runbook
 - [docs/PHASE_H4_RELOCATE.md](docs/PHASE_H4_RELOCATE.md) — `~/MAKAKOO → ~/.makakoo/` runtime-relocation runbook
 - [install/completions/README.md](install/completions/README.md) — shell completion install + dynamic plugin-name wrappers
+- [spec/CAPABILITIES.md §1.11](spec/CAPABILITIES.md) — three-layer write-permission model (v0.3)
+- [spec/USER_GRANTS.md](spec/USER_GRANTS.md) — user-grants file format, lock protocol, CLI + MCP reference
 - [spec/](spec/) — frozen v0.1 architecture + ABI contracts
 
 ## License

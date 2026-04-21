@@ -239,10 +239,40 @@ atomic temp-rename, corrupt-file tolerance). See §USER_GRANTS.md §writers.
 / `**`; `~` and `$MAKAKOO_HOME` expand at grant-time (not check-time).
 
 **Where enforcement lives in v0.3:** Python `_resolve_write_path()` in
-`lib-harvey-core`. Rust is currently read-only (CLI + MCP handlers
-mutate the store; the Unix-socket capability gate from §4 is Phase E/2,
-v0.4+). When the v0.4 socket gate ships, it reads the same JSON and
-merges it into the grant table built by §2 — no throwaway code.
+`lib-harvey-core` (agent write path) + Rust `capability::user_grants`
+(CLI + MCP handlers + SANCHO purge). Both read + write the same JSON
+under the shared sidecar-lock protocol. When the v0.4 Unix-socket
+capability gate from §4 ships, it merges `user_grants.json` into the
+per-plugin grant table §2 builds — same JSON, no throwaway code.
+
+**Self-maintenance:** the `perms_purge_tick` native SANCHO handler
+(#10 in `NATIVE_TASK_NAMES`) fires every 900s, drops grants whose
+`expires_at ≤ now`, and emits one `perms/revoke` audit entry per
+removed grant with `correlation_id="reason:expired"` and
+`plugin="sancho-native"`. The CLI `makakoo perms purge` shares the
+same `UserGrants::purge_expired` backend but attributes `plugin="cli"`
+so the audit trail records which trigger ran each purge.
+
+**Worked example — three layers, one write call:**
+
+```
+Installed plugins:
+  agent-inbox   grants fs/write:~/MAKAKOO/data/inbox-triage/**
+  agent-arb     grants fs/write:~/MAKAKOO/agents/arbitrage-agent/**
+
+Active user grants (user_grants.json):
+  g_20260421_a1b2c3d4  fs/write:~/code/**   expires 2026-04-21T18:00Z
+  g_20260421_e5f6g7h8  fs/write:~/notes/**  permanent
+```
+
+| Write target | Decision | Matched layer |
+|---|---|---|
+| `~/MAKAKOO/data/reports/x.md`           | allowed | Layer 1 (baseline) |
+| `~/MAKAKOO/data/inbox-triage/sent.md`   | allowed | Layer 2 (agent-inbox manifest) |
+| `~/code/src/main.rs` (before 18:00Z)    | allowed | Layer 3 (`g_20260421_a1b2c3d4`) |
+| `~/code/src/main.rs` (after 18:00Z)     | denied — purged by `perms_purge_tick` |
+| `~/notes/weekly.md`                     | allowed | Layer 3 (`g_20260421_e5f6g7h8`) |
+| `~/other/unmapped.md`                   | denied — error string suggests `makakoo perms grant` |
 
 **Backwards compatibility:** absent `user_grants.json` = baseline-only
 behavior, byte-identical to pre-v0.3. Writes outside the baseline are

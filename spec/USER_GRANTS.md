@@ -1,19 +1,21 @@
 # User Grants — File Format, Lock Protocol, and API
 
-**Version:** 1.0-draft (stub landed in Phase B.1 of
-`MAKAKOO-OS-V0.3-USER-GRANTS`; final draft lands at Gate G.2).
+**Version:** 1.0 (locked 2026-04-21 at Gate G.2 of
+`MAKAKOO-OS-V0.3-USER-GRANTS`). Revisions go in §14.
 
 This document is the authoritative schema contract for
 `$MAKAKOO_HOME/config/user_grants.json`. Python (`lib-harvey-core`)
 and Rust (`makakoo-core`) both read AND write this file; the two
 implementations MUST stay byte-for-byte compatible. Round-trip tests
 at `tests/fixtures/grant_glob_vectors.json` lock glob semantics;
-drift fails CI.
+drift fails CI. Shared scenario fixture
+`tests/fixtures/grant_tool_vectors.json` locks the conversational
+tool surface (Python ↔ Rust). Audit-escape vectors at
+`tests/fixtures/audit_escape_vectors.json` lock control-char handling.
 
 For the *why* of the user-grant layer, see
 `spec/CAPABILITIES.md §1.11`. For the threat model, see
-`spec/USER_GRANTS_THREAT_MODEL.md`. For the CLI-chat UX, see
-§CLI-chat UX (populated in Phase E.10).
+`spec/USER_GRANTS_THREAT_MODEL.md`. For the CLI-chat UX, see §12.
 
 ## 1. Purpose
 
@@ -412,3 +414,10 @@ implementations to catch glob-semantic drift.
   `MAKAKOO-OS-V0.3-USER-GRANTS`. Schema locked, lock protocol
   locked, glob grammar locked. CLI/MCP/UX sections stubbed for
   later phases.
+- **v1.0 (locked)** — 2026-04-21, Gate G.2. All stubs filled:
+  §10 CLI (Phase D), §11 MCP + HARVEY_TOOLS (Phase E.1 shipping
+  `grant_write_access` / `revoke_write_access` / `list_write_grants`
+  across MCP + agent dispatch), §12 four canonical UX flows,
+  §13 writers. Self-maintenance added: `perms_purge_tick` native
+  SANCHO handler (900s) fires alongside CLI `makakoo perms purge`;
+  both share `UserGrants::purge_expired`.

@@ -10,6 +10,65 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added — v0.3 User Grants (`MAKAKOO-OS-V0.3-USER-GRANTS`, 2026-04-21)
+- Three-layer additive write-permission model (baseline → manifest →
+  user grants). Agents can now write outside the hardcoded baseline
+  when the user grants access — without editing code or restarting.
+  See `spec/CAPABILITIES.md §1.11` for the precedence diagram +
+  worked example.
+- `$MAKAKOO_HOME/config/user_grants.json` — machine-local, gitignored
+  grant store with sidecar-lock protocol (LD#9), atomic temp-rename,
+  corrupt-file tolerance. Full schema + lock contract at
+  `spec/USER_GRANTS.md` v1.0.
+- `makakoo perms {list,grant,revoke,purge,audit,show}` — dedicated
+  CLI for scripted + CI workflows. Strict duration grammar
+  (`30m|1h|24h|7d|permanent`); broad scopes (`/`, `~`, `**`, `*`)
+  refused with `too broad`; `permanent` outside `$MAKAKOO_HOME`
+  requires `--confirm yes-really`.
+- `grant_write_access` / `revoke_write_access` / `list_write_grants`
+  — conversational MCP + HARVEY_TOOLS handlers. Every infected CLI
+  can issue + list + revoke grants from chat. Canonical replies
+  quoted verbatim by the agent; shared scenario fixture at
+  `tests/fixtures/grant_tool_vectors.json` locks Python ↔ Rust
+  drift.
+- `perms_purge_tick` — SANCHO native handler #10. Runs every 900s,
+  drops expired grants, emits one `perms/revoke` audit per removed
+  grant with `correlation_id="reason:expired"` and
+  `plugin="sancho-native"`.
+- `perms/grant` + `perms/revoke` audit verbs. Both land in
+  `logs/audit.jsonl` under the existing schema with
+  `plugin="cli"`, `plugin="sancho-native"`, or any
+  `HARVEY_PLUGIN` env value from a conversational surface.
+- Rate-limit guardrail (LD#14): max 20 active grants, max 50
+  create-ops per rolling hour. Counter state in
+  `state/perms_rate_limit.json` so a corrupt counter can't poison
+  grants.
+- Telegram allowlist gate — `HARVEY_PLUGIN=harveychat-telegram` +
+  `HARVEY_TELEGRAM_CHAT_ID` routed through the existing
+  `data/chat/config.json` allowlist. Non-allowlisted chats get an
+  `authz:` refusal and an audit entry with `result=denied`.
+- Write-access-grants section in every infected CLI bootstrap
+  (claude / gemini / codex / opencode / vibe / cursor / qwen / pi).
+  Carries the rejection-path flow + verbatim-quote rule. Re-run
+  `makakoo infect --global` to propagate.
+- Threat-model doc at `spec/USER_GRANTS_THREAT_MODEL.md`: 6-asset
+  register, 4 adversary types (T1–T4), 10-row per-surface authN
+  matrix, STRIDE pass, R1–R4 residual-risk register.
+
+### Changed — v0.3
+- `WRITE_FILE_ROOTS` (hardcoded tuple) → three-layer resolver
+  `_resolve_write_path()`. Baseline resolution is now env-aware
+  (reads `$MAKAKOO_HOME` at call time instead of at import).
+- Write-file rejection string now suggests the exact
+  `makakoo perms grant '<path>' --for 1h` command to run.
+- `HARVEY_SYSTEM_PROMPT` gains an `{allowed_paths}` placeholder
+  rendered per-call with the active baseline + grants. Agents see
+  their current writable surface in every turn.
+- `HARVEY_PLUGIN` env var now propagates from chat bridge → every
+  audit entry. Audit log shows which CLI made each perms call.
+- `NATIVE_TASK_COUNT: 9 → 10`, `NATIVE_TASK_NAMES` appends
+  `"perms_purge_tick"`. Gated by `native_task_names_match_registry`.
+
 ### Added
 - `makakoo uninfect` — symmetric inverse of `makakoo infect --global`.
   Strips the bootstrap block from every global CLI slot (or the
