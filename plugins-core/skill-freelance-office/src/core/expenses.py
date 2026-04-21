@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import paths
+from . import md_table
 from .errors import FreelanceError
 
 CATEGORY_HEADERS = {
@@ -43,6 +44,20 @@ CATEGORY_NET_COL = {
     "telefon":      3,   # | Datum | Beschreibung | Anteil | Netto (€) |
     "fahrt":        3,   # | Datum | Strecke | km | Betrag (€) |
     "arbeitsmittel": 2,  # | Datum | Beschreibung | Netto (€) |
+}
+
+# Canonical column count per category. Rows with any other count are
+# routed to the malformed-rows sentinel via
+# :mod:`src.core.md_table` so a pipe in a description cell cannot
+# silently mis-align :data:`CATEGORY_NET_COL`.
+CATEGORY_COLS = {
+    "equipment":    6,
+    "software":     6,
+    "fortbildung":  6,
+    "homeoffice":   3,
+    "telefon":      4,
+    "fahrt":        4,
+    "arbeitsmittel": 3,
 }
 
 # DE: "Jahreszusammenfassung"; AR + ES: "Resumen Anual".
@@ -91,31 +106,48 @@ def ytd_by_category(year: int, root: Optional[Path] = None) -> Dict[str, float]:
         return {"__total__": 0.0}
     text = path.read_text(encoding="utf-8")
     out: Dict[str, float] = {k: 0.0 for k in CATEGORY_HEADERS}
-    for cat, total in _scan_categories(text):
+    for cat, total in _scan_categories(text, source=path):
         out[cat] = round(total, 2)
     out["__total__"] = round(sum(out.values()), 2)
     return out
 
 
-def _scan_categories(text: str):
+def _scan_categories(text: str, *, source: Optional[Path] = None):
     for cat, header in CATEGORY_HEADERS.items():
         start, end = _section_by_literal(text, header)
         if start < 0:
             continue
         body = text[start:end]
         net_col = CATEGORY_NET_COL[cat]
+        expected = CATEGORY_COLS[cat]
         total = 0.0
         for line in body.splitlines():
             if not line.startswith("|"):
                 continue
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if not cells or cells[0].lower().startswith(("monat", "datum", "---")):
+            # Skip header / separator / placeholder rows by shape
+            # BEFORE strict-count parsing — these are expected to not
+            # match the data-row layout.
+            raw_cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if not raw_cells:
                 continue
-            if "YYYY" in cells[0] or "**" in cells[0] or cells[0] == "":
+            first = raw_cells[0].lower()
+            if first.startswith(("monat", "datum", "---")):
                 continue
-            if "summe" in cells[0].lower() or "gesamt" in cells[0].lower():
+            if "YYYY" in raw_cells[0] or "**" in raw_cells[0] or raw_cells[0] == "":
                 continue
-            if len(cells) <= net_col:
+            if "summe" in first or "gesamt" in first:
+                continue
+            # Strict-count parse: mis-aligned rows route to sentinel
+            # instead of letting a pipe-in-description shift net_col.
+            cells = md_table.parse_row(line, expected)
+            if cells is None:
+                md_table.log_malformed_row(
+                    f"expenses:{cat}",
+                    line,
+                    source=source,
+                    expected_cols=expected,
+                    reason="cell count mismatch — pipe inside a cell?",
+                )
                 continue
             money_cell = cells[net_col]
             if money_cell == "" or money_cell.startswith("_"):

@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import paths
+from . import md_table
 from .errors import FreelanceError
+
+# Canonical column count for the Einnahmen-Übersicht table — any row
+# with a different count is routed to the malformed-rows sentinel so
+# that a pipe character inside a client name can never silently shift
+# ``_parse_money(cells[5])`` onto a non-money cell. See
+# :mod:`src.core.md_table` for rationale.
+EARN_COLS = 9
 
 # Section headers vary by country: DE uses "Einnahmen-Übersicht" and
 # "Quartalszusammenfassung"; AR + ES use "Resumen de Ingresos" and
@@ -74,20 +82,26 @@ def ytd_total(year: int, root: Optional[Path] = None) -> float:
         return 0.0
     text = path.read_text(encoding="utf-8")
     total = 0.0
-    for r in _iter_rows(text):
+    for r in _iter_rows(text, source=path):
         total += r["net"]
     return round(total, 2)
 
 
-def _iter_rows(text: str):
+def _iter_rows(text: str, *, source: Optional[Path] = None):
     start, end = _section_bounds(text, EARN_HEADER_RE)
     body = text[start:end]
     for line in body.splitlines():
-        m = DATA_ROW_RE.match(line)
-        if not m:
+        if not DATA_ROW_RE.match(line):
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 9:
+        cells = md_table.parse_row(line, EARN_COLS)
+        if cells is None:
+            md_table.log_malformed_row(
+                "earnings",
+                line,
+                source=source,
+                expected_cols=EARN_COLS,
+                reason="cell count mismatch — pipe inside a cell?",
+            )
             continue
         inv_no = cells[1]
         if inv_no.startswith("INV-") and "YYYY" in inv_no:
@@ -104,7 +118,7 @@ def _iter_rows(text: str):
             "net": net,
             "ust": _parse_money_safe(cells[6]),
             "brutto": _parse_money_safe(cells[7]),
-            "status": cells[8] if len(cells) > 8 else "",
+            "status": cells[8],
         }
 
 
@@ -136,13 +150,18 @@ def _append_row(text: str, rec: EarningRecord) -> str:
         if not m:
             data_end = i
             break
-        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-        inv_no = cells[1] if len(cells) > 1 else ""
+        cells = md_table.parse_row(ln, EARN_COLS)
+        if cells is None:
+            # malformed row (already logged by the _iter_rows pass):
+            # don't let it shift next_num, just skip and move on.
+            data_end = i + 1
+            continue
+        inv_no = cells[1]
         if not ("YYYY" in inv_no):
             is_placeholder_only = False
             try:
                 next_num = int(cells[0]) + 1
-            except (ValueError, IndexError):
+            except ValueError:
                 pass
         data_end = i + 1
 
@@ -170,17 +189,20 @@ def _recompute_summe(text: str) -> str:
     trailing_nl = _trailing_nl(body)
     rows = []
     for line in body.splitlines():
-        if DATA_ROW_RE.match(line):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) >= 8 and "YYYY" not in cells[1]:
-                try:
-                    rows.append((
-                        _parse_money_safe(cells[5]),
-                        _parse_money_safe(cells[6]),
-                        _parse_money_safe(cells[7]),
-                    ))
-                except ValueError:
-                    continue
+        if not DATA_ROW_RE.match(line):
+            continue
+        cells = md_table.parse_row(line, EARN_COLS)
+        if cells is None:
+            # parser hardening: malformed rows are logged once during
+            # _iter_rows — no double-log here.
+            continue
+        if "YYYY" in cells[1]:
+            continue
+        rows.append((
+            _parse_money_safe(cells[5]),
+            _parse_money_safe(cells[6]),
+            _parse_money_safe(cells[7]),
+        ))
     sn = sum(n for n, _, _ in rows)
     su = sum(u for _, u, _ in rows)
     sb = sum(b for _, _, b in rows)
