@@ -25,6 +25,7 @@ SUBCOMMANDS: Dict[str, str] = {
     "onboard-client":         "sign a new client (slug, day_rate_agreed, terms)",
     "log-hours":              "upsert a KW row on a project's _project-tracker.md",
     "generate-invoice":       "allocate INV-YYYY-NNN atomically, render, book",
+    "mark-paid":              "flip EARNINGS.md status to bezahlt/teilweise, append Zahlungseingänge + tracker",
     "track-expense":          "append a row to the right section of EXPENSES.md",
     "pipeline":               "read-only pipeline table (supports --json)",
     "kleinunternehmer-check": "local tax threshold check (§19 UStG DE / Monotributo AR / Autonomo ES)",

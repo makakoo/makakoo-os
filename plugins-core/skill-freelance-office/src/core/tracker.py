@@ -126,6 +126,59 @@ class Tracker:
         block = _yaml_replace(block, "remaining_days", self.remaining_days)
         self.text = self.text[: m.start(2)] + block + self.text[m.end(2) :]
 
+    def mark_invoice_paid(self, inv_no: str, *, partial: bool = False) -> bool:
+        """Flip the "Bezahlt" cell of the matching Rechnungen row
+        to ``[✅]`` (full) or ``[💰]`` (partial). Returns ``True`` if
+        a row was found and updated, ``False`` otherwise. Caller is
+        responsible for calling :meth:`write` afterwards plus the
+        two-phase read-back verify (pi corruption-risk #2)."""
+        section_start, section_end = _find_section(self.text, _RECH_HEADER_RE)
+        body = self.text[section_start:section_end]
+        trailing_nl = _count_trailing_nl(body)
+        lines = body.splitlines()
+        marker = "[💰]" if partial else "[✅]"
+        updated = False
+        for i, ln in enumerate(lines):
+            mm = _INV_ROW_RE.match(ln)
+            if not mm or mm.group(2) != inv_no:
+                continue
+            # Walk the cells and replace the final ``[ ]`` (or any
+            # prior marker) with the new marker. Splitting the row
+            # preserves the other cells byte-for-byte.
+            parts = ln.split("|")
+            # Last non-empty segment is the Bezahlt cell (there's a
+            # trailing empty segment after the final ``|``).
+            idx = len(parts) - 2
+            while idx >= 0 and parts[idx].strip() == "":
+                idx -= 1
+            if idx < 0:
+                break
+            # Only flip the final cell if it currently holds a
+            # checkbox-shaped payload.
+            current = parts[idx].strip()
+            if current in ("[ ]", "[✅]", "[💰]"):
+                parts[idx] = f" {marker} "
+                lines[i] = "|".join(parts)
+                updated = True
+            break
+        if updated:
+            new_body = "\n".join(lines) + ("\n" * trailing_nl)
+            self.text = self.text[:section_start] + new_body + self.text[section_end:]
+        return updated
+
+    def verify_invoice_paid_marker(self, inv_no: str, *, partial: bool = False) -> bool:
+        """Re-read the text buffer and confirm the expected marker
+        landed in the ``inv_no`` row — pi corruption-risk #2's
+        read-after-write check."""
+        marker = "[💰]" if partial else "[✅]"
+        section_start, section_end = _find_section(self.text, _RECH_HEADER_RE)
+        body = self.text[section_start:section_end]
+        for ln in body.splitlines():
+            mm = _INV_ROW_RE.match(ln)
+            if mm and mm.group(2) == inv_no and marker in ln:
+                return True
+        return False
+
     def append_invoice(self, inv_no: str, amount_net: float, issued: str, due: str) -> None:
         section_start, section_end = _find_section(self.text, _RECH_HEADER_RE)
         body = self.text[section_start:section_end]
