@@ -21,8 +21,17 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 base64 = "0.22"
+# Phase B v0.6 — HTTP serve mode. Axum's http1+json with default-features
+# off keeps the surface minimal; TLS is the user's reverse-proxy job.
+axum = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+hex = "0.4"
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = "3"
 wiremock = "0.6"
+tower = "0.5"
+reqwest = { workspace = true }

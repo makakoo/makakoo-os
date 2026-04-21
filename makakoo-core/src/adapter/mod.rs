@@ -14,6 +14,7 @@ pub mod call;
 pub mod install;
 pub mod manifest;
 pub mod output;
+pub mod peer;
 pub mod registry;
 pub mod result;
 pub mod sandbox;
@@ -33,6 +34,12 @@ pub use manifest::{
     TransportTable,
 };
 pub use output::{parse_response, OutputError};
+pub use peer::{
+    default_peers_dir, default_signing_key_path, default_signing_pub_path, default_trust_file,
+    fingerprint, load_or_create_signing_key, load_trust_file, now_millis, sign_request,
+    trust_add, trust_remove, verify_request, PeerError, DRIFT_WINDOW_MS, PEER_HEADER, SIG_HEADER,
+    SIG_PREFIX, TS_HEADER,
+};
 pub use registry::{AdapterRegistry, RegisteredAdapter, RegistryError};
 pub use result::{PhaseVerdict, ValidatorResult, VerdictStatus};
 pub use sandbox::{
@@ -42,8 +49,9 @@ pub use sign::{
     default_trust_root, keys_dir, load_publisher_key, verify_manifest_bytes, SignError,
 };
 pub use transport::{
-    call_transport, expand_env, CallContext, HttpTransport, McpHttpTransport, McpStdioTransport,
-    ResponseMeta, SubprocessTransport, Transport, TransportError, TransportResponse,
+    call_transport, expand_env, CallContext, HttpTransport, McpHttpSignedTransport,
+    McpHttpTransport, McpStdioTransport, ResponseMeta, SubprocessTransport, Transport,
+    TransportError, TransportResponse,
 };
 pub use trust::{
     diff_manifest, trust_entry_from_manifest, CapSnapshot, ManifestDiff, SecSnapshot, TrustEntry,

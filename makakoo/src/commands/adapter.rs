@@ -15,7 +15,7 @@ use makakoo_core::adapter::{
     InstallOptions, InstallRoot, Manifest, TrustLedger,
 };
 
-use crate::cli::AdapterCmd;
+use crate::cli::{AdapterCmd, AdapterTrustCmd};
 use crate::context::CliContext;
 use crate::output;
 
@@ -62,7 +62,131 @@ pub async fn run(ctx: &CliContext, cmd: AdapterCmd) -> anyhow::Result<i32> {
         AdapterCmd::Search { query } => search(&query),
         AdapterCmd::MigrateConfig { path } => migrate_config(&path),
         AdapterCmd::Export { name, out } => export(&name, out),
+        AdapterCmd::Trust { cmd } => trust_cmd(cmd),
+        AdapterCmd::SelfPubkey { with_fingerprint } => self_pubkey(with_fingerprint),
     }
+}
+
+/// v0.6 — `makakoo adapter trust {add,list,remove}`. The trust file lives
+/// at `$MAKAKOO_HOME/config/peers/trusted.keys`. Consumers: makakoo-mcp
+/// --http (reads at startup) and the upcoming peer-makakoo adapter
+/// template (writes via `add`).
+fn trust_cmd(cmd: AdapterTrustCmd) -> anyhow::Result<i32> {
+    use makakoo_core::adapter::peer;
+
+    let home = makakoo_core::platform::makakoo_home();
+    let trust_path = peer::default_trust_file(&home);
+
+    match cmd {
+        AdapterTrustCmd::Add { name, pubkey } => {
+            peer::trust_add(&trust_path, &name, pubkey.trim())
+                .map_err(|e| anyhow::anyhow!("trust add failed: {e}"))?;
+            println!(
+                "{} {} added to {}",
+                "✅".to_string().green(),
+                name,
+                trust_path.display()
+            );
+            Ok(0)
+        }
+        AdapterTrustCmd::Remove { name } => {
+            let removed = peer::trust_remove(&trust_path, &name)
+                .map_err(|e| anyhow::anyhow!("trust remove failed: {e}"))?;
+            if removed {
+                println!("{} removed {} from trust file", "✅".to_string().green(), name);
+            } else {
+                println!(
+                    "{} no peer named `{}` in {}",
+                    "(no-op)".to_string().dark_grey(),
+                    name,
+                    trust_path.display()
+                );
+            }
+            Ok(0)
+        }
+        AdapterTrustCmd::List { with_keys, json } => {
+            use base64::Engine;
+            let trusted = peer::load_trust_file(&trust_path)
+                .map_err(|e| anyhow::anyhow!("read trust file: {e}"))?;
+            if json {
+                let mut rows = Vec::new();
+                for (name, key) in &trusted {
+                    let pubkey_b64 =
+                        base64::engine::general_purpose::STANDARD.encode(key.to_bytes());
+                    let fingerprint = peer::fingerprint(key);
+                    rows.push(if with_keys {
+                        json!({
+                            "name": name,
+                            "pubkey": pubkey_b64,
+                            "fingerprint": fingerprint
+                        })
+                    } else {
+                        json!({ "name": name, "fingerprint": fingerprint })
+                    });
+                }
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+                return Ok(0);
+            }
+            if trusted.is_empty() {
+                println!(
+                    "{} trust file is empty or missing ({})",
+                    "(empty)".to_string().dark_grey(),
+                    trust_path.display()
+                );
+                return Ok(0);
+            }
+            let mut t = Table::new();
+            t.load_preset(UTF8_FULL);
+            if with_keys {
+                t.set_header(vec!["peer", "fingerprint", "pubkey"]);
+            } else {
+                t.set_header(vec!["peer", "fingerprint"]);
+            }
+            let mut rows: Vec<_> = trusted.iter().collect();
+            rows.sort_by(|(a, _), (b, _)| a.cmp(b));
+            for (name, key) in rows {
+                let fp = peer::fingerprint(key);
+                if with_keys {
+                    let pubkey_b64 =
+                        base64::engine::general_purpose::STANDARD.encode(key.to_bytes());
+                    t.add_row(vec![name.clone(), fp, pubkey_b64]);
+                } else {
+                    t.add_row(vec![name.clone(), fp]);
+                }
+            }
+            println!("{t}");
+            Ok(0)
+        }
+    }
+}
+
+/// v0.6 — `makakoo adapter self-pubkey`. Prints the local install's
+/// Ed25519 pubkey so peers can add it to their trust files via
+/// `makakoo adapter trust add <our-name> <pubkey>`. Auto-generates the
+/// keypair on first invocation.
+fn self_pubkey(with_fingerprint: bool) -> anyhow::Result<i32> {
+    use base64::Engine;
+    use makakoo_core::adapter::peer;
+
+    let home = makakoo_core::platform::makakoo_home();
+    let key_path = peer::default_signing_key_path(&home);
+    let pub_path = peer::default_signing_pub_path(&home);
+    let (_, verifying, was_generated) = peer::load_or_create_signing_key(&key_path, &pub_path)
+        .map_err(|e| anyhow::anyhow!("load/create signing key: {e}"))?;
+
+    let pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes());
+    if was_generated {
+        eprintln!(
+            "(generated fresh Ed25519 keypair at {})",
+            key_path.display()
+        );
+    }
+    if with_fingerprint {
+        println!("{} {}", pubkey_b64, peer::fingerprint(&verifying));
+    } else {
+        println!("{pubkey_b64}");
+    }
+    Ok(0)
 }
 
 /// Walk the default registry dir + optionally the bundled reference dir,
@@ -969,6 +1093,11 @@ fn transport_str(m: &Manifest) -> String {
         TransportKind::McpHttp => format!(
             "mcp-http @ {}",
             m.transport.url.as_deref().unwrap_or("?")
+        ),
+        TransportKind::McpHttpSigned => format!(
+            "mcp-http-signed @ {} (peer={})",
+            m.transport.url.as_deref().unwrap_or("?"),
+            m.transport.peer_name.as_deref().unwrap_or("?")
         ),
     }
 }

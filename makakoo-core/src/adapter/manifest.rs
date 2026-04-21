@@ -99,6 +99,12 @@ pub enum TransportKind {
     McpStdio,
     #[serde(rename = "mcp-http")]
     McpHttp,
+    /// v0.6 — signed HTTP MCP (`X-Makakoo-{Peer,Ts,Sig}` headers,
+    /// Ed25519 over sha256(body||ts)). Distinct from `mcp-http` so
+    /// 3rd-party unauthenticated MCP HTTP servers still have a
+    /// transport.
+    #[serde(rename = "mcp-http-signed")]
+    McpHttpSigned,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +227,11 @@ pub struct TransportTable {
     pub url: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// v0.6 — name the peer knows us by. Sent in `X-Makakoo-Peer` on
+    /// every `mcp-http-signed` request. Only meaningful for that
+    /// transport kind.
+    #[serde(default)]
+    pub peer_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,6 +443,30 @@ impl Manifest {
                 };
                 validate_http_url(&path, "transport.url", url)?;
             }
+            TransportKind::McpHttpSigned => {
+                let Some(url) = self.transport.url.as_deref() else {
+                    return Err(ManifestError::invalid(
+                        &path,
+                        "transport.url is required when kind = mcp-http-signed",
+                    ));
+                };
+                validate_http_url(&path, "transport.url", url)?;
+                // Signed transport requires the caller to have a local
+                // signing key. The `peer_name` field tells the remote
+                // how to look us up in their trust file; it's required.
+                if self
+                    .transport
+                    .peer_name
+                    .as_deref()
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+                {
+                    return Err(ManifestError::invalid(
+                        &path,
+                        "transport.peer_name is required when kind = mcp-http-signed",
+                    ));
+                }
+            }
             TransportKind::Subprocess | TransportKind::McpStdio => {
                 if self.transport.command.is_empty() {
                     return Err(ManifestError::invalid(
@@ -639,7 +674,7 @@ impl Manifest {
             TransportKind::OpenAiCompatible => AdapterKind::Http,
             TransportKind::Subprocess => AdapterKind::Subprocess,
             TransportKind::McpStdio => AdapterKind::McpStdio,
-            TransportKind::McpHttp => AdapterKind::McpHttp,
+            TransportKind::McpHttp | TransportKind::McpHttpSigned => AdapterKind::McpHttp,
         }
     }
 }

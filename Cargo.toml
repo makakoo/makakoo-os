@@ -42,6 +42,7 @@ semver = { version = "1", features = ["serde"] }
 libc = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Pipes"] }
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "pkcs8"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"] }
 tar = "0.4"
 flate2 = "1"
 tempfile = "3"

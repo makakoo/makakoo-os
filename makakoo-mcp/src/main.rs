@@ -32,6 +32,7 @@ use std::sync::Arc;
 mod dispatch;
 mod framing;
 mod handlers;
+mod http_server;
 mod jsonrpc;
 mod server;
 
@@ -51,6 +52,31 @@ struct Args {
     /// testing to confirm all 41 handlers are registered.
     #[arg(long)]
     list_tools: bool,
+
+    /// v0.6 Phase B — run as an HTTP server instead of the stdio loop.
+    /// Value is the address:port to bind (default 127.0.0.1:0 picks a
+    /// random port). Signed-request auth (Ed25519) is mandatory in this
+    /// mode; there is no unauthenticated network MCP path.
+    #[arg(long, value_name = "ADDR:PORT")]
+    http: Option<String>,
+
+    /// Override the default bind interface (127.0.0.1). Only consulted
+    /// when --http is set. Binding to a non-loopback address prints a
+    /// warning banner; auth is still enforced.
+    #[arg(long, value_name = "IP", default_value = "127.0.0.1")]
+    bind: std::net::IpAddr,
+
+    /// Path to the trust file (list of peer pubkeys authorized to call).
+    /// Default `$MAKAKOO_HOME/config/peers/trusted.keys`. Lines of the
+    /// form `<peer-name> <base64-pubkey>`.
+    #[arg(long, value_name = "PATH")]
+    trust_file: Option<std::path::PathBuf>,
+
+    /// Path to this server's Ed25519 signing key. Default
+    /// `$MAKAKOO_HOME/config/peers/signing.key`. Auto-generated on
+    /// first run if absent (pubkey printed to stderr; share with peers).
+    #[arg(long, value_name = "PATH")]
+    signing_key: Option<std::path::PathBuf>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -84,9 +110,81 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(http_arg) = args.http.as_deref() {
+        return run_http(http_arg, args.bind, args.trust_file, args.signing_key, registry, ctx)
+            .await;
+    }
+
     let server = server::McpServer::new(registry, ctx);
     server.run_stdio().await?;
     Ok(())
+}
+
+/// v0.6 Phase B — start the HTTP serve mode. Loads (or generates) the
+/// local signing keypair, loads the trust file, then hands everything to
+/// `http_server::serve`.
+async fn run_http(
+    http_arg: &str,
+    bind_ip: std::net::IpAddr,
+    trust_file_arg: Option<std::path::PathBuf>,
+    signing_key_arg: Option<std::path::PathBuf>,
+    registry: Arc<dispatch::ToolRegistry>,
+    ctx: Arc<dispatch::ToolContext>,
+) -> Result<()> {
+    use makakoo_core::adapter::peer;
+
+    // Parse the bind spec. Accept "host:port" or bare ":port" — bare
+    // port uses --bind as the host.
+    let bind_addr: std::net::SocketAddr = match http_arg.parse() {
+        Ok(addr) => addr,
+        Err(_) => {
+            // Try bare port.
+            let port: u16 = http_arg
+                .trim_start_matches(':')
+                .parse()
+                .map_err(|_| anyhow::anyhow!("--http must be ADDR:PORT or :PORT"))?;
+            std::net::SocketAddr::new(bind_ip, port)
+        }
+    };
+
+    let home = makakoo_core::platform::makakoo_home();
+    let signing_key_path = signing_key_arg.unwrap_or_else(|| peer::default_signing_key_path(&home));
+    let signing_pub_path = peer::default_signing_pub_path(&home);
+    let trust_path = trust_file_arg.unwrap_or_else(|| peer::default_trust_file(&home));
+
+    let (_signing, verifying, was_generated) =
+        peer::load_or_create_signing_key(&signing_key_path, &signing_pub_path)
+            .map_err(|e| anyhow::anyhow!("signing key: {e}"))?;
+
+    if was_generated {
+        use base64::Engine;
+        let pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes());
+        eprintln!(
+            "makakoo-mcp: generated Ed25519 signing key at {}\n\
+             pubkey (share with peers via `makakoo adapter trust add <name> <pubkey>`):\n\
+             {}",
+            signing_key_path.display(),
+            pubkey_b64
+        );
+    }
+
+    let trust = peer::load_trust_file(&trust_path)
+        .map_err(|e| anyhow::anyhow!("trust file {}: {e}", trust_path.display()))?;
+
+    if trust.is_empty() {
+        tracing::warn!(
+            path = %trust_path.display(),
+            "trust file is empty or missing — all signed requests will be rejected until peers are added via `makakoo adapter trust add`"
+        );
+    }
+
+    let state = Arc::new(http_server::HttpState::new(
+        registry,
+        ctx,
+        trust,
+        trust_path,
+    ));
+    http_server::serve(bind_addr, state).await
 }
 
 /// Build a best-effort [`ToolContext`]. T13 extends this from the T12

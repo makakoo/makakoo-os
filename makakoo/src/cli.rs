@@ -964,6 +964,50 @@ pub enum AdapterCmd {
         #[arg(long)]
         out: Option<std::path::PathBuf>,
     },
+
+    /// v0.6 — manage the per-peer trust store used by signed HTTP MCP
+    /// (`$MAKAKOO_HOME/config/peers/trusted.keys`). Each line names a
+    /// peer Makakoo install authorized to reach this one over HTTP.
+    Trust {
+        #[command(subcommand)]
+        cmd: AdapterTrustCmd,
+    },
+
+    /// v0.6 — print this install's Ed25519 public key for peers to add
+    /// to their trust files. Generates the keypair on first invocation.
+    SelfPubkey {
+        /// Also print the fingerprint alongside the full base64 key.
+        #[arg(long)]
+        with_fingerprint: bool,
+    },
+}
+
+/// v0.6 — peer trust subcommands.
+#[derive(clap::Subcommand, Debug)]
+pub enum AdapterTrustCmd {
+    /// Add or replace a peer → pubkey entry.
+    Add {
+        /// Peer name (how this install will refer to the remote).
+        name: String,
+        /// Remote's Ed25519 pubkey (base64, 32 bytes decoded).
+        pubkey: String,
+    },
+    /// List trusted peers. Prints fingerprints by default; pass
+    /// `--with-keys` to include full base64 pubkeys.
+    List {
+        /// Include full base64 pubkey in output.
+        #[arg(long)]
+        with_keys: bool,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a peer by name. Silent no-op if the peer isn't in the
+    /// trust file.
+    Remove {
+        /// Peer name.
+        name: String,
+    },
 }
 
 #[cfg(test)]

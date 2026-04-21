@@ -112,6 +112,9 @@ pub async fn call_transport(
             SubprocessTransport::default().call(manifest, prompt, ctx).await
         }
         TransportKind::McpHttp => McpHttpTransport::default().call(manifest, prompt, ctx).await,
+        TransportKind::McpHttpSigned => {
+            McpHttpSignedTransport::default().call(manifest, prompt, ctx).await
+        }
         TransportKind::McpStdio => McpStdioTransport::default().call(manifest, prompt, ctx).await,
     }
 }
@@ -474,6 +477,130 @@ impl Transport for McpHttpTransport {
             },
         })
     }
+}
+
+// ─────────────── MCP over signed HTTP (v0.6 Phase B) ────────────
+//
+// Target: another Makakoo install running `makakoo-mcp --http`. Every
+// request carries Ed25519 signature headers so the peer knows who sent
+// it and that the body hasn't been tampered. Transport-level only; the
+// user is responsible for the underlying network (Tailscale, SSH,
+// Cloudflare Tunnel, LAN, localhost) and any reverse-proxy TLS.
+
+#[derive(Debug, Default)]
+pub struct McpHttpSignedTransport;
+
+#[async_trait]
+impl Transport for McpHttpSignedTransport {
+    async fn call(
+        &self,
+        manifest: &Manifest,
+        prompt: &str,
+        ctx: &CallContext,
+    ) -> Result<TransportResponse, TransportError> {
+        use super::peer;
+
+        let url = manifest.transport.url.as_deref().ok_or_else(|| {
+            TransportError::BadManifest("transport.url missing for mcp-http-signed".into())
+        })?;
+        let peer_name = manifest.transport.peer_name.as_deref().ok_or_else(|| {
+            TransportError::BadManifest(
+                "transport.peer_name missing for mcp-http-signed".into(),
+            )
+        })?;
+
+        // Locate the signing key. Two sources, in order:
+        //   1. MAKAKOO_PEER_SIGNING_KEY env var → base64 of the 32-byte secret.
+        //   2. $MAKAKOO_HOME/config/peers/signing.key file.
+        let signing = load_local_signing_key(ctx)?;
+
+        // Build the body — same JSON-RPC `tools/call` envelope as
+        // mcp-stdio / mcp-http, reusing the envelope parser so
+        // callers can fan out to arbitrary MCP tools on the remote.
+        let body_json = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": mcp_params_from_prompt(prompt),
+        });
+        let body_bytes = serde_json::to_vec(&body_json)
+            .map_err(|e| TransportError::Http(format!("serialize body: {e}")))?;
+
+        let ts = peer::now_millis();
+        let sig = peer::sign_request(&signing, &body_bytes, ts);
+
+        let timeout = Duration::from_secs(ctx.timeout_seconds.unwrap_or(60));
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| TransportError::Http(e.to_string()))?;
+
+        let start = Instant::now();
+        let resp = match client
+            .post(url)
+            .header(peer::PEER_HEADER, peer_name)
+            .header(peer::TS_HEADER, ts.to_string())
+            .header(
+                peer::SIG_HEADER,
+                format!("{}{}", peer::SIG_PREFIX, sig),
+            )
+            .header("Content-Type", "application/json")
+            .body(body_bytes)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) if e.is_timeout() => {
+                return Err(TransportError::Timeout {
+                    secs: timeout.as_secs(),
+                });
+            }
+            Err(e) => return Err(TransportError::Http(e.to_string())),
+        };
+        let status = resp.status().as_u16();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| TransportError::Http(e.to_string()))?;
+        Ok(TransportResponse {
+            body: bytes.to_vec(),
+            meta: ResponseMeta {
+                duration: start.elapsed(),
+                http_status: Some(status),
+                exit_code: None,
+            },
+        })
+    }
+}
+
+fn load_local_signing_key(
+    ctx: &CallContext,
+) -> Result<ed25519_dalek::SigningKey, TransportError> {
+    use super::peer;
+    use base64::Engine;
+
+    // Env var fast-path (tests, ephemeral runs).
+    if let Some(b64) = ctx.resolve_env("MAKAKOO_PEER_SIGNING_KEY") {
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .map_err(|e| TransportError::BadManifest(format!("MAKAKOO_PEER_SIGNING_KEY: {e}")))?;
+        if raw.len() != 32 {
+            return Err(TransportError::BadManifest(format!(
+                "MAKAKOO_PEER_SIGNING_KEY must decode to 32 bytes, got {}",
+                raw.len()
+            )));
+        }
+        let arr: [u8; 32] = raw.as_slice().try_into().unwrap();
+        return Ok(ed25519_dalek::SigningKey::from_bytes(&arr));
+    }
+
+    // File path — load-or-create using the standard layout.
+    let home = super::super::platform::makakoo_home();
+    let key_path = peer::default_signing_key_path(&home);
+    let pub_path = peer::default_signing_pub_path(&home);
+    let (signing, _, _) = peer::load_or_create_signing_key(&key_path, &pub_path)
+        .map_err(|e| TransportError::BadManifest(format!("signing key: {e}")))?;
+    Ok(signing)
 }
 
 // ─────────────────── MCP params envelope ────────────────────────

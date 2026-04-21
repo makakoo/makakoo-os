@@ -32,6 +32,9 @@ toml_edit.workspace = true
 reqwest.workspace = true
 flate2.workspace = true
 tar.workspace = true
+# v0.6 Phase B — `adapter trust` + `adapter self-pubkey` subcommands
+# encode Ed25519 pubkeys for display.
+base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -39,3 +42,7 @@ libc = "0.2"
 [dev-dependencies]
 tempfile = "3"
 rusqlite.workspace = true
+# v0.6 Phase B — peer-to-peer HTTP integration test.
+ed25519-dalek.workspace = true
+rand.workspace = true
+base64 = "0.22"
