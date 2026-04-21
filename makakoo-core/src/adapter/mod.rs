@@ -11,13 +11,21 @@
 //! and the adapters-core pack on top.
 
 pub mod call;
+pub mod install;
 pub mod manifest;
 pub mod output;
 pub mod registry;
 pub mod result;
+pub mod sandbox;
+pub mod sign;
 pub mod transport;
+pub mod trust;
 
 pub use call::{call_adapter, call_adapter_with_default_timeout, AdapterCallError};
+pub use install::{
+    install_from_path, install_from_tarball_bytes, uninstall, DiffSummary, InstallError,
+    InstallOptions, InstallReport, InstallRoot,
+};
 pub use manifest::{
     AdapterKind, AdapterRole, AdapterTable, AuthScheme, AuthTable, CapabilitiesTable,
     CompatibilityTable, HealthTable, InstallTable, Manifest, ManifestError, OutputFormat,
@@ -27,7 +35,17 @@ pub use manifest::{
 pub use output::{parse_response, OutputError};
 pub use registry::{AdapterRegistry, RegisteredAdapter, RegistryError};
 pub use result::{PhaseVerdict, ValidatorResult, VerdictStatus};
+pub use sandbox::{
+    assert_manifest_self_consistent, generate_sbpl, ProfileSpec, SandboxBackend, SandboxError,
+};
+pub use sign::{
+    default_trust_root, keys_dir, load_publisher_key, verify_manifest_bytes, SignError,
+};
 pub use transport::{
     call_transport, expand_env, CallContext, HttpTransport, McpHttpTransport, McpStdioTransport,
     ResponseMeta, SubprocessTransport, Transport, TransportError, TransportResponse,
+};
+pub use trust::{
+    diff_manifest, trust_entry_from_manifest, CapSnapshot, ManifestDiff, SecSnapshot, TrustEntry,
+    TrustError, TrustLedger,
 };
