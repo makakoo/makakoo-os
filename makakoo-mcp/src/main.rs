@@ -28,7 +28,6 @@
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
-use tracing_subscriber::EnvFilter;
 
 mod dispatch;
 mod framing;
@@ -56,17 +55,10 @@ struct Args {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
-    // Logs to stderr ALWAYS. stdout is the wire.
-    //
-    // Use plain fmt (not `.json()`) so `--health` / `--list-tools`
-    // smoke tests don't have to parse structured log lines interleaved
-    // with their single-line stdout output. Flip to `.json()` once we
-    // pipe logs to a sink.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .try_init();
+    // Logs to stderr ALWAYS. stdout is the wire. Format is controlled
+    // by $MAKAKOO_LOG_FORMAT (compact|pretty|json) — default compact
+    // keeps --health / --list-tools JSON output easy to parse.
+    makakoo_core::telemetry::init_stderr("info");
 
     let args = Args::parse();
 

@@ -11,6 +11,7 @@ serde_json.workspace = true
 rusqlite.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
+tracing-subscriber = { workspace = true }
 fs2.workspace = true
 dirs.workspace = true
 blake3.workspace = true
@@ -39,4 +40,3 @@ windows-sys.workspace = true
 [dev-dependencies]
 tempfile = "3"
 wiremock = "0.6"
-tracing-subscriber = { workspace = true }

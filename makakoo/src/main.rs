@@ -18,7 +18,6 @@
 #![allow(dead_code)]
 
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
 
 mod cli;
 mod commands;
@@ -37,15 +36,10 @@ use cli::Cli;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     // Logs to stderr — stdout is reserved for human-readable command
-    // output (tables, JSON). Env-filter defaults to `info` if unset.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
-        )
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .compact()
-        .try_init();
+    // output (tables, JSON). Format + default level controlled by the
+    // shared makakoo-core helper; $MAKAKOO_LOG_FORMAT selects compact|
+    // pretty|json output.
+    makakoo_core::telemetry::init_stderr("warn");
 
     let cli = Cli::parse();
     let ctx = context::CliContext::new()?;

@@ -6,5 +6,7 @@
 
 pub mod aggregate;
 pub mod costs;
+pub mod tracing_setup;
 pub use aggregate::{audit_rollup, rollup_default, AuditRollup, Period, RollupRow};
 pub use costs::{CostRecord, CostSummary, CostTracker};
+pub use tracing_setup::{init_stderr, LogFormat};
