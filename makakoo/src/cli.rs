@@ -287,6 +287,14 @@ pub enum Commands {
         skip_infect: bool,
     },
 
+    /// Manage JSONL session trees — list, inspect, fork, label, rewind,
+    /// export. Gated by `kernel.session_tree = true` in
+    /// `$MAKAKOO_HOME/config/kernel.toml` (default OFF).
+    Session {
+        #[command(subcommand)]
+        cmd: SessionCmd,
+    },
+
     /// Emit a shell completion script for the chosen shell.
     ///
     /// Write the output to the shell's completion path to enable
@@ -509,6 +517,78 @@ pub enum SanchoCmd {
     Tick,
     /// Show registered tasks and their last-run timestamps.
     Status,
+}
+
+/// `makakoo session <subcommand>`. Every subcommand refuses to run
+/// unless `kernel.session_tree = true` — keeps the feature strictly
+/// opt-in while G.* stabilizes.
+#[derive(Subcommand, Debug)]
+pub enum SessionCmd {
+    /// List every session id under `$MAKAKOO_HOME/data/sessions/`.
+    List {
+        /// Emit JSON (one id per array entry) instead of a plain list.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Print a human-readable dump of one session.
+    Show {
+        /// Session id (matches the JSONL file stem).
+        id: String,
+        /// Emit the full JSON array instead of the markdown dump.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Fork a session at a specific entry into a new session id.
+    ///
+    /// Non-destructive: source file is untouched, a fresh `<new-id>.jsonl`
+    /// is written with a re-rooted header and the kept ancestor chain.
+    Fork {
+        /// Source session id.
+        source: String,
+        /// Entry id to fork from (inclusive). Use `session show` to
+        /// discover entry ids.
+        #[arg(long)]
+        from: String,
+        /// Override the new session id. Defaults to a time-stamped
+        /// derivation of the source id.
+        #[arg(long)]
+        new_id: Option<String>,
+    },
+
+    /// Write a named label entry on the latest entry of a session.
+    /// Use `session rewind` to collapse the session back to this point.
+    Label {
+        /// Session id.
+        id: String,
+        /// Human-readable label name (unique per session).
+        name: String,
+    },
+
+    /// Non-destructive rewind to a labeled checkpoint. The pre-rewind
+    /// file is preserved as `<id>.<ts>.bak.jsonl` alongside.
+    Rewind {
+        /// Session id.
+        id: String,
+        /// Label name previously written via `session label`.
+        label: String,
+    },
+
+    /// Export a session as Markdown, HTML, or JSON.
+    ///
+    /// By default prints to stdout — redirect to a file, or pass
+    /// `--out <path>` to write atomically.
+    Export {
+        /// Session id.
+        id: String,
+        /// Target format.
+        #[arg(long, default_value = "markdown")]
+        format: String,
+        /// Destination file. Default: stdout.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -881,6 +961,91 @@ mod tests {
             assert!(!skip_infect);
         } else {
             panic!("expected Install");
+        }
+    }
+
+    #[test]
+    fn parse_session_list_default() {
+        let cli = Cli::try_parse_from(["makakoo", "session", "list"]).unwrap();
+        match cli.command {
+            Commands::Session {
+                cmd: SessionCmd::List { json: false },
+            } => {}
+            _ => panic!("expected Session::List"),
+        }
+    }
+
+    #[test]
+    fn parse_session_fork_with_new_id() {
+        let cli = Cli::try_parse_from([
+            "makakoo", "session", "fork", "abc",
+            "--from", "m3", "--new-id", "abc-alt",
+        ])
+        .unwrap();
+        if let Commands::Session {
+            cmd: SessionCmd::Fork { source, from, new_id },
+        } = cli.command
+        {
+            assert_eq!(source, "abc");
+            assert_eq!(from, "m3");
+            assert_eq!(new_id.as_deref(), Some("abc-alt"));
+        } else {
+            panic!("expected Session::Fork");
+        }
+    }
+
+    #[test]
+    fn parse_session_label() {
+        let cli =
+            Cli::try_parse_from(["makakoo", "session", "label", "abc", "before-tool"]).unwrap();
+        if let Commands::Session {
+            cmd: SessionCmd::Label { id, name },
+        } = cli.command
+        {
+            assert_eq!(id, "abc");
+            assert_eq!(name, "before-tool");
+        } else {
+            panic!("expected Session::Label");
+        }
+    }
+
+    #[test]
+    fn parse_session_rewind() {
+        let cli =
+            Cli::try_parse_from(["makakoo", "session", "rewind", "abc", "before-tool"]).unwrap();
+        if let Commands::Session {
+            cmd: SessionCmd::Rewind { id, label },
+        } = cli.command
+        {
+            assert_eq!(id, "abc");
+            assert_eq!(label, "before-tool");
+        } else {
+            panic!("expected Session::Rewind");
+        }
+    }
+
+    #[test]
+    fn parse_session_export_html_to_file() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "session",
+            "export",
+            "abc",
+            "--format",
+            "html",
+            "--out",
+            "/tmp/out.html",
+        ])
+        .unwrap();
+        if let Commands::Session {
+            cmd: SessionCmd::Export { id, format, out },
+        } = cli.command
+        {
+            assert_eq!(id, "abc");
+            assert_eq!(format, "html");
+            assert_eq!(out.unwrap().to_str(), Some("/tmp/out.html"));
+        } else {
+            panic!("expected Session::Export");
         }
     }
 

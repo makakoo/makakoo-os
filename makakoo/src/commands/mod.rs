@@ -20,6 +20,7 @@ pub mod promotions;
 pub mod query;
 pub mod sancho;
 pub mod search;
+pub mod session;
 pub mod setup;
 pub mod sync;
 pub mod skill;
@@ -106,6 +107,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Uninfect { target, dry_run } => {
             crate::infect::uninfect_global(target, dry_run).await
         }
+        Commands::Session { cmd } => session::run(ctx, cmd).await,
     }
 }
 

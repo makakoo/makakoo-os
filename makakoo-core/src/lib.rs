@@ -17,6 +17,7 @@ pub mod error;
 pub mod event_bus;
 pub mod gimmicks;
 pub mod gym;
+pub mod kernel_config;
 pub mod llm;
 pub mod memory;
 pub mod nursery;
