@@ -1,0 +1,72 @@
+{
+  "//": "Shared escape-helper fixture for LD#16 untrusted-field handling. Exercised by Python + Rust. Drift fails CI. spec/USER_GRANTS_THREAT_MODEL.md \u00a76.",
+  "schema_version": 1,
+  "vectors": [
+    {
+      "name": "plain_printable_ascii_passthrough",
+      "input": "sprint doc edits",
+      "max_len": 80,
+      "output": "sprint doc edits"
+    },
+    {
+      "name": "nul_and_esc_and_del_dropped",
+      "input": "a\u0000b\u001bc\u007fd",
+      "max_len": 80,
+      "output": "abcd"
+    },
+    {
+      "name": "newline_becomes_space",
+      "input": "hello\nworld",
+      "max_len": 80,
+      "output": "hello world"
+    },
+    {
+      "name": "tab_becomes_space",
+      "input": "col1\tcol2",
+      "max_len": 80,
+      "output": "col1 col2"
+    },
+    {
+      "name": "carriage_return_becomes_space",
+      "input": "line1\r\nline2",
+      "max_len": 80,
+      "output": "line1 line2"
+    },
+    {
+      "name": "run_of_whitespace_collapsed",
+      "input": "a   \n\t b",
+      "max_len": 80,
+      "output": "a b"
+    },
+    {
+      "name": "truncation_with_ellipsis",
+      "input": "aaaaaaaaaaaaaaaaaaaa",
+      "max_len": 10,
+      "output": "aaaaaaaaa\u2026"
+    },
+    {
+      "name": "no_truncation_when_fits",
+      "input": "hi",
+      "max_len": 10,
+      "output": "hi"
+    },
+    {
+      "name": "c1_control_dropped",
+      "input": "a\u0090b",
+      "max_len": 80,
+      "output": "ab"
+    },
+    {
+      "name": "empty_input",
+      "input": "",
+      "max_len": 80,
+      "output": ""
+    },
+    {
+      "name": "unicode_printable_passthrough",
+      "input": "r\u00e9sum\u00e9 na\u00efve caf\u00e9",
+      "max_len": 80,
+      "output": "r\u00e9sum\u00e9 na\u00efve caf\u00e9"
+    }
+  ]
+}

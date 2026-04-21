@@ -20,13 +20,21 @@
 //! manifest audit trail.
 
 pub mod audit;
+pub mod audit_escape;
 pub mod grants;
+pub mod rate_limit;
 pub mod service;
 pub mod socket;
+pub mod user_grants;
 pub mod verb;
 
 pub use audit::{AuditEntry, AuditLog, AuditResult, RotationError};
+pub use audit_escape::escape_audit_field;
 pub use grants::{resolve_grants, GrantCheck, GrantTable, ResolveError};
+pub use rate_limit::{
+    check_and_increment as rate_limit_check_and_increment, RateLimitError,
+    MAX_ACTIVE_GRANTS, MAX_CREATES_PER_HOUR,
+};
 pub use service::{
     CompositeHandler, EnvSecretBackend, InMemorySecretBackend, SecretBackend,
     SecretError, SecretHandler, StateError, StateHandler,
@@ -34,6 +42,10 @@ pub use service::{
 pub use socket::{
     socket_path, CapabilityError, CapabilityHandler, CapabilityRequest,
     CapabilityResponse, CapabilityServer, EchoHandler, ServerHandle, SocketError,
+};
+pub use user_grants::{
+    glob_match as user_grant_glob_match, new_grant_id, UserGrant, UserGrants,
+    UserGrantsError, SCHEMA_VERSION,
 };
 pub use verb::{
     normalize_grant, parse_grant, scope_matches, Verb, VerbError, KNOWN_VERBS,
