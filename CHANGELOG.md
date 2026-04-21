@@ -10,6 +10,34 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Fixed — v0.3.1 User-Grants Hardening (`MAKAKOO-OS-V0.3.1-PERMS-HARDENING`, 2026-04-21)
+- **Rate-limit self-DoS closed.** `creates_in_window` now decrements
+  on revoke (symmetric with increment-on-grant). Without this a single
+  CLI session could cycle 50 grant/revoke pairs and lock itself out
+  of the grant system for an hour even with zero active grants. Fix
+  spans both Python (`core.capability.rate_limit.decrement`) and Rust
+  (`makakoo_core::capability::rate_limit::decrement`), wired into
+  `perms_core.do_revoke()` and `makakoo perms revoke`. Shared drift
+  fixture at `plugins-core/lib-harvey-core/tests/fixtures/rate_limit_decrement_vectors.json`.
+  Closes pi R1, opencode #1.
+- **Grant denials now audited.** Every refusal from `do_grant()`
+  (`too_broad`, `bad_duration`, `permanent_outside_home_unconfirmed`,
+  `rate_limit_active`, `rate_limit_hourly`) emits one
+  `logs/audit.jsonl` entry with `result="denied"` and a
+  `correlation_id="reason:<kind>"` taxonomy tag. Makes post-incident
+  intrusion detection on the grant subsystem possible. Closes
+  opencode #2, minimax #2.
+- **`origin_turn_id` now enforced on conversational channels.** New
+  module constant `CONVERSATIONAL_CHANNELS` (11 slugs). When `plugin`
+  is in the set and `origin_turn_id` is empty, `do_grant()` refuses
+  with `origin_turn_id required on conversational channels (...)`
+  before scope/duration gates. Closes the prompt-injection path where
+  a fabricated `grant_write_access(user_turn_id=null)` call landed
+  indistinguishably from a legit human-turn grant. Closes gemini #1,
+  minimax #3, opencode §3, pi R3 (related). `cli` and `sancho-native`
+  remain unaffected (no human turn). Python-only this sprint; Rust
+  MCP handler enforcement deferred to v0.3.2.
+
 ### Added — v0.3 User Grants (`MAKAKOO-OS-V0.3-USER-GRANTS`, 2026-04-21)
 - Three-layer additive write-permission model (baseline → manifest →
   user grants). Agents can now write outside the hardcoded baseline

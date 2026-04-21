@@ -1,7 +1,19 @@
 # User Grants — File Format, Lock Protocol, and API
 
-**Version:** 1.0 (locked 2026-04-21 at Gate G.2 of
+**Version:** 1.1 (hardening 2026-04-21 at Gate H of
+`MAKAKOO-OS-V0.3.1-PERMS-HARDENING`; base locked at v1.0 Gate G.2 of
 `MAKAKOO-OS-V0.3-USER-GRANTS`). Revisions go in §14.
+
+**v1.1 hot-path guarantees (now true, promised in v1.0 preamble):**
+
+- Every `do_grant` refusal writes one `logs/audit.jsonl` entry with
+  `result="denied"` and `correlation_id="reason:<kind>"`.
+- `creates_in_window` on the rate-limit counter decrements on revoke
+  (Phase A) — purge deliberately does not.
+- Conversational channels (`claude-code`, `gemini-cli`, `codex`,
+  `opencode`, `vibe`, `cursor`, `qwen`, `pi`, `harveychat`,
+  `harveychat-telegram`, `harveychat-web`) require a non-empty
+  `origin_turn_id` on grant. See §8 tool schemas.
 
 This document is the authoritative schema contract for
 `$MAKAKOO_HOME/config/user_grants.json`. Python (`lib-harvey-core`)
@@ -73,7 +85,7 @@ counter. Lock file created on-demand, `0o600`.
 | `grants[].label` | string | yes | free text; escaped + truncated to 80 chars before audit emit (LD#16) |
 | `grants[].granted_by` | string | yes | literal `"sebastian"` in single-user installs; field reserved for multi-user future |
 | `grants[].plugin` | string | yes | caller surface — one of `cli`, `claude-code`, `gemini-cli`, `codex`, `opencode`, `vibe`, `cursor`, `qwen`, `pi`, `harveychat`, `harveychat-telegram`, `sancho-native` |
-| `grants[].origin_turn_id` | string | yes | host-provided turn identifier; enforcement-binding deferred to v0.3.1 per lope F6 |
+| `grants[].origin_turn_id` | string | yes | host-provided turn identifier; **REQUIRED to be non-empty when `plugin ∈ CONVERSATIONAL_CHANNELS`** (v0.3.1 Phase C — enforced in Python `do_grant`). Empty accepted for `cli`, `sancho-native` |
 
 **Explicitly NOT in the schema (lope F4):** `use_count`, `last_used_at`.
 The audit log is the sole record of grant usage. `makakoo perms audit
@@ -421,3 +433,21 @@ implementations to catch glob-semantic drift.
   §13 writers. Self-maintenance added: `perms_purge_tick` native
   SANCHO handler (900s) fires alongside CLI `makakoo perms purge`;
   both share `UserGrants::purge_expired`.
+- **v1.1 (hardening)** — 2026-04-21,
+  `MAKAKOO-OS-V0.3.1-PERMS-HARDENING`. Three targeted fixes from
+  Gate G lope verdicts (gemini / pi / opencode all PASS, three
+  independent findings):
+  - **Rate-limit decrement on revoke.** `creates_in_window`
+    decrements when a user revokes a grant — symmetric with the
+    increment on grant. Closes the 50-cycle self-DoS (pi R1,
+    opencode #1). Purge remains a NON-decrement path by design.
+  - **Denial audit.** Every `do_grant()` refusal emits one
+    `result="denied"` entry with a taxonomy
+    `correlation_id="reason:<kind>"` tag. Closes the audit gap
+    (opencode #2, minimax #2) — preamble promise in v1.0 is now
+    true.
+  - **`origin_turn_id` enforcement.** New module constant
+    `CONVERSATIONAL_CHANNELS` (11 plugin slugs). `do_grant()`
+    refuses when `args.plugin ∈ CONVERSATIONAL_CHANNELS` and
+    `args.origin_turn_id` is empty. Closes R2 in the threat model.
+    Python-only this sprint; Rust MCP handler mirror is v0.3.2.

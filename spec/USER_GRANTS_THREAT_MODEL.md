@@ -231,26 +231,44 @@ against that fd's path, `openat(parent_fd, filename, O_CREAT|O_NOFOLLOW)`.
 symlinks, Sebastian's tmp dir is not writable by anyone else, there's
 no attacker process with filesystem rights. Tracked for completeness.
 
-### R2 — `origin_turn_id` schema-present, enforcement-deferred (lope F6)
+### R2 — `origin_turn_id` schema-present, enforcement-deferred (lope F6) — **CLOSED in v0.3.1**
 
-The grant schema carries `origin_turn_id` (msg-id for Telegram,
-turn-uuid for Claude Code, session-monotonic counter fallback) in v1
-per B.1. The idea is that Phase 3's "untrusted-tool-result ring buffer"
-(E.3 §prompt-injection guardrails §d) can refuse grants issued within
-the same turn as a large-file-read / web-fetch / non-makakoo MCP
-result.
+**v0.3 status (preserved for history).** The grant schema carries
+`origin_turn_id` (msg-id for Telegram, turn-uuid for Claude Code,
+session-monotonic counter fallback) in v1 per B.1 — but the field is
+written, never checked. A prompt-injected
+`grant_write_access(path, "1h", user_turn_id=null)` call from a
+conversational surface lands indistinguishably from a legit human
+grant.
 
-**Mitigation in v0.3:** the field is written. The ring-buffer + refusal
-logic is deferred — stability of host-side turn-id semantics across
-7 CLIs is not yet proven.
+**v0.3.1 closure (`MAKAKOO-OS-V0.3.1-PERMS-HARDENING` Phase C).**
+`do_grant()` now refuses any call where
+`args.plugin ∈ CONVERSATIONAL_CHANNELS` and `args.origin_turn_id == ""`.
+The check fires before scope/duration gates so prompt-injected calls
+fail fast with a provenance signal. Denial emits one audit entry with
+`correlation_id="reason:missing_origin_turn_id"`.
 
-**Status:** v0.3.1 card queued:
-`v0.3.1-ORIGIN-TURN-ID-REFUSAL-ENFORCEMENT`. Will require a soak
-period of audit-log analysis to tune what constitutes "untrusted"
-tool-result sizes.
+Scope of the v0.3.1 fix:
 
-**Realistic exposure:** T1 residual. 1h default expiry + rate limit
-+ Sebastian-visible audit log are the v1 compensating controls.
+- Python `core.capability.perms_core` — enforcement point.
+  Covers HarveyChat, HarveyChat-Telegram, and every conversational
+  MCP surface that dispatches through `tool_grant_write_access`.
+- CLI (`makakoo perms grant`) uses `plugin="cli"` (not in the set) —
+  unaffected. SANCHO native handlers use `plugin="sancho-native"` —
+  also unaffected.
+
+Scope NOT yet covered (tracked as v0.3.2 item):
+
+- Direct Rust MCP handler at
+  `makakoo-mcp/src/handlers/tier_b/perms.rs`. The handler writes the
+  grant record with `origin_turn_id=user_turn_id.to_string()` but
+  does not refuse on empty. Python is the canonical conversational
+  path, so this is a minor parity gap — the MCP handler is still
+  functional, just slightly weaker.
+
+**Residual:** R2 is CLOSED for the Python hot path (where every
+infected CLI + HarveyChat + Telegram actually lives); the Rust MCP
+direct path remains T1 residual until v0.3.2.
 
 ### R3 — Brain writes ungated by design (LD#7, lope F10)
 
