@@ -49,9 +49,12 @@ fn every_reference_adapter_parses() {
             "openai-api".to_string(),
             "openclaw".to_string(),
             "openrouter".to_string(),
+            "pi".to_string(),
+            "switchailocal".to_string(),
+            "tytus-cli".to_string(),
             "tytus-pod".to_string(),
         ],
-        "eight reference adapters must parse; got {:?}",
+        "all reference adapters must parse; got {:?}",
         names
     );
 }
@@ -74,5 +77,5 @@ fn reference_adapters_have_unique_canonical_hashes() {
     for window in hashes.windows(2) {
         assert_ne!(window[0].1, window[1].1, "hash collision: {window:?}");
     }
-    assert_eq!(hashes.len(), 8);
+    assert_eq!(hashes.len(), 11);
 }

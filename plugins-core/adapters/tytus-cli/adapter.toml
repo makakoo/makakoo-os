@@ -1,0 +1,56 @@
+# Tytus CLI fan-out adapter — wraps `tytus-mcp` (the MCP stdio server
+# shipped with tytus v0.4+) so every Tytus tool is callable through the
+# v0.3 adapter bridge as one participant.
+#
+# Differs from the `tytus-pod` adapter:
+#   - `tytus-pod`  → OpenAI-compat chat completion at the pod gateway
+#                    (10.42.42.1:18080). One shape: chat.
+#   - `tytus-cli`  → mcp-stdio to `tytus-mcp`. N shapes: tytus_status,
+#                    tytus_env, tytus_models, tytus_chat, tytus_docs,
+#                    tytus_revoke, tytus_setup_guide. Pick one per call
+#                    via the JSON-envelope prompt shape:
+#                    `{"tool":"tytus_status","arguments":{}}`.
+#
+# Plain-string prompts default to the `chat` tool, which tytus-mcp does
+# not expose — so a plain prompt here errors. Always send an envelope.
+
+[adapter]
+name            = "tytus-cli"
+version         = "0.1.0"
+manifest_schema = 1
+description     = "Tytus CLI MCP server (pod lifecycle, agent deploy, chat — 7 tools)"
+homepage        = "https://traylinx.com/tytus"
+license         = "Proprietary"
+authors         = ["Traylinx"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["mcp-stdio"]
+
+[transport]
+kind    = "mcp-stdio"
+command = ["tytus-mcp"]
+
+[auth]
+scheme = "none"
+
+[output]
+format        = "openai-chat"
+verdict_field = "result.content.0.text"
+
+[capabilities]
+features       = ["tool_use"]
+supports_roles = ["delegate", "swarm_member"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.1.0"
+
+[security]
+requires_network    = true
+allowed_hosts       = ["10.42.42.1", "*.traylinx.com"]
+requires_filesystem = ["read:~/.tytus", "write:~/.tytus"]
+requires_env        = []
+sandbox_profile     = "network-io"
+signed_by           = "traylinx"

@@ -389,10 +389,7 @@ impl Transport for McpStdioTransport {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {
-                "name": "chat",
-                "arguments": { "prompt": prompt }
-            }
+            "params": mcp_params_from_prompt(prompt),
         });
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(rpc.to_string().as_bytes()).await?;
@@ -444,10 +441,7 @@ impl Transport for McpHttpTransport {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {
-                "name": "chat",
-                "arguments": { "prompt": prompt }
-            }
+            "params": mcp_params_from_prompt(prompt),
         });
         let timeout = Duration::from_secs(ctx.timeout_seconds.unwrap_or(60));
         let client = reqwest::Client::builder()
@@ -480,6 +474,38 @@ impl Transport for McpHttpTransport {
             },
         })
     }
+}
+
+// ─────────────────── MCP params envelope ────────────────────────
+//
+// Lets one `mcp-stdio` / `mcp-http` adapter route to ANY tool on the
+// target MCP server instead of being locked to a hardcoded `chat` tool
+// (v0.3 behavior). Two callable shapes from an adapter caller:
+//
+//   1. Plain string prompt → `{"name":"chat","arguments":{"prompt": <str>}}`
+//      (v0.3 backwards-compat for adapters whose target only has `chat`).
+//   2. JSON envelope `{"tool":"<name>","arguments":{...}}` → unwrapped
+//      into `{"name":"<name>","arguments":{...}}`.
+//
+// This makes a single adapter manifest (e.g. `tytus-cli`) fan out to all
+// N tools on the target without needing N manifests. Chosen over a new
+// `transport.tool` manifest field because the tool selection is
+// per-call, not per-adapter.
+
+fn mcp_params_from_prompt(prompt: &str) -> serde_json::Value {
+    let trimmed = prompt.trim_start();
+    if trimmed.starts_with('{') {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(tool_name) = map.get("tool").and_then(|v| v.as_str()) {
+                let args = map
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                return json!({ "name": tool_name, "arguments": args });
+            }
+        }
+    }
+    json!({ "name": "chat", "arguments": { "prompt": prompt } })
 }
 
 // ──────────────────────────── Tests ──────────────────────────────
@@ -519,5 +545,49 @@ mod tests {
         let ctx = CallContext::default().with_env(env);
         let out = expand_env("${A}${B}${A}", &ctx).unwrap();
         assert_eq!(out, "121");
+    }
+
+    #[test]
+    fn mcp_params_plain_prompt_uses_chat_default() {
+        let out = mcp_params_from_prompt("hello world");
+        assert_eq!(out["name"], "chat");
+        assert_eq!(out["arguments"]["prompt"], "hello world");
+    }
+
+    #[test]
+    fn mcp_params_json_envelope_routes_to_named_tool() {
+        let out = mcp_params_from_prompt(r#"{"tool":"tytus_status","arguments":{"pod_id":"02"}}"#);
+        assert_eq!(out["name"], "tytus_status");
+        assert_eq!(out["arguments"]["pod_id"], "02");
+    }
+
+    #[test]
+    fn mcp_params_json_envelope_without_arguments_defaults_to_empty_obj() {
+        let out = mcp_params_from_prompt(r#"{"tool":"tytus_docs"}"#);
+        assert_eq!(out["name"], "tytus_docs");
+        assert!(out["arguments"].is_object());
+        assert_eq!(out["arguments"].as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn mcp_params_json_without_tool_field_falls_back_to_chat() {
+        // A JSON object that isn't an envelope — treat the whole thing
+        // as a plain prompt so callers that happen to send JSON don't
+        // get silently rerouted.
+        let out = mcp_params_from_prompt(r#"{"not_an_envelope":true}"#);
+        assert_eq!(out["name"], "chat");
+        assert_eq!(out["arguments"]["prompt"], r#"{"not_an_envelope":true}"#);
+    }
+
+    #[test]
+    fn mcp_params_malformed_json_falls_back_to_chat() {
+        let out = mcp_params_from_prompt("{broken");
+        assert_eq!(out["name"], "chat");
+    }
+
+    #[test]
+    fn mcp_params_leading_whitespace_still_detects_envelope() {
+        let out = mcp_params_from_prompt("  \n  {\"tool\":\"pod_status\"}");
+        assert_eq!(out["name"], "pod_status");
     }
 }
