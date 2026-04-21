@@ -1,0 +1,25 @@
+[plugin]
+name = "bootstrap-fragment-browser-harness"
+version = "0.1.0"
+kind = "bootstrap-fragment"
+language = "shell"
+summary = "Teaches every CLI when to reach for harvey_browse — MCP tool shipped by agent-browser-harness"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/bootstrap-fragment-browser-harness"
+
+[abi]
+bootstrap-fragment = "^1.0"
+
+[depends]
+
+[capabilities]
+grants = []
+
+# Pair: this fragment only makes sense when the paired tool plugin is also
+# installed. The bootstrap text itself flags the prerequisite so the CLI
+# won't try to call harvey_browse without it.
+[infect.fragments]
+default = "fragments/default.md"

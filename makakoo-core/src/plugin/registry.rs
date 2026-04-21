@@ -267,16 +267,18 @@ fn check_uniqueness(
             }
             mcp_owner.insert(tool.name.clone(), plugin_name.clone());
         }
-        for frag in m.infect.fragments.keys() {
-            if let Some(prev) = fragment_owner.get(frag) {
-                return Err(RegistryError::DuplicateInfectFragment {
-                    name: frag.clone(),
-                    a: prev.clone(),
-                    b: plugin_name.clone(),
-                });
-            }
-            fragment_owner.insert(frag.clone(), plugin_name.clone());
-        }
+        // Infect-fragment keys (e.g. `default`, `claude`, `gemini`) are
+        // HOST identifiers, not globally-unique fragment IDs. Multiple
+        // plugins legitimately declare `default = "fragments/default.md"`
+        // — the renderer (makakoo/src/infect/renderer.rs) walks every
+        // plugin in load order and concatenates their fragments. The only
+        // thing that must stay unique is the map key WITHIN a single
+        // manifest, which the TOML parser enforces for free.
+        let _ = &fragment_owner; // silence unused while we keep the map
+                                 // around for future per-host conflict
+                                 // detection (e.g. "two plugins tried to
+                                 // own the same `claude`-host slot and
+                                 // the host can only take one").
     }
     Ok(())
 }
