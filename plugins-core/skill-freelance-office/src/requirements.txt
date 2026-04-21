@@ -1,3 +1,10 @@
 pyyaml>=6
 jinja2>=3
 python-dateutil>=2.8
+# v0.3 invoice-lifecycle: PDF render via weasyprint (pi A1).
+# LaTeX-free HTML→PDF; pinned range for deterministic output.
+weasyprint>=61,<63
+markdown>=3.5
+# Used in tests only, but shipped in requirements so the PDF
+# content-matches-invoice-data check is runnable everywhere.
+pypdf>=4

@@ -31,6 +31,31 @@ def add_arguments(parser):
     parser.add_argument("--leistungszeitraum", default="", help="YYYY-MM-DD bis YYYY-MM-DD")
     parser.add_argument("--invoice-number", default=None, help="manual INV-YYYY-NNN override")
     parser.add_argument("--issued", default=None, help="YYYY-MM-DD, default today")
+    parser.add_argument("--pdf", action="store_true", help="also render a PDF next to the invoice .md")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="regenerate even if the invoice is marked paid (pi corruption-risk #1)",
+    )
+
+
+def _status_for_invoice(year: int, inv_no: str, home: Path) -> str:
+    """Peek the Einnahmen-Übersicht row status for ``inv_no``. Empty
+    string when the row / file does not exist — callers treat that
+    as "not paid"."""
+    path = earnings.earnings_path(year, home)
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    for rec in earnings._iter_rows(text, source=path):
+        if rec["inv_no"] == inv_no:
+            return rec["status"]
+    return ""
+
+
+def _is_paid_status(status: str) -> bool:
+    s = status.lower()
+    return "bezahlt" in s or "pagad" in s or "paid" in s
 
 
 def _resolve_amount(args, meta_flat: Dict[str, Any]):
@@ -95,6 +120,8 @@ def run(args) -> Dict[str, Any]:
     year = issued_d.year
 
     dry = bool(getattr(args, "dry_run", False))
+    want_pdf = bool(getattr(args, "pdf", False))
+    force = bool(getattr(args, "force", False))
 
     # Allocate number (unless user-forced)
     seeded = False
@@ -158,8 +185,21 @@ def run(args) -> Dict[str, Any]:
         invoice_template = "INVOICE.md.j2"
     rendered = render.render_invoice(ctx, template_name=invoice_template, office_root=home)
 
+    # Paid-guard: re-rendering (md + pdf) of a paid invoice requires
+    # --force. Applies regardless of --dry-run so the preview also
+    # refuses, matching user expectations.
+    status_existing = _status_for_invoice(year, inv_no, home) if args.invoice_number else ""
+    if _is_paid_status(status_existing) and not force:
+        raise FreelanceError(
+            f"Invoice [[{inv_no}]] already paid. Use --force to regenerate."
+        )
+
+    invoices_dir = project_dir / "invoices"
+    out_path = invoices_dir / f"{inv_no}.md"
+    pdf_path = out_path.with_suffix(".pdf") if want_pdf else None
+
     if dry:
-        return {
+        envelope = {
             "status": "preview",
             "exit_code": 0,
             "dry_run": True,
@@ -173,51 +213,68 @@ def run(args) -> Dict[str, Any]:
             "warnings": warnings,
             "message": f"dry-run: would write {inv_no} (€{amount_net} net, due {due_d})",
         }
+        if want_pdf:
+            envelope["pdf_path"] = str(pdf_path)
+        return envelope
 
-    invoices_dir = project_dir / "invoices"
     invoices_dir.mkdir(parents=True, exist_ok=True)
-    out_path = invoices_dir / f"{inv_no}.md"
-    if out_path.exists():
+
+    # Regen path: when --force targets an existing .md, treat this as
+    # a pure re-render (PDF refresh after a typo fix). The row is
+    # already booked in EARNINGS/tracker, and the Brain journal has
+    # the original entry — skip all three so we don't duplicate.
+    is_regen = bool(args.invoice_number) and force and out_path.exists()
+
+    if not is_regen and out_path.exists() and not force:
         raise FreelanceError(f"invoice file already exists: {out_path}")
     out_path.write_text(rendered, encoding="utf-8")
 
-    # Book to EARNINGS.md
-    try:
-        rec = earnings.EarningRecord(
-            inv_no=inv_no,
-            client=args.client,
-            project=args.project,
-            issued=str(issued_d),
-            net=amount_net,
-            ust=ust,
-            status="⏳ offen",
-        )
-        _, ytd = earnings.append_earning(year, rec, home)
-    except FreelanceError as e:
-        warnings.append(f"EARNINGS.md update failed: {e}")
-        ytd = 0.0
-
-    # Add to tracker's Rechnungen table
-    tracker_path = project_dir / "_project-tracker.md"
-    if tracker_path.is_file():
+    ytd = 0.0
+    journaled = None
+    if not is_regen:
+        # Book to EARNINGS.md
         try:
-            t = tracker.Tracker.load(tracker_path)
-            t.append_invoice(inv_no, amount_net, str(issued_d), str(due_d))
-            t.write()
+            rec = earnings.EarningRecord(
+                inv_no=inv_no,
+                client=args.client,
+                project=args.project,
+                issued=str(issued_d),
+                net=amount_net,
+                ust=ust,
+                status="⏳ offen",
+            )
+            _, ytd = earnings.append_earning(year, rec, home)
         except FreelanceError as e:
-            warnings.append(f"tracker invoice-row update failed: {e}")
+            warnings.append(f"EARNINGS.md update failed: {e}")
 
-    journal_line = (
-        f"Generated [[{inv_no}]] for [[{args.client}]] — €{amount_net:.2f} net, "
-        f"due {due_d}. [[freelance-office]]"
-    )
-    try:
-        journaled = brain.append_journal_line(journal_line)
-    except FreelanceError as e:
-        warnings.append(f"brain journal failed: {e}")
-        journaled = None
+        # Add to tracker's Rechnungen table
+        tracker_path = project_dir / "_project-tracker.md"
+        if tracker_path.is_file():
+            try:
+                t = tracker.Tracker.load(tracker_path)
+                t.append_invoice(inv_no, amount_net, str(issued_d), str(due_d))
+                t.write()
+            except FreelanceError as e:
+                warnings.append(f"tracker invoice-row update failed: {e}")
 
-    return {
+        journal_line = (
+            f"Generated [[{inv_no}]] for [[{args.client}]] — €{amount_net:.2f} net, "
+            f"due {due_d}. [[freelance-office]]"
+        )
+        try:
+            journaled = brain.append_journal_line(journal_line)
+        except FreelanceError as e:
+            warnings.append(f"brain journal failed: {e}")
+
+    if want_pdf:
+        from ..core.pdf import render_markdown_to_pdf
+        try:
+            pdf_path = render_markdown_to_pdf(out_path, pdf_path)
+        except FreelanceError as e:
+            warnings.append(f"PDF render failed: {e}")
+            pdf_path = None
+
+    envelope = {
         "status": "ok",
         "exit_code": 0,
         "invoice_number": inv_no,
@@ -233,3 +290,6 @@ def run(args) -> Dict[str, Any]:
         "warnings": warnings,
         "message": f"{inv_no}: €{amount_net:.2f} net → {out_path}. Due {due_d}.",
     }
+    if want_pdf:
+        envelope["pdf_path"] = str(pdf_path) if pdf_path else None
+    return envelope

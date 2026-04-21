@@ -114,3 +114,50 @@ def test_unknown_office_raises_clear_error(two_country_offices):
     # Error names registered offices with id, country, path (pi Q2 refinement)
     assert "de-main" in msg and "DE" in msg
     assert "ar-main" in msg and "AR" in msg
+
+
+def test_cross_office_pdf_smoke(two_country_offices, no_brain):
+    """v0.3 Phase 1 — DE + AR offices both produce valid PDFs at
+    their own rates. Guards against a weasyprint pipeline that
+    silently only works for the default locale."""
+    pytest.importorskip("weasyprint")
+    pytest.importorskip("markdown")
+    pypdf = pytest.importorskip("pypdf")
+
+    home_de, home_ar = two_country_offices
+    onboard_cmd.run(argparse.Namespace(
+        json=False, dry_run=False, office="de-main", slug="pdfclient", name="PDF DE",
+        sector="", contact_email="", ust_id="", b2b="true", client_country="DE",
+        day_rate=1400, hourly_rate=None, payment_terms_days=30,
+    ))
+    onboard_cmd.run(argparse.Namespace(
+        json=False, dry_run=False, office="ar-main", slug="pdfclient", name="PDF AR",
+        sector="", contact_email="", ust_id="", b2b="true", client_country="AR",
+        day_rate=2_000_000, hourly_rate=None, payment_terms_days=30,
+    ))
+    contract_cmd.run(argparse.Namespace(
+        json=False, dry_run=False, office="de-main", client="pdfclient", project="p",
+        title="T", description="", meilensteine="[]", total_days=20, rate=None,
+    ))
+    contract_cmd.run(argparse.Namespace(
+        json=False, dry_run=False, office="ar-main", client="pdfclient", project="p",
+        title="T", description="", meilensteine="[]", total_days=10, rate=None,
+    ))
+
+    r_de = invoice_cmd.run(argparse.Namespace(
+        json=False, dry_run=False, office="de-main", client="pdfclient", project="p",
+        amount_net=None, days=5, description="x",
+        leistungszeitraum="", invoice_number=None, issued="2026-04-01",
+        pdf=True, force=False,
+    ))
+    r_ar = invoice_cmd.run(argparse.Namespace(
+        json=False, dry_run=False, office="ar-main", client="pdfclient", project="p",
+        amount_net=None, days=2, description="x",
+        leistungszeitraum="", invoice_number=None, issued="2026-04-01",
+        pdf=True, force=False,
+    ))
+    for r in (r_de, r_ar):
+        pdf = Path(r["pdf_path"])
+        assert pdf.is_file()
+        assert pdf.read_bytes()[:8].startswith(b"%PDF-1.")
+        assert len(pypdf.PdfReader(str(pdf)).pages) >= 1
