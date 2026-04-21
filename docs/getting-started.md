@@ -91,6 +91,28 @@ makakoo query "what projects am I working on?"
 makakoo search "polymarket"
 ```
 
+## Step 6: Grant write access when you need it
+
+Makakoo agents can only write inside a small hardcoded baseline by
+default (`~/MAKAKOO/data/reports`, `~/MAKAKOO/data/drafts`,
+`~/MAKAKOO/tmp`, `/tmp`). To let an agent edit other paths — your
+codebase, a notes folder, a draft outside `MAKAKOO` — grant access
+either in conversation or from the CLI:
+
+```bash
+# Terminal — grant 1h write access
+makakoo perms grant ~/code/scratch/ --for 1h
+
+# Or in chat with any infected CLI, when a write is rejected:
+# >  Agent: "Want me to grant myself 1h access to ~/code?"
+# >  You:   "yes"
+```
+
+See the [`makakoo perms` reference](user-manual/makakoo-perms.md) for the
+full command surface (list / grant / revoke / purge / audit / show),
+the conversational flow, and the v0.3.1 + v0.3.2 hardening details
+(rate-limit decrement, denial audits, `origin_turn_id` enforcement).
+
 ## What's Next?
 
 ### Daily Usage
@@ -107,6 +129,12 @@ makakoo search "polymarket"
 
 - [FAQ](troubleshooting/index.md) — Common issues
 - [Uninstall](troubleshooting/uninstall.md) — Clean removal
+
+### Security
+
+- [`makakoo perms` reference](user-manual/makakoo-perms.md) — runtime write-access grants
+- [`spec/USER_GRANTS.md`](../spec/USER_GRANTS.md) — three-layer permission model, lock protocol
+- [`spec/USER_GRANTS_THREAT_MODEL.md`](../spec/USER_GRANTS_THREAT_MODEL.md) — adversary register, residual risks
 
 ## Environment Variables
 

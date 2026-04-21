@@ -21,6 +21,7 @@ makakoo <command> [options] [arguments]
 | [daemon](makakoo-daemon.md) | Control the background daemon |
 | [distro](makakoo-distro.md) | Manage distro bundles |
 | [secret](makakoo-secret.md) | Manage secrets |
+| [perms](makakoo-perms.md) | Runtime write-access grants (v0.3 / hardened in v0.3.1-v0.3.2) |
 | [status](makakoo-status.md) | Show system status |
 | [completion](makakoo-completion.md) | Shell completion setup |
 | [adapter](makakoo-adapter.md) | Manage AI adapters |
@@ -127,6 +128,30 @@ makakoo infect --target claude,gemini
 # Remove infection
 makakoo uninfect --global
 ```
+
+### Write-access grants
+
+```bash
+# Show baseline + active grants
+makakoo perms list
+
+# Grant 1h write access to a directory outside the baseline
+makakoo perms grant ~/code/scratch/ --for 1h
+
+# Revoke the grant (also releases a rate-limit slot since v0.3.1)
+makakoo perms revoke --path last
+
+# See every grant / revoke / denial since yesterday
+makakoo perms audit --since 1d
+
+# Forensic: why did a grant get refused?
+makakoo perms audit --since 10m --json | jq 'select(.result == "denied")'
+```
+
+Full reference: [makakoo-perms.md](makakoo-perms.md). For the
+conversational flow — when an agent's `write_file` gets rejected and
+offers to grant itself access — see the "Grant write access in
+conversation" section of [quickstart.md](../quickstart.md).
 
 ## Exit Codes
 

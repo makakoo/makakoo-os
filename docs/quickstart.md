@@ -83,6 +83,56 @@ makakoo query "summarize my work this week"
 
 ---
 
+## Grant write access in conversation
+
+By default, Makakoo agents can only write inside a small baseline
+(`~/MAKAKOO/data/reports`, `~/MAKAKOO/data/drafts`, `~/MAKAKOO/tmp`,
+`/tmp`). Everything else is refused at the handler.
+
+When an agent's `write_file` gets rejected, the canonical flow is:
+
+```
+Agent: write_file rejected: '/Users/you/code/foo.md' is outside
+       the allowed baseline roots and active grants.
+
+       Want me to grant myself 1h write access to ~/code/? Say yes
+       to proceed.
+
+You:   yes
+```
+
+On "yes" the agent calls `grant_write_access(path, "1h")`. The grant
+lives in `~/MAKAKOO/config/user_grants.json` until it expires (1h
+default) or you revoke it.
+
+**Equivalents from any terminal:**
+
+```bash
+# Grant yourself 1h
+makakoo perms grant ~/code/ --for 1h
+
+# Undo the newest grant
+makakoo perms revoke --path last
+
+# See what's open right now
+makakoo perms list
+```
+
+Hardening in v0.3.1 + v0.3.2:
+
+- Revoke releases a rate-limit slot (no more self-DoS via
+  50 grant/revoke cycles).
+- Every refusal writes an audit entry with a taxonomy tag
+  (`reason:too_broad`, `reason:rate_limit_hourly`,
+  `reason:missing_origin_turn_id`, …).
+- Conversational tool calls (`grant_write_access` from any infected
+  CLI) MUST carry a host-supplied `origin_turn_id` — prompt-injected
+  grants with a null turn id are rejected.
+
+Full reference: [user-manual/makakoo-perms.md](user-manual/makakoo-perms.md).
+
+---
+
 ## Key Commands
 
 ### Essential

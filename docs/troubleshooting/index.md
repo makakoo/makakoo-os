@@ -224,6 +224,112 @@ makakoo plugin disable <task-plugin>
 
 ---
 
+## Permission / Write-Access Issues
+
+### `write_file rejected: '...' is outside the allowed baseline roots and active grants`
+
+**Symptoms:** An agent tries to write to a path outside
+`~/MAKAKOO/data/reports`, `~/MAKAKOO/data/drafts`, `~/MAKAKOO/tmp`, or
+`/tmp`, and the call is refused.
+
+**Fix:** Grant access for the path. In conversation:
+
+```
+Agent: write_file rejected: '...' is outside the allowed baseline...
+       Want me to grant myself 1h access to ~/foo/? Say yes.
+You:   yes
+```
+
+Or from the CLI:
+
+```bash
+makakoo perms grant ~/foo/ --for 1h
+```
+
+Never fabricate a grant call yourself — if an agent did without
+asking, it's a bug; check `makakoo perms audit --since 10m` for the
+audit trail.
+
+### `rate limit: 50 grants created in the last hour (max 50); wait a bit`
+
+**Symptoms:** After many grant/revoke operations, new grants are
+refused.
+
+**Fix:** v0.3.1 introduced decrement-on-revoke (50 grant+revoke
+cycles no longer lock you out). If you're still hitting this,
+you've created 50 grants in an hour without revoking. Either:
+
+```bash
+# Wait for the hourly window to roll
+# Or revoke the ones you don't need (also releases slots since v0.3.1)
+makakoo perms list
+makakoo perms revoke <grant-id>
+```
+
+### `rate limit: 20 active grants (max 20); revoke some or wait`
+
+**Symptoms:** You have 20 active grants; a 21st is refused.
+
+**Fix:**
+
+```bash
+# See what's open
+makakoo perms list
+
+# Revoke the stale ones
+makakoo perms revoke <grant-id>
+# Or revoke all expired (also done by SANCHO every 900s automatically)
+makakoo perms purge
+```
+
+### `origin_turn_id required on conversational channels`
+
+**Symptoms:** An agent or MCP tool call reports "origin_turn_id
+required on conversational channels (plugin=claude-code); this grant
+call appears to be agent-initiated without a human turn binding".
+
+**What it means (v0.3.1 + v0.3.2):** the grant call came from a
+conversational plugin (`claude-code`, `gemini-cli`, `codex`,
+`opencode`, `vibe`, `cursor`, `qwen`, `pi`, `harveychat*`) without
+the host-supplied turn id. This is the prompt-injection
+defence — a legitimate tool call from the host carries the turn
+id; a fabricated call from the agent's own output doesn't.
+
+**Fix:** Usually not an issue in normal use — the infected
+bootstrap threads `user_turn_id` through the MCP tool call. If you
+hit this:
+
+1. Re-run `makakoo infect --global` to refresh the bootstrap.
+2. Check the audit entry:
+   ```bash
+   makakoo perms audit --since 10m --json | \
+     jq 'select(.correlation_id == "reason:missing_origin_turn_id")'
+   ```
+3. If scripting, use `makakoo perms grant` (plugin=`cli`) — CLI is
+   outside the conversational channel set by design.
+
+### Grants work from `makakoo perms` but not from chat
+
+**Symptoms:** `makakoo perms grant` succeeds; the agent says it
+can't grant.
+
+**Fix:** The agent lost its `HARVEY_PLUGIN` / `user_turn_id` wiring
+or the infection is stale:
+
+```bash
+# Refresh the bootstrap
+makakoo infect --global --dry-run   # preview
+makakoo infect --global
+
+# Restart the CLI
+```
+
+The agent's infected bootstrap sets `HARVEY_PLUGIN` per host; if
+that's missing, `grant_write_access` falls through to the
+conversational-channels gate and may be refused.
+
+---
+
 ## Network Issues
 
 ### LLM API Errors
