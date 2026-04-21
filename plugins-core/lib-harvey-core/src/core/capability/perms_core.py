@@ -248,11 +248,35 @@ class GrantArgs:
     confirm: Optional[str] = None  # "yes-really" enables permanent-outside-home
 
 
+def _audit_grant_denial(args: "GrantArgs", correlation_id: str) -> None:
+    """Emit one `perms/grant` audit entry with `result="denied"` and a
+    taxonomy tag on `correlation_id`. v0.3.1 Phase B — rejections must
+    leave a forensic trace so intrusion detection on the grant system
+    is possible after the fact.
+    """
+    log_audit(
+        verb="perms/grant",
+        scope_requested=args.path or "",
+        scope_granted=None,
+        result="denied",
+        plugin=args.plugin,
+        correlation_id=correlation_id,
+    )
+
+
 def do_grant(args: GrantArgs, *, now: Optional[datetime] = None) -> str:
     """Core grant flow. Returns the quotable reply string."""
     now = now or datetime.now(tz=timezone.utc)
-    abs_path = validate_and_expand_scope(args.path)
-    dur = parse_duration(args.duration)
+    try:
+        abs_path = validate_and_expand_scope(args.path)
+    except PermsError:
+        _audit_grant_denial(args, "reason:too_broad")
+        raise
+    try:
+        dur = parse_duration(args.duration)
+    except PermsError:
+        _audit_grant_denial(args, "reason:bad_duration")
+        raise
     expires_at = None if dur is None else now + dur
 
     # Permanent-outside-HOME confirmation gate.
@@ -266,6 +290,9 @@ def do_grant(args: GrantArgs, *, now: Optional[datetime] = None) -> str:
         path_real = os.path.realpath(abs_path)
         if not path_real.startswith(home_real.rstrip(os.sep) + os.sep) and path_real != home_real:
             if args.confirm != "yes-really":
+                _audit_grant_denial(
+                    args, "reason:permanent_outside_home_unconfirmed"
+                )
                 raise PermsError(
                     f"permanent grant outside $MAKAKOO_HOME ({abs_path}) "
                     "requires confirm='yes-really'"
@@ -284,6 +311,12 @@ def do_grant(args: GrantArgs, *, now: Optional[datetime] = None) -> str:
             now=now,
         )
     except RateLimitExceeded as e:
+        reason = (
+            "reason:rate_limit_active"
+            if e.creates_in_window == 0
+            else "reason:rate_limit_hourly"
+        )
+        _audit_grant_denial(args, reason)
         raise PermsError(e.reason) from e
 
     # Audit emit — perms/grant verb, scope_granted = new id.
