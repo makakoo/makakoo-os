@@ -404,14 +404,35 @@ pub enum PluginCmd {
 
     /// Re-fetch + reinstall the plugin from its recorded source.
     ///
-    /// v0.1 only understands `path:` sources (the kind `plugin install`
-    /// + `distro install` write). Git URL + tarball sources land with
-    /// Phase F. Preserves the plugin's enabled / disabled flag across
-    /// the reinstall — if you had disabled it, `update` keeps it disabled.
-    /// State directories are preserved (no `--purge`).
+    /// Path-sourced plugins: uninstall + reinstall from the recorded
+    /// directory. Git-sourced plugins: refetch upstream ref, diff manifest
+    /// hash, prompt on capability drift (override with `--yes`), then
+    /// reinstall. Tarball-sourced plugins: surface hint to reinstall
+    /// with a fresh `--sha256` (v0.4 restricts tarball auto-update).
+    /// Preserves the plugin's enabled / disabled flag across the
+    /// reinstall. State directories are preserved (no `--purge`).
     Update {
-        /// Plugin name.
-        name: String,
+        /// Plugin name. Required unless `--all` is set.
+        #[arg(required_unless_present = "all")]
+        name: Option<String>,
+
+        /// Update every updatable (git + tarball) plugin. Per-plugin
+        /// failures log + skip; the batch continues.
+        #[arg(long)]
+        all: bool,
+
+        /// Skip the manifest-drift re-trust prompt. Dangerous — only
+        /// use when you trust upstream unconditionally.
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// List every updatable plugin whose upstream ref has drifted. Pure
+    /// dry-run; no disk state is mutated.
+    Outdated {
+        /// Emit JSON instead of the default table.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Batch-reinstall every plugin from `plugins-core/` into

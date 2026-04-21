@@ -20,8 +20,9 @@ pub mod resolver;
 pub mod staging;
 
 pub use install::{
-    install, install_from_git, install_from_path, install_from_tarball_url, uninstall,
-    InstallError, InstallRequest, PluginSource,
+    apply_update, drop_probe, install, install_from_git, install_from_path,
+    install_from_tarball_url, list_updatable, probe_upstream, uninstall, InstallError,
+    InstallRequest, PluginSource, ProbeDrift, UpstreamProbe,
 };
 pub use lock::{lock_path, LockEntry, LockError, LockMeta, PluginsLock};
 pub use manifest::{

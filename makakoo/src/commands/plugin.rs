@@ -6,11 +6,14 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color as TableColor, Table};
 use crossterm::style::Stylize;
 use serde_json::json;
 
+use std::io::{self, Write};
+
 use makakoo_core::capability::resolve_grants;
 use makakoo_core::plugin::staging::StagingError;
 use makakoo_core::plugin::{
-    install as core_install, install_from_path, uninstall as core_uninstall, InstallError,
-    InstallRequest, Manifest, PluginRegistry, PluginSource, PluginsLock,
+    apply_update as core_apply_update, drop_probe, install as core_install, install_from_path,
+    list_updatable, probe_upstream, uninstall as core_uninstall, InstallError, InstallRequest,
+    LockEntry, Manifest, PluginRegistry, PluginSource, PluginsLock, ProbeDrift,
 };
 
 use crate::cli::PluginCmd;
@@ -31,7 +34,14 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
         PluginCmd::Uninstall { name, purge } => uninstall(ctx, &name, purge),
         PluginCmd::Enable { name } => set_enabled(ctx, &name, true),
         PluginCmd::Disable { name } => set_enabled(ctx, &name, false),
-        PluginCmd::Update { name } => update(ctx, &name),
+        PluginCmd::Update { name, all, yes } => {
+            if all {
+                update_all(ctx, yes)
+            } else {
+                update(ctx, name.as_deref().unwrap_or_default(), yes)
+            }
+        }
+        PluginCmd::Outdated { json } => outdated(ctx, json),
         PluginCmd::Sync { dry_run, force } => sync(ctx, dry_run, force),
     }
 }
@@ -304,25 +314,39 @@ fn parse_install_source(
     Ok(PluginSource::Path(PathBuf::from(raw)))
 }
 
-fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
-    // 1) Read the existing lock entry — it carries the recorded source
-    //    path and the current enabled flag. Both must survive the
-    //    reinstall round-trip.
+fn update(ctx: &CliContext, name: &str, yes: bool) -> anyhow::Result<i32> {
     let lock = PluginsLock::load(ctx.home())?;
     let Some(entry) = lock.get(name).cloned() else {
         output::print_error(format!("plugin not installed: {name}"));
         return Ok(1);
     };
 
-    // 2) Only `path:` sources are supported in v0.1. Git URL + tarball
-    //    sources are a Phase F concern — they need a resolver layer the
-    //    kernel doesn't ship yet.
-    let Some(source_path) = entry.source.strip_prefix("path:") else {
+    if entry.source.starts_with("path:") {
+        return update_from_path(ctx, &entry);
+    }
+    if entry.source.starts_with("git:") {
+        return update_from_git(ctx, &entry, yes);
+    }
+    if entry.source.starts_with("tar:") {
         output::print_error(format!(
-            "plugin {name} has a non-path source ({}) — `plugin update` only supports path: in v0.1; git URL and tarball sources land in Phase F",
-            entry.source
+            "plugin {name} is tarball-sourced — `update` cannot auto-pin a new sha256. Reinstall with `plugin install {} --sha256=<new-hex>` after verifying the upstream hash.",
+            entry.source.strip_prefix("tar:").unwrap_or("<url>")
         ));
         return Ok(1);
+    }
+    output::print_error(format!(
+        "plugin {name} has an unrecognized lock source `{}` — reinstall manually",
+        entry.source
+    ));
+    Ok(1)
+}
+
+/// Legacy path-sourced update: uninstall + reinstall from the recorded
+/// local directory. Preserves enabled flag across round-trip.
+fn update_from_path(ctx: &CliContext, entry: &LockEntry) -> anyhow::Result<i32> {
+    let name = &entry.name;
+    let Some(source_path) = entry.source.strip_prefix("path:") else {
+        unreachable!("caller verified prefix");
     };
     let source_path = PathBuf::from(source_path);
     if !source_path.exists() {
@@ -335,14 +359,11 @@ fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
 
     let prior_enabled = entry.enabled;
 
-    // 3) Uninstall without purge — keep the state dir. A user who wants
-    //    a full reset runs `plugin uninstall --purge` + `plugin install`.
     if let Err(e) = core_uninstall(name, ctx.home(), false) {
         output::print_error(format!("uninstall step failed: {e}"));
         return Ok(1);
     }
 
-    // 4) Reinstall from the recorded source.
     let req = InstallRequest {
         source: PluginSource::Path(source_path.clone()),
         expected_blake3: None,
@@ -357,9 +378,6 @@ fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
         }
     };
 
-    // 5) Reapply the saved enabled flag if it was disabled. Fresh
-    //    installs land as enabled=true by design (see install.rs), so
-    //    the state roundtrips only when prior_enabled was false.
     if !prior_enabled {
         let mut lock = PluginsLock::load(ctx.home())?;
         if let Some(mut e) = lock.get(name).cloned() {
@@ -373,9 +391,207 @@ fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
         "updated {} → blake3 {} (enabled: {})",
         outcome.name,
         outcome.computed_blake3,
-        if prior_enabled { "yes" } else { "no (preserved from prior state)" }
+        if prior_enabled {
+            "yes"
+        } else {
+            "no (preserved from prior state)"
+        }
     ));
     Ok(0)
+}
+
+/// Git-sourced update: probe upstream, diff manifest_hash, prompt on
+/// drift (or skip with `--yes`), apply.
+fn update_from_git(ctx: &CliContext, entry: &LockEntry, yes: bool) -> anyhow::Result<i32> {
+    let name = &entry.name;
+    let probe = match probe_upstream(entry) {
+        Ok(p) => p,
+        Err(e) => {
+            output::print_error(format!("upstream probe failed for {name}: {e}"));
+            return Ok(1);
+        }
+    };
+
+    match probe.drift {
+        ProbeDrift::UpToDate => {
+            output::print_info(format!(
+                "{name} up to date (sha {short})",
+                short = short_sha(&probe.new_resolved_sha)
+            ));
+            drop_probe(probe);
+            return Ok(0);
+        }
+        ProbeDrift::ContentOnly => {
+            output::print_info(format!(
+                "{name}: upstream drifted {old} → {new} (manifest unchanged; reinstalling)",
+                old = short_sha_opt(probe.old_resolved_sha.as_deref()),
+                new = short_sha(&probe.new_resolved_sha),
+            ));
+        }
+        ProbeDrift::ManifestChange => {
+            println!(
+                "plugin {name} manifest changed upstream (sha {old} → {new})",
+                old = short_sha_opt(probe.old_resolved_sha.as_deref()),
+                new = short_sha(&probe.new_resolved_sha),
+            );
+            println!("  manifest_hash: {:?}", probe.old_manifest_hash);
+            println!("             → {}", probe.new_manifest_hash);
+            if !yes && !prompt_yes_no("Re-trust and apply update?") {
+                output::print_info("update declined — installed version unchanged");
+                drop_probe(probe);
+                return Ok(0);
+            }
+        }
+    }
+
+    match core_apply_update(probe, ctx.home()) {
+        Ok(outcome) => {
+            output::print_info(format!(
+                "updated {} → blake3 {}",
+                outcome.name, outcome.computed_blake3
+            ));
+            Ok(0)
+        }
+        Err(e) => {
+            output::print_error(format!(
+                "apply_update failed — plugin may be uninstalled: {e}"
+            ));
+            Ok(1)
+        }
+    }
+}
+
+/// `plugin update --all [--yes]` — walk every git-sourced entry, update
+/// each, print a summary.
+fn update_all(ctx: &CliContext, yes: bool) -> anyhow::Result<i32> {
+    let candidates = list_updatable(ctx.home())?;
+    if candidates.is_empty() {
+        output::print_info("no git-sourced plugins installed — nothing to update");
+        return Ok(0);
+    }
+    let mut up_to_date = 0usize;
+    let mut updated = 0usize;
+    let mut failed = 0usize;
+    for entry in &candidates {
+        if entry.source.starts_with("tar:") {
+            // Tarballs can't auto-update without a fresh --sha256.
+            output::print_warn(format!(
+                "{} is tarball-sourced; skip (reinstall with new --sha256)",
+                entry.name
+            ));
+            continue;
+        }
+        match update_from_git(ctx, entry, yes)? {
+            0 => {
+                // Success path covers both up-to-date + updated; figure
+                // out which by re-reading the lock.
+                if let Some(new_entry) = PluginsLock::load(ctx.home())?.get(&entry.name) {
+                    if new_entry.resolved_sha == entry.resolved_sha {
+                        up_to_date += 1;
+                    } else {
+                        updated += 1;
+                    }
+                }
+            }
+            _ => failed += 1,
+        }
+    }
+    output::print_info(format!(
+        "{up_to_date} up-to-date, {updated} updated, {failed} failed"
+    ));
+    Ok(if failed > 0 { 1 } else { 0 })
+}
+
+/// `plugin outdated` — pure dry-run. Prints a table of drift info.
+fn outdated(ctx: &CliContext, as_json: bool) -> anyhow::Result<i32> {
+    let candidates = list_updatable(ctx.home())?;
+    if candidates.is_empty() {
+        output::print_info("no git-sourced plugins installed");
+        return Ok(0);
+    }
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    for entry in &candidates {
+        match probe_upstream(entry) {
+            Ok(probe) => {
+                let drifted = probe.drift != ProbeDrift::UpToDate;
+                rows.push(serde_json::json!({
+                    "name": entry.name,
+                    "source": entry.source,
+                    "current": short_sha_opt(entry.resolved_sha.as_deref()),
+                    "upstream": short_sha(&probe.new_resolved_sha),
+                    "drift": drifted,
+                    "drift_type": match probe.drift {
+                        ProbeDrift::UpToDate => "none",
+                        ProbeDrift::ContentOnly => "content",
+                        ProbeDrift::ManifestChange => "manifest",
+                    },
+                }));
+                drop_probe(probe);
+            }
+            Err(e) => {
+                rows.push(serde_json::json!({
+                    "name": entry.name,
+                    "source": entry.source,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(0);
+    }
+    let mut t = Table::new();
+    t.load_preset(UTF8_FULL);
+    t.set_header(vec![
+        Cell::new("name").fg(TableColor::Cyan),
+        Cell::new("current").fg(TableColor::Cyan),
+        Cell::new("upstream").fg(TableColor::Cyan),
+        Cell::new("drift").fg(TableColor::Cyan),
+    ]);
+    for r in &rows {
+        let drifted = r.get("drift").and_then(|v| v.as_bool()).unwrap_or(false);
+        let drift_label = if r.get("error").is_some() {
+            Cell::new("error").fg(TableColor::Red)
+        } else if drifted {
+            let label = r
+                .get("drift_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("yes");
+            Cell::new(label).fg(TableColor::Yellow)
+        } else {
+            Cell::new("no").fg(TableColor::Green)
+        };
+        t.add_row(vec![
+            Cell::new(r.get("name").and_then(|v| v.as_str()).unwrap_or("?")),
+            Cell::new(r.get("current").and_then(|v| v.as_str()).unwrap_or("-")),
+            Cell::new(r.get("upstream").and_then(|v| v.as_str()).unwrap_or("-")),
+            drift_label,
+        ]);
+    }
+    println!("{t}");
+    Ok(0)
+}
+
+fn short_sha(s: &str) -> String {
+    s.chars().take(7).collect()
+}
+
+fn short_sha_opt(s: Option<&str>) -> String {
+    match s {
+        Some(v) => short_sha(v),
+        None => "-".into(),
+    }
+}
+
+fn prompt_yes_no(prompt: &str) -> bool {
+    print!("{prompt} [y/N] ");
+    let _ = io::stdout().flush();
+    let mut line = String::new();
+    if io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
 /// Batch reinstall every plugin in `plugins-core/` into $MAKAKOO_HOME/plugins/.

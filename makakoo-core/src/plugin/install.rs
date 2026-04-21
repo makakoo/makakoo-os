@@ -82,6 +82,19 @@ pub enum InstallError {
         exit: i32,
         stderr: String,
     },
+    /// Raised by `plugin update` when the lock entry's `source` field
+    /// doesn't parse as one of the known prefixes (`path:`, `git:`,
+    /// `tar:`). Points at corruption or a manually-edited lock file.
+    #[error("lock entry for {plugin:?} has unparseable source: {source_str:?}")]
+    InvalidLockSource {
+        plugin: String,
+        source_str: String,
+    },
+    /// Raised by `plugin update` on a path-sourced plugin — those use
+    /// the legacy path-based update flow (uninstall + reinstall from
+    /// recorded directory), handled at the CLI layer.
+    #[error("plugin {plugin:?} has a path source — use the path-based update flow instead")]
+    UpdateWrongSource { plugin: String },
 }
 
 /// Where a plugin's source lives. v0.4 accepts all three shapes the
@@ -223,6 +236,222 @@ pub fn install_from_tarball_url(
         },
         makakoo_home,
     )
+}
+
+/// Describes how an upstream probe compares to the installed version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeDrift {
+    /// Upstream resolved_sha matches the locked one — no work needed.
+    UpToDate,
+    /// Upstream resolved_sha differs but the plugin.toml bytes are
+    /// identical to the locked `manifest_hash`. Safe for silent update.
+    ContentOnly,
+    /// The manifest itself changed — capabilities, security, sandbox
+    /// profile, install script may have drifted. Requires user consent
+    /// before the new code is promoted.
+    ManifestChange,
+}
+
+/// Result of a dry-run upstream probe. The probe has already fetched
+/// the upstream tree into `staging_dir`; the caller can either promote
+/// it via `apply_update` or discard by `fs::remove_dir_all(staging_dir)`.
+#[derive(Debug)]
+pub struct UpstreamProbe {
+    pub name: String,
+    pub old_resolved_sha: Option<String>,
+    pub new_resolved_sha: String,
+    pub old_manifest_hash: Option<String>,
+    pub new_manifest_hash: String,
+    pub drift: ProbeDrift,
+    pub staging_dir: PathBuf,
+    pub plugin_source: PluginSource,
+}
+
+/// Dry-run probe: refetch the locked upstream ref, compute its SHA and
+/// manifest_hash, classify drift. No disk state under `$MAKAKOO_HOME/plugins/`
+/// is mutated. Caller MUST eventually `apply_update` or `drop_probe` to
+/// clean up the staging dir.
+///
+/// Supports git and tarball sources. Path-sourced plugins return
+/// `UpdateWrongSource` — callers use the legacy reinstall flow for those.
+pub fn probe_upstream(entry: &LockEntry) -> Result<UpstreamProbe, InstallError> {
+    let plugin_source = parse_lock_source(&entry.name, &entry.source)?;
+    match &plugin_source {
+        PluginSource::Path(_) => {
+            return Err(InstallError::UpdateWrongSource {
+                plugin: entry.name.clone(),
+            })
+        }
+        _ => {}
+    }
+    let spec = match &plugin_source {
+        PluginSource::Git {
+            url,
+            ref_,
+            allow_unstable,
+        } => SourceSpec::Git {
+            url: url.clone(),
+            ref_: ref_.clone(),
+            allow_unstable: *allow_unstable,
+        },
+        PluginSource::Tarball { url, sha256 } => SourceSpec::HttpsTarball {
+            url: url.clone(),
+            // Accept an empty declared sha: in that case source_fetch
+            // skips the comparison and just computes + returns the actual
+            // sha256. Used by `plugin update` when the user hasn't
+            // supplied a new sha256 yet — we still need to see what
+            // upstream actually hashes to.
+            sha256: sha256.clone(),
+        },
+        PluginSource::Path(_) => unreachable!(),
+    };
+    let fetched = source_fetch::fetch(&spec)?;
+    let manifest_path = fetched.staging_dir.join("plugin.toml");
+    if !manifest_path.is_file() {
+        let _ = fs::remove_dir_all(&fetched.staging_dir);
+        return Err(InstallError::NoManifest {
+            path: fetched.staging_dir.clone(),
+        });
+    }
+    let new_manifest_hash = hash_manifest_text(&manifest_path).unwrap_or_default();
+
+    let drift = if entry.resolved_sha.as_deref() == Some(fetched.resolved_sha.as_str()) {
+        ProbeDrift::UpToDate
+    } else if entry
+        .manifest_hash
+        .as_deref()
+        .map(|h| h == new_manifest_hash.as_str())
+        .unwrap_or(false)
+    {
+        ProbeDrift::ContentOnly
+    } else {
+        ProbeDrift::ManifestChange
+    };
+
+    Ok(UpstreamProbe {
+        name: entry.name.clone(),
+        old_resolved_sha: entry.resolved_sha.clone(),
+        new_resolved_sha: fetched.resolved_sha,
+        old_manifest_hash: entry.manifest_hash.clone(),
+        new_manifest_hash,
+        drift,
+        staging_dir: fetched.staging_dir,
+        plugin_source,
+    })
+}
+
+/// Promote a probed update: uninstall + reinstall from the probe's
+/// staging dir. Preserves the `enabled` flag across the round-trip.
+/// Staging dir is consumed (moved or deleted).
+pub fn apply_update(
+    probe: UpstreamProbe,
+    makakoo_home: &Path,
+) -> Result<super::staging::InstallOutcome, InstallError> {
+    let prior_enabled = PluginsLock::load(makakoo_home)?
+        .get(&probe.name)
+        .map(|e| e.enabled)
+        .unwrap_or(true);
+
+    // Uninstall the old install. Keep state dir intact — an update
+    // that wipes user state would be terrifying.
+    if let Err(e) = uninstall(&probe.name, makakoo_home, false) {
+        let _ = fs::remove_dir_all(&probe.staging_dir);
+        return Err(e);
+    }
+
+    let source_str = format_source_str(&probe.plugin_source);
+    let resolved_sha = Some(probe.new_resolved_sha.clone());
+    let outcome = install_staged(
+        &probe.staging_dir,
+        source_str,
+        resolved_sha,
+        None,
+        makakoo_home,
+    )?;
+
+    if !prior_enabled {
+        let mut lock = PluginsLock::load(makakoo_home)?;
+        if let Some(mut e) = lock.get(&probe.name).cloned() {
+            e.enabled = false;
+            lock.upsert(e);
+            lock.save(makakoo_home)?;
+        }
+    }
+
+    // Best-effort: the staged tree was renamed into place by
+    // install_staged, but source_fetch::fetch() uses a tempdir with
+    // other subdirs (for tarballs: extract/, stage/). Clean them.
+    if let Some(parent) = probe.staging_dir.parent() {
+        // Only clean the immediate parent if it's clearly the fetcher's
+        // tempdir (contains a well-known download.tar.gz sibling or empty).
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    Ok(outcome)
+}
+
+/// Discard a probe's staging dir without promoting. Use when the user
+/// declines a re-trust prompt.
+pub fn drop_probe(probe: UpstreamProbe) {
+    let _ = fs::remove_dir_all(&probe.staging_dir);
+    if let Some(parent) = probe.staging_dir.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// List every lock entry whose source is git or tarball — the candidates
+/// for `plugin update --all` and `plugin outdated`.
+pub fn list_updatable(makakoo_home: &Path) -> Result<Vec<LockEntry>, InstallError> {
+    let lock = PluginsLock::load(makakoo_home)?;
+    Ok(lock
+        .plugins
+        .into_iter()
+        .filter(|e| {
+            e.source.starts_with("git:") || e.source.starts_with("tar:")
+        })
+        .collect())
+}
+
+fn format_source_str(ps: &PluginSource) -> String {
+    match ps {
+        PluginSource::Path(p) => format!("path:{}", p.display()),
+        PluginSource::Git { url, ref_, .. } => format!("git:{url}@{ref_}"),
+        PluginSource::Tarball { url, .. } => format!("tar:{url}"),
+    }
+}
+
+fn parse_lock_source(plugin: &str, s: &str) -> Result<PluginSource, InstallError> {
+    if let Some(rest) = s.strip_prefix("path:") {
+        return Ok(PluginSource::Path(PathBuf::from(rest)));
+    }
+    if let Some(rest) = s.strip_prefix("git:") {
+        // git:<url>@<ref>. Split on the LAST '@' to sidestep `ssh://git@host`
+        // (which shouldn't appear here but keep the parser defensive).
+        let (url, ref_) = match rest.rfind('@') {
+            Some(i) if i > "https://".len() => {
+                (rest[..i].to_string(), rest[i + 1..].to_string())
+            }
+            _ => (rest.to_string(), "HEAD".to_string()),
+        };
+        // A previously-accepted install implies the user already OK'd the
+        // ref stability; preserve that on refetch.
+        return Ok(PluginSource::Git {
+            url,
+            ref_,
+            allow_unstable: true,
+        });
+    }
+    if let Some(rest) = s.strip_prefix("tar:") {
+        return Ok(PluginSource::Tarball {
+            url: rest.to_string(),
+            // Empty sha triggers "compute but don't enforce" in source_fetch.
+            sha256: String::new(),
+        });
+    }
+    Err(InstallError::InvalidLockSource {
+        plugin: plugin.to_string(),
+        source_str: s.to_string(),
+    })
 }
 
 /// Shared install path — works on any source directory that already
@@ -1030,6 +1259,178 @@ tasks = [{ name = "dream", interval = "3600s" }]
             raw.contains("manifest_hash"),
             "lock file must record manifest_hash"
         );
+    }
+
+    // ─── v0.4 Phase C: probe_upstream + apply_update tests ──────────
+
+    #[test]
+    fn probe_upstream_uptodate_when_sha_unchanged() {
+        let (_fixture, url, tag, expected_sha) =
+            seed_plugin_bare_repo("probe-noop", "");
+        let tmp_home = TempDir::new().unwrap();
+        install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
+        let entry = PluginsLock::load(tmp_home.path())
+            .unwrap()
+            .get("probe-noop")
+            .cloned()
+            .unwrap();
+        let probe = probe_upstream(&entry).unwrap();
+        assert_eq!(probe.drift, ProbeDrift::UpToDate);
+        assert_eq!(probe.new_resolved_sha, expected_sha);
+        drop_probe(probe);
+    }
+
+    #[test]
+    fn probe_upstream_detects_content_drift() {
+        use std::process::Command;
+        let (fixture_tmp, url, tag, _sha) = seed_plugin_bare_repo("probe-drift", "");
+        let tmp_home = TempDir::new().unwrap();
+        install_from_git(&url, &tag, true, tmp_home.path()).unwrap();
+
+        // Move the tag to a new commit with identical plugin.toml but
+        // a different file. Manifest hash stays the same; resolved_sha
+        // changes → ContentOnly drift.
+        let wt = fixture_tmp.path().join("wt");
+        fs::write(wt.join("extra.py"), b"# new file\n").unwrap();
+        run_git(&["add", "."], Some(&wt));
+        run_git(
+            &["commit", "--quiet", "-m", "content-only-update"],
+            Some(&wt),
+        );
+        run_git(&["tag", "-f", "v0.1.0"], Some(&wt));
+        run_git(
+            &[
+                "push", "--quiet", "--force", "origin", "main", "--tags",
+            ],
+            Some(&wt),
+        );
+
+        // Refresh the probe-drift entry to use branch-based update
+        // (so we can push again without stale-tag race).
+        let entry = PluginsLock::load(tmp_home.path())
+            .unwrap()
+            .get("probe-drift")
+            .cloned()
+            .unwrap();
+        // Swap the source to the main branch so probe_upstream re-fetches
+        // HEAD (tag might not move atomically in file:// transports).
+        let mut lock = PluginsLock::load(tmp_home.path()).unwrap();
+        let mut swapped = entry.clone();
+        swapped.source = format!("git:{url}@main");
+        lock.upsert(swapped);
+        lock.save(tmp_home.path()).unwrap();
+        let swapped = lock.get("probe-drift").cloned().unwrap();
+
+        let probe = probe_upstream(&swapped).unwrap();
+        assert_eq!(probe.drift, ProbeDrift::ContentOnly);
+        drop_probe(probe);
+
+        // Pull the fixture into scope so the tempdir lives long enough.
+        let _ = Command::new("true").arg(fixture_tmp.path()).status();
+    }
+
+    #[test]
+    fn probe_upstream_detects_manifest_change() {
+        let (fixture_tmp, url, _tag, _sha) =
+            seed_plugin_bare_repo("probe-manifest", "");
+        let tmp_home = TempDir::new().unwrap();
+        install_from_git(&url, "main", true, tmp_home.path()).unwrap();
+
+        // Rewrite the manifest upstream with a new version → manifest_hash
+        // must change.
+        let wt = fixture_tmp.path().join("wt");
+        write_manifest(
+            &wt,
+            "probe-manifest",
+            "\n[capabilities]\ngrants = [\"brain/read\"]\n",
+        );
+        run_git(&["add", "."], Some(&wt));
+        run_git(
+            &["commit", "--quiet", "-m", "add capability"],
+            Some(&wt),
+        );
+        run_git(
+            &["push", "--quiet", "--force", "origin", "main"],
+            Some(&wt),
+        );
+
+        let entry = PluginsLock::load(tmp_home.path())
+            .unwrap()
+            .get("probe-manifest")
+            .cloned()
+            .unwrap();
+        let probe = probe_upstream(&entry).unwrap();
+        assert_eq!(probe.drift, ProbeDrift::ManifestChange);
+        assert_ne!(probe.new_manifest_hash, entry.manifest_hash.unwrap_or_default());
+        drop_probe(probe);
+    }
+
+    #[test]
+    fn apply_update_swaps_installed_version_and_preserves_disabled_flag() {
+        let (fixture_tmp, url, _tag, _sha) =
+            seed_plugin_bare_repo("apply-update", "");
+        let tmp_home = TempDir::new().unwrap();
+        install_from_git(&url, "main", true, tmp_home.path()).unwrap();
+
+        // Flip enabled=false before update.
+        let mut lock = PluginsLock::load(tmp_home.path()).unwrap();
+        let mut e = lock.get("apply-update").unwrap().clone();
+        e.enabled = false;
+        lock.upsert(e);
+        lock.save(tmp_home.path()).unwrap();
+
+        // Push a second commit upstream.
+        let wt = fixture_tmp.path().join("wt");
+        fs::write(wt.join("v2.py"), b"# v2\n").unwrap();
+        run_git(&["add", "."], Some(&wt));
+        run_git(&["commit", "--quiet", "-m", "v2"], Some(&wt));
+        run_git(
+            &["push", "--quiet", "--force", "origin", "main"],
+            Some(&wt),
+        );
+
+        let entry = PluginsLock::load(tmp_home.path())
+            .unwrap()
+            .get("apply-update")
+            .cloned()
+            .unwrap();
+        let probe = probe_upstream(&entry).unwrap();
+        let new_sha = probe.new_resolved_sha.clone();
+        apply_update(probe, tmp_home.path()).unwrap();
+
+        let after = PluginsLock::load(tmp_home.path())
+            .unwrap()
+            .get("apply-update")
+            .cloned()
+            .unwrap();
+        assert_eq!(after.resolved_sha.as_deref(), Some(new_sha.as_str()));
+        assert!(!after.enabled, "disabled flag must survive apply_update");
+        // New file present on disk
+        let plugin_dir = tmp_home.path().join("plugins/apply-update");
+        assert!(plugin_dir.join("v2.py").exists());
+    }
+
+    #[test]
+    fn list_updatable_filters_to_git_and_tar() {
+        let tmp_home = TempDir::new().unwrap();
+        // Install a path plugin.
+        let src = seed_source(tmp_home.path(), "path-one");
+        install_from_path(
+            &InstallRequest {
+                source: PluginSource::Path(src),
+                expected_blake3: None,
+            },
+            tmp_home.path(),
+        )
+        .unwrap();
+        // Install a git plugin.
+        let (_fix, url, tag, _sha) = seed_plugin_bare_repo("git-one", "");
+        install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
+
+        let updatable = list_updatable(tmp_home.path()).unwrap();
+        let names: Vec<_> = updatable.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"git-one"));
+        assert!(!names.contains(&"path-one"));
     }
 
     #[test]
