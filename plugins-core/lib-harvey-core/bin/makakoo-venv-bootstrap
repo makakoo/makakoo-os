@@ -26,7 +26,7 @@ fi
 
 case "$MODE" in
     editable)
-        exec "$BIN" plugin internal venv-bootstrap --mode editable --python "$PYTHON"
+        exec "$BIN" plugin internal venv-bootstrap --mode=editable "--python=$PYTHON"
         ;;
     pip)
         SPEC="${1:-}"
@@ -34,7 +34,9 @@ case "$MODE" in
             echo "makakoo-venv-bootstrap pip requires a pip spec arg" >&2
             exit 2
         fi
-        exec "$BIN" plugin internal venv-bootstrap --mode pip --spec "$SPEC" --python "$PYTHON"
+        # `--spec=<value>` (with `=`) so clap doesn't misparse pip flags
+        # like `-e` / `-r` inside the spec string as its own short flags.
+        exec "$BIN" plugin internal venv-bootstrap --mode=pip "--spec=$SPEC" "--python=$PYTHON"
         ;;
     git)
         URL_AT_REV="${1:-}"
@@ -46,9 +48,9 @@ case "$MODE" in
         if [[ "$URL_AT_REV" == *@* ]] && [[ "$URL_AT_REV" != *://* || "${URL_AT_REV##*://}" == *@* ]]; then
             URL="${URL_AT_REV%@*}"
             REV="${URL_AT_REV##*@}"
-            exec "$BIN" plugin internal venv-bootstrap --mode git --url "$URL" --rev "$REV" --python "$PYTHON"
+            exec "$BIN" plugin internal venv-bootstrap --mode=git "--url=$URL" "--rev=$REV" "--python=$PYTHON"
         else
-            exec "$BIN" plugin internal venv-bootstrap --mode git --url "$URL_AT_REV" --python "$PYTHON"
+            exec "$BIN" plugin internal venv-bootstrap --mode=git "--url=$URL_AT_REV" "--python=$PYTHON"
         fi
         ;;
     *)

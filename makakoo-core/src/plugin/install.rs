@@ -562,22 +562,40 @@ fn run_install_script(
     makakoo_home: &Path,
     script: &str,
 ) -> Result<(), InstallError> {
+    // Resolve the script. If `script` is a bare filename that exists in
+    // the plugin dir (e.g. `install.sh`), execute it via the absolute
+    // path — `sh -c "install.sh"` doesn't check CWD for executables
+    // (PATH-only), so the bare-filename form would fail with
+    // "command not found" even though the file is right there. Caught
+    // live 2026-04-21 installing agent-browser-harness.
     let resolved_script = plugin_dir.join(script);
-    let (program, args): (&str, Vec<&str>) = if resolved_script.is_file() {
-        ("sh", vec!["-c", script])
+    let command_string: String = if resolved_script.is_file() {
+        resolved_script.to_string_lossy().into_owned()
     } else {
-        // Interpret `script` as an inline shell command.
-        ("sh", vec!["-c", script])
+        script.to_string()
     };
     debug!(
-        "running [install].unix for {plugin} in {}: {script}",
+        "running [install].unix for {plugin} in {}: {command_string}",
         plugin_dir.display()
     );
-    let out = Command::new(program)
-        .args(&args)
+    // Make Makakoo-provided shell shims (e.g. `makakoo-venv-bootstrap`)
+    // discoverable from install.sh. `lib-harvey-core/bin/` is the
+    // canonical home for these helpers — prepend it to PATH so plugins
+    // can invoke them by bare name. Every pre-existing PATH element is
+    // preserved; we just move ours to the front.
+    let shim_dir = makakoo_home.join("plugins/lib-harvey-core/bin");
+    let path = match std::env::var("PATH") {
+        Ok(existing) => format!("{}:{existing}", shim_dir.display()),
+        Err(_) => shim_dir.display().to_string(),
+    };
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(&command_string)
         .current_dir(plugin_dir)
         .env("MAKAKOO_PLUGIN_DIR", plugin_dir)
         .env("MAKAKOO_HOME", makakoo_home)
+        .env("MAKAKOO_BIN_DIR", &shim_dir)
+        .env("PATH", path)
         .output()
         .map_err(|source| InstallError::Io {
             path: plugin_dir.to_path_buf(),
@@ -1227,6 +1245,67 @@ tasks = [{ name = "dream", interval = "3600s" }]
         assert!(marker.is_file(), "[install].unix did not run");
         let body = fs::read_to_string(&marker).unwrap();
         assert!(body.contains("ran"));
+    }
+
+    #[test]
+    /// Regression: a bare filename in `[install].unix = "install.sh"`
+    /// must be resolved against the plugin dir, not looked up on PATH.
+    /// `sh -c "install.sh"` would otherwise fail with "command not found"
+    /// even when install.sh sits right next to plugin.toml. Caught live
+    /// 2026-04-21 installing agent-browser-harness.
+    #[test]
+    fn install_script_bare_filename_resolves_against_plugin_dir() {
+        use std::process::Command;
+        // Seed a plugin tree whose install.sh writes a marker — we commit
+        // install.sh to the bare repo so it ships with the clone.
+        let tmp = TempDir::new().unwrap();
+        let bare = tmp.path().join("bare.git");
+        let wt = tmp.path().join("wt");
+        run_git(&["init", "--bare", "--quiet", bare.to_str().unwrap()], None);
+        run_git(
+            &[
+                "clone",
+                "--quiet",
+                bare.to_str().unwrap(),
+                wt.to_str().unwrap(),
+            ],
+            None,
+        );
+        run_git(&["config", "user.email", "t@t.test"], Some(&wt));
+        run_git(&["config", "user.name", "t"], Some(&wt));
+        run_git(&["config", "commit.gpgsign", "false"], Some(&wt));
+        write_manifest(
+            &wt,
+            "bare-filename-plugin",
+            "\n[install]\nunix = \"install.sh\"\n",
+        );
+        fs::write(
+            wt.join("install.sh"),
+            "#!/usr/bin/env sh\necho ran > \"$MAKAKOO_PLUGIN_DIR/.bare-filename-marker\"\n",
+        )
+        .unwrap();
+        // Make install.sh executable — the bare-filename path must work
+        // with either +x or not (sh -c invokes through sh, not via exec).
+        let mut perms = fs::metadata(wt.join("install.sh")).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        fs::set_permissions(wt.join("install.sh"), perms).unwrap();
+        run_git(&["add", "."], Some(&wt));
+        run_git(&["commit", "--quiet", "-m", "init"], Some(&wt));
+        run_git(&["tag", "v0.1.0"], Some(&wt));
+        run_git(&["branch", "-M", "main"], Some(&wt));
+        run_git(&["push", "--quiet", "origin", "main", "--tags"], Some(&wt));
+        let url = format!("file://{}", bare.display());
+
+        let tmp_home = TempDir::new().unwrap();
+        let outcome =
+            install_from_git(&url, "v0.1.0", false, tmp_home.path()).unwrap();
+        let marker = outcome.final_dir.join(".bare-filename-marker");
+        assert!(
+            marker.is_file(),
+            "bare-filename install.sh did not run — marker missing"
+        );
+        let _ = Command::new("true"); // silence unused import on some paths
     }
 
     #[test]
