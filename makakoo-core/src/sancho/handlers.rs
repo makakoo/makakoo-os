@@ -688,6 +688,147 @@ impl SanchoHandler for SubprocessHandler {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+//  10. SwarmDispatchHandler — drains $MAKAKOO_HOME/state/swarm/queue.jsonl
+// ─────────────────────────────────────────────────────────────────────
+
+/// Drain pending swarm dispatch requests on every tick.
+///
+/// v0.2 Phase D.4. Producers enqueue `TeamDispatchRequest` /
+/// `DispatchRequest` via `swarm::dispatch_queue::{enqueue_team,
+/// enqueue_agent}`. On each tick the handler calls the swarm gateway
+/// for every pending entry, writes a receipt, and journals one line
+/// per successful dispatch.
+///
+/// The gateway is looked up via [`crate::swarm::SwarmGateway::global`].
+/// If the global gateway isn't installed (tests, boots without swarm)
+/// the handler reports ok-but-noop — it doesn't fail a tick.
+pub struct SwarmDispatchHandler {
+    /// Upper bound per tick so a pathological queue can't starve the
+    /// rest of SANCHO. Remainder drains on the next tick.
+    pub max_per_tick: usize,
+}
+
+impl SwarmDispatchHandler {
+    pub fn new() -> Self {
+        Self { max_per_tick: 16 }
+    }
+    pub fn with_max_per_tick(mut self, n: usize) -> Self {
+        self.max_per_tick = n;
+        self
+    }
+}
+
+impl Default for SwarmDispatchHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SanchoHandler for SwarmDispatchHandler {
+    fn name(&self) -> &str {
+        "swarm_dispatch"
+    }
+
+    async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
+        use crate::swarm::dispatch_queue::{load_receipts, load_queue, write_receipt, Receipt};
+        use crate::swarm::gateway::SwarmGateway;
+        use crate::swarm::QueueEntry;
+        use std::collections::HashSet;
+
+        let start = Instant::now();
+
+        let queue = match load_queue(&ctx.home) {
+            Ok(q) => q,
+            Err(e) => {
+                return Ok(HandlerReport::failed(
+                    "swarm_dispatch",
+                    format!("queue read failed: {e}"),
+                    start.elapsed(),
+                ));
+            }
+        };
+        if queue.is_empty() {
+            return Ok(HandlerReport::ok("swarm_dispatch", "queue empty", start.elapsed()));
+        }
+        let receipts = load_receipts(&ctx.home).unwrap_or_default();
+        let done: HashSet<String> = receipts.into_iter().map(|r| r.id).collect();
+
+        let gateway = match SwarmGateway::global() {
+            Some(g) => g,
+            None => {
+                return Ok(HandlerReport::ok(
+                    "swarm_dispatch",
+                    format!("gateway not installed; {} pending", queue.len() - done.len()),
+                    start.elapsed(),
+                ));
+            }
+        };
+
+        let mut dispatched = 0usize;
+        let mut failures = 0usize;
+
+        for entry in queue.into_iter().filter(|e| !done.contains(e.id())) {
+            if dispatched + failures >= self.max_per_tick {
+                break;
+            }
+            let id = entry.id().to_string();
+            let outcome = match entry {
+                QueueEntry::Team { req, .. } => {
+                    let team_name = req.team.clone();
+                    match crate::swarm::TeamComposition::by_name(&team_name, req.parallelism) {
+                        Some(roster) => match gateway.dispatch_team(&roster, req).await {
+                            Ok(resp) => Ok(resp.run_id),
+                            Err(e) => Err(format!("team {team_name}: {e}")),
+                        },
+                        None => Err(format!("unknown team {team_name}")),
+                    }
+                }
+                QueueEntry::Agent { req, .. } => match gateway.dispatch(req).await {
+                    Ok(resp) => Ok(resp.run_id),
+                    Err(e) => Err(format!("{e}")),
+                },
+            };
+
+            match outcome {
+                Ok(run_id) => {
+                    let r = Receipt {
+                        id: id.clone(),
+                        dispatched_at: chrono::Utc::now(),
+                        run_id: run_id.clone(),
+                    };
+                    if let Err(e) = write_receipt(&ctx.home, &r) {
+                        tracing::warn!(queue_id = %id, error = %e, "receipt write failed");
+                        failures += 1;
+                        continue;
+                    }
+                    let _ = append_journal_line(
+                        &ctx.home,
+                        &format!(
+                            "- [[SANCHO]] [[swarm_dispatch]] queued `{}` → run `{}`",
+                            id, run_id
+                        ),
+                    );
+                    dispatched += 1;
+                }
+                Err(msg) => {
+                    tracing::warn!(queue_id = %id, error = %msg, "dispatch failed — will retry");
+                    failures += 1;
+                }
+            }
+        }
+
+        let report = HandlerReport::ok(
+            "swarm_dispatch",
+            format!("dispatched={dispatched} failures={failures}"),
+            start.elapsed(),
+        );
+        publish_report(ctx, &report);
+        Ok(report)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 //  Tests
 // ─────────────────────────────────────────────────────────────────────
 
@@ -852,5 +993,70 @@ mod tests {
         let path = append_journal_line(&home, "- already prefixed").unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert!(!content.contains("- - already"));
+    }
+
+    // D.4 — SwarmDispatchHandler. We don't have a global SwarmGateway in
+    // unit tests (they'd need a real event bus + coordinator), so the
+    // handler short-circuits with a benign "gateway not installed" report.
+    // Pre-handler: queue has 2 entries, 1 already receipted. Post-handler:
+    // state is untouched (gateway missing → no side-effects).
+    #[tokio::test]
+    async fn swarm_dispatch_handler_noops_without_gateway() {
+        use crate::swarm::{enqueue_team, Receipt};
+        use crate::swarm::dispatch_queue::write_receipt;
+        use crate::swarm::TeamDispatchRequest;
+
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+
+        let id1 = enqueue_team(
+            &ctx.home,
+            TeamDispatchRequest {
+                team: "research_team".into(),
+                prompt: "investigate X".into(),
+                parallelism: None,
+                model: None,
+            },
+        )
+        .unwrap();
+        let _id2 = enqueue_team(
+            &ctx.home,
+            TeamDispatchRequest {
+                team: "archive_team".into(),
+                prompt: "file Y".into(),
+                parallelism: None,
+                model: None,
+            },
+        )
+        .unwrap();
+        write_receipt(
+            &ctx.home,
+            &Receipt {
+                id: id1.clone(),
+                dispatched_at: chrono::Utc::now(),
+                run_id: "already-run".into(),
+            },
+        )
+        .unwrap();
+
+        let handler = SwarmDispatchHandler::new();
+        let report = handler.run(&ctx).await.unwrap();
+        assert!(report.ok, "handler must report ok when gateway is absent");
+        assert!(
+            report.message.contains("gateway not installed")
+                || report.message.contains("queue empty"),
+            "unexpected message: {}",
+            report.message,
+        );
+    }
+
+    #[tokio::test]
+    async fn swarm_dispatch_handler_ok_on_empty_queue() {
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+        let handler = SwarmDispatchHandler::new();
+        let report = handler.run(&ctx).await.unwrap();
+        assert!(report.ok);
+        assert!(report.message.contains("queue empty"), "msg: {}", report.message);
     }
 }

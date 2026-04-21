@@ -25,7 +25,7 @@ pub use gates::{
 pub use handlers::{
     DailyBriefingHandler, DreamHandler, DynamicChecklistHandler, FakeLlmCall,
     IndexRebuildHandler, LlmCall, MemoryConsolidationHandler, MemoryPromotionHandler,
-    SubprocessHandler, SuperbrainSyncEmbedHandler, WikiLintHandler,
+    SubprocessHandler, SuperbrainSyncEmbedHandler, SwarmDispatchHandler, WikiLintHandler,
 };
 pub use registry::{HandlerReport, SanchoContext, SanchoHandler, SanchoRegistry, TaskRegistration};
 

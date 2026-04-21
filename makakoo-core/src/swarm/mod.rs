@@ -19,6 +19,7 @@
 
 pub mod artifacts;
 pub mod coordinator;
+pub mod dispatch_queue;
 pub mod gateway;
 pub mod olibia;
 pub mod state;
@@ -26,6 +27,10 @@ pub mod team;
 
 pub use artifacts::{Artifact, ArtifactKind, ArtifactStore};
 pub use coordinator::{AgentCoordinator, SubagentHandle, SubagentSpec, SubagentStatus};
+pub use dispatch_queue::{
+    enqueue_agent, enqueue_team, load_queue, load_receipts, pending as pending_queue_entries,
+    queue_path, receipts_path, QueueEntry, Receipt,
+};
 pub use gateway::{
     DispatchRequest, DispatchResponse, SwarmGateway, SwarmRunStatus, TeamDispatchRequest,
     TeamDispatchResponse,
