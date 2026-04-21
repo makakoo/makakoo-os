@@ -29,9 +29,24 @@ from typing import List, Optional
 
 log = logging.getLogger("superbrain.memory_stack")
 
-HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
+# Honor MAKAKOO_HOME (post-rename canonical) before falling back to HARVEY_HOME.
+HARVEY_HOME = (
+    os.environ.get("MAKAKOO_HOME")
+    or os.environ.get("HARVEY_HOME")
+    or os.path.expanduser("~/MAKAKOO")
+)
 BRAIN_DIR = os.path.join(HARVEY_HOME, "data", "Brain")
-SOUL_PATH = os.path.join(HARVEY_HOME, "plugins-core", "lib-harvey-core", "SOUL.md")
+# SOUL_PATH search order: live plugin install → source tree (development).
+# `plugins-core/` is the source layout (this repo); `plugins/` is the
+# installed layout under $MAKAKOO_HOME after `makakoo plugin install`.
+_SOUL_CANDIDATES = [
+    os.path.join(HARVEY_HOME, "plugins", "lib-harvey-core", "SOUL.md"),
+    os.path.join(HARVEY_HOME, "plugins-core", "lib-harvey-core", "SOUL.md"),
+]
+SOUL_PATH = next(
+    (p for p in _SOUL_CANDIDATES if os.path.exists(p)),
+    _SOUL_CANDIDATES[0],
+)
 
 # Token budget (1 token ≈ 4 chars for English text)
 L0_LEAN_CHAR_BUDGET = 160     # ~40 tokens — used when intent is "code"
