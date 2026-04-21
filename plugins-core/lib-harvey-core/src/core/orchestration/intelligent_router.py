@@ -19,6 +19,7 @@ Exposed:
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -160,12 +161,97 @@ class IntelligentRouter:
         parallelism = self._scale_parallelism(request, cls)
         return TeamComposition.for_intent(cls.intent, parallelism=parallelism)
 
-    def classify_and_route(self, request: str) -> tuple[IntentClassification, TeamRoster]:
-        """Return both the classification AND the team, in one call."""
-        cls = self.classify(request)
+    def classify_and_route(
+        self,
+        request: str,
+        *,
+        mode: Optional[str] = None,
+    ) -> tuple[IntentClassification, TeamRoster]:
+        """Return both the classification AND the team, in one call.
+
+        `mode` picks the classifier:
+          - "keyword" (default): the deterministic keyword table above.
+          - "llm": one switchAILocal chat completion. Falls back to keyword
+            if the LLM call raises (network, timeout, unparseable reply).
+
+        `mode=None` honors the `router.llm_mode=on` env toggle
+        (set via `MAKAKOO_ROUTER_LLM_MODE=1`). Default: keyword.
+        """
+        if mode is None:
+            env = os.environ.get("MAKAKOO_ROUTER_LLM_MODE", "").lower()
+            mode = "llm" if env in ("1", "on", "true", "yes") else "keyword"
+
+        if mode == "llm":
+            cls = self._classify_llm(request) or self.classify(request)
+        else:
+            cls = self.classify(request)
         parallelism = self._scale_parallelism(request, cls)
         team = TeamComposition.for_intent(cls.intent, parallelism=parallelism)
         return cls, team
+
+    # ── LLM classifier (D.5, flag-gated) ──
+
+    _LLM_PROMPT = (
+        "Classify the user request into exactly one of: "
+        "research | image | archive | minimal | unknown. "
+        "Return JSON {\"intent\": str, \"confidence\": float 0..1, "
+        "\"rationale\": str}. No prose outside the JSON.\n\nRequest: "
+    )
+
+    def _classify_llm(self, request: str) -> Optional[IntentClassification]:
+        """One switchAILocal call. Returns None on any error (caller falls back)."""
+        try:
+            import json as _json
+            import os as _os
+            import urllib.request as _urllib_request
+            import urllib.error as _urllib_error
+        except ImportError:
+            return None
+
+        base = _os.environ.get("LLM_BASE_URL", "http://localhost:18080/v1")
+        model = _os.environ.get("MAKAKOO_ROUTER_LLM_MODEL", "auto")
+        key = _os.environ.get("LLM_API_KEY") or _os.environ.get("SWITCHAI_KEY", "")
+
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a strict JSON classifier."},
+                {"role": "user", "content": self._LLM_PROMPT + request},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 200,
+        }
+        try:
+            req = _urllib_request.Request(
+                f"{base.rstrip('/')}/chat/completions",
+                data=_json.dumps(body).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    **({"Authorization": f"Bearer {key}"} if key else {}),
+                },
+                method="POST",
+            )
+            with _urllib_request.urlopen(req, timeout=0.3) as resp:
+                payload = _json.loads(resp.read().decode("utf-8", "replace"))
+        except (_urllib_error.URLError, TimeoutError, OSError, ValueError):
+            return None
+        except Exception:
+            return None
+
+        try:
+            content = payload["choices"][0]["message"]["content"]
+            parsed = _json.loads(content)
+            intent = str(parsed.get("intent", "unknown")).lower()
+            if intent not in {"research", "image", "archive", "minimal", "unknown"}:
+                intent = "unknown"
+            return IntentClassification(
+                intent=intent,
+                confidence=float(parsed.get("confidence", 0.0)),
+                rationale=str(parsed.get("rationale", "llm classifier"))[:200],
+                keywords_hit=[],
+            )
+        except (KeyError, ValueError, TypeError):
+            return None
 
     # ── Helpers ──
 
