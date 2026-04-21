@@ -64,7 +64,108 @@ pub async fn run(ctx: &CliContext, cmd: AdapterCmd) -> anyhow::Result<i32> {
         AdapterCmd::Export { name, out } => export(&name, out),
         AdapterCmd::Trust { cmd } => trust_cmd(cmd),
         AdapterCmd::SelfPubkey { with_fingerprint } => self_pubkey(with_fingerprint),
+        AdapterCmd::Gen {
+            template,
+            name,
+            description,
+            url,
+            key_env,
+            model,
+            command,
+            roles,
+            peer_name,
+            skip_doctor,
+            skip_install,
+            skip_health_check,
+        } => {
+            gen_cmd(
+                template,
+                name,
+                description,
+                url,
+                key_env,
+                model,
+                command,
+                roles,
+                peer_name,
+                skip_doctor,
+                skip_install,
+                skip_health_check,
+            )
+            .await
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn gen_cmd(
+    template: String,
+    name: String,
+    description: Option<String>,
+    url: Option<String>,
+    key_env: Option<String>,
+    model: Option<String>,
+    command: Vec<String>,
+    roles: Vec<String>,
+    peer_name: Option<String>,
+    skip_doctor: bool,
+    skip_install: bool,
+    skip_health_check: bool,
+) -> anyhow::Result<i32> {
+    use crate::commands::adapter_gen::{self, GenSpec, GenTemplate};
+    use makakoo_core::adapter::AdapterRole;
+
+    let template = GenTemplate::from_str(&template)?;
+
+    let resolved_roles: Vec<AdapterRole> = if roles.is_empty() {
+        vec![AdapterRole::Delegate, AdapterRole::SwarmMember]
+    } else {
+        roles
+            .iter()
+            .map(|r| match r.trim() {
+                "validator" => Ok(AdapterRole::Validator),
+                "delegate" => Ok(AdapterRole::Delegate),
+                "swarm_member" | "swarm-member" => Ok(AdapterRole::SwarmMember),
+                other => Err(anyhow::anyhow!(
+                    "unknown role `{other}`. Valid: validator, delegate, swarm_member"
+                )),
+            })
+            .collect::<anyhow::Result<_>>()?
+    };
+
+    let spec = GenSpec {
+        template,
+        name: name.clone(),
+        description,
+        url,
+        key_env,
+        model,
+        command,
+        roles: resolved_roles,
+        peer_name,
+        scratch_parent: None,
+        install_root: None,
+        skip_doctor,
+        skip_install,
+        skip_health_check,
+    };
+
+    let report = adapter_gen::run(&spec)?;
+    adapter_gen::print_report(&report, &spec);
+
+    if report.registered_path.is_some() && !skip_doctor {
+        match doctor(&name, false).await {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!(
+                    "{} doctor follow-up reported an issue: {e}",
+                    "⚠️".to_string().yellow()
+                );
+            }
+        }
+    }
+
+    Ok(0)
 }
 
 /// v0.6 — `makakoo adapter trust {add,list,remove}`. The trust file lives

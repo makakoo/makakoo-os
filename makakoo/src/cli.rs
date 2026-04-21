@@ -980,6 +980,55 @@ pub enum AdapterCmd {
         #[arg(long)]
         with_fingerprint: bool,
     },
+
+    /// v0.6 — scaffold a new adapter from a template. Writes an
+    /// adapter.toml with the appropriate shape, installs it to the
+    /// registered dir, and (unless --skip-doctor) runs `adapter doctor`
+    /// on the result.
+    Gen {
+        /// Template shape: `openai-compat` | `subprocess` | `mcp-stdio`
+        /// | `peer-makakoo`.
+        #[arg(long)]
+        template: String,
+        /// Adapter name (lowercase, hyphens allowed).
+        #[arg(long)]
+        name: String,
+        /// Free-form description (defaults to a template-specific string).
+        #[arg(long)]
+        description: Option<String>,
+        /// Base URL (required for openai-compat / peer-makakoo).
+        #[arg(long)]
+        url: Option<String>,
+        /// Env var name holding the API bearer token (openai-compat).
+        /// Default: `<NAME>_API_KEY` with hyphens → underscores, uppercased.
+        #[arg(long)]
+        key_env: Option<String>,
+        /// Model name to send in chat completions (openai-compat).
+        #[arg(long)]
+        model: Option<String>,
+        /// Command argv (required for subprocess / mcp-stdio). Each
+        /// occurrence adds one element: `--command bash --command -c`.
+        #[arg(long)]
+        command: Vec<String>,
+        /// Adapter roles (comma-separated). Default `delegate,swarm_member`.
+        #[arg(long, value_delimiter = ',')]
+        roles: Vec<String>,
+        /// Peer name the remote Makakoo install knows us by (required
+        /// for peer-makakoo template).
+        #[arg(long)]
+        peer_name: Option<String>,
+        /// Skip the post-gen `doctor` call (useful if the remote isn't
+        /// reachable from this machine yet).
+        #[arg(long)]
+        skip_doctor: bool,
+        /// Skip the post-gen install entirely — just render the manifest
+        /// to the scratch dir and print the path.
+        #[arg(long)]
+        skip_install: bool,
+        /// Skip the install-time health check (dev loop).
+        #[arg(long)]
+        skip_health_check: bool,
+    },
 }
 
 /// v0.6 — peer trust subcommands.

@@ -7,6 +7,7 @@
 //! `main.rs` prints them via `output::print_error`.
 
 pub mod adapter;
+pub mod adapter_gen;
 pub mod buddy;
 pub mod distro;
 pub mod dream;
