@@ -865,11 +865,34 @@ impl SanchoHandler for PermsPurgeHandler {
 
     async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
         use crate::capability::audit::{AuditEntry, AuditLog, AuditResult};
+        use crate::capability::purge_idempotency::{
+            check_and_record, PurgeCheck,
+        };
         use crate::capability::user_grants::UserGrants;
         use chrono::Utc;
 
         let start = Instant::now();
         let now = Utc::now();
+
+        // v0.3.3 Phase B — idempotency gate (pi R2). Skip if the
+        // previous tick landed less than PURGE_COOLDOWN_SECONDS ago.
+        // Fail-open on I/O errors so a broken state file can't
+        // silently disable hygiene.
+        if let PurgeCheck::SkipCooldown { seconds_since_last } =
+            check_and_record(&ctx.home, now)
+        {
+            let msg = format!(
+                "skipped (within {s}s cooldown since last tick)",
+                s = seconds_since_last
+            );
+            let report = HandlerReport::ok(
+                "perms_purge_tick",
+                msg,
+                start.elapsed(),
+            );
+            publish_report(ctx, &report);
+            return Ok(report);
+        }
 
         let mut grants = UserGrants::load(&ctx.home);
         let removed = grants.purge_expired(now);
@@ -1232,10 +1255,18 @@ mod tests {
         assert!(r1.ok);
         assert!(r1.message.contains("0 expired"), "msg: {}", r1.message);
 
-        // Second tick back-to-back: still 0 expired, no audit rows.
+        // Second tick back-to-back: v0.3.3 Phase B idempotency gate
+        // trips the cooldown and the tick returns "skipped" without
+        // touching the grant store. Prior v0.3.2 behavior ("0 expired"
+        // on every call) is preserved *semantically* — no change to
+        // the grant store — but the message now surfaces the skip.
         let r2 = h.run(&ctx).await.unwrap();
         assert!(r2.ok);
-        assert!(r2.message.contains("0 expired"), "msg: {}", r2.message);
+        assert!(
+            r2.message.contains("skipped") && r2.message.contains("cooldown"),
+            "expected skipped-cooldown msg; got: {}",
+            r2.message
+        );
 
         let audit_path = ctx.home.join("logs").join("audit.jsonl");
         if audit_path.exists() {
@@ -1245,6 +1276,83 @@ mod tests {
                 "audit log should be empty on no-op ticks; got: {contents}"
             );
         }
+    }
+
+    /// v0.3.3 Phase B — pi R2 scenario. Two SANCHO ticks fire within
+    /// 60s (daemon restart / clock skew). Expired grants exist. The
+    /// first tick purges them AND writes `N expired` audit entries.
+    /// The second tick must see the idempotency gate, return
+    /// `skipped`, and write ZERO additional audit entries.
+    #[tokio::test]
+    async fn perms_purge_cooldown_prevents_double_audit_on_rapid_retick() {
+        use crate::capability::user_grants::{
+            default_path, UserGrant, UserGrants,
+        };
+        use chrono::{Duration as ChronoDuration, Utc};
+
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+        let now = Utc::now();
+        let p = default_path(&ctx.home);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut u = UserGrants::empty_at(p);
+        u.add(UserGrant {
+            id: "g_expired_one".into(),
+            scope: "fs/write:/tmp/g_expired_one/**".into(),
+            created_at: now - ChronoDuration::minutes(120),
+            expires_at: Some(now - ChronoDuration::minutes(1)),
+            label: "seed".into(),
+            granted_by: "sebastian".into(),
+            plugin: "cli".into(),
+            origin_turn_id: "".into(),
+            owner: "cli".into(),
+        });
+        u.save().unwrap();
+
+        let h = PermsPurgeHandler::new();
+
+        // First tick — purges the one expired grant, emits 1 audit.
+        let r1 = h.run(&ctx).await.unwrap();
+        assert!(r1.ok);
+        assert!(
+            r1.message.contains("1 expired"),
+            "first tick msg: {}",
+            r1.message
+        );
+        let audit_path = ctx.home.join("logs").join("audit.jsonl");
+        let lines_after_first: Vec<String> = fs::read_to_string(&audit_path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            lines_after_first.len(),
+            1,
+            "expected 1 audit line after first tick, got: {:?}",
+            lines_after_first
+        );
+
+        // Second tick immediately — within cooldown, must skip.
+        let r2 = h.run(&ctx).await.unwrap();
+        assert!(r2.ok);
+        assert!(
+            r2.message.contains("skipped") && r2.message.contains("cooldown"),
+            "second tick msg: {}",
+            r2.message
+        );
+        let lines_after_second: Vec<String> = fs::read_to_string(&audit_path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            lines_after_second.len(),
+            1,
+            "cooldown MUST NOT produce additional audit lines; got: {:?}",
+            lines_after_second
+        );
     }
 
     #[tokio::test]

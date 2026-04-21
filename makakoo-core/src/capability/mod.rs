@@ -22,6 +22,7 @@
 pub mod audit;
 pub mod audit_escape;
 pub mod grants;
+pub mod purge_idempotency;
 pub mod rate_limit;
 pub mod service;
 pub mod socket;
@@ -31,6 +32,10 @@ pub mod verb;
 pub use audit::{AuditEntry, AuditLog, AuditResult, RotationError};
 pub use audit_escape::escape_audit_field;
 pub use grants::{resolve_grants, GrantCheck, GrantTable, ResolveError};
+pub use purge_idempotency::{
+    check_and_record as purge_check_and_record, PurgeCheck,
+    PURGE_COOLDOWN_SECONDS,
+};
 pub use rate_limit::{
     check_and_increment as rate_limit_check_and_increment,
     decrement as rate_limit_decrement, RateLimitError, MAX_ACTIVE_GRANTS,
