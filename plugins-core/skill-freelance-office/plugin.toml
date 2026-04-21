@@ -30,22 +30,14 @@ grants = [
 dir = "$MAKAKOO_HOME/state/skill-freelance-office"
 retention = "keep"
 
-# SANCHO watchdogs — v0.3 invoice lifecycle. Each entry is loaded
-# as a Python ``tick(ctx)`` callable by the kernel scheduler.
-[[sancho]]
-id = "freelance_invoice_overdue_tick"
-handler = "src.sancho_handlers.overdue_tick:tick"
-schedule = "every 24h"
-summary = "Nag about overdue invoices past payment_terms + grace days."
-
-[[sancho]]
-id = "freelance_threshold_tick"
-handler = "src.sancho_handlers.threshold_tick:tick"
-schedule = "every 24h"
-summary = "Alert on first 80% and first 100% Kleinunternehmer-threshold crossings per office per year."
-
-[[sancho]]
-id = "freelance_daily_digest_tick"
-handler = "src.sancho_handlers.daily_digest_tick:tick"
-schedule = "0 9 * * *"
-summary = "Daily 09:00 summary of overdue + threshold activity; silent on zero-activity days."
+# SANCHO watchdogs — v0.3 invoice lifecycle. Each entry is a named
+# ``tick(ctx)`` callable under ``src.sancho_handlers.<task>:tick``;
+# the kernel scheduler binds the name to the module by convention.
+# The daily digest uses ``active_hours = [9, 10]`` in lieu of a cron
+# expression — same net effect, "fire within the 09:00 local hour".
+[sancho]
+tasks = [
+  { name = "freelance_invoice_overdue_tick", interval = "24h" },
+  { name = "freelance_threshold_tick",       interval = "24h" },
+  { name = "freelance_daily_digest_tick",    interval = "24h", active_hours = [9, 10] },
+]
