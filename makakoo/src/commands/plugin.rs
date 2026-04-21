@@ -9,8 +9,8 @@ use serde_json::json;
 use makakoo_core::capability::resolve_grants;
 use makakoo_core::plugin::staging::StagingError;
 use makakoo_core::plugin::{
-    install_from_path, uninstall as core_uninstall, InstallError, InstallRequest, Manifest,
-    PluginRegistry, PluginSource, PluginsLock,
+    install as core_install, install_from_path, uninstall as core_uninstall, InstallError,
+    InstallRequest, Manifest, PluginRegistry, PluginSource, PluginsLock,
 };
 
 use crate::cli::PluginCmd;
@@ -25,7 +25,9 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
             source,
             core,
             blake3,
-        } => install(ctx, &source, core, blake3),
+            sha256,
+            allow_unstable_ref,
+        } => install(ctx, &source, core, blake3, sha256, allow_unstable_ref),
         PluginCmd::Uninstall { name, purge } => uninstall(ctx, &name, purge),
         PluginCmd::Enable { name } => set_enabled(ctx, &name, true),
         PluginCmd::Disable { name } => set_enabled(ctx, &name, false),
@@ -203,23 +205,42 @@ fn install(
     source: &str,
     use_core: bool,
     blake3: Option<String>,
+    sha256: Option<String>,
+    allow_unstable_ref: bool,
 ) -> anyhow::Result<i32> {
-    let source_path = if use_core {
-        resolve_plugins_core(source)?
-    } else {
-        PathBuf::from(source)
+    let plugin_source = match parse_install_source(source, use_core, sha256, allow_unstable_ref) {
+        Ok(s) => s,
+        Err(msg) => {
+            output::print_error(msg);
+            return Ok(1);
+        }
     };
-    if !source_path.exists() {
-        output::print_error(format!("source does not exist: {}", source_path.display()));
-        return Ok(1);
+
+    if let PluginSource::Path(ref p) = plugin_source {
+        if !p.exists() {
+            output::print_error(format!("source does not exist: {}", p.display()));
+            return Ok(1);
+        }
+    }
+    if let PluginSource::Git {
+        ref ref_,
+        allow_unstable,
+        ..
+    } = plugin_source
+    {
+        if allow_unstable {
+            output::print_warn(format!(
+                "installing from unstable git ref `{ref_}` — pass a semver tag or 40-char SHA to pin"
+            ));
+        }
     }
 
     let req = InstallRequest {
-        source: PluginSource::Path(source_path.clone()),
+        source: plugin_source,
         expected_blake3: blake3,
     };
 
-    match install_from_path(&req, ctx.home()) {
+    match core_install(&req, ctx.home()) {
         Ok(outcome) => {
             output::print_info(format!(
                 "installed {} → {} (blake3: {})",
@@ -234,6 +255,53 @@ fn install(
             Ok(1)
         }
     }
+}
+
+/// Parse the `<source>` argument of `plugin install` into a `PluginSource`.
+///
+/// Order of recognition (first match wins):
+///   1. `--core` → plugins-core lookup via `resolve_plugins_core`.
+///   2. Starts with `git+` → git URL (optionally `@<ref>`).
+///   3. Scheme `http://` or `https://` → tarball (requires `--sha256`).
+///   4. Anything else → treated as a local path.
+fn parse_install_source(
+    raw: &str,
+    use_core: bool,
+    sha256: Option<String>,
+    allow_unstable_ref: bool,
+) -> Result<PluginSource, String> {
+    if use_core {
+        let p = resolve_plugins_core(raw).map_err(|e| format!("resolve plugins-core: {e}"))?;
+        return Ok(PluginSource::Path(p));
+    }
+    if let Some(rest) = raw.strip_prefix("git+") {
+        // git+<url>[@<ref>]. Split on the LAST '@' to avoid splitting
+        // on SSH-style `git@host:...` authority (which shouldn't appear
+        // after `git+` but keep the parser defensive).
+        let (url, ref_) = match rest.rfind('@') {
+            Some(i) if i > "https://".len() => (
+                rest[..i].to_string(),
+                rest[i + 1..].to_string(),
+            ),
+            _ => (rest.to_string(), "HEAD".to_string()),
+        };
+        return Ok(PluginSource::Git {
+            url,
+            ref_,
+            allow_unstable: allow_unstable_ref,
+        });
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        let sha = sha256.ok_or_else(|| {
+            "tarball install requires --sha256=<hex>: refusing to install unverified archive"
+                .to_string()
+        })?;
+        return Ok(PluginSource::Tarball {
+            url: raw.to_string(),
+            sha256: sha,
+        });
+    }
+    Ok(PluginSource::Path(PathBuf::from(raw)))
 }
 
 fn update(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {

@@ -548,6 +548,8 @@ tasks = [{ name = "togglable_tick", interval = "3600s" }]
             version: "1.0.0".into(),
             blake3: None,
             source: "test".into(),
+            resolved_sha: None,
+            manifest_hash: None,
             installed_at: Utc::now(),
             enabled: false,
         });

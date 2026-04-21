@@ -19,7 +19,10 @@ pub mod registry;
 pub mod resolver;
 pub mod staging;
 
-pub use install::{install_from_path, uninstall, InstallError, InstallRequest, PluginSource};
+pub use install::{
+    install, install_from_git, install_from_path, install_from_tarball_url, uninstall,
+    InstallError, InstallRequest, PluginSource,
+};
 pub use lock::{lock_path, LockEntry, LockError, LockMeta, PluginsLock};
 pub use manifest::{
     AbiTable, CapabilitiesTable, DependsTable, EntrypointTable, InfectTable, InstallTable,

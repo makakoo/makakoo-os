@@ -343,10 +343,15 @@ pub enum PluginCmd {
         name: String,
     },
 
-    /// Install a plugin from a local source directory (or a bundled
-    /// `plugins-core/<name>` if `--core` is set).
+    /// Install a plugin from a local path, a git URL, or an HTTPS tarball.
+    ///
+    /// Accepted `<source>` shapes:
+    ///   - `path/to/dir`                      — local directory (or use `--core`)
+    ///   - `git+<url>[@<ref>]`                — git repo pinned to tag or 40-char SHA
+    ///   - `https://.../x.tar.gz`             — tarball (requires `--sha256`)
+    ///   - bare name + `--core`               — resolves against `plugins-core/`
     Install {
-        /// Either a local path or — with `--core` — a plugins-core name.
+        /// Source — see shapes above.
         source: String,
 
         /// Resolve `source` against `$MAKAKOO_PLUGINS_CORE` (or the
@@ -358,6 +363,17 @@ pub enum PluginCmd {
         /// over the value declared in the manifest.
         #[arg(long)]
         blake3: Option<String>,
+
+        /// Expected sha256 of the tarball bytes. Required for tarball
+        /// sources (`https://...`). Ignored for path and git sources.
+        #[arg(long)]
+        sha256: Option<String>,
+
+        /// Permit non-tag-non-SHA git refs (e.g. `main`, `master`,
+        /// branch names). Without this flag, git+<url>@<ref> requires
+        /// the ref to be a semver tag or 40-char SHA.
+        #[arg(long)]
+        allow_unstable_ref: bool,
     },
 
     /// Remove an installed plugin. With `--purge`, also wipe its state dir.
@@ -992,6 +1008,7 @@ mod tests {
                     source,
                     core,
                     blake3,
+                    ..
                 },
         } = cli.command
         {
@@ -1018,6 +1035,77 @@ mod tests {
         {
             assert_eq!(source, "/tmp/my-plugin");
             assert!(!core);
+        } else {
+            panic!("expected Plugin::Install");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_install_git_url_with_tag() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "plugin",
+            "install",
+            "git+https://github.com/user/plugin@v0.1.0",
+        ])
+        .unwrap();
+        if let Commands::Plugin {
+            cmd:
+                PluginCmd::Install {
+                    source,
+                    allow_unstable_ref,
+                    ..
+                },
+        } = cli.command
+        {
+            assert_eq!(source, "git+https://github.com/user/plugin@v0.1.0");
+            assert!(!allow_unstable_ref);
+        } else {
+            panic!("expected Plugin::Install");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_install_git_with_allow_unstable_ref() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "plugin",
+            "install",
+            "git+https://github.com/user/plugin@main",
+            "--allow-unstable-ref",
+        ])
+        .unwrap();
+        if let Commands::Plugin {
+            cmd:
+                PluginCmd::Install {
+                    allow_unstable_ref,
+                    ..
+                },
+        } = cli.command
+        {
+            assert!(allow_unstable_ref);
+        } else {
+            panic!("expected Plugin::Install");
+        }
+    }
+
+    #[test]
+    fn parse_plugin_install_tarball_with_sha256() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "plugin",
+            "install",
+            "https://example.com/plugin.tar.gz",
+            "--sha256",
+            &"a".repeat(64),
+        ])
+        .unwrap();
+        if let Commands::Plugin {
+            cmd: PluginCmd::Install { source, sha256, .. },
+        } = cli.command
+        {
+            assert!(source.starts_with("https://"));
+            assert_eq!(sha256.unwrap().len(), 64);
         } else {
             panic!("expected Plugin::Install");
         }

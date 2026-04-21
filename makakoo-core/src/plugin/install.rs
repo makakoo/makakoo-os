@@ -5,19 +5,25 @@
 //! CLI can point at any local directory and end up with a registered
 //! plugin + updated `plugins.lock`.
 //!
-//! v0.1 scope: local filesystem source only. Git URL / tarball sources
-//! come in Phase F alongside the cross-OS installer.
+//! v0.4 (git-sourced plugins): `install()` dispatches on `PluginSource`
+//! to support Path / Git / Tarball sources. Git + Tarball variants
+//! delegate the network I/O to `core::source_fetch`, then feed the staged
+//! tree through the same promotion pipeline as a local path install.
+//! Plugins with an `[install].unix` script run it from the promoted dir
+//! after staging (CWD = plugin dir, `$MAKAKOO_PLUGIN_DIR` exported).
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use chrono::Utc;
 use thiserror::Error;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::lock::{LockEntry, LockError, PluginsLock};
 use super::manifest::{Manifest, ManifestError};
 use super::staging::{stage_and_install, stage_dir, StagingError};
+use crate::source_fetch::{self, FetchError, SourceSpec};
 
 #[derive(Debug, Error)]
 pub enum InstallError {
@@ -60,13 +66,43 @@ pub enum InstallError {
     /// the other process just installed).
     #[error("concurrent sync in progress for plugin {name:?}")]
     ConcurrentSync { name: String },
+    /// Source fetch (git clone, tarball download) failed. Holds the
+    /// underlying source_fetch error so callers can distinguish
+    /// "git clone refused unstable ref" from "curl returned 404" etc.
+    #[error("source fetch failed: {0}")]
+    SourceFetch(#[from] FetchError),
+    /// `[install].unix` script exited non-zero. The plugin dir stays on
+    /// disk (script may have created helpful breadcrumbs) but the lock
+    /// file is NOT updated, so the next install will retry cleanly.
+    #[error(
+        "[install].unix script for plugin {plugin:?} exited {exit}: {stderr}"
+    )]
+    InstallScriptFailed {
+        plugin: String,
+        exit: i32,
+        stderr: String,
+    },
 }
 
-/// Where a plugin's source lives. v0.1 only implements `Path`.
+/// Where a plugin's source lives. v0.4 accepts all three shapes the
+/// manifest can declare (`[source] path = ... | git = ... | tar = ...`).
 #[derive(Debug, Clone)]
 pub enum PluginSource {
     /// An absolute or relative path to a directory containing plugin.toml.
     Path(PathBuf),
+    /// A git repository + a ref to pin (tag or 40-char SHA, or branch
+    /// name if `allow_unstable` is true).
+    Git {
+        url: String,
+        ref_: String,
+        allow_unstable: bool,
+    },
+    /// A URL pointing at a `.tar.gz` (or plain `.tar`) + a sha256 that
+    /// the downloaded archive MUST match before the tree is promoted.
+    Tarball {
+        url: String,
+        sha256: String,
+    },
 }
 
 /// Arguments for a single install.
@@ -88,18 +124,130 @@ pub fn install_from_path(
     req: &InstallRequest,
     makakoo_home: &Path,
 ) -> Result<super::staging::InstallOutcome, InstallError> {
-    let PluginSource::Path(src_path) = &req.source;
+    install(req, makakoo_home)
+}
 
+/// Install a plugin — dispatches on `PluginSource`. Git + Tarball
+/// variants go through `core::source_fetch`, which stages the tree in a
+/// tempdir; the rest of the pipeline (copy to stage dir, hash verify,
+/// atomic promote, run `[install].unix`, update lock) is identical to
+/// the path case.
+pub fn install(
+    req: &InstallRequest,
+    makakoo_home: &Path,
+) -> Result<super::staging::InstallOutcome, InstallError> {
+    match &req.source {
+        PluginSource::Path(p) => install_staged(
+            p,
+            format!("path:{}", p.display()),
+            None,
+            req.expected_blake3.as_deref(),
+            makakoo_home,
+        ),
+        PluginSource::Git {
+            url,
+            ref_,
+            allow_unstable,
+        } => {
+            let fetched = source_fetch::fetch(&SourceSpec::Git {
+                url: url.clone(),
+                ref_: ref_.clone(),
+                allow_unstable: *allow_unstable,
+            })?;
+            let source_str = format!("git:{url}@{ref_}");
+            let result = install_staged(
+                &fetched.staging_dir,
+                source_str,
+                Some(fetched.resolved_sha.clone()),
+                req.expected_blake3.as_deref(),
+                makakoo_home,
+            );
+            // Always clean the fetcher's tempdir — promotion above moves
+            // content out of it already, but source_fetch::fetch() can
+            // leave an empty parent we should still reap.
+            let _ = fs::remove_dir_all(&fetched.staging_dir);
+            result
+        }
+        PluginSource::Tarball { url, sha256 } => {
+            let fetched = source_fetch::fetch(&SourceSpec::HttpsTarball {
+                url: url.clone(),
+                sha256: sha256.clone(),
+            })?;
+            let source_str = format!("tar:{url}");
+            let result = install_staged(
+                &fetched.staging_dir,
+                source_str,
+                Some(fetched.resolved_sha.clone()),
+                req.expected_blake3.as_deref(),
+                makakoo_home,
+            );
+            let _ = fs::remove_dir_all(&fetched.staging_dir);
+            result
+        }
+    }
+}
+
+/// Convenience wrapper: install straight from a git URL at a pinned ref.
+pub fn install_from_git(
+    url: &str,
+    ref_: &str,
+    allow_unstable: bool,
+    makakoo_home: &Path,
+) -> Result<super::staging::InstallOutcome, InstallError> {
+    install(
+        &InstallRequest {
+            source: PluginSource::Git {
+                url: url.to_string(),
+                ref_: ref_.to_string(),
+                allow_unstable,
+            },
+            expected_blake3: None,
+        },
+        makakoo_home,
+    )
+}
+
+/// Convenience wrapper: install straight from an HTTPS tarball URL.
+pub fn install_from_tarball_url(
+    url: &str,
+    sha256: &str,
+    makakoo_home: &Path,
+) -> Result<super::staging::InstallOutcome, InstallError> {
+    install(
+        &InstallRequest {
+            source: PluginSource::Tarball {
+                url: url.to_string(),
+                sha256: sha256.to_string(),
+            },
+            expected_blake3: None,
+        },
+        makakoo_home,
+    )
+}
+
+/// Shared install path — works on any source directory that already
+/// contains a `plugin.toml`. Called by every public entry point.
+///
+/// `source_str` is the human-readable lock-file source (e.g. `path:/x`,
+/// `git:https://.../repo@v0.1.0`, `tar:https://.../x.tar.gz`).
+/// `resolved_sha` is the git SHA or tarball sha256 (None for path installs).
+fn install_staged(
+    src_path: &Path,
+    source_str: String,
+    resolved_sha: Option<String>,
+    expected_blake3: Option<&str>,
+    makakoo_home: &Path,
+) -> Result<super::staging::InstallOutcome, InstallError> {
     // 1) Basic sanity on the source tree.
     if !src_path.is_dir() {
         return Err(InstallError::NotADir {
-            path: src_path.clone(),
+            path: src_path.to_path_buf(),
         });
     }
     let manifest_path = src_path.join("plugin.toml");
     if !manifest_path.exists() {
         return Err(InstallError::NoManifest {
-            path: src_path.clone(),
+            path: src_path.to_path_buf(),
         });
     }
     // Parse the manifest so we know the plugin name before copying —
@@ -109,8 +257,7 @@ pub fn install_from_path(
 
     // Reject plugins whose sancho tasks would shadow native kernel
     // handlers. Done before staging so a bad manifest never touches
-    // $MAKAKOO_HOME/plugins/. The walker has a belt-and-suspenders
-    // skip for manifests that bypass this path (hand-copied dirs).
+    // $MAKAKOO_HOME/plugins/.
     for task in &manifest.sancho.tasks {
         if crate::sancho::NATIVE_TASK_NAMES
             .iter()
@@ -146,27 +293,86 @@ pub fn install_from_path(
     );
 
     // 3) Hand off to stage_and_install: verifies blake3, atomic rename.
-    let outcome = stage_and_install(
-        &stage_target,
-        makakoo_home,
-        req.expected_blake3.as_deref(),
-    )?;
+    let outcome = stage_and_install(&stage_target, makakoo_home, expected_blake3)?;
 
-    // 4) Record in plugins.lock. Fresh installs start enabled;
+    // 4) Run `[install].unix` if declared. Script sees CWD = promoted
+    //    plugin dir, `$MAKAKOO_PLUGIN_DIR` = same, `$MAKAKOO_HOME` = root.
+    if let Some(ref script) = manifest.install.unix {
+        if cfg!(unix) && !script.trim().is_empty() {
+            run_install_script(&name, &outcome.final_dir, makakoo_home, script)?;
+        }
+    }
+
+    // 5) Record in plugins.lock. Fresh installs start enabled;
     //    reinstalls of a previously-disabled plugin reset to enabled
     //    (a user who wanted it off must re-run `makakoo plugin disable`).
+    let manifest_hash = hash_manifest_text(&manifest_path);
     let mut lock = PluginsLock::load(makakoo_home)?;
     lock.upsert(LockEntry {
         name: outcome.name.clone(),
         version: manifest.plugin.version.to_string(),
         blake3: Some(outcome.computed_blake3.clone()),
-        source: format!("path:{}", src_path.display()),
+        source: source_str,
+        resolved_sha,
+        manifest_hash,
         installed_at: Utc::now(),
         enabled: true,
     });
     lock.save(makakoo_home)?;
 
     Ok(outcome)
+}
+
+/// Execute `[install].unix` from the promoted plugin dir. On failure
+/// the plugin stays installed (script side effects may be meaningful)
+/// but the lock file has NOT been updated yet, so `plugin install` can
+/// re-run once the user fixes the underlying issue.
+fn run_install_script(
+    plugin: &str,
+    plugin_dir: &Path,
+    makakoo_home: &Path,
+    script: &str,
+) -> Result<(), InstallError> {
+    let resolved_script = plugin_dir.join(script);
+    let (program, args): (&str, Vec<&str>) = if resolved_script.is_file() {
+        ("sh", vec!["-c", script])
+    } else {
+        // Interpret `script` as an inline shell command.
+        ("sh", vec!["-c", script])
+    };
+    debug!(
+        "running [install].unix for {plugin} in {}: {script}",
+        plugin_dir.display()
+    );
+    let out = Command::new(program)
+        .args(&args)
+        .current_dir(plugin_dir)
+        .env("MAKAKOO_PLUGIN_DIR", plugin_dir)
+        .env("MAKAKOO_HOME", makakoo_home)
+        .output()
+        .map_err(|source| InstallError::Io {
+            path: plugin_dir.to_path_buf(),
+            source,
+        })?;
+    if !out.status.success() {
+        let exit = out.status.code().unwrap_or(-1);
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        warn!("[install].unix failed for {plugin} (exit {exit}): {stderr}");
+        return Err(InstallError::InstallScriptFailed {
+            plugin: plugin.to_string(),
+            exit,
+            stderr,
+        });
+    }
+    Ok(())
+}
+
+/// sha256 of the raw plugin.toml bytes — used as the manifest_hash in
+/// the lock entry so Phase C's `plugin update` can re-prompt on
+/// capability / security drift without re-parsing the TOML twice.
+fn hash_manifest_text(manifest_path: &Path) -> Option<String> {
+    let bytes = fs::read(manifest_path).ok()?;
+    Some(source_fetch::sha256_hex(&bytes))
 }
 
 /// Uninstall a plugin by name.
@@ -655,5 +861,200 @@ tasks = [{ name = "dream", interval = "3600s" }]
             !final_lock.get("rolling").unwrap().enabled,
             "update must preserve enabled=false across reinstall"
         );
+    }
+
+    // ─── v0.4 Phase B: git-sourced plugin install tests ──────────────
+
+    /// Initialise a bare git repo + seed one commit containing a
+    /// self-contained plugin tree. Returns (guard, bare_url, tag, sha).
+    /// Guard keeps the fixture tmpdir alive for the whole test.
+    fn seed_plugin_bare_repo(
+        plugin_name: &str,
+        extra_manifest: &str,
+    ) -> (TempDir, String, String, String) {
+        use std::process::Command;
+        let tmp = TempDir::new().unwrap();
+        let bare = tmp.path().join("bare.git");
+        let wt = tmp.path().join("wt");
+        run_git(&["init", "--bare", "--quiet", bare.to_str().unwrap()], None);
+        run_git(
+            &[
+                "clone",
+                "--quiet",
+                bare.to_str().unwrap(),
+                wt.to_str().unwrap(),
+            ],
+            None,
+        );
+        run_git(&["config", "user.email", "t@t.test"], Some(&wt));
+        run_git(&["config", "user.name", "t"], Some(&wt));
+        run_git(&["config", "commit.gpgsign", "false"], Some(&wt));
+        write_manifest(&wt, plugin_name, extra_manifest);
+        fs::write(wt.join("hello.py"), b"print('hi')").unwrap();
+        run_git(&["add", "."], Some(&wt));
+        run_git(&["commit", "--quiet", "-m", "init"], Some(&wt));
+        let sha_out = Command::new("git")
+            .current_dir(&wt)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
+        run_git(&["tag", "v0.1.0"], Some(&wt));
+        run_git(&["branch", "-M", "main"], Some(&wt));
+        run_git(&["push", "--quiet", "origin", "main", "--tags"], Some(&wt));
+        let url = format!("file://{}", bare.display());
+        (tmp, url, "v0.1.0".into(), sha)
+    }
+
+    fn run_git(args: &[&str], cwd: Option<&Path>) {
+        use std::process::Command;
+        let mut cmd = Command::new("git");
+        cmd.args(args);
+        if let Some(c) = cwd {
+            cmd.current_dir(c);
+        }
+        let out = cmd.output().expect("git binary missing");
+        if !out.status.success() {
+            panic!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn install_from_git_tag_happy_path() {
+        let (_fixture, url, tag, expected_sha) =
+            seed_plugin_bare_repo("git-plugin", "");
+        let tmp_home = TempDir::new().unwrap();
+        let home = tmp_home.path();
+        let outcome = install_from_git(&url, &tag, false, home).unwrap();
+        assert_eq!(outcome.name, "git-plugin");
+        assert!(outcome.final_dir.join("hello.py").exists());
+        let lock = PluginsLock::load(home).unwrap();
+        let entry = lock.get("git-plugin").unwrap();
+        assert_eq!(entry.resolved_sha.as_deref(), Some(expected_sha.as_str()));
+        assert!(entry.source.starts_with("git:"));
+        assert!(
+            entry.manifest_hash.is_some(),
+            "manifest_hash must be recorded for future update diffs"
+        );
+    }
+
+    #[test]
+    fn install_from_git_sha40_happy_path() {
+        let (_fixture, url, _tag, expected_sha) =
+            seed_plugin_bare_repo("sha40-plugin", "");
+        let tmp_home = TempDir::new().unwrap();
+        let outcome =
+            install_from_git(&url, &expected_sha, false, tmp_home.path()).unwrap();
+        let lock = PluginsLock::load(tmp_home.path()).unwrap();
+        let entry = lock.get("sha40-plugin").unwrap();
+        assert_eq!(entry.resolved_sha.as_deref(), Some(expected_sha.as_str()));
+        assert!(
+            outcome.final_dir.exists(),
+            "install from SHA must still promote plugin tree"
+        );
+    }
+
+    #[test]
+    fn install_from_git_branch_rejected_without_flag() {
+        let (_fixture, url, _tag, _sha) = seed_plugin_bare_repo("branch-rej", "");
+        let tmp_home = TempDir::new().unwrap();
+        let err = install_from_git(&url, "main", false, tmp_home.path()).unwrap_err();
+        match &err {
+            InstallError::SourceFetch(FetchError::UnstableRef { ref_ }) => {
+                assert_eq!(ref_, "main");
+            }
+            other => panic!("expected UnstableRef, got: {other:?}"),
+        }
+        // Nothing was promoted.
+        let lock = PluginsLock::load(tmp_home.path()).unwrap();
+        assert!(lock.plugins.is_empty());
+    }
+
+    #[test]
+    fn install_from_git_branch_accepted_with_flag() {
+        let (_fixture, url, _tag, _sha) = seed_plugin_bare_repo("branch-ok", "");
+        let tmp_home = TempDir::new().unwrap();
+        install_from_git(&url, "main", true, tmp_home.path()).unwrap();
+        let lock = PluginsLock::load(tmp_home.path()).unwrap();
+        assert!(lock.get("branch-ok").is_some());
+    }
+
+    #[test]
+    fn install_runs_install_script_and_env_is_set() {
+        // Plugin manifest declares an [install].unix line that writes a
+        // marker file using $MAKAKOO_PLUGIN_DIR. Proves the script runs
+        // from the promoted dir with the env exported.
+        let extras =
+            "\n[install]\nunix = \"echo ran > $MAKAKOO_PLUGIN_DIR/.install-marker\"\n";
+        let (_fixture, url, tag, _sha) = seed_plugin_bare_repo("script-plugin", extras);
+        let tmp_home = TempDir::new().unwrap();
+        let outcome =
+            install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
+        let marker = outcome.final_dir.join(".install-marker");
+        assert!(marker.is_file(), "[install].unix did not run");
+        let body = fs::read_to_string(&marker).unwrap();
+        assert!(body.contains("ran"));
+    }
+
+    #[test]
+    fn install_script_failure_bubbles_up_as_error() {
+        let extras = "\n[install]\nunix = \"exit 7\"\n";
+        let (_fixture, url, tag, _sha) = seed_plugin_bare_repo("fail-plugin", extras);
+        let tmp_home = TempDir::new().unwrap();
+        let err = install_from_git(&url, &tag, false, tmp_home.path()).unwrap_err();
+        assert!(
+            matches!(err, InstallError::InstallScriptFailed { exit: 7, .. }),
+            "expected InstallScriptFailed(exit=7), got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn install_from_git_appends_resolved_sha_to_lock() {
+        let (_fixture, url, tag, expected_sha) =
+            seed_plugin_bare_repo("lock-sha", "");
+        let tmp_home = TempDir::new().unwrap();
+        install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
+        let raw = fs::read_to_string(
+            tmp_home.path().join("config/plugins.lock"),
+        )
+        .unwrap();
+        assert!(
+            raw.contains(&expected_sha),
+            "lock file must record resolved git SHA, got:\n{raw}"
+        );
+        assert!(
+            raw.contains("manifest_hash"),
+            "lock file must record manifest_hash"
+        );
+    }
+
+    #[test]
+    fn install_from_tarball_sha_mismatch_aborts_before_promotion() {
+        // Build a tarball by hand so we can attach a known-bad hash.
+        let tmp = TempDir::new().unwrap();
+        let pack = tmp.path().join("pack.tar.gz");
+        fs::write(&pack, b"garbage tarball bytes").unwrap();
+        let url = format!("file://{}", pack.display());
+        let tmp_home = TempDir::new().unwrap();
+        let err = install_from_tarball_url(
+            &url,
+            &"0".repeat(64),
+            tmp_home.path(),
+        )
+        .unwrap_err();
+        // Either Sha256Mismatch (hash check fires) or TarballHttp (curl
+        // can't fetch file:// on this platform). Either proves nothing
+        // was promoted.
+        assert!(matches!(
+            err,
+            InstallError::SourceFetch(FetchError::Sha256Mismatch { .. })
+                | InstallError::SourceFetch(FetchError::TarballHttp { .. })
+        ));
+        // $MAKAKOO_HOME/plugins/ should not exist.
+        assert!(!tmp_home.path().join("plugins").exists());
     }
 }

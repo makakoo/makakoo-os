@@ -65,8 +65,20 @@ pub struct LockEntry {
     #[serde(default)]
     pub blake3: Option<String>,
     /// Source descriptor — e.g. `path:plugins-core/foo`,
-    /// `git:https://github.com/x/y@v1.0`, `local:/tmp/plug`. Human-read.
+    /// `git:https://github.com/x/y@v1.0`, `tar:https://.../x.tar.gz`. Human-read.
     pub source: String,
+    /// For git + tarball sources, the resolved content pin (git SHA for
+    /// git, sha256 of archive bytes for tarball). `None` for path installs.
+    /// Back-compat: older lock files without this field deserialize as
+    /// `None`, which is the correct path-install value.
+    #[serde(default)]
+    pub resolved_sha: Option<String>,
+    /// sha256 of the plugin.toml bytes at install time. Phase C's
+    /// `plugin update` diffs this against the upstream manifest hash to
+    /// decide whether to re-prompt for user approval on capability or
+    /// security drift.
+    #[serde(default)]
+    pub manifest_hash: Option<String>,
     pub installed_at: DateTime<Utc>,
     /// Soft on/off switch. `false` means the plugin is installed on disk
     /// but suppressed by `makakoo plugin disable <name>` — SANCHO task
@@ -171,6 +183,8 @@ mod tests {
             version: version.into(),
             blake3: Some("a".repeat(64)),
             source: "path:plugins-core/test".into(),
+            resolved_sha: None,
+            manifest_hash: None,
             installed_at: Utc::now(),
             enabled: true,
         }
