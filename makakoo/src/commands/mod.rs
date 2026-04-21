@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod memory;
 pub mod migrate;
 pub mod nursery;
+pub mod perms;
 pub mod plugin;
 pub mod promotions;
 pub mod query;
@@ -108,6 +109,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Uninfect { target, dry_run } => {
             crate::infect::uninfect_global(target, dry_run).await
         }
+        Commands::Perms { cmd } => perms::run(ctx, cmd).await,
         Commands::Session { cmd } => session::run(ctx, cmd).await,
         Commands::Adapter { cmd } => adapter::run(ctx, cmd).await,
     }
