@@ -8,18 +8,44 @@ Upstream code is NOT vendored. The wrapper is ~150 lines (`plugin.toml` + `insta
 
 ```bash
 # 1. Install the plugin (clones upstream, sets up venv, pip install -e .)
-makakoo plugin install --core agent-browser-harness
+#    Upstream requires Python >=3.11 — on macOS the default python3 is
+#    3.9, so override via MAKAKOO_VENV_PYTHON.
+MAKAKOO_VENV_PYTHON=python3.13 makakoo plugin install --core agent-browser-harness
 
 # 2. Start your local Chrome with CDP exposed
-google-chrome --remote-debugging-port=9222 \
-              --user-data-dir=/tmp/chrome-cdp &
+open -na "Google Chrome" --args \
+  --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-cdp   # macOS
+# OR
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-cdp &  # Linux
 
 # 3. Start the agent daemon
 makakoo agent start agent-browser-harness
 
-# 4. From any MCP-capable CLI:
+# 4. Restart your CLI — MCP stdio children don't hot-reload. The new
+#    session will see harvey_browse in its tool list.
+
+# 5. From any MCP-capable CLI (Claude Code, Gemini, Codex, OpenCode,
+#    Vibe, Cursor, Qwen, pi):
 harvey_browse code="goto('https://example.com'); print(page_info())"
 ```
+
+## Python version prereq (`MAKAKOO_VENV_PYTHON`)
+
+Upstream `browser-harness` declares `python = ">=3.11"` in its
+`pyproject.toml`. Without an override, the plugin's venv is built with
+whatever `python3` is first on PATH — which is **Python 3.9** on
+stock macOS — and pip rejects the install with:
+
+```
+ERROR: Package 'harness' requires a different Python: 3.9.6 not in '>=3.11'
+```
+
+Fix: set `MAKAKOO_VENV_PYTHON=python3.11` (or `.12` / `.13`) for the
+install invocation. Homebrew's `brew install python@3.13` is the
+fastest path to an interpreter on macOS; `pyenv` works too.
+
+Once installed, the venv remembers its interpreter — future runs don't
+need the env var.
 
 ## What's in the wrapper
 
