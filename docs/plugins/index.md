@@ -109,8 +109,9 @@ Makakoo ships with 38 plugins:
 | `skill-dev-orchestrator` | Multi-task coordination |
 | `skill-productivity-google-workspace` | Gmail/Calendar/Drive |
 | `skill-productivity-apple-notes` | Apple Notes integration |
-| `skill-productivity-obsidian` | Obsidian sync |
+| `skill-productivity-obsidian` | Read/write Obsidian vault |
 | `skill-productivity-notion` | Notion integration |
+| `skill-productivity-logseq` | Connect Logseq app to Brain |
 
 ### SANCHO Tasks
 
@@ -212,4 +213,135 @@ makakoo sancho status
 
 # See task history
 makakoo sancho history --task <task-name>
+```
+
+---
+
+## skill-productivity-logseq
+
+Connect Makakoo Brain to Logseq app for graph view and app integration.
+
+### What it does
+
+Makakoo Brain already uses Logseq markdown format. This plugin makes it easy to:
+- See your Brain as a visual graph
+- Use Logseq backlinks and queries
+- Access community plugins
+
+### Setup
+
+```bash
+# Install
+makakoo plugin install skill-productivity-logseq --core
+
+# Then connect Logseq app:
+# 1. Open Logseq app
+# 2. Settings → Advanced → Choose folder
+# 3. Select: ~/MAKAKOO/data/Brain
+```
+
+### Usage
+
+```bash
+# Check status
+makakoo skill logseq status
+
+# List pages
+makakoo skill logseq pages
+
+# Search Brain
+makakoo skill logseq search "polymarket"
+
+# Add to today's journal
+makakoo skill logseq journal "Did something important"
+
+# Print setup instructions
+makakoo skill logseq connect
+```
+
+
+### Logseq App Features
+
+Once connected:
+- **Graph View** - Visual map of all wikilinks
+- **Backlinks** - See all pages linking to a page
+- **Queries** - Datalog queries on your Brain
+- **Daily Notes** - Journal view
+- **Plugins** - Community plugins work
+
+---
+
+## skill-productivity-obsidian
+
+Read, write, and sync any Obsidian vault.
+
+
+### What it does
+
+Manage multiple knowledge bases:
+- Read/write any Obsidian vault
+- Sync from Makakoo Brain to Obsidian
+- Search across vaults
+
+### Setup
+
+```bash
+# Install
+makakoo plugin install skill-productivity-obsidian --core
+
+# Configure vault path
+export OBSIDIAN_VAULT_PATH=~/Documents/MyVault
+```
+
+### Usage
+
+```bash
+# Check vault status
+makakoo skill obsidian status
+
+# List notes
+makakoo skill obsidian list
+makakoo skill obsidian list projects/
+
+# Read a note
+makakoo skill obsidian read "Project Name"
+
+# Search
+makakoo skill obsidian search "keyword"
+
+# Create note
+makakoo skill obsidian create "New Note" "# Title\n\nContent here"
+
+# Add to journal
+makakoo skill obsidian journal "Did X today"
+
+# Sync from Brain to Obsidian vault
+makakoo skill obsidian sync
+```
+
+### Vault Format
+
+Both use standard Logseq markdown:
+- Frontmatter: `key:: value`
+- Wikilinks: `[[Page Name]]`
+- Tags: `#tag`
+- Bullet points: `- item`
+
+---
+
+## skill-productivity-apple-notes
+
+Access Apple Notes from Makakoo.
+
+### Setup
+
+```bash
+makakoo plugin install skill-productivity-apple-notes --core
+```
+
+### Usage
+
+```bash
+makakoo skill apple-notes list
+makakoo skill apple-notes read "Note Name"
 ```
