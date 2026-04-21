@@ -1,6 +1,6 @@
 [plugin]
 name = "skill-freelance-office"
-version = "0.2.0"
+version = "0.3.0"
 kind = "skill"
 language = "python"
 summary = "Multi-country freelance accounting plugin. DE + AR + ES + US tax regimes in-tree (drop a core/tax/<cc>.py to add more). Per-office registry + --office selector. One install hosts many offices, each with own tax rules, locale, currency, and ledger."
@@ -29,3 +29,23 @@ grants = [
 [state]
 dir = "$MAKAKOO_HOME/state/skill-freelance-office"
 retention = "keep"
+
+# SANCHO watchdogs — v0.3 invoice lifecycle. Each entry is loaded
+# as a Python ``tick(ctx)`` callable by the kernel scheduler.
+[[sancho]]
+id = "freelance_invoice_overdue_tick"
+handler = "src.sancho_handlers.overdue_tick:tick"
+schedule = "every 24h"
+summary = "Nag about overdue invoices past payment_terms + grace days."
+
+[[sancho]]
+id = "freelance_threshold_tick"
+handler = "src.sancho_handlers.threshold_tick:tick"
+schedule = "every 24h"
+summary = "Alert on first 80% and first 100% Kleinunternehmer-threshold crossings per office per year."
+
+[[sancho]]
+id = "freelance_daily_digest_tick"
+handler = "src.sancho_handlers.daily_digest_tick:tick"
+schedule = "0 9 * * *"
+summary = "Daily 09:00 summary of overdue + threshold activity; silent on zero-activity days."

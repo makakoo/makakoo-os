@@ -56,6 +56,9 @@ class Finance:
     invoice_currency: str = "EUR"
     payment_terms_days: int = 30
     invoice_language: str = "de"
+    # v0.3 overdue watchdog — both optional, safe defaults.
+    overdue_grace_days: int = 7
+    overdue_ping_floor: float = 500.0
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,8 @@ def load_settings(path: Optional[Path] = None) -> Settings:
             invoice_currency=fin.get("invoice_currency", "EUR"),
             payment_terms_days=int(fin.get("payment_terms_days", 30)),
             invoice_language=fin.get("invoice_language", "de"),
+            overdue_grace_days=int(fin.get("overdue_grace_days", 7)),
+            overdue_ping_floor=float(fin.get("overdue_ping_floor", 500.0)),
         ),
         business=Business(
             freelance_since=str(biz.get("freelance_since", "")),
