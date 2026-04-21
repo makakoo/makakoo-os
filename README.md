@@ -94,9 +94,11 @@ makakoo perms audit --since 1h   # every grant / revoke / denial
 
 See [`docs/user-manual/makakoo-perms.md`](docs/user-manual/makakoo-perms.md)
 for the full `perms` subcommand reference, the rejected-write
-conversational flow, and the v0.3.1 + v0.3.2 hardening details
-(rate-limit decrement on revoke, denial audits with `reason:*`
-taxonomy, `origin_turn_id` enforcement on conversational channels).
+conversational flow, and the v0.3.1 + v0.3.2 + v0.3.3 hardening
+details (rate-limit decrement on revoke, denial audits with
+`reason:*` taxonomy, `origin_turn_id` enforcement on conversational
+channels, grant ownership check on revoke, SANCHO purge idempotency,
+and the structured `list --json` envelope).
 
 ## Layout
 
@@ -147,8 +149,8 @@ This is a community-built open-source project. Contributions welcome across code
 - [docs/PHASE_H4_RELOCATE.md](docs/PHASE_H4_RELOCATE.md) — `~/MAKAKOO → ~/.makakoo/` runtime-relocation runbook
 - [install/completions/README.md](install/completions/README.md) — shell completion install + dynamic plugin-name wrappers
 - [spec/CAPABILITIES.md §1.11](spec/CAPABILITIES.md) — three-layer write-permission model (v0.3)
-- [spec/USER_GRANTS.md](spec/USER_GRANTS.md) v1.2 — user-grants file format, lock protocol, CLI + MCP reference
-- [spec/USER_GRANTS_THREAT_MODEL.md](spec/USER_GRANTS_THREAT_MODEL.md) — adversary register, residual risks (R2 fully closed in v0.3.2)
+- [spec/USER_GRANTS.md](spec/USER_GRANTS.md) v1.3 — user-grants file format, lock protocol, CLI + MCP reference
+- [spec/USER_GRANTS_THREAT_MODEL.md](spec/USER_GRANTS_THREAT_MODEL.md) — adversary register, residual risks (R2 fully closed in v0.3.2, ownership gate added in v0.3.3)
 - [docs/user-manual/makakoo-perms.md](docs/user-manual/makakoo-perms.md) — `makakoo perms` command reference
 - [spec/](spec/) — frozen v0.1 architecture + ABI contracts
 

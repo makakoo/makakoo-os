@@ -10,6 +10,34 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Fixed — v0.3.3 Security Lockdown (`MAKAKOO-OS-V0.3.3-SECURITY-LOCKDOWN`, 2026-04-21)
+- **Grant ownership check on revoke** (closes pi N3). New `owner`
+  field on every grant captures the caller's plugin at create time;
+  `do_revoke` / `RevokeWriteAccessHandler::call` refuse unless the
+  caller's plugin matches OR the caller is an admin bypass
+  (`cli`, `sancho-native`). Without this, a compromised skill with
+  knowledge of another agent's grant_id could silently revoke it.
+  Denial emits `correlation_id="reason:not_owner"` audit entry.
+  Backward-compatible: pre-v0.3.3 records with no `owner` field
+  fall back to their `plugin` attribution on load.
+- **SANCHO `perms_purge_tick` idempotency key** (closes pi R2).
+  New `makakoo_core::capability::purge_idempotency` module. When
+  the 900s tick fires twice within 60s (daemon restart, clock skew),
+  the second run now returns `skipped (within Ns cooldown since
+  last tick)` without touching the grant store — no more double
+  audit entries for the same revocations. CLI `makakoo perms purge`
+  deliberately skips the gate (admin bypass).
+- **`makakoo perms list --json` structured envelope** (closes the
+  gemini nit). Pre-v0.3.3 the flag emitted an undocumented flat
+  array; now it emits `{schema_version, baseline, active,
+  expired_today_count, all}` matching the MCP `list_write_grants`
+  response shape. CI / IDS / dashboards use one parser across CLI
+  and MCP surfaces.
+- New shared drift fixture
+  `plugins-core/lib-harvey-core/tests/fixtures/grant_ownership_vectors.json`
+  (6 cases) loaded by both Python and Rust test suites. Sixth
+  Python↔Rust drift gate.
+
 ### Fixed — v0.3.2 Rust MCP Phase B/C parity (`MAKAKOO-OS-V0.3.2-MCP-PARITY`, 2026-04-21)
 - **Rust MCP `grant_write_access` now enforces `origin_turn_id` on
   conversational channels.** v0.3.1 closed the gap for the Python

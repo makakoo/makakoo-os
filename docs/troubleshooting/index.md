@@ -308,6 +308,46 @@ hit this:
 3. If scripting, use `makakoo perms grant` (plugin=`cli`) — CLI is
    outside the conversational channel set by design.
 
+### `revoke refused: grant g_... is owned by "claude-code", not "gemini-cli"`
+
+**Symptoms (v0.3.3 Phase A):** an agent tries to revoke a grant that
+was created by a different plugin — e.g. Gemini CLI trying to revoke
+a grant Claude Code issued.
+
+**What it means:** the ownership gate is doing its job — a compromised
+or confused plugin can't wipe another agent's grants.
+
+**Fix:** either ask the original owner (the plugin named in the error)
+to revoke, or use the CLI admin bypass:
+
+```bash
+makakoo perms revoke <grant-id>   # CLI always succeeds
+```
+
+The audit trail:
+
+```bash
+makakoo perms audit --since 10m --json | \
+  jq 'select(.correlation_id == "reason:not_owner")'
+```
+
+### `perms_purge_tick: skipped (within Ns cooldown since last tick)`
+
+**Symptoms (v0.3.3 Phase B):** the SANCHO tick logs a skip instead
+of purging.
+
+**What it means:** not an error — the idempotency gate fired because
+a previous tick ran less than 60s ago (daemon restart, clock skew).
+This is the designed behavior and prevents double audit entries for
+the same revocations.
+
+**Fix:** none needed. If you want to force an immediate purge, the
+CLI bypasses the gate:
+
+```bash
+makakoo perms purge
+```
+
 ### Grants work from `makakoo perms` but not from chat
 
 **Symptoms:** `makakoo perms grant` succeeds; the agent says it

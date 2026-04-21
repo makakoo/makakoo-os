@@ -1,6 +1,7 @@
 # User Grants — File Format, Lock Protocol, and API
 
-**Version:** 1.2 (Rust MCP parity 2026-04-21 at
+**Version:** 1.3 (Security Lockdown 2026-04-21 at
+`MAKAKOO-OS-V0.3.3-SECURITY-LOCKDOWN`; v1.2 Rust MCP parity at
 `MAKAKOO-OS-V0.3.2-MCP-PARITY`; v1.1 hardening at
 `MAKAKOO-OS-V0.3.1-PERMS-HARDENING`; base locked at v1.0 Gate G.2 of
 `MAKAKOO-OS-V0.3-USER-GRANTS`). Revisions go in §14.
@@ -15,6 +16,20 @@
   `opencode`, `vibe`, `cursor`, `qwen`, `pi`, `harveychat`,
   `harveychat-telegram`, `harveychat-web`) require a non-empty
   `origin_turn_id` on grant. See §8 tool schemas.
+
+**v1.3 authz + observability guarantees (v0.3.3):**
+
+- Grants carry an `owner` string — the plugin that created the
+  grant. `do_revoke` refuses any caller whose plugin doesn't match
+  the owner, unless the caller is `cli` or `sancho-native`.
+- `perms_purge_tick` consults a 60s idempotency gate. A second tick
+  within the cooldown window returns `skipped` without touching
+  the grant store or emitting audit entries. The gate state lives
+  at `state/perms_purge_last.json`.
+- `makakoo perms list --json` emits a structured envelope
+  (`{schema_version, baseline, active, expired_today_count, all}`)
+  matching the MCP `list_write_grants` response shape. One parser,
+  two surfaces.
 
 This document is the authoritative schema contract for
 `$MAKAKOO_HOME/config/user_grants.json`. Python (`lib-harvey-core`)
@@ -87,6 +102,7 @@ counter. Lock file created on-demand, `0o600`.
 | `grants[].granted_by` | string | yes | literal `"sebastian"` in single-user installs; field reserved for multi-user future |
 | `grants[].plugin` | string | yes | caller surface — one of `cli`, `claude-code`, `gemini-cli`, `codex`, `opencode`, `vibe`, `cursor`, `qwen`, `pi`, `harveychat`, `harveychat-telegram`, `sancho-native` |
 | `grants[].origin_turn_id` | string | yes | host-provided turn identifier; **REQUIRED to be non-empty when `plugin ∈ CONVERSATIONAL_CHANNELS`** (v0.3.1 Phase C — enforced in Python `do_grant`). Empty accepted for `cli`, `sancho-native` |
+| `grants[].owner` | string | yes | **v0.3.3** — plugin string of the caller that created the grant. `do_revoke` refuses unless the caller's plugin matches OR the caller is an admin bypass (`cli` / `sancho-native`). Defaults to `plugin` on new grants; pre-v0.3.3 records fall back to `plugin` on load. |
 
 **Explicitly NOT in the schema (lope F4):** `use_count`, `last_used_at`.
 The audit log is the sole record of grant usage. `makakoo perms audit
@@ -452,6 +468,25 @@ implementations to catch glob-semantic drift.
     refuses when `args.plugin ∈ CONVERSATIONAL_CHANNELS` and
     `args.origin_turn_id` is empty. Closes R2 in the threat model.
     Python-only this sprint; Rust MCP handler mirror is v0.3.2.
+- **v1.3 (Security Lockdown)** — 2026-04-21,
+  `MAKAKOO-OS-V0.3.3-SECURITY-LOCKDOWN`. Three focused fixes
+  closing the remaining Gate-G authz + observability gaps:
+  - **Phase A — grant ownership check on revoke.** New `owner`
+    field on `Grant` / `UserGrant`. `do_revoke` refuses cross-plugin
+    revokes with `correlation_id="reason:not_owner"`. Admin bypass
+    list: `cli`, `sancho-native`. Backward-compat on load: missing
+    `owner` falls back to `plugin`. Closes pi N3.
+  - **Phase B — SANCHO `perms_purge_tick` idempotency.** New
+    `capability::purge_idempotency` module + state file
+    `state/perms_purge_last.json`. 60s cooldown gate prevents
+    double-audit when the tick fires twice in rapid succession.
+    CLI `makakoo perms purge` bypasses the gate. Closes pi R2.
+  - **Phase C — `makakoo perms list --json` envelope.** Replaces
+    the pre-v0.3.3 flat-array shape with a `{schema_version,
+    baseline, active, expired_today_count, all}` object matching
+    the MCP `list_write_grants` response. Closes the gemini nit.
+  - Sixth shared Python ↔ Rust drift fixture:
+    `grant_ownership_vectors.json`.
 - **v1.2 (Rust MCP parity)** — 2026-04-21,
   `MAKAKOO-OS-V0.3.2-MCP-PARITY`. Port v1.1's Phase B + C to the
   Rust MCP direct path (`makakoo-mcp/src/handlers/tier_b/perms.rs`):

@@ -1,6 +1,6 @@
 # `makakoo perms` — Runtime write-access grants
 
-**Since:** v0.3 (baseline); hardened in v0.3.1 (rate-limit decrement, denial audits, `origin_turn_id` enforcement) and v0.3.2 (Rust MCP handler parity).
+**Since:** v0.3 (baseline); hardened in v0.3.1 (rate-limit decrement, denial audits, `origin_turn_id` enforcement), v0.3.2 (Rust MCP handler parity), and v0.3.3 (grant ownership check on revoke, SANCHO idempotency, `--json` envelope).
 
 By default, Makakoo agents can only write inside a small hardcoded *baseline*:
 
@@ -56,7 +56,7 @@ makakoo perms list [--all] [--json]
 | Flag | Meaning |
 |---|---|
 | `--all` | Also show today's expired grants |
-| `--json` | Machine-readable output (deferred to v0.3.3 — currently human-only) |
+| `--json` | Machine-readable envelope (v0.3.3) |
 
 Prints a one-line summary:
 
@@ -68,6 +68,38 @@ Baseline: ~/MAKAKOO/data/reports, ~/MAKAKOO/data/drafts, ~/MAKAKOO/tmp, /tmp.
 
 This is the same string the conversational `list_write_grants` tool returns —
 agents quote it verbatim.
+
+**`--json` envelope (v0.3.3):**
+
+```json
+{
+  "schema_version": 1,
+  "baseline": [
+    "/Users/you/MAKAKOO/data/reports",
+    "/Users/you/MAKAKOO/data/drafts",
+    "/Users/you/MAKAKOO/tmp",
+    "/tmp"
+  ],
+  "active": [
+    {
+      "id": "g_20260421_a3f21c4b",
+      "scope": "fs/write:/Users/you/code/**",
+      "created_at": "2026-04-21T14:00:00Z",
+      "expires_at": "2026-04-21T15:00:00Z",
+      "label": "debug session",
+      "granted_by": "sebastian",
+      "plugin": "cli",
+      "origin_turn_id": "",
+      "owner": "cli"
+    }
+  ],
+  "expired_today_count": 0,
+  "all": false
+}
+```
+
+Same shape as the MCP `list_write_grants` response — callers use one
+parser across both surfaces.
 
 ---
 
@@ -139,6 +171,22 @@ cycle of `grant → revoke → grant` doesn't eat through the 50/hour cap.
 Purge (expiry) does *not* decrement — that path is deliberately not a
 capacity return.
 
+**Ownership gate (v0.3.3).** A caller may revoke a grant only if:
+
+- The caller's `plugin` string matches the grant's `owner` field,
+  OR
+- The caller is on the **admin bypass list**: `cli` or
+  `sancho-native`.
+
+`owner` defaults to the `plugin` that created the grant. So
+cross-plugin revokes are refused unless you call from the CLI
+(`plugin=cli` → admin bypass). Refusals emit an audit entry with
+`correlation_id="reason:not_owner"` — grep
+`logs/audit.jsonl` for it to track cross-plugin revoke attempts.
+
+In practice the CLI and SANCHO purge always succeed; a compromised
+conversational plugin can no longer wipe another agent's grants.
+
 ---
 
 ## `makakoo perms purge`
@@ -154,6 +202,13 @@ audit entry per removed grant with
 The SANCHO task `perms_purge_tick` runs this every 900 seconds
 automatically — you almost never need to call it manually. Use
 `makakoo perms purge` only if you want an immediate cleanup.
+
+**Idempotency gate (v0.3.3).** The SANCHO tick consults a 60s
+cooldown stored at `state/perms_purge_last.json`. If a restart /
+clock skew re-fires the tick within that window, the second run
+returns `skipped (within Ns cooldown since last tick)` — no double
+audit entries for the same revocations. The CLI
+`makakoo perms purge` **bypasses** the gate (admin action).
 
 ---
 
@@ -184,6 +239,7 @@ with a taxonomy tag on `correlation_id`:
 | `reason:rate_limit_active` | 20-active-grants cap hit |
 | `reason:rate_limit_hourly` | 50/hour create cap hit |
 | `reason:missing_origin_turn_id` | Conversational tool called without the host's turn-id (prompt-injection signature) |
+| `reason:not_owner` | v0.3.3 — revoke refused because caller's plugin doesn't match the grant's `owner` |
 | `reason:expired` | Grant rolled off by purge |
 
 Intrusion detection on the grant subsystem is now possible post-incident —
