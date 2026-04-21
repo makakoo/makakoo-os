@@ -344,6 +344,10 @@ fn grant(
         granted_by: "sebastian".to_string(),
         plugin: plugin.to_string(),
         origin_turn_id: String::new(),
+        // v0.3.3 — `owner` defaults to the caller's plugin. CLI owns
+        // grants it creates; at revoke time CLI is also on the admin
+        // bypass list, so this is mostly a forensic breadcrumb here.
+        owner: plugin.to_string(),
     };
     u.add(new_grant.clone());
     u.save().with_context(|| {

@@ -1,0 +1,43 @@
+{
+  "description": "v0.3.3 Phase A — grant ownership check vectors. Each case: a grant owned by `grant_owner`, a revoke call by `revoke_caller_plugin`, and the expected outcome (`allow` or `reject`). Loaded by both Python (`test_user_grants_enforcement.py`) and Rust (`makakoo-mcp::handlers::tier_b::perms::tests`). Drift on either side fails both suites.",
+  "schema_version": 1,
+  "admin_bypass": ["cli", "sancho-native"],
+  "cases": [
+    {
+      "name": "owner_revokes_own_grant",
+      "grant_owner": "claude-code",
+      "revoke_caller_plugin": "claude-code",
+      "expected": "allow"
+    },
+    {
+      "name": "different_plugin_refused",
+      "grant_owner": "claude-code",
+      "revoke_caller_plugin": "gemini-cli",
+      "expected": "reject"
+    },
+    {
+      "name": "cli_admin_bypass_any_grant",
+      "grant_owner": "gemini-cli",
+      "revoke_caller_plugin": "cli",
+      "expected": "allow"
+    },
+    {
+      "name": "sancho_native_admin_bypass",
+      "grant_owner": "harveychat",
+      "revoke_caller_plugin": "sancho-native",
+      "expected": "allow"
+    },
+    {
+      "name": "harveychat_cannot_revoke_claude_grant",
+      "grant_owner": "claude-code",
+      "revoke_caller_plugin": "harveychat",
+      "expected": "reject"
+    },
+    {
+      "name": "telegram_surface_owns_its_grants",
+      "grant_owner": "harveychat-telegram",
+      "revoke_caller_plugin": "harveychat-telegram",
+      "expected": "allow"
+    }
+  ]
+}

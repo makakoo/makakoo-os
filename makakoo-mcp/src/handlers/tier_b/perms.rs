@@ -422,6 +422,10 @@ impl ToolHandler for GrantWriteAccessHandler {
             granted_by: "sebastian".to_string(),
             plugin: plugin.clone(),
             origin_turn_id: user_turn_id.to_string(),
+            // v0.3.3 — owner captures the caller's plugin. Revoke side
+            // (`RevokeWriteAccessHandler`) refuses unless the revoke
+            // caller matches OR is on the admin bypass list.
+            owner: plugin.clone(),
         };
         grants.add(new_grant.clone());
         grants
@@ -547,6 +551,33 @@ impl ToolHandler for RevokeWriteAccessHandler {
                 }
             }
         };
+
+        // v0.3.3 Phase A — ownership gate. A caller may revoke a grant
+        // only if its plugin matches the grant's `owner` OR if it is
+        // an admin bypass (`cli` / `sancho-native`). Prevents a
+        // compromised skill from wiping another agent's active grants.
+        let caller = caller_plugin();
+        let is_admin_bypass = caller == "cli" || caller == "sancho-native";
+        let target_owner = grants
+            .get(&target_id)
+            .map(|g| g.owner.clone())
+            .unwrap_or_default();
+        if !is_admin_bypass && target_owner != caller {
+            emit_perms_audit_with_correlation(
+                &self.ctx,
+                "perms/revoke",
+                &target_id,
+                None,
+                AuditResult::Denied,
+                &caller,
+                Some("reason:not_owner"),
+            );
+            return Err(RpcError::invalid_params(format!(
+                "revoke refused: grant {target_id} is owned by {target_owner:?}, \
+                 not {caller:?}. Only the creating plugin or an admin caller (cli) \
+                 may revoke."
+            )));
+        }
 
         // Stable view of the scope before we drop it from the store.
         let scope_glob = grants
@@ -1081,6 +1112,132 @@ mod tests {
             .unwrap();
         assert!(out["reply"].as_str().unwrap_or("").contains("Granted."));
         std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  v0.3.3 Phase A — grant ownership check on revoke
+    // ═══════════════════════════════════════════════════════════
+
+    /// Seed one grant with the given owner plugin into the temp home,
+    /// return its id.
+    async fn seed_grant_with_owner(h: &Harness, owner: &str) -> String {
+        std::env::set_var("HARVEY_PLUGIN", owner);
+        let tgt = h.home.join(format!("owner-{owner}"));
+        std::fs::create_dir_all(&tgt).unwrap();
+        let args = json!({
+            "path": tgt.to_string_lossy(),
+            "duration": "1h",
+            "user_turn_id": "t_test_owner",
+        });
+        let out = GrantWriteAccessHandler::new(h.ctx.clone())
+            .call(args)
+            .await
+            .unwrap();
+        std::env::remove_var("HARVEY_PLUGIN");
+        out["grant_id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn phase_a_owner_can_revoke_own_grant() {
+        let h = Harness::new();
+        let id = seed_grant_with_owner(&h, "claude-code").await;
+        std::env::set_var("HARVEY_PLUGIN", "claude-code");
+        let out = RevokeWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({"grant_id": id}))
+            .await
+            .unwrap();
+        assert!(out["reply"].as_str().unwrap_or("").contains("Revoked"));
+        std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    #[tokio::test]
+    async fn phase_a_cross_plugin_revoke_refused() {
+        let h = Harness::new();
+        let id = seed_grant_with_owner(&h, "claude-code").await;
+        std::env::set_var("HARVEY_PLUGIN", "gemini-cli");
+        let err = RevokeWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({"grant_id": id}))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("revoke refused"),
+            "{err:?}"
+        );
+        let entries = read_audit(&h.home);
+        let d = last_denial(&entries).expect("denial entry");
+        assert_eq!(d["verb"].as_str(), Some("perms/revoke"));
+        assert_eq!(
+            d["correlation_id"].as_str(),
+            Some("reason:not_owner"),
+            "{d:?}"
+        );
+        assert_eq!(d["plugin"].as_str(), Some("gemini-cli"), "{d:?}");
+        std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    #[tokio::test]
+    async fn phase_a_cli_admin_bypass_revokes_any_grant() {
+        let h = Harness::new();
+        let id = seed_grant_with_owner(&h, "gemini-cli").await;
+        std::env::set_var("HARVEY_PLUGIN", "cli");
+        let out = RevokeWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({"grant_id": id}))
+            .await
+            .unwrap();
+        assert!(out["reply"].as_str().unwrap_or("").contains("Revoked"));
+        std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    #[tokio::test]
+    async fn phase_a_sancho_native_admin_bypass() {
+        let h = Harness::new();
+        let id = seed_grant_with_owner(&h, "harveychat").await;
+        std::env::set_var("HARVEY_PLUGIN", "sancho-native");
+        let out = RevokeWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({"grant_id": id}))
+            .await
+            .unwrap();
+        assert!(out["reply"].as_str().unwrap_or("").contains("Revoked"));
+        std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    #[tokio::test]
+    async fn phase_a_shared_fixture_vectors() {
+        let fixture_bytes = include_bytes!(
+            "../../../../plugins-core/lib-harvey-core/tests/fixtures/grant_ownership_vectors.json"
+        );
+        let fixture: Value =
+            serde_json::from_slice(fixture_bytes).expect("valid fixture");
+        for case in fixture["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap().to_string();
+            let owner = case["grant_owner"].as_str().unwrap().to_string();
+            let caller =
+                case["revoke_caller_plugin"].as_str().unwrap().to_string();
+            let expected = case["expected"].as_str().unwrap().to_string();
+
+            let h = Harness::new();
+            let id = seed_grant_with_owner(&h, &owner).await;
+            std::env::set_var("HARVEY_PLUGIN", &caller);
+            let result = RevokeWriteAccessHandler::new(h.ctx.clone())
+                .call(json!({"grant_id": id}))
+                .await;
+            std::env::remove_var("HARVEY_PLUGIN");
+            match (expected.as_str(), result) {
+                ("allow", Ok(_)) => {}
+                ("reject", Err(e)) => {
+                    assert!(
+                        format!("{e:?}").contains("revoke refused"),
+                        "{name}: expected ownership refusal, got {e:?}"
+                    );
+                }
+                ("allow", Err(e)) => panic!("{name}: expected allow, got {e:?}"),
+                ("reject", Ok(v)) => panic!(
+                    "{name}: expected reject, got success: {}",
+                    v
+                ),
+                (other, _) => panic!("{name}: unknown expected {other:?}"),
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════

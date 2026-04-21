@@ -62,6 +62,13 @@ class Grant:
     granted_by: str = "sebastian"
     plugin: str = "cli"
     origin_turn_id: str = ""
+    # v0.3.3 — `owner` captures the plugin string that created the
+    # grant. `do_revoke` refuses unless the caller's plugin matches
+    # OR the caller is `cli` / `sancho-native` (admin escape hatches).
+    # Defaults to "cli" on the dataclass; `add()` backfills from
+    # `plugin` when omitted; `from_dict` falls back to `plugin` for
+    # backward-compatible reads of pre-v0.3.3 records.
+    owner: str = "cli"
 
     # ── deserialize ────────────────────────────────────────────
     @classmethod
@@ -69,6 +76,7 @@ class Grant:
         created = _parse_iso8601(raw["created_at"])
         expires_raw = raw.get("expires_at")
         expires = _parse_iso8601(expires_raw) if expires_raw else None
+        plugin = str(raw.get("plugin", "cli"))
         return cls(
             id=str(raw["id"]),
             scope=str(raw["scope"]),
@@ -76,8 +84,11 @@ class Grant:
             expires_at=expires,
             label=str(raw.get("label", "")),
             granted_by=str(raw.get("granted_by", "sebastian")),
-            plugin=str(raw.get("plugin", "cli")),
+            plugin=plugin,
             origin_turn_id=str(raw.get("origin_turn_id", "")),
+            # Backward compat: pre-v0.3.3 records have no `owner` field
+            # — attribute ownership to whatever `plugin` claimed.
+            owner=str(raw.get("owner", plugin)),
         )
 
     # ── serialize ──────────────────────────────────────────────
@@ -91,6 +102,7 @@ class Grant:
             "granted_by": self.granted_by,
             "plugin": self.plugin,
             "origin_turn_id": self.origin_turn_id,
+            "owner": self.owner,
         }
 
     # ── predicates ─────────────────────────────────────────────
@@ -341,12 +353,17 @@ class UserGrantsFile:
         plugin: str,
         origin_turn_id: str,
         granted_by: str = "sebastian",
+        owner: str | None = None,
         now: datetime | None = None,
     ) -> Grant:
         """Append one grant, sidecar-locked + atomic rename.
 
         Checks the global rate limit BEFORE mutating; on overflow
         raises RateLimitExceeded without writing anything.
+
+        `owner` defaults to `plugin` — whoever created the grant owns
+        it (v0.3.3). Admin callers (`cli`, `sancho-native`) get a
+        bypass at revoke time, not at create time.
         """
         n = now or _now_utc()
         # Rate-limit check uses the current on-disk active count — NOT
@@ -363,6 +380,7 @@ class UserGrantsFile:
             granted_by=granted_by,
             plugin=plugin,
             origin_turn_id=origin_turn_id,
+            owner=owner if owner is not None else plugin,
         )
         with self._lock():
             # Re-read under lock so we don't clobber a concurrent writer.

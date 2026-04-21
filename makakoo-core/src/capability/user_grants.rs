@@ -70,10 +70,17 @@ pub struct UserGrant {
     pub granted_by: String,
     #[serde(default = "default_plugin")]
     pub plugin: String,
-    /// Host-provided turn identifier. Enforcement-binding deferred to
-    /// v0.3.1 (lope F6).
+    /// Host-provided turn identifier. Enforcement-binding shipped in
+    /// v0.3.1 (Python path) + v0.3.2 (Rust MCP path).
     #[serde(default)]
     pub origin_turn_id: String,
+    /// v0.3.3 — plugin string of the caller that created the grant.
+    /// `do_revoke` refuses unless the caller's plugin matches this
+    /// value OR the caller is an admin bypass (`cli` / `sancho-native`).
+    /// Falls back to `plugin` for pre-v0.3.3 records so existing
+    /// grants remain revocable by the same caller that created them.
+    #[serde(default)]
+    pub owner: String,
 }
 
 fn default_granted_by() -> String {
@@ -167,6 +174,15 @@ impl UserGrants {
                 "user_grants.json version={} (loader expects {}); best-effort parse",
                 parsed.version, SCHEMA_VERSION
             );
+        }
+        // v0.3.3 backward compat: pre-v0.3.3 records have no `owner`
+        // field — fall back to `plugin` so the grant remains revocable
+        // by its original creator. Writes from v0.3.3+ always set
+        // owner explicitly, so this fallback only fires on first load.
+        for g in &mut parsed.grants {
+            if g.owner.is_empty() {
+                g.owner = g.plugin.clone();
+            }
         }
         parsed.path = path.to_path_buf();
         info!(
@@ -424,6 +440,7 @@ mod tests {
             granted_by: "sebastian".into(),
             plugin: "cli".into(),
             origin_turn_id: "".into(),
+            owner: "cli".into(),
         }
     }
 

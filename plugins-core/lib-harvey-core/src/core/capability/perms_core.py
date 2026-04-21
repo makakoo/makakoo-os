@@ -297,6 +297,27 @@ def _audit_grant_denial(args: "GrantArgs", correlation_id: str) -> None:
     )
 
 
+# v0.3.3 — callers allowed to revoke any grant regardless of owner.
+# CLI is the admin escape hatch (Sebastian running `makakoo perms
+# revoke` directly); sancho-native is the background purge path.
+_ADMIN_REVOKE_BYPASS: frozenset[str] = frozenset({"cli", "sancho-native"})
+
+
+def _audit_revoke_denial(
+    args: "RevokeArgs", target_id: str, correlation_id: str
+) -> None:
+    """v0.3.3 Phase A — emit an audit entry when a revoke is refused
+    by the ownership gate. Mirrors `_audit_grant_denial` shape."""
+    log_audit(
+        verb="perms/revoke",
+        scope_requested=target_id,
+        scope_granted=None,
+        result="denied",
+        plugin=args.plugin,
+        correlation_id=correlation_id,
+    )
+
+
 def do_grant(args: GrantArgs, *, now: Optional[datetime] = None) -> str:
     """Core grant flow. Returns the quotable reply string."""
     now = now or datetime.now(tz=timezone.utc)
@@ -432,6 +453,21 @@ def do_revoke(args: RevokeArgs, *, now: Optional[datetime] = None) -> str:
     scope_glob = target.scope[len("fs/write:"):] if target.scope.startswith(
         "fs/write:"
     ) else target.scope
+
+    # v0.3.3 Phase A — ownership gate. A caller can only revoke grants
+    # it owns unless it's an admin escape hatch (`cli`, `sancho-native`).
+    # Prevents compromised-skill-A from wiping skill-B's active grants.
+    if (
+        args.plugin not in _ADMIN_REVOKE_BYPASS
+        and target.owner != args.plugin
+    ):
+        _audit_revoke_denial(args, target.id, "reason:not_owner")
+        raise PermsError(
+            f"revoke refused: grant {target.id} is owned by "
+            f"{target.owner!r}, not {args.plugin!r}. Only the creating "
+            "plugin or an admin caller (cli) may revoke."
+        )
+
     removed = grants_file.remove(target.id)
     if not removed:
         raise PermsError(

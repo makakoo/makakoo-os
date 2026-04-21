@@ -1189,6 +1189,7 @@ mod tests {
                 granted_by: "sebastian".into(),
                 plugin: "cli".into(),
                 origin_turn_id: "".into(),
+                owner: "cli".into(),
             });
         }
         u.save().unwrap();
