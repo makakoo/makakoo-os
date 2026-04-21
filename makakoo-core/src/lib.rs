@@ -6,6 +6,7 @@
 //! Later waves layer superbrain store, event bus, chat store, MCP server,
 //! CLI, SANCHO, nursery, etc. on top of these primitives.
 
+pub mod adapter;
 pub mod agents;
 pub mod capability;
 pub mod chat;

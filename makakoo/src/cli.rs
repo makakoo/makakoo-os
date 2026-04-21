@@ -295,6 +295,15 @@ pub enum Commands {
         cmd: SessionCmd,
     },
 
+    /// Manage external AI-agent adapters — list, inspect, install, update,
+    /// remove, enable/disable, status, doctor, migrate config, export.
+    /// Phase A ships `list`, `info`, and `spec`; later phases add the rest.
+    /// Source of truth for the manifest format: `spec/ADAPTER_MANIFEST.md`.
+    Adapter {
+        #[command(subcommand)]
+        cmd: AdapterCmd,
+    },
+
     /// Emit a shell completion script for the chosen shell.
     ///
     /// Write the output to the shell's completion path to enable
@@ -615,6 +624,36 @@ pub enum NurseryCmd {
     },
     /// List every mascot in the registry.
     List,
+}
+
+/// `makakoo adapter <subcommand>` — external AI-agent bridge.
+#[derive(Subcommand, Debug)]
+pub enum AdapterCmd {
+    /// List every registered adapter. Reads `~/.makakoo/adapters/registered/`
+    /// by default; override via `$MAKAKOO_ADAPTERS_HOME`.
+    List {
+        /// Emit JSON instead of the default table.
+        #[arg(long)]
+        json: bool,
+        /// Also include bundled reference adapters shipped at
+        /// `plugins-core/adapters/<name>/adapter.toml` that are not yet
+        /// installed into the user's registry.
+        #[arg(long)]
+        include_bundled: bool,
+    },
+
+    /// Show the parsed manifest + canonical hash for one adapter.
+    Info {
+        /// Adapter name.
+        name: String,
+        /// Emit JSON instead of a human-readable dump.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Dump the canonical adapter.toml schema description (v1) to stdout.
+    /// Reads from the in-binary copy of `spec/ADAPTER_MANIFEST.md`.
+    Spec,
 }
 
 #[cfg(test)]

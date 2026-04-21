@@ -6,6 +6,7 @@
 //! subsystem). Unexpected failures propagate as `anyhow::Error` and
 //! `main.rs` prints them via `output::print_error`.
 
+pub mod adapter;
 pub mod buddy;
 pub mod distro;
 pub mod dream;
@@ -108,6 +109,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             crate::infect::uninfect_global(target, dry_run).await
         }
         Commands::Session { cmd } => session::run(ctx, cmd).await,
+        Commands::Adapter { cmd } => adapter::run(ctx, cmd),
     }
 }
 
