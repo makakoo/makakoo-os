@@ -1,6 +1,7 @@
 # User Grants — File Format, Lock Protocol, and API
 
-**Version:** 1.1 (hardening 2026-04-21 at Gate H of
+**Version:** 1.2 (Rust MCP parity 2026-04-21 at
+`MAKAKOO-OS-V0.3.2-MCP-PARITY`; v1.1 hardening at
 `MAKAKOO-OS-V0.3.1-PERMS-HARDENING`; base locked at v1.0 Gate G.2 of
 `MAKAKOO-OS-V0.3-USER-GRANTS`). Revisions go in §14.
 
@@ -451,3 +452,20 @@ implementations to catch glob-semantic drift.
     refuses when `args.plugin ∈ CONVERSATIONAL_CHANNELS` and
     `args.origin_turn_id` is empty. Closes R2 in the threat model.
     Python-only this sprint; Rust MCP handler mirror is v0.3.2.
+- **v1.2 (Rust MCP parity)** — 2026-04-21,
+  `MAKAKOO-OS-V0.3.2-MCP-PARITY`. Port v1.1's Phase B + C to the
+  Rust MCP direct path (`makakoo-mcp/src/handlers/tier_b/perms.rs`):
+  - `makakoo_core::capability::CONVERSATIONAL_CHANNELS` constant +
+    `is_conversational_channel(plugin)` helper.
+  - Phase C origin_turn_id gate fires before every other check;
+    rejection emits `correlation_id="reason:missing_origin_turn_id"`
+    audit.
+  - Phase B — every `bail!`/`return Err` in the grant handler
+    emits the same `reason:<kind>` denial audit as Python
+    (taxonomy unchanged: `too_broad`, `bad_duration`,
+    `permanent_outside_home_unconfirmed`, `rate_limit_active`,
+    `rate_limit_hourly`).
+  - Shared drift fixture at
+    `plugins-core/lib-harvey-core/tests/fixtures/conversational_channels.json`
+    loaded by both sides. Drift-gate tests in both suites.
+  - R2 now FULLY CLOSED — no residual T1 for the Rust direct path.

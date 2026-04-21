@@ -231,7 +231,7 @@ against that fd's path, `openat(parent_fd, filename, O_CREAT|O_NOFOLLOW)`.
 symlinks, Sebastian's tmp dir is not writable by anyone else, there's
 no attacker process with filesystem rights. Tracked for completeness.
 
-### R2 — `origin_turn_id` schema-present, enforcement-deferred (lope F6) — **CLOSED in v0.3.1**
+### R2 — `origin_turn_id` schema-present, enforcement-deferred (lope F6) — **FULLY CLOSED in v0.3.2** (Python closure in v0.3.1, Rust MCP parity in v0.3.2)
 
 **v0.3 status (preserved for history).** The grant schema carries
 `origin_turn_id` (msg-id for Telegram, turn-uuid for Claude Code,
@@ -257,18 +257,19 @@ Scope of the v0.3.1 fix:
   unaffected. SANCHO native handlers use `plugin="sancho-native"` —
   also unaffected.
 
-Scope NOT yet covered (tracked as v0.3.2 item):
+**v0.3.2 closure (`MAKAKOO-OS-V0.3.2-MCP-PARITY` Phase 1).** The Rust
+MCP handler at `makakoo-mcp/src/handlers/tier_b/perms.rs::GrantWriteAccessHandler::call`
+now runs the same origin_turn_id gate as Python — `is_conversational_channel(plugin)
+&& user_turn_id.is_empty()` → `invalid_params` error + denial audit
+with `correlation_id="reason:missing_origin_turn_id"`. A shared fixture
+at `plugins-core/lib-harvey-core/tests/fixtures/conversational_channels.json`
+drives a drift-gate test on both sides — adding a plugin slug to one
+list without the other fails both suites.
 
-- Direct Rust MCP handler at
-  `makakoo-mcp/src/handlers/tier_b/perms.rs`. The handler writes the
-  grant record with `origin_turn_id=user_turn_id.to_string()` but
-  does not refuse on empty. Python is the canonical conversational
-  path, so this is a minor parity gap — the MCP handler is still
-  functional, just slightly weaker.
-
-**Residual:** R2 is CLOSED for the Python hot path (where every
-infected CLI + HarveyChat + Telegram actually lives); the Rust MCP
-direct path remains T1 residual until v0.3.2.
+**Residual:** R2 is **fully closed**. Both the Python conversational
+path (HarveyChat, Telegram, HARVEY_TOOLS) and the Rust MCP direct path
+(Claude Code, Cursor, Vibe, every MCP-native CLI) now enforce the
+gate. No open residual for R2.
 
 ### R3 — Brain writes ungated by design (LD#7, lope F10)
 

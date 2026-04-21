@@ -36,6 +36,46 @@ pub use rate_limit::{
     decrement as rate_limit_decrement, RateLimitError, MAX_ACTIVE_GRANTS,
     MAX_CREATES_PER_HOUR,
 };
+
+/// Plugin identifiers that represent a live human conversational turn.
+///
+/// Grants from these surfaces MUST carry a non-empty `origin_turn_id`
+/// binding the grant to the human turn that issued the "yes". An empty
+/// `origin_turn_id` from one of these plugins is a prompt-injection
+/// signature — a legit tool call from the host carries the turn id;
+/// a fabricated one from an agent's own output doesn't.
+///
+/// Mirrors the Python `CONVERSATIONAL_CHANNELS` frozenset in
+/// `plugins-core/lib-harvey-core/src/core/capability/perms_core.py`.
+/// A shared drift fixture at
+/// `plugins-core/lib-harvey-core/tests/fixtures/conversational_channels.json`
+/// is loaded by both sides; adding a plugin to one list without the
+/// other fails both test suites in lockstep.
+///
+/// **Additive only.** Never remove an existing entry — downstream
+/// plugin attributions rely on the stability of this set. New chat
+/// surfaces must be appended.
+pub const CONVERSATIONAL_CHANNELS: &[&str] = &[
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini-cli",
+    "harveychat",
+    "harveychat-telegram",
+    "harveychat-web",
+    "opencode",
+    "pi",
+    "qwen",
+    "vibe",
+];
+
+/// True when the plugin identifier is on the conversational-channel
+/// list. Membership uses exact-string match; unknown plugins default
+/// to non-conversational (allows CI / scripted surfaces to call
+/// `grant_write_access` without `origin_turn_id`).
+pub fn is_conversational_channel(plugin: &str) -> bool {
+    CONVERSATIONAL_CHANNELS.contains(&plugin)
+}
 pub use service::{
     CompositeHandler, EnvSecretBackend, InMemorySecretBackend, SecretBackend,
     SecretError, SecretHandler, StateError, StateHandler,

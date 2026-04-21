@@ -27,8 +27,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 
 use makakoo_core::capability::{
-    rate_limit, user_grants::UserGrant, AuditEntry, AuditLog, AuditResult,
-    UserGrants,
+    is_conversational_channel, rate_limit, user_grants::UserGrant, AuditEntry,
+    AuditLog, AuditResult, UserGrants, MAX_ACTIVE_GRANTS,
 };
 
 use crate::dispatch::{ToolContext, ToolHandler};
@@ -138,6 +138,26 @@ fn emit_perms_audit(
     result: AuditResult,
     plugin: &str,
 ) {
+    emit_perms_audit_with_correlation(
+        ctx,
+        verb,
+        scope_requested,
+        scope_granted,
+        result,
+        plugin,
+        None,
+    );
+}
+
+fn emit_perms_audit_with_correlation(
+    ctx: &ToolContext,
+    verb: &str,
+    scope_requested: &str,
+    scope_granted: Option<&str>,
+    result: AuditResult,
+    plugin: &str,
+    correlation_id: Option<&str>,
+) {
     if let Ok(log) = AuditLog::open_default(&ctx.home) {
         let entry = AuditEntry {
             ts: Utc::now(),
@@ -150,10 +170,33 @@ fn emit_perms_audit(
             duration_ms: None,
             bytes_in: None,
             bytes_out: None,
-            correlation_id: None,
+            correlation_id: correlation_id.map(str::to_string),
         };
         let _ = log.append(&entry);
     }
+}
+
+/// v0.3.2 Phase B mirror — every grant refusal lands one
+/// `result="denied"` entry with a `correlation_id="reason:<kind>"`
+/// taxonomy tag before the error surfaces. Mirrors the Python
+/// `_audit_grant_denial` helper in `perms_core.py`. The `path_for_audit`
+/// is the user-supplied raw path (not the expanded one) so the audit
+/// line shows exactly what was asked for.
+fn audit_grant_denial(
+    ctx: &ToolContext,
+    path_for_audit: &str,
+    plugin: &str,
+    correlation_id: &str,
+) {
+    emit_perms_audit_with_correlation(
+        ctx,
+        "perms/grant",
+        path_for_audit,
+        None,
+        AuditResult::Denied,
+        plugin,
+        Some(correlation_id),
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -288,8 +331,47 @@ impl ToolHandler for GrantWriteAccessHandler {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let abs = validate_and_expand_scope(path)?;
-        let dur = parse_duration_str(duration)?;
+        let plugin = caller_plugin();
+
+        // v0.3.2 Phase C — conversational channels require non-empty
+        // origin_turn_id. Fail-fast before any other check so
+        // prompt-injected calls show up in audit with a provenance
+        // signal, not a guardrail one. Mirrors the Python check in
+        // `perms_core.do_grant`. CLI + sancho-native + unknown plugins
+        // bypass by design — they don't carry a human turn.
+        if is_conversational_channel(&plugin) && user_turn_id.is_empty() {
+            audit_grant_denial(
+                &self.ctx,
+                path,
+                &plugin,
+                "reason:missing_origin_turn_id",
+            );
+            return Err(RpcError::invalid_params(format!(
+                "origin_turn_id required on conversational channels \
+                 (plugin={plugin}); this grant call appears to be \
+                 agent-initiated without a human turn binding"
+            )));
+        }
+
+        let abs = match validate_and_expand_scope(path) {
+            Ok(a) => a,
+            Err(e) => {
+                audit_grant_denial(&self.ctx, path, &plugin, "reason:too_broad");
+                return Err(e);
+            }
+        };
+        let dur = match parse_duration_str(duration) {
+            Ok(d) => d,
+            Err(e) => {
+                audit_grant_denial(
+                    &self.ctx,
+                    path,
+                    &plugin,
+                    "reason:bad_duration",
+                );
+                return Err(e);
+            }
+        };
         let now = Utc::now();
         let expires_at: Option<DateTime<Utc>> = dur.map(|d| now + d);
 
@@ -301,6 +383,12 @@ impl ToolHandler for GrantWriteAccessHandler {
                 std::fs::canonicalize(&abs).unwrap_or_else(|_| std::path::PathBuf::from(&abs));
             let inside_home = path_real.starts_with(&home_real);
             if !inside_home && confirm != "yes-really" {
+                audit_grant_denial(
+                    &self.ctx,
+                    path,
+                    &plugin,
+                    "reason:permanent_outside_home_unconfirmed",
+                );
                 return Err(RpcError::invalid_params(format!(
                     "permanent grant outside $MAKAKOO_HOME ({abs}) requires confirm=\"yes-really\""
                 )));
@@ -310,7 +398,18 @@ impl ToolHandler for GrantWriteAccessHandler {
         // Rate-limit check + store mutate.
         let mut grants = UserGrants::load(&self.ctx.home);
         let active_count = grants.active_grants(now).len();
+        // Pre-derive the rate-limit denial reason: if the active cap
+        // is already at/above the limit, `check_and_increment` bails
+        // on that branch (creates_in_window is not incremented). Any
+        // other failure is the per-hour cap. Mirrors Python's
+        // `e.creates_in_window == 0` discriminator.
         if let Err(e) = rate_limit::check_and_increment(active_count, &self.ctx.home, now) {
+            let reason = if active_count >= MAX_ACTIVE_GRANTS {
+                "reason:rate_limit_active"
+            } else {
+                "reason:rate_limit_hourly"
+            };
+            audit_grant_denial(&self.ctx, path, &plugin, reason);
             return Err(RpcError::invalid_params(e.to_string()));
         }
 
@@ -321,7 +420,7 @@ impl ToolHandler for GrantWriteAccessHandler {
             expires_at,
             label: makakoo_core::capability::escape_audit_field(label, 80),
             granted_by: "sebastian".to_string(),
-            plugin: caller_plugin(),
+            plugin: plugin.clone(),
             origin_turn_id: user_turn_id.to_string(),
         };
         grants.add(new_grant.clone());
@@ -335,7 +434,7 @@ impl ToolHandler for GrantWriteAccessHandler {
             &new_grant.scope,
             Some(&new_grant.id),
             AuditResult::Allowed,
-            &caller_plugin(),
+            &plugin,
         );
 
         Ok(json!({ "reply": grant_success_msg(&new_grant), "grant_id": new_grant.id }))
@@ -585,10 +684,17 @@ mod tests {
         _tmp: TempDir,
         home: std::path::PathBuf,
         ctx: Arc<ToolContext>,
+        // `_lock` serialises any test touching HARVEY_PLUGIN /
+        // MAKAKOO_HOME env vars against every other test in this
+        // module. The env is process-global — without this, Rust's
+        // default parallel runner races plugin attribution across
+        // concurrent handler invocations.
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl Harness {
         fn new() -> Self {
+            let lock = env_lock();
             let tmp = TempDir::new().unwrap();
             let home = std::fs::canonicalize(tmp.path()).unwrap();
             for d in ["config", "state", "logs"] {
@@ -605,6 +711,7 @@ mod tests {
                 _tmp: tmp,
                 home,
                 ctx,
+                _lock: lock,
             }
         }
 
@@ -612,6 +719,18 @@ mod tests {
             let h = self.home.to_string_lossy().to_string();
             substitute_home(v, &h)
         }
+    }
+
+    /// Guard: serialise tests that mutate `HARVEY_PLUGIN` or rely on
+    /// a predictable env state. Every Harness::new() acquires this;
+    /// plain `#[test]` functions that don't use Harness should also
+    /// acquire it if they touch env.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     fn substitute_home(v: &Value, home: &str) -> Value {
@@ -775,6 +894,232 @@ mod tests {
             format!("{err:?}").contains("rate limit"),
             "expected rate limit, got {err:?}"
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  v0.3.2 Phase B — denial-audit wrapping (reason: taxonomy)
+    // ═══════════════════════════════════════════════════════════
+
+    /// Parse `<home>/logs/audit.jsonl` into a Vec<Value>. Lines that
+    /// don't deserialize are dropped — matches the Python helper.
+    fn read_audit(home: &std::path::Path) -> Vec<Value> {
+        let p = home.join("logs/audit.jsonl");
+        let Ok(data) = std::fs::read_to_string(&p) else {
+            return Vec::new();
+        };
+        data.lines()
+            .filter_map(|line| serde_json::from_str(line.trim()).ok())
+            .collect()
+    }
+
+    fn last_denial<'a>(entries: &'a [Value]) -> Option<&'a Value> {
+        entries
+            .iter()
+            .rev()
+            .find(|e| e.get("result").and_then(Value::as_str) == Some("denied"))
+    }
+
+    #[tokio::test]
+    async fn phase_b_too_broad_denial_audited() {
+        let h = Harness::new();
+        let err = GrantWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({"path": "/"}))
+            .await
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("too broad"));
+        let entries = read_audit(&h.home);
+        let d = last_denial(&entries).expect("denial entry not written");
+        assert_eq!(d["verb"].as_str(), Some("perms/grant"));
+        assert_eq!(
+            d["correlation_id"].as_str(),
+            Some("reason:too_broad"),
+            "{d:?}"
+        );
+        assert!(d["scope_granted"].is_null());
+        assert_eq!(d["scope_requested"].as_str(), Some("/"));
+    }
+
+    #[tokio::test]
+    async fn phase_b_bad_duration_denial_audited() {
+        let h = Harness::new();
+        let tgt = h.home.join("phase-b-dur");
+        std::fs::create_dir_all(&tgt).unwrap();
+        let err = GrantWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({"path": tgt.to_string_lossy(), "duration": "forever"}))
+            .await
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("unsupported duration"));
+        let entries = read_audit(&h.home);
+        let d = last_denial(&entries).expect("denial entry not written");
+        assert_eq!(
+            d["correlation_id"].as_str(),
+            Some("reason:bad_duration"),
+            "{d:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase_b_permanent_outside_home_denial_audited() {
+        let h = Harness::new();
+        // tmpdir outside the isolated HOME — `/tmp/phase-b-perm-<pid>`
+        let outside = std::env::temp_dir()
+            .join(format!("phase-b-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        let outside_str = outside.to_string_lossy().to_string();
+
+        let err = GrantWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({
+                "path": outside_str.clone(),
+                "duration": "permanent"
+            }))
+            .await
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("yes-really"));
+        let entries = read_audit(&h.home);
+        let d = last_denial(&entries).expect("denial entry not written");
+        assert_eq!(
+            d["correlation_id"].as_str(),
+            Some("reason:permanent_outside_home_unconfirmed"),
+            "{d:?}"
+        );
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[tokio::test]
+    async fn phase_b_rate_limit_active_denial_audited() {
+        let h = Harness::new();
+        let grant_h = GrantWriteAccessHandler::new(h.ctx.clone());
+        for i in 0..MAX_ACTIVE_GRANTS {
+            let tgt = h.home.join(format!("active-seed-{i}"));
+            std::fs::create_dir_all(&tgt).unwrap();
+            grant_h
+                .call(json!({
+                    "path": tgt.to_string_lossy(),
+                    "duration": "1h"
+                }))
+                .await
+                .unwrap();
+        }
+        let over = h.home.join("over");
+        std::fs::create_dir_all(&over).unwrap();
+        let err = grant_h
+            .call(json!({"path": over.to_string_lossy(), "duration": "1h"}))
+            .await
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("active grants"));
+        let entries = read_audit(&h.home);
+        let d = last_denial(&entries).expect("denial entry not written");
+        assert_eq!(
+            d["correlation_id"].as_str(),
+            Some("reason:rate_limit_active"),
+            "{d:?}"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  v0.3.2 Phase C — origin_turn_id enforcement
+    // ═══════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn phase_c_rejects_conversational_without_origin_turn_id() {
+        let h = Harness::new();
+        std::env::set_var("HARVEY_PLUGIN", "claude-code");
+        let tgt = h.home.join("phase-c-conv");
+        std::fs::create_dir_all(&tgt).unwrap();
+        let err = GrantWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({
+                "path": tgt.to_string_lossy(),
+                "duration": "1h"
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("origin_turn_id required"),
+            "{err:?}"
+        );
+        let entries = read_audit(&h.home);
+        let d = last_denial(&entries).expect("denial entry not written");
+        assert_eq!(
+            d["correlation_id"].as_str(),
+            Some("reason:missing_origin_turn_id"),
+            "{d:?}"
+        );
+        assert_eq!(d["plugin"].as_str(), Some("claude-code"), "{d:?}");
+        std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    #[tokio::test]
+    async fn phase_c_accepts_conversational_with_origin_turn_id() {
+        let h = Harness::new();
+        std::env::set_var("HARVEY_PLUGIN", "gemini-cli");
+        let tgt = h.home.join("phase-c-conv-ok");
+        std::fs::create_dir_all(&tgt).unwrap();
+        let out = GrantWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({
+                "path": tgt.to_string_lossy(),
+                "duration": "1h",
+                "user_turn_id": "t_abc123"
+            }))
+            .await
+            .unwrap();
+        assert!(out["reply"].as_str().unwrap_or("").contains("Granted."));
+        std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    #[tokio::test]
+    async fn phase_c_cli_bypasses_origin_turn_id_gate() {
+        let h = Harness::new();
+        std::env::set_var("HARVEY_PLUGIN", "cli");
+        let tgt = h.home.join("phase-c-cli");
+        std::fs::create_dir_all(&tgt).unwrap();
+        let out = GrantWriteAccessHandler::new(h.ctx.clone())
+            .call(json!({
+                "path": tgt.to_string_lossy(),
+                "duration": "1h"
+            }))
+            .await
+            .unwrap();
+        assert!(out["reply"].as_str().unwrap_or("").contains("Granted."));
+        std::env::remove_var("HARVEY_PLUGIN");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  v0.3.2 drift-gate — CONVERSATIONAL_CHANNELS shared fixture
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn conversational_channels_fixture_matches_rust_const() {
+        use makakoo_core::capability::CONVERSATIONAL_CHANNELS;
+        let bytes = include_bytes!(
+            "../../../../plugins-core/lib-harvey-core/tests/fixtures/conversational_channels.json"
+        );
+        let fixture: Value = serde_json::from_slice(bytes).expect("valid fixture");
+        let fixture_set: std::collections::BTreeSet<&str> = fixture["channels"]
+            .as_array()
+            .expect("channels array")
+            .iter()
+            .map(|v| v.as_str().expect("string"))
+            .collect();
+        let rust_set: std::collections::BTreeSet<&str> =
+            CONVERSATIONAL_CHANNELS.iter().copied().collect();
+        assert_eq!(
+            fixture_set, rust_set,
+            "Rust CONVERSATIONAL_CHANNELS diverged from shared fixture.\n\
+             Only in fixture: {:?}\nOnly in Rust: {:?}",
+            fixture_set.difference(&rust_set).collect::<Vec<_>>(),
+            rust_set.difference(&fixture_set).collect::<Vec<_>>()
+        );
+        // Sanity on the negative examples too — none should be in the set.
+        for non in fixture["non_conversational_examples"]
+            .as_array()
+            .expect("non_conversational_examples array")
+        {
+            let name = non.as_str().unwrap();
+            assert!(
+                !is_conversational_channel(name),
+                "{name} should NOT be a conversational channel"
+            );
+        }
     }
 
     #[tokio::test]

@@ -10,6 +10,32 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Fixed — v0.3.2 Rust MCP Phase B/C parity (`MAKAKOO-OS-V0.3.2-MCP-PARITY`, 2026-04-21)
+- **Rust MCP `grant_write_access` now enforces `origin_turn_id` on
+  conversational channels.** v0.3.1 closed the gap for the Python
+  conversational path (HarveyChat, Telegram, infected-CLI
+  HARVEY_TOOLS dispatch). The Rust MCP handler at
+  `makakoo-mcp/src/handlers/tier_b/perms.rs` — which is what Claude
+  Code, Cursor, Vibe, and every other MCP-native CLI actually calls —
+  did not. Now it does. Closes R2's residual T1 for the Rust direct
+  path in `spec/USER_GRANTS_THREAT_MODEL.md`.
+- **Every Rust MCP grant refusal now writes a
+  `result="denied"` audit entry** with the same
+  `correlation_id="reason:<kind>"` taxonomy as Python: `too_broad`,
+  `bad_duration`, `permanent_outside_home_unconfirmed`,
+  `rate_limit_active`, `rate_limit_hourly`,
+  `missing_origin_turn_id`. Python and Rust now emit identical
+  denial signals — IDS / forensic tooling no longer has to special-
+  case which runtime emitted the refusal.
+- **Shared drift-gate fixture** at
+  `plugins-core/lib-harvey-core/tests/fixtures/conversational_channels.json`
+  is loaded by both Python and Rust tests. Both sides assert their
+  own `CONVERSATIONAL_CHANNELS` set equals the fixture — adding a
+  plugin slug on one side without the other fails both suites.
+- New `makakoo_core::capability::CONVERSATIONAL_CHANNELS` + 
+  `is_conversational_channel(plugin)` exported for downstream
+  consumers.
+
 ### Fixed — v0.3.1 User-Grants Hardening (`MAKAKOO-OS-V0.3.1-PERMS-HARDENING`, 2026-04-21)
 - **Rate-limit self-DoS closed.** `creates_in_window` now decrements
   on revoke (symmetric with increment-on-grant). Without this a single
