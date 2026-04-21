@@ -9,7 +9,9 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color as TableColor, Table};
 use crossterm::style::Stylize;
 use serde_json::json;
 
-use makakoo_core::adapter::{AdapterRegistry, Manifest};
+use makakoo_core::adapter::{
+    call_adapter, AdapterRegistry, CallContext, Manifest,
+};
 
 use crate::cli::AdapterCmd;
 use crate::context::CliContext;
@@ -17,7 +19,7 @@ use crate::output;
 
 const ADAPTER_SPEC: &str = include_str!("../../../spec/ADAPTER_MANIFEST.md");
 
-pub fn run(_ctx: &CliContext, cmd: AdapterCmd) -> anyhow::Result<i32> {
+pub fn run(ctx: &CliContext, cmd: AdapterCmd) -> anyhow::Result<i32> {
     match cmd {
         AdapterCmd::List {
             json,
@@ -25,6 +27,12 @@ pub fn run(_ctx: &CliContext, cmd: AdapterCmd) -> anyhow::Result<i32> {
         } => list(json, include_bundled),
         AdapterCmd::Info { name, json } => info(&name, json),
         AdapterCmd::Spec => spec(),
+        AdapterCmd::Call {
+            name,
+            prompt,
+            timeout,
+            bundled,
+        } => call(ctx, &name, prompt, timeout, bundled),
     }
 }
 
@@ -184,6 +192,62 @@ fn info(name: &str, as_json: bool) -> anyhow::Result<i32> {
 fn spec() -> anyhow::Result<i32> {
     print!("{ADAPTER_SPEC}");
     Ok(0)
+}
+
+/// Run the adapter with a prompt, emit a single JSON `ValidatorResult` on
+/// stdout. Never exits nonzero on transport/parse failure — a verdict with
+/// `INFRA_ERROR` status is still a valid result row for lope/swarm.
+/// Exits nonzero only when the adapter cannot be resolved at all.
+fn call(
+    _ctx: &CliContext,
+    name: &str,
+    prompt: Option<String>,
+    timeout: u64,
+    bundled: bool,
+) -> anyhow::Result<i32> {
+    let registry = AdapterRegistry::load_default()
+        .unwrap_or_else(|_| AdapterRegistry::load(PathBuf::new()).expect("empty"));
+    let manifest: Manifest = if let Some(r) = registry.get(name) {
+        r.manifest.clone()
+    } else if bundled {
+        match load_bundled_adapters().into_iter().find(|b| b.manifest.adapter.name == name) {
+            Some(b) => b.manifest,
+            None => {
+                output::print_error(format!(
+                    "no adapter named `{name}` (neither registered nor bundled)"
+                ));
+                return Ok(1);
+            }
+        }
+    } else {
+        output::print_error(format!(
+            "no adapter named `{name}` registered — pass `--bundled` to call a reference adapter"
+        ));
+        return Ok(1);
+    };
+
+    // Resolve the prompt. Stdin read is blocking so we spin up a runtime
+    // only when we actually need one.
+    let resolved_prompt = match prompt {
+        Some(p) => p,
+        None => read_stdin_prompt()?,
+    };
+
+    let ctx_call = CallContext::default().with_timeout(timeout);
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async { call_adapter(&manifest, &resolved_prompt, ctx_call).await });
+
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(0)
+}
+
+fn read_stdin_prompt() -> anyhow::Result<String> {
+    use std::io::Read as _;
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    Ok(buf)
 }
 
 struct AdapterRow {

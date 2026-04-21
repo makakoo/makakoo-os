@@ -654,6 +654,26 @@ pub enum AdapterCmd {
     /// Dump the canonical adapter.toml schema description (v1) to stdout.
     /// Reads from the in-binary copy of `spec/ADAPTER_MANIFEST.md`.
     Spec,
+
+    /// Call a registered adapter with a prompt. Reads prompt from stdin by
+    /// default, or pass via `--prompt`. Writes a single JSON
+    /// ValidatorResult to stdout — the same shape lope's Python
+    /// `PhaseVerdict` + `ValidatorResult` dataclasses hydrate from. This
+    /// is the interop seam lope's GenericAdapterValidator shells into.
+    Call {
+        /// Adapter name as registered (or bundled via `--bundled`).
+        name: String,
+        /// Provide the prompt inline instead of reading stdin.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Request timeout in seconds.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
+        /// Resolve the adapter from `plugins-core/adapters/` in addition
+        /// to the registered dir.
+        #[arg(long)]
+        bundled: bool,
+    },
 }
 
 #[cfg(test)]
