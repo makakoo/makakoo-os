@@ -22,6 +22,41 @@ from ..core.errors import FreelanceError, NotInitialisedError
 from ..core.tax import get_regime
 
 
+def _post_generate_summary(year: int, home: Path, country: str, s) -> str:
+    """One-line summary: open invoices + threshold percentage.
+
+    Pi scope-undershoot: every ``generate-invoice`` envelope gets a
+    grep-friendly line ("3 open invoices totalling €X at Y% of
+    threshold") so Sebastian doesn't have to open ``dashboard`` to
+    see where things stand.
+    """
+    open_count = 0
+    open_amount = 0.0
+    for rec in earnings.iter_rows(year, home):
+        status = (rec.get("status") or "").lower()
+        if "bezahlt" in status and "teilweise" not in status:
+            continue
+        if "pagad" in status and "parcial" not in status and "parcialmente" not in status:
+            continue
+        open_count += 1
+        open_amount += float(rec.get("net") or 0)
+
+    ytd = earnings.ytd_total(year, root=home)
+    pct_used = None
+    try:
+        regime = get_regime(country)
+        status_obj = regime.check_threshold(s, ytd)
+        pct_used = status_obj.pct_used
+    except Exception:
+        pct_used = None
+
+    pct_txt = f"{pct_used}% of threshold" if pct_used is not None else "no applicable threshold"
+    return (
+        f"{open_count} open invoices totalling "
+        f"€{open_amount:,.2f} at {pct_txt}"
+    )
+
+
 def add_arguments(parser):
     parser.add_argument("--client", required=True)
     parser.add_argument("--project", required=True)
@@ -215,6 +250,7 @@ def run(args) -> Dict[str, Any]:
         }
         if want_pdf:
             envelope["pdf_path"] = str(pdf_path)
+        envelope["summary"] = _post_generate_summary(year, home, s.office.country, s)
         return envelope
 
     invoices_dir.mkdir(parents=True, exist_ok=True)
@@ -292,4 +328,6 @@ def run(args) -> Dict[str, Any]:
     }
     if want_pdf:
         envelope["pdf_path"] = str(pdf_path) if pdf_path else None
+    # Pi scope-undershoot: post-generate summary line.
+    envelope["summary"] = _post_generate_summary(year, home, s.office.country, s)
     return envelope

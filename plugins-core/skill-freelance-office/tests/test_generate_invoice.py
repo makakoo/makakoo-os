@@ -97,3 +97,16 @@ def test_dry_run_preview_does_not_allocate(tmp_freelance_home, no_brain):
     # Counter not written (file may not exist yet since we dry-ran first call)
     from src.core import invoice_counter
     assert invoice_counter.peek(2026) == 0
+
+
+def test_generate_invoice_envelope_carries_summary_field(tmp_freelance_home, no_brain):
+    """Phase 5 / pi scope-undershoot: every generate-invoice envelope
+    ships a post-generate ``summary`` line so callers don't need to
+    run ``dashboard`` to see where things stand."""
+    _setup(tmp_freelance_home, no_brain, ku=True)
+    r = cmd.run(_ns(client="c1", project="p1", amount_net=5000))
+    assert "summary" in r, r
+    assert "open invoices" in r["summary"]
+    # With kleinunternehmer=true the threshold is meaningful → expect
+    # a percentage in the summary.
+    assert "%" in r["summary"]
