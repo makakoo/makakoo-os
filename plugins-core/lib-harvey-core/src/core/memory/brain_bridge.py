@@ -286,6 +286,153 @@ def sync_inbound_to_brain(sender: str, subject: str, snippet: str, msg_id: str, 
     return create_page(page_name, props, content.strip())
 
 
+# --- v0.2 C.1 additions -----------------------------------------------------
+# `create_page`, `upsert_property`, `append_block`, `execute_query` already
+# cover the base read/write API. The helpers below round out the surface
+# Phase C needs: dict-based property upserts, search, full page enumeration,
+# and a one-liner wikilink appender.
+
+
+def upsert_page_properties(
+    page_name: str,
+    properties: dict,
+) -> bool:
+    """Upsert multiple properties on a page in one call.
+
+    Equivalent to calling `upsert_property(page_name, k, v)` for every
+    item in `properties` but only writes the file once. If the page
+    doesn't exist it's created with those properties.
+    """
+    try:
+        os.makedirs(PAGES_DIR, exist_ok=True)
+        path = _page_file_path(page_name)
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                lines = f.read().splitlines()
+        else:
+            lines = ["---", "type:: page", "---"]
+
+        for key, value in properties.items():
+            prefix = f"{key}::"
+            idx = None
+            for i, line in enumerate(lines):
+                if line.startswith(prefix):
+                    idx = i
+                    break
+            if idx is not None:
+                lines[idx] = f"{key}:: {value}"
+            else:
+                insert_at = len(lines)
+                for i, line in enumerate(lines):
+                    if line.strip() == "---" and i > 0:
+                        insert_at = i
+                        break
+                lines.insert(insert_at, f"{key}:: {value}")
+
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        return True
+    except OSError as e:
+        print(
+            f"[brain_bridge] Failed to upsert properties on {page_name}: {e}",
+            file=sys.stderr,
+        )
+        return False
+
+
+def search(pattern: str, limit: int = 50) -> list:
+    """Case-insensitive substring search over page NAMES and BODIES.
+
+    Returns a list of dicts `{"name": str, "path": str, "match": "name"|"body"}`
+    in best-match-first order (name hits before body hits). Falls back to
+    a plain filesystem walk if the Logseq accelerator's queryPages isn't
+    available; the accelerator path is preferred because it uses the
+    Logseq-side index and doesn't touch every file.
+    """
+    if not pattern:
+        return []
+    needle = pattern.lower()
+
+    hits: list = []
+
+    accelerated = _try_accelerator(
+        "logseq.DB.q",
+        [f'[:find ?name :where [?p :block/name ?name] [(re-find #"{pattern}" ?name)]]'],
+    )
+    if accelerated and isinstance(accelerated, list):
+        for item in accelerated[:limit]:
+            name = item[0] if isinstance(item, list) else item
+            hits.append({"name": str(name), "path": _page_file_path(str(name)), "match": "name"})
+        if hits:
+            return hits
+
+    # Filesystem fallback.
+    if not os.path.isdir(PAGES_DIR):
+        return []
+    name_hits: list = []
+    body_hits: list = []
+    for fname in sorted(os.listdir(PAGES_DIR)):
+        if not fname.endswith(".md"):
+            continue
+        if len(name_hits) + len(body_hits) >= limit:
+            break
+        stem = fname[:-3]
+        path = os.path.join(PAGES_DIR, fname)
+        if needle in stem.lower():
+            name_hits.append({"name": stem, "path": path, "match": "name"})
+            continue
+        try:
+            with open(path, "r", errors="replace") as f:
+                if needle in f.read().lower():
+                    body_hits.append({"name": stem, "path": path, "match": "body"})
+        except OSError:
+            continue
+    return (name_hits + body_hits)[:limit]
+
+
+def get_all_pages() -> list:
+    """List every page in the graph. Returns a list of `{name, path}` dicts."""
+    if not os.path.isdir(PAGES_DIR):
+        return []
+    out: list = []
+    for fname in sorted(os.listdir(PAGES_DIR)):
+        if not fname.endswith(".md"):
+            continue
+        out.append({
+            "name": fname[:-3],
+            "path": os.path.join(PAGES_DIR, fname),
+        })
+    return out
+
+
+def page_exists(page_name: str) -> bool:
+    """Return True if a page file exists on disk. Cheap — no API call."""
+    return os.path.exists(_page_file_path(page_name))
+
+
+def link(from_page: str, to_page: str, label: str = "") -> bool:
+    """Append a wikilink bullet on `from_page` pointing at `to_page`.
+
+    The bullet body is `[[to_page]]` or `label [[to_page]]` if the caller
+    passes a human-readable prefix. Idempotent: if the exact bullet
+    already exists on the page we don't duplicate it.
+    """
+    bullet = f"[[{to_page}]]" if not label else f"{label} [[{to_page}]]"
+    try:
+        os.makedirs(PAGES_DIR, exist_ok=True)
+        path = _page_file_path(from_page)
+        existing = ""
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                existing = f.read()
+        if f"- {bullet}\n" in existing:
+            return True
+    except OSError as e:
+        print(f"[brain_bridge] link precheck on {from_page} failed: {e}", file=sys.stderr)
+        return False
+    return append_block(from_page, bullet)
+
+
 # --- Convenience -------------------------------------------------------------
 
 def append_to_page(page_name: str, block_content: str) -> bool:
@@ -324,6 +471,11 @@ class Brain:
     def create_journal_page(self, *a, **kw): return create_journal_page(*a, **kw)
     def append_block(self, *a, **kw): return append_block(*a, **kw)
     def upsert_property(self, *a, **kw): return upsert_property(*a, **kw)
+    def upsert_page_properties(self, *a, **kw): return upsert_page_properties(*a, **kw)
+    def page_exists(self, *a, **kw): return page_exists(*a, **kw)
+    def search(self, *a, **kw): return search(*a, **kw)
+    def get_all_pages(self, *a, **kw): return get_all_pages(*a, **kw)
+    def link(self, *a, **kw): return link(*a, **kw)
     def execute_query(self, *a, **kw): return execute_query(*a, **kw)
     def get_page_blocks_tree(self, *a, **kw): return get_page_blocks_tree(*a, **kw)
     def sync_lead_to_brain(self, *a, **kw): return sync_lead_to_brain(*a, **kw)

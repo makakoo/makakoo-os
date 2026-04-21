@@ -1,23 +1,42 @@
 #!/usr/bin/env python3
-"""sync_to_brain.py - Reusable module for syncing career data to Logseq Brain."""
+"""sync_to_brain.py - Reusable module for syncing career data to Logseq Brain.
+
+v0.2 C.2: imports the Brain helpers directly from `core.memory.brain_bridge`
+(PYTHONPATH is set up by the kernel; the old `logseq-brain/` skill path is
+retired). Idempotent — re-runs use `upsert_page_properties` so a manual
+status progression isn't clobbered by the next discovery tick.
+"""
 
 import os
 import sys
 from datetime import datetime
 
-# Import Logseq Brain
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 try:
-    sys.path.append(os.path.join(os.path.dirname(SCRIPT_DIR), "logseq-brain"))
-    from logseq_bridge import LogseqBrain
-except ImportError:
+    from core.memory.brain_bridge import (
+        LogseqBrain,
+        create_page,
+        upsert_page_properties,
+        append_block,
+    )
+except ImportError as e:
+    print(f"[sync_to_brain] core.memory.brain_bridge unavailable: {e}", file=sys.stderr)
     LogseqBrain = None
+    create_page = None
+    upsert_page_properties = None
+    append_block = None
 
 brain = LogseqBrain() if LogseqBrain else None
 
 
 def sync_lead_to_brain(lead):
-    """Sync a single job lead dictionary to a Logseq Brain page."""
+    """Sync a single job lead dictionary to a Logseq Brain page.
+
+    Idempotent (v0.2 C.2): on re-discovery, the lead's `score`, `contract-type`,
+    `link`, `skills`, and `date-added` get refreshed, but user-progressed
+    `status` stays — we only seed `status: "New"` the first time the page is
+    created. Previously, every cron tick would reset the status and torch
+    manual progress tracking.
+    """
     if not brain:
         return None
 
@@ -30,27 +49,32 @@ def sync_lead_to_brain(lead):
     date_added = lead.get("date_added", datetime.now().strftime('%Y-%m-%d %H:%M'))
 
     page_title = f"Lead - {company} - {title}"
-    
+
+    # Base props that always get updated.
     properties = {
         "type": "career-lead",
         "company": company,
         "job-title": title,
         "score": str(score),
         "contract-type": contract_type,
-        "status": "New",
         "link": link,
         "skills": skills,
         "date-added": date_added,
-        "source": "career-manager"
+        "source": "career-manager",
     }
 
-    content = f"""
-## Details
-- Application Link: {link}
-- Matched Skills: {skills}
-- Date Added: {date_added}
-"""
-    # Create or update the page
+    if brain.page_exists(page_title):
+        # Existing page — refresh fields but DON'T overwrite status.
+        return brain.upsert_page_properties(page_title, properties)
+
+    # Fresh lead — seed with status: "New" + the full detail block.
+    properties["status"] = "New"
+    content = (
+        "## Details\n"
+        f"- Application Link: {link}\n"
+        f"- Matched Skills: {skills}\n"
+        f"- Date Added: {date_added}\n"
+    )
     return brain.create_page(page_title, properties, content)
 
 
