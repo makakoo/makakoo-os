@@ -24,6 +24,7 @@ pub mod outbound;
 pub mod platform;
 pub mod plugin;
 pub mod sancho;
+pub mod session;
 pub mod superbrain;
 pub mod swarm;
 pub mod telemetry;
