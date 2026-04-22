@@ -92,6 +92,16 @@ fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
         "DELETE FROM recall_stats WHERE content_hash IS NULL",
         [],
     )?;
+    // Orphan brain_vectors rows — doc_id pointing to a brain_docs.id
+    // that no longer exists (classic post-.recover artefact: vectors
+    // were written for IDs that didn't survive the b-tree rebuild).
+    // Under `PRAGMA foreign_keys=ON` this state is impossible going
+    // forward, but older DBs may carry it. Clear it so vector-search
+    // results can never reference a ghost doc_id.
+    conn.execute(
+        "DELETE FROM brain_vectors WHERE doc_id NOT IN (SELECT id FROM brain_docs)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -681,5 +691,76 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("legacy.db");
         (dir, path)
+    }
+
+    #[test]
+    fn heal_clears_null_content_hash_and_orphan_vectors() {
+        // Seed a migrated DB with two flavours of legacy garbage and
+        // prove run_migrations cleans both. The fixture has to bypass
+        // `PRAGMA foreign_keys = ON` to insert the orphan in the first
+        // place — which mirrors how the live DB acquired its 945
+        // orphans (from a pre-FK Python era).
+        let (_dir, conn) = tmp_db();
+        run_migrations(&conn).unwrap();
+        // Disable FK enforcement via pragma_update (execute_batch
+        // rejects the row that PRAGMA returns).
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+        // Legitimate doc (rowid 1) that will have a vector.
+        conn.execute(
+            "INSERT INTO brain_docs (path, name, doc_type, content, content_hash)
+             VALUES ('/tmp/real.md', 'real', 'page', 'body', 'h-real')",
+            [],
+        )
+        .unwrap();
+        // Two vectors: one keyed to the real doc, one orphan.
+        conn.execute(
+            "INSERT INTO brain_vectors (doc_id, embedding, dim, model)
+             VALUES (1, x'00000000', 1, 'test')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO brain_vectors (doc_id, embedding, dim, model)
+             VALUES (999, x'00000000', 1, 'orphan')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        // Insert a NULL content_hash row into recall_stats via a trick —
+        // the column is declared PRIMARY KEY but SQLite allows NULL in
+        // non-INTEGER PK columns historically, so the upsert ladder from
+        // Python can land them.
+        conn.execute(
+            "INSERT INTO recall_stats (content_hash, doc_id, doc_path)
+             VALUES (NULL, 1, '/tmp/real.md')",
+            [],
+        )
+        .ok(); // ignore if constraint actually fires in newer SQLite
+        let orphans_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM brain_vectors WHERE doc_id NOT IN (SELECT id FROM brain_docs)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Force a second run of heal — migrations are idempotent.
+        run_migrations(&conn).unwrap();
+        let orphans_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM brain_vectors WHERE doc_id NOT IN (SELECT id FROM brain_docs)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let null_hashes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM recall_stats WHERE content_hash IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(orphans_before >= 1, "fixture must seed at least 1 orphan vector");
+        assert_eq!(orphans_after, 0, "heal must clear orphan vectors");
+        assert_eq!(null_hashes, 0, "heal must clear NULL content_hash rows");
     }
 }
