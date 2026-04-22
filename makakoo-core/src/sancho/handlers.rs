@@ -400,6 +400,80 @@ impl SanchoHandler for MemoryConsolidationHandler {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+//  5b. MemoryConsolidationGateHandler  (SPRINT P2.6 — sentinel bridge)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Cross-bus sentinel bridge between Python `EventBus` and the Rust
+/// daemon. The Python `auto_memory_router._handle_brain_write` touches
+/// `$MAKAKOO_HOME/data/.memory_consolidation_requested` whenever
+/// `brain.write.completed` fires; this handler polls for that file on
+/// its own 15-minute cadence, unlinks it atomically, and runs the same
+/// ranking pass as `MemoryConsolidationHandler`.
+///
+/// Absent sentinel → no-op (no journal noise, no report spam).
+pub struct MemoryConsolidationGateHandler;
+
+impl MemoryConsolidationGateHandler {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Resolve the sentinel path for a given `$MAKAKOO_HOME`.
+    pub fn sentinel_path(home: &Path) -> PathBuf {
+        home.join("data").join(".memory_consolidation_requested")
+    }
+}
+
+impl Default for MemoryConsolidationGateHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SanchoHandler for MemoryConsolidationGateHandler {
+    fn name(&self) -> &str {
+        "memory_consolidation_gate"
+    }
+
+    async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
+        let start = Instant::now();
+        let sentinel = Self::sentinel_path(&ctx.home);
+        if !sentinel.exists() {
+            let report = HandlerReport::ok(
+                "memory_consolidation_gate",
+                "no sentinel",
+                start.elapsed(),
+            );
+            publish_report(ctx, &report);
+            return Ok(report);
+        }
+        // Unlink first so a concurrent Python publish doesn't race the
+        // ranking pass — if the unlink fails we'd rather skip this tick
+        // than double-rank.
+        if let Err(e) = fs::remove_file(&sentinel) {
+            let report = HandlerReport::failed(
+                "memory_consolidation_gate",
+                format!("unlink failed: {e}"),
+                start.elapsed(),
+            );
+            publish_report(ctx, &report);
+            return Ok(report);
+        }
+        let promoter = MemoryPromoter::new(ctx.store.conn_arc());
+        let ranked = promoter.rank_candidates()?;
+        let msg = format!("sentinel consumed, {} candidates ranked", ranked.len());
+        append_journal_line(
+            &ctx.home,
+            &format!("- [[SANCHO]] memory_consolidation_gate: {msg}"),
+        )?;
+        let report = HandlerReport::ok("memory_consolidation_gate", msg, start.elapsed());
+        publish_report(ctx, &report);
+        Ok(report)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 //  6. MemoryPromotionHandler
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1064,6 +1138,42 @@ mod tests {
         let report = h.run(&ctx).await.unwrap();
         assert!(report.ok);
         assert!(report.message.contains("candidates"));
+    }
+
+    #[tokio::test]
+    async fn memory_consolidation_gate_noop_without_sentinel() {
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+        let h = MemoryConsolidationGateHandler::new();
+        let report = h.run(&ctx).await.unwrap();
+        assert!(report.ok);
+        assert_eq!(report.handler, "memory_consolidation_gate");
+        assert!(report.message.contains("no sentinel"));
+    }
+
+    #[tokio::test]
+    async fn memory_consolidation_gate_consumes_and_unlinks_sentinel() {
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+        let sentinel =
+            MemoryConsolidationGateHandler::sentinel_path(&ctx.home);
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        fs::write(&sentinel, b"trigger").unwrap();
+        assert!(sentinel.exists());
+
+        let h = MemoryConsolidationGateHandler::new();
+        let report = h.run(&ctx).await.unwrap();
+        assert!(report.ok);
+        assert!(report.message.contains("sentinel consumed"));
+        assert!(
+            !sentinel.exists(),
+            "sentinel must be unlinked after successful consumption"
+        );
+
+        // Second tick with no sentinel is a no-op.
+        let second = h.run(&ctx).await.unwrap();
+        assert!(second.ok);
+        assert!(second.message.contains("no sentinel"));
     }
 
     #[tokio::test]

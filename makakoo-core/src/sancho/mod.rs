@@ -24,9 +24,10 @@ pub use gates::{
 };
 pub use handlers::{
     DailyBriefingHandler, DreamHandler, DynamicChecklistHandler, FakeLlmCall,
-    IndexRebuildHandler, LlmCall, MemoryConsolidationHandler, MemoryPromotionHandler,
-    PermsPurgeHandler, SubprocessHandler, SuperbrainSyncEmbedHandler,
-    SwarmDispatchHandler, WikiLintHandler,
+    IndexRebuildHandler, LlmCall, MemoryConsolidationGateHandler,
+    MemoryConsolidationHandler, MemoryPromotionHandler, PermsPurgeHandler,
+    SubprocessHandler, SuperbrainSyncEmbedHandler, SwarmDispatchHandler,
+    WikiLintHandler,
 };
 pub use registry::{HandlerReport, SanchoContext, SanchoHandler, SanchoRegistry, TaskRegistration};
 
@@ -68,7 +69,7 @@ pub fn parse_interval(spec: &str, default: Duration) -> Duration {
 ///
 /// Used by `makakoo sancho status` to display a "N native + M manifest"
 /// breakdown without rebuilding the native registry twice.
-pub const NATIVE_TASK_COUNT: usize = 10;
+pub const NATIVE_TASK_COUNT: usize = 11;
 
 /// Native SANCHO task names the kernel owns. A plugin whose
 /// manifest declares `[[sancho.tasks]].name` matching any of these
@@ -89,6 +90,7 @@ pub const NATIVE_TASK_NAMES: &[&str] = &[
     "index_rebuild",
     "daily_briefing",
     "memory_consolidation",
+    "memory_consolidation_gate",
     "memory_promotion",
     "superbrain_sync_embed",
     "dynamic_checklist",
@@ -130,6 +132,15 @@ pub fn native_registry(ctx: Arc<SanchoContext>) -> SanchoRegistry {
     reg.register(
         Arc::new(MemoryConsolidationHandler::new()),
         vec![Arc::new(TimeGate::new(Duration::from_secs(4 * 3600)))],
+    );
+    // SPRINT P2.6 — sentinel-file bridge from Python router
+    // (`auto_memory_router._handle_brain_write`) into the Rust daemon.
+    // 15 minutes is the coarsest interval that still feels responsive
+    // for a freshly-written doc while staying cheap (single `exists()`
+    // check on every tick when the sentinel is absent).
+    reg.register(
+        Arc::new(MemoryConsolidationGateHandler::new()),
+        vec![Arc::new(TimeGate::new(Duration::from_secs(15 * 60)))],
     );
     reg.register(
         Arc::new(MemoryPromotionHandler::new()),
