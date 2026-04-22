@@ -20,6 +20,7 @@ use tracing::{error, info};
 pub mod install;
 pub mod status;
 pub mod uninstall;
+pub mod watchdog;
 
 // Per-OS daemon modules retired in Phase B — all logic now lives behind
 // the `makakoo_platform::PlatformAdapter` trait. See
@@ -79,10 +80,38 @@ pub async fn run_forever() -> Result<()> {
 
     // Build the SANCHO engine with the same setup as `makakoo sancho tick`.
     let store = ctx.store()?;
+
+    // Post-crash integrity probe. `PRAGMA integrity_check` is O(DB) but
+    // runs once at boot and is dominated by the first WAL checkpoint
+    // anyway. We surface issues via a structured log — NOT auto-recovery
+    // — so the operator can decide whether to .recover or restore from
+    // backup. The 2026-04-22 post-reboot corruption would have surfaced
+    // here 90 seconds after boot instead of silently returning Error 11
+    // to every read path until a human noticed.
+    {
+        let arc = store.conn_arc();
+        let conn = arc.lock().expect("integrity probe conn poisoned");
+        match conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)) {
+            Ok(status) if status == "ok" => {
+                info!("superbrain.db integrity check: ok");
+            }
+            Ok(status) => {
+                error!(
+                    first_issue = %status,
+                    "superbrain.db integrity check FAILED — database corruption detected. \
+                     Sync and chat may hit Error 11/1555. Recovery: sqlite3 superbrain.db '.recover' > recovered.sql; \
+                     mv superbrain.db superbrain.db.corrupt; sqlite3 superbrain.db < recovered.sql"
+                );
+            }
+            Err(e) => {
+                error!(error = %e, "superbrain.db integrity check could not run");
+            }
+        }
+    }
     let bus = ctx.event_bus()?;
     let llm = ctx.llm();
     let emb = ctx.embeddings();
-    let sancho_ctx = Arc::new(SanchoContext::new(store, bus, llm, emb, home));
+    let sancho_ctx = Arc::new(SanchoContext::new(store, bus, llm, emb, home.clone()));
     let plugins = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
     let registry = default_registry(Arc::clone(&sancho_ctx), &plugins);
     let engine = SanchoEngine::new(registry, sancho_ctx, Duration::from_secs(60));
@@ -124,13 +153,29 @@ pub async fn run_forever() -> Result<()> {
         "agent supervisor started (poll every 30s)"
     );
 
+    // Phase 1 SPRINT-HARVEY-BRAIN-ORCHESTRATION: daemon self-watchdog
+    // writes a heartbeat JSONL line every 5 min so `harvey memory health`
+    // and Pixel mascot can prove the daemon is alive without parsing logs.
+    let watchdog_shutdown = Arc::new(tokio::sync::Notify::new());
+    let watchdog_handle = watchdog::spawn(
+        home.clone(),
+        watchdog::DEFAULT_WATCHDOG_INTERVAL,
+        Arc::clone(&watchdog_shutdown),
+    );
+    info!(
+        interval_sec = watchdog::DEFAULT_WATCHDOG_INTERVAL.as_secs(),
+        "daemon self-watchdog started"
+    );
+
     tokio::signal::ctrl_c().await?;
-    info!("shutdown signal received — stopping sancho + agent supervisor");
+    info!("shutdown signal received — stopping sancho + agent supervisor + watchdog");
     shutdown.notify_waiters();
     sup_token.cancel();
+    watchdog_shutdown.notify_waiters();
     supervisor.shutdown(Duration::from_millis(500));
     let _ = sancho_handle.await;
     let _ = supervisor_handle.await;
+    let _ = watchdog_handle.await;
     info!("daemon exiting");
     Ok(())
 }

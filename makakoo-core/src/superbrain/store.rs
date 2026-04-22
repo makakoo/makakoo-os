@@ -380,8 +380,34 @@ impl SuperbrainStore {
         let name = derive_name(doc_id);
         let char_count = content.chars().count() as i64;
 
-        let conn = self.lock_conn()?;
-        conn.execute(
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        // Fetch the pre-existing row's rowid + FTS column values (if any)
+        // so we can issue a matching 'delete' into the external-content
+        // FTS5 shadow before overwriting. External-content FTS5 does NOT
+        // auto-sync — we must mirror every write into `brain_fts`.
+        let existing: Option<(i64, String, String, String)> = tx
+            .query_row(
+                "SELECT id, name, content, entities FROM brain_docs WHERE path = ?1",
+                params![doc_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((rid, old_name, old_content, old_entities)) = &existing {
+            tx.execute(
+                "INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
+                 VALUES ('delete', ?1, ?2, ?3, ?4)",
+                params![rid, old_name, old_content, old_entities],
+            )?;
+        }
+        tx.execute(
             "INSERT INTO brain_docs (path, name, doc_type, content, content_hash, entities, char_count, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
              ON CONFLICT(path) DO UPDATE SET
@@ -394,24 +420,51 @@ impl SuperbrainStore {
                  updated_at = excluded.updated_at",
             params![doc_id, name, doc_type, content, content_hash, entities_json, char_count],
         )?;
+        let rid: i64 = tx.query_row(
+            "SELECT id FROM brain_docs WHERE path = ?1",
+            params![doc_id],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO brain_fts(rowid, name, content, entities)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![rid, name, content, entities_json],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Delete a document and its vector (if any).
     pub fn delete_document(&self, doc_id: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        // brain_vectors is keyed on the integer rowid; resolve it first.
-        let row_id: Option<i64> = conn
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        // Resolve FTS columns + rowid before the DELETE so we can mirror
+        // the removal into `brain_fts` (external-content FTS5 does not
+        // auto-sync).
+        let existing: Option<(i64, String, String, String)> = tx
             .query_row(
-                "SELECT id FROM brain_docs WHERE path = ?1",
+                "SELECT id, name, content, entities FROM brain_docs WHERE path = ?1",
                 params![doc_id],
-                |row| row.get::<_, i64>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
             )
             .optional()?;
-        if let Some(id) = row_id {
-            conn.execute("DELETE FROM brain_vectors WHERE doc_id = ?1", params![id])?;
+        if let Some((rid, name, content, entities)) = existing {
+            tx.execute(
+                "INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
+                 VALUES ('delete', ?1, ?2, ?3, ?4)",
+                params![rid, name, content, entities],
+            )?;
+            tx.execute("DELETE FROM brain_vectors WHERE doc_id = ?1", params![rid])?;
         }
-        conn.execute("DELETE FROM brain_docs WHERE path = ?1", params![doc_id])?;
+        tx.execute("DELETE FROM brain_docs WHERE path = ?1", params![doc_id])?;
+        tx.commit()?;
         Ok(())
     }
 

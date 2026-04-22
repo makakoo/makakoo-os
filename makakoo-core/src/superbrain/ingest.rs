@@ -333,16 +333,33 @@ impl IngestEngine {
     fn prune_unseen(&self, seen: &HashSet<String>) -> Result<usize> {
         let conn = self.store.conn_arc();
         let conn = conn.lock().expect("ingest conn poisoned");
-        let all: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT path FROM brain_docs")?;
+        let all: Vec<(i64, String, String, String, String)> = {
+            let mut stmt =
+                conn.prepare("SELECT id, path, name, content, entities FROM brain_docs")?;
             let rows = stmt
-                .query_map([], |r| r.get::<_, String>(0))?
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows
         };
         let mut removed = 0usize;
-        for path in all {
+        for (id, path, name, content, entities) in all {
             if !seen.contains(&path) {
+                // Mirror the delete into the external-content FTS5 shadow,
+                // clear the FK-dependent vector row, then drop the doc.
+                conn.execute(
+                    "INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
+                     VALUES ('delete', ?1, ?2, ?3, ?4)",
+                    params![id, name, content, entities],
+                )?;
+                conn.execute("DELETE FROM brain_vectors WHERE doc_id = ?1", params![id])?;
                 conn.execute("DELETE FROM brain_docs WHERE path = ?1", params![path])?;
                 removed += 1;
             }

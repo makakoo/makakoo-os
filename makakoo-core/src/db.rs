@@ -44,6 +44,7 @@ pub fn open_db(path: &Path) -> Result<Connection> {
 /// Run idempotent migrations. Safe to call on every boot.
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA_V1)?;
+    heal_legacy_schema_drift(conn)?;
     // `PRAGMA user_version = N` is a no-row PRAGMA on most builds but
     // we run it through the same drain-rows path as `open_db` for
     // forward-compat with rusqlite strictness changes.
@@ -51,6 +52,29 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     let mut s = conn.prepare(&sql)?;
     let mut rows = s.query([])?;
     while rows.next()?.is_some() {}
+    Ok(())
+}
+
+/// Drop Python-era triggers that shadow the external-content FTS5 tables.
+///
+/// The Python implementation maintained `brain_fts` / `brain_anchors_fts`
+/// with explicit AFTER INSERT/UPDATE/DELETE triggers on `brain_docs`. The
+/// Rust store writes FTS rows directly in `write_document`, so the old
+/// triggers double-insert the same rowid into the FTS shadow table and
+/// crash with `PRIMARY KEY constraint failed` (SQLite 1555). DBs created
+/// under SCHEMA_V1 never have these triggers; DBs migrated from Python do.
+/// Drop-if-exists is cheap and idempotent.
+fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
+    for trig in [
+        "brain_docs_ai",
+        "brain_docs_ad",
+        "brain_docs_au",
+        "brain_docs_anchors_ai",
+        "brain_docs_anchors_ad",
+        "brain_docs_anchors_au",
+    ] {
+        conn.execute(&format!("DROP TRIGGER IF EXISTS {trig}"), [])?;
+    }
     Ok(())
 }
 
@@ -112,22 +136,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS brain_fts USING fts5(
     tokenize='porter unicode61'
 );
 
-CREATE TRIGGER IF NOT EXISTS brain_docs_ai AFTER INSERT ON brain_docs BEGIN
-    INSERT INTO brain_fts(rowid, name, content, entities)
-    VALUES (new.id, new.name, new.content, new.entities);
-END;
-
-CREATE TRIGGER IF NOT EXISTS brain_docs_ad AFTER DELETE ON brain_docs BEGIN
-    INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
-    VALUES ('delete', old.id, old.name, old.content, old.entities);
-END;
-
-CREATE TRIGGER IF NOT EXISTS brain_docs_au AFTER UPDATE ON brain_docs BEGIN
-    INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
-    VALUES ('delete', old.id, old.name, old.content, old.entities);
-    INSERT INTO brain_fts(rowid, name, content, entities)
-    VALUES (new.id, new.name, new.content, new.entities);
-END;
+-- FTS5 with content= automatically synchronizes the index on INSERT/UPDATE/DELETE.
+-- No manual triggers needed. The old triggers used invalid syntax for FTS5 virtual tables.
 
 CREATE TABLE IF NOT EXISTS brain_vectors (
     doc_id INTEGER PRIMARY KEY REFERENCES brain_docs(id),
@@ -569,28 +579,90 @@ mod tests {
     }
 
     #[test]
-    fn brain_fts_triggers_work() {
-        let (_dir, conn) = tmp_db();
-        run_migrations(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO brain_docs (path, name, doc_type, content, content_hash)
-             VALUES (?, ?, ?, ?, ?)",
-            [
-                "/tmp/test.md",
-                "test",
-                "page",
-                "hello makakoo world",
-                "abc123",
-            ],
-        )
-        .unwrap();
-        let hits: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM brain_fts WHERE brain_fts MATCH 'makakoo'",
-                [],
-                |row| row.get(0),
+    fn legacy_fts_triggers_get_dropped_by_migration() {
+        // A DB carrying the Python-era brain_docs_ai/ad/au + _anchors_*
+        // triggers must come out of run_migrations with all 6 gone.
+        let (_dir, path) = tmp_db_path();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE brain_docs (
+                    id INTEGER PRIMARY KEY,
+                    path TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    doc_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    entities TEXT DEFAULT '[]',
+                    char_count INTEGER DEFAULT 0,
+                    updated_at TEXT DEFAULT (datetime('now')),
+                    anchor TEXT,
+                    anchor_keywords TEXT,
+                    anchor_entities TEXT
+                 );
+                 CREATE VIRTUAL TABLE brain_fts USING fts5(
+                    name, content, entities,
+                    content=brain_docs, content_rowid=id,
+                    tokenize='porter unicode61');
+                 CREATE VIRTUAL TABLE brain_anchors_fts USING fts5(
+                    anchor, anchor_keywords, anchor_entities,
+                    content='brain_docs', content_rowid='id',
+                    tokenize='porter unicode61');
+                 CREATE TRIGGER brain_docs_ai AFTER INSERT ON brain_docs BEGIN
+                    INSERT INTO brain_fts(rowid, name, content, entities)
+                    VALUES (new.id, new.name, new.content, new.entities);
+                 END;
+                 CREATE TRIGGER brain_docs_ad AFTER DELETE ON brain_docs BEGIN
+                    INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
+                    VALUES ('delete', old.id, old.name, old.content, old.entities);
+                 END;
+                 CREATE TRIGGER brain_docs_au AFTER UPDATE ON brain_docs BEGIN
+                    INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
+                    VALUES ('delete', old.id, old.name, old.content, old.entities);
+                    INSERT INTO brain_fts(rowid, name, content, entities)
+                    VALUES (new.id, new.name, new.content, new.entities);
+                 END;
+                 CREATE TRIGGER brain_docs_anchors_ai AFTER INSERT ON brain_docs BEGIN
+                    INSERT INTO brain_anchors_fts(rowid, anchor, anchor_keywords, anchor_entities)
+                    VALUES (new.id, new.anchor, new.anchor_keywords, new.anchor_entities);
+                 END;
+                 CREATE TRIGGER brain_docs_anchors_ad AFTER DELETE ON brain_docs BEGIN
+                    INSERT INTO brain_anchors_fts(brain_anchors_fts, rowid, anchor, anchor_keywords, anchor_entities)
+                    VALUES ('delete', old.id, old.anchor, old.anchor_keywords, old.anchor_entities);
+                 END;
+                 CREATE TRIGGER brain_docs_anchors_au AFTER UPDATE ON brain_docs BEGIN
+                    INSERT INTO brain_anchors_fts(brain_anchors_fts, rowid, anchor, anchor_keywords, anchor_entities)
+                    VALUES ('delete', old.id, old.anchor, old.anchor_keywords, old.anchor_entities);
+                    INSERT INTO brain_anchors_fts(rowid, anchor, anchor_keywords, anchor_entities)
+                    VALUES (new.id, new.anchor, new.anchor_keywords, new.anchor_entities);
+                 END;",
             )
             .unwrap();
-        assert_eq!(hits, 1);
+            let before: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'brain_docs_%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(before, 6, "fixture should pre-seed the 6 legacy triggers");
+        }
+        // Rust migration over the legacy fixture must drop every trigger.
+        let conn = open_db(&path).unwrap();
+        run_migrations(&conn).unwrap();
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'brain_docs_%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 0, "all legacy triggers must be dropped by run_migrations");
+    }
+
+    fn tmp_db_path() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        (dir, path)
     }
 }
