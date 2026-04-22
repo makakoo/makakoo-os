@@ -55,15 +55,26 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Drop Python-era triggers that shadow the external-content FTS5 tables.
+/// Converge Python-era schema drift so a migrated DB behaves identically
+/// to a freshly-created one under `SCHEMA_V1`. Idempotent — safe to run
+/// on every boot.
 ///
-/// The Python implementation maintained `brain_fts` / `brain_anchors_fts`
-/// with explicit AFTER INSERT/UPDATE/DELETE triggers on `brain_docs`. The
-/// Rust store writes FTS rows directly in `write_document`, so the old
-/// triggers double-insert the same rowid into the FTS shadow table and
-/// crash with `PRIMARY KEY constraint failed` (SQLite 1555). DBs created
-/// under SCHEMA_V1 never have these triggers; DBs migrated from Python do.
-/// Drop-if-exists is cheap and idempotent.
+/// ## What it fixes
+///
+/// 1. **Legacy FTS5 triggers.** The Python implementation maintained
+///    `brain_fts` / `brain_anchors_fts` with AFTER INSERT/UPDATE/DELETE
+///    triggers on `brain_docs`. The Rust store mirrors FTS writes
+///    directly in `write_document`, so the old triggers double-insert
+///    the same rowid into the FTS shadow table and crash with
+///    `PRIMARY KEY constraint failed` (SQLite 1555). Drop unconditionally.
+///
+/// 2. **NULL `content_hash` rows in `recall_stats`.** The live schema
+///    declares `content_hash TEXT PRIMARY KEY`, but an earlier Python
+///    pass wrote rows with NULL hashes before the constraint landed.
+///    Rust `rusqlite` row deserialisation fails hard on NULL → `String`,
+///    which breaks `MemoryPromoter::rank_candidates()` — surfaces as
+///    `sqlite error: Invalid column type Null at index: 0` on every
+///    sancho tick. These rows carry no promotable signal; delete them.
 fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
     for trig in [
         "brain_docs_ai",
@@ -75,6 +86,12 @@ fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
     ] {
         conn.execute(&format!("DROP TRIGGER IF EXISTS {trig}"), [])?;
     }
+    // NULL content_hash rows trip the Rust row deserialiser. Cheap to
+    // delete — a NULL primary key row is un-joinable anyway.
+    conn.execute(
+        "DELETE FROM recall_stats WHERE content_hash IS NULL",
+        [],
+    )?;
     Ok(())
 }
 
