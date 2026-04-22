@@ -1,6 +1,6 @@
 [plugin]
 name = "skill-freelance-office"
-version = "0.3.0"
+version = "0.3.1"
 kind = "skill"
 language = "python"
 summary = "Multi-country freelance accounting plugin. DE + AR + ES + US tax regimes in-tree (drop a core/tax/<cc>.py to add more). Per-office registry + --office selector. One install hosts many offices, each with own tax rules, locale, currency, and ledger."

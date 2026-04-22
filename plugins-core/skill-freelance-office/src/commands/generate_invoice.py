@@ -203,6 +203,7 @@ def run(args) -> Dict[str, Any]:
         "from_name": s.identity.name,
         "from_dba": s.identity.dba,
         "from_email": s.identity.email,
+        "from_phone": s.identity.phone,
         "from_ust_id": s.tax.ust_id,
         "to_name": str(meta.get("name") or args.client),
         "to_email": str(meta.get("contact_email") or ""),

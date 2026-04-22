@@ -2,7 +2,8 @@
 
 **VON**
 {{ from_name }}{% if from_dba %} ({{ from_dba }}){% endif %}
-{{ from_email }}{% if from_ust_id %}
+{{ from_email }}{% if from_phone is defined and from_phone %}
+Tel.: {{ from_phone }}{% endif %}{% if from_ust_id %}
 USt-IdNr.: {{ from_ust_id }}{% elif kleinunternehmer %}
 Kleinunternehmer gem. § 19 UStG — kein Umsatzsteuerausweis{% endif %}
 

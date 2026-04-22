@@ -31,6 +31,7 @@ class Identity:
     dba: str = ""
     website: str = ""
     email: str = ""
+    phone: str = ""
     github: str = ""
     location: str = ""
 
@@ -127,6 +128,7 @@ def load_settings(path: Optional[Path] = None) -> Settings:
             dba=ident.get("dba", ""),
             website=ident.get("website", ""),
             email=ident.get("email", ""),
+            phone=str(ident.get("phone", "") or ""),
             github=ident.get("github", ""),
             location=ident.get("location", ""),
         ),
