@@ -71,6 +71,7 @@ def run(args) -> Dict[str, Any]:
         home,
         home / "_meta",
         home / "clients" / "_template" / "projects",
+        home / "clients" / "_template" / "communications",
         home / "templates",
         home / "admin",
         home / "finances" / str(date.today().year),
