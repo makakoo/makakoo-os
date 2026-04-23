@@ -41,6 +41,14 @@ version = "^0.1"
 "skill-meta-loops"                        = { version = "*" }
 "skill-productivity-fts5-search"          = { version = "*" }
 
+# Auto-update + browser bootstrap (inherited via core.toml, listed explicitly).
+"sancho-task-plugin-update-check"          = { version = "*" }
+"bootstrap-fragment-browser-harness"        = { version = "*" }
+"sancho-task-cli-pi"                        = { version = "*" }
+"sancho-task-cli-ghostty"                   = { version = "*" }  # macOS only
+"sancho-task-cli-switchailocal"              = { version = "*" }
+"agent-switchailocal"                        = { version = "*" }
+
 [defaults]
 voice = "caveman"
 persona_name = "Harvey"
@@ -64,5 +72,15 @@ harvey-os skills shipped so far:
 Persona locked to: Harvey (voice=caveman, pronoun=he/him).
 
 Sprint 002 batch 3. Library plugin lib-hte ships with core.
-13 plugins total in this distro.
+19 plugins total in this distro.
+
+Browser + CLI setup:
+  1. open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-cdp
+  2. makakoo agent start agent-browser-harness
+  3. makakoo agent start agent-switchailocal
+  4. Auto-update tasks (24h):
+     - plugin_update_check — browser-harness via GitHub releases
+     - cli_pi_update — pi-coding-agent via npm (all platforms)
+     - cli_ghostty_update — Ghostty via Homebrew (macOS only)
+     - cli_switchailocal_update — switchAILocal via npm
 """

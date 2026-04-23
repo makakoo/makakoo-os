@@ -1,0 +1,14 @@
+{
+  "$schema": "https://makakoo-os.dev/schemas/plugins-to-update.json",
+  "plugins": [
+    {
+      "name": "agent-browser-harness",
+      "auto_update": true,
+      "upstream_repo": "browser-use/browser-harness",
+      "post_update": [
+        "makakoo agent stop agent-browser-harness",
+        "makakoo agent start agent-browser-harness"
+      ]
+    }
+  ]
+}

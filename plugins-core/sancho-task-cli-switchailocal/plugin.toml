@@ -1,0 +1,43 @@
+[plugin]
+name = "sancho-task-cli-switchailocal"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Auto-update @traylinx/switchailocal npm global package every 24h."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-cli-switchailocal"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+binaries = ["npm"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+run = "python3 -u src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:$MAKAKOO_HOME/data/Brain",
+    "fs/write:$MAKAKOO_HOME/data/Brain",
+    "fs/read:$MAKAKOO_HOME/state/sancho-task-cli-switchailocal",
+    "fs/write:$MAKAKOO_HOME/state/sancho-task-cli-switchailocal",
+    "exec/binary:npm",
+    "net/http:registry.npmjs.org",
+    "net/http:github.com",
+    "net/http:api.github.com",
+]
+
+[sancho]
+tasks = [{ name = "cli_switchailocal_update", interval = "24h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-cli-switchailocal"
+retention = "keep"

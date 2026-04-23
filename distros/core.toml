@@ -22,6 +22,19 @@ version = "^0.1"
 "lib-hte" = { version = "*" }
 "lib-agent-loop" = { version = "*" }
 
+# Browser — Chrome CDP harness for harvey_browse in every infected CLI.
+"agent-browser-harness" = { version = "*" }
+"bootstrap-fragment-browser-harness" = { version = "*" }
+
+# CLI auto-update — default CLIs on fresh Makakoo OS.
+"sancho-task-plugin-update-check" = { version = "*" }
+"sancho-task-cli-pi" = { version = "*" }
+"sancho-task-cli-ghostty" = { version = "*" }  # macOS only; no-op on Linux/Windows
+"sancho-task-cli-switchailocal" = { version = "*" }
+
+# LLM gateway — switchAILocal unified local API proxy on port 18080.
+"agent-switchailocal" = { version = "*" }
+
 # Watchdogs — wake up the services Harvey depends on.
 "watchdog-switchailocal" = { version = "*" }
 "watchdog-postgres" = { version = "*" }
@@ -39,15 +52,24 @@ voice = "caveman"
 
 [post_install]
 message = """
-Makakoo Core installed. Five plugins are now registered:
+Makakoo Core installed. Plugins registered:
+  - agent-browser-harness     — harvey_browse for every CLI (needs Chrome with CDP)
+  - agent-switchailocal       — LLM gateway on :18080 (all platforms)
   - watchdog-switchailocal   (300s interval)
   - watchdog-postgres        (900s interval)
   - watchdog-infect          (21600s interval — catches + heals infect drift)
   - monitor-hackernews       (3600s interval)
   - mascot-gym               (5 SANCHO tasks)
+  - plugin_update_check     (24h — auto-updates browser-harness via GitHub releases)
+  - cli_pi_update           (24h — auto-updates pi via npm, all platforms)
+  - cli_ghostty_update      (24h — auto-updates Ghostty via Homebrew, macOS only)
+  - cli_switchailocal_update (24h — auto-updates switchAILocal via npm)
 
 Next:
-  1. makakoo daemon install     — launchd/systemd agent for the tick loop
-  2. makakoo secret set AIL_API_KEY — so the LLM gateway can answer
-  3. makakoo sancho status      — verify all tasks are registered
+  1. Start Chrome: open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-cdp
+  2. makakoo agent start agent-browser-harness
+  3. makakoo agent start agent-switchailocal
+  4. makakoo daemon install     — launchd/systemd agent for the tick loop
+  5. makakoo secret set AIL_API_KEY — so the LLM gateway can answer
+  6. makakoo sancho status      — verify all tasks are registered
 """
