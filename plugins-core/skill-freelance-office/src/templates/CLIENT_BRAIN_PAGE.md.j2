@@ -1,0 +1,51 @@
+# [[{{ client_slug }}]] — {{ client_name }}
+
+{% if sector %}
+> **Sector:** {{ sector }}
+{% endif %}
+> **Onboarded:** {{ started }} via `freelance-office onboard-client`
+
+---
+
+## Quick Status
+
+| | |
+|---|---|
+| Status | {{ status }} |
+| Day rate | €{{ day_rate }}/day |
+| Payment terms | {{ payment_terms_days }} days |
+| NDA | {{ nda_status }} |
+| Active projects | See below |
+
+---
+
+## Active Projects
+
+| Project | Phase | Volume | Notes |
+|---------|-------|--------|-------|
+{% for project in projects %}
+| [[{{ project.slug }}]] | {{ project.phase }} | €{{ project.value }} | {{ project.notes }} |
+{% endfor %}
+
+---
+
+## Contact
+
+- **Email:** {{ contact_email }}
+{% if website %}
+- **Website:** {{ website }}
+{% endif %}
+
+---
+
+## Freelance-Office
+
+| Document | Path |
+|----------|------|
+| Client meta | `~/freelance-office/clients/{{ client_slug }}/meta.yaml` |
+
+---
+
+## Keywords
+
+`#client` `#{{ client_slug }}` `#freelance-office`

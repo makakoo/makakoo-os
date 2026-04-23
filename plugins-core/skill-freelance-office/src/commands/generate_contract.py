@@ -167,6 +167,32 @@ def run(args) -> Dict[str, Any]:
         warnings.append(f"brain journal failed: {e}")
         journaled = None
 
+    # Create Makakoo Brain project page
+    brain_page_path = None
+    try:
+        brain_page_path = brain.create_project_brain_page(
+            client_slug=args.client,
+            project_slug=args.project,
+            project_title=args.title,
+            description=args.description,
+            day_rate=int(day_rate),
+            total_days=int(args.total_days),
+            total_contract_value=int(total_net),
+            phase="verhandlung",
+            contract_version=version,
+            milestones=milestones,
+        )
+        # Also append project row to client brain page
+        brain.append_project_to_client_brain(args.client, {
+            "slug": args.project,
+            "phase": "verhandlung",
+            "value": int(total_net),
+            "notes": args.title[:50],
+        })
+    except FreelanceError as e:
+        warnings.append(f"brain page write failed: {e}")
+        brain_page_path = None
+
     return {
         "status": "ok",
         "exit_code": 0,
@@ -179,6 +205,7 @@ def run(args) -> Dict[str, Any]:
         "total_net": round(total_net, 2),
         "milestones": len(milestones),
         "journal": journaled,
+        "brain_page": brain_page_path,
         "warnings": warnings,
         "message": f"contract v{version} at {out_path}. Review before sending.",
     }

@@ -114,6 +114,37 @@ def run(args) -> Dict[str, Any]:
         warnings.append(f"brain journal write failed: {e}")
         journaled_to = None
 
+    # Create Makakoo Brain client page
+    brain_page_path = None
+    try:
+        brain_page_path = brain.create_client_brain_page(
+            client_slug=args.slug,
+            client_name=args.name,
+            sector=args.sector,
+            contact_email=args.contact_email,
+            day_rate=args.day_rate,
+            payment_terms_days=args.payment_terms_days,
+            status="prospecting",
+        )
+    except FreelanceError as e:
+        warnings.append(f"brain page write failed: {e}")
+        brain_page_path = None
+
+    # Append brain link to meta.yaml
+    try:
+        meta_content = meta_path.read_text(encoding="utf-8")
+        brain_section = (
+            "\n---\n"
+            "## 🧠 Makakoo Brain\n\n"
+            "| Was | Pfad |\n"
+            "|-----|------|\n"
+            f"| Client Overview | `~/MAKAKOO/data/Brain/pages/{args.slug}/{args.slug}.md` |\n"
+        )
+        if "## 🧠 Makakoo Brain" not in meta_content:
+            meta_path.write_text(meta_content + brain_section, encoding="utf-8")
+    except OSError:
+        pass
+
     return {
         "status": "ok",
         "exit_code": 0,
@@ -121,10 +152,11 @@ def run(args) -> Dict[str, Any]:
         "path": str(target),
         "meta": str(meta_path),
         "journal": journaled_to,
+        "brain_page": brain_page_path,
         "warnings": warnings,
         "next_step": (
             f"freelance-office generate-contract --client {args.slug} "
             "--project <project-slug> --title '...' --days <N>"
         ),
-        "message": f"onboarded {args.slug} at {target}",
+        "message": f"onboarded {args.slug} at {target} — brain page at {brain_page_path}",
     }

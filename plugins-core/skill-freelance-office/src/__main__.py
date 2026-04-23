@@ -34,14 +34,23 @@ SUBCOMMANDS: Dict[str, str] = {
     "office":                 "multi-office registry (list / add / remove / use / show)",
 }
 
+# SANCHO watchdog handlers — registered as CLI subcommands so the
+# SANCHO kernel can invoke them via `freelance-office <name>`. These are
+# NOT in src.commands; they live in src.sancho_handlers and expose tick().
+SANCHO_HANDLERS: Dict[str, str] = {
+    "freelance_invoice_overdue_tick": "daily nag: open invoices past payment_terms + grace (7d default)",
+    "freelance_threshold_tick":       "daily check: first 80% / 100% tax threshold crossings per office per year",
+    "freelance_daily_digest_tick":    "daily 09:00 summary: any overdue/threshold events in the last 24h",
+}
+
 # Subcommands that should NOT auto-run the v0.1 -> v0.2 migration at entry.
 # `office` needs to be reachable on a fresh machine before any migration has
 # happened — migration uses the registry, which office commands manage.
-_NO_MIGRATE_ON_ENTRY = frozenset({"office"})
+_NO_MIGRATE_ON_ENTRY = frozenset({"office"} | set(SANCHO_HANDLERS))
 
 # Subcommands that should NOT accept the --office selector (they manage the
 # registry itself or don't touch any office's filesystem).
-_NO_OFFICE_FLAG = frozenset({"office"})
+_NO_OFFICE_FLAG = frozenset({"office"} | set(SANCHO_HANDLERS))
 
 
 def _lazy_run(name: str) -> Callable[[argparse.Namespace], Dict[str, Any]]:
@@ -50,6 +59,26 @@ def _lazy_run(name: str) -> Callable[[argparse.Namespace], Dict[str, Any]]:
     def _run(args: argparse.Namespace) -> Dict[str, Any]:
         module = import_module(module_name)
         return module.run(args)
+
+    return _run
+
+
+# Map SANCHO subcommand name (freelance_X_tick) -> handler module name.
+_SANCHO_SUBCMD_TO_HANDLER: Dict[str, str] = {
+    "freelance_invoice_overdue_tick": "overdue_tick",
+    "freelance_threshold_tick":       "threshold_tick",
+    "freelance_daily_digest_tick":    "daily_digest_tick",
+}
+
+
+def _lazy_sancho_run(name: str) -> Callable[[argparse.Namespace], Dict[str, Any]]:
+    """Load src.sancho_handlers.<handler> and call tick(ctx={})."""
+    handler_name = _SANCHO_SUBCMD_TO_HANDLER[name]
+    module_name = f"src.sancho_handlers.{handler_name}"
+
+    def _run(args: argparse.Namespace) -> Dict[str, Any]:
+        module = import_module(module_name)
+        return module.tick(ctx={})
 
     return _run
 
@@ -82,19 +111,25 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(parser, is_toplevel=True)
 
     sub = parser.add_subparsers(dest="command", required=True, metavar="<subcommand>")
+
+    # Regular user-facing commands
     for name, summary in SUBCOMMANDS.items():
         sp = sub.add_parser(name, help=summary)
         _add_common(sp, with_office=(name not in _NO_OFFICE_FLAG), is_toplevel=False)
         sp.set_defaults(func=_lazy_run(name), _cmd_name=name)
-        # Each command module may expose add_arguments(parser) to register
-        # its own flags. We import lazily here to keep `--help` cheap; if
-        # the module is missing or raises, we fall back to a bare parser.
         try:
             module = import_module("src.commands." + name.replace("-", "_"))
             if hasattr(module, "add_arguments"):
                 module.add_arguments(sp)
         except Exception:
             continue
+
+    # SANCHO watchdog handlers
+    for name, summary in SANCHO_HANDLERS.items():
+        sp = sub.add_parser(name, help=summary)
+        _add_common(sp, with_office=False, is_toplevel=False)
+        sp.set_defaults(func=_lazy_sancho_run(name), _cmd_name=name)
+
     return parser
 
 
