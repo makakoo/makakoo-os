@@ -1,0 +1,32 @@
+[plugin]
+name = "skill-meta-session-memory-observer"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+summary = "Passively observe Claude Code session transcripts, extract durable memories into draft staging for user review"
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-meta-session-memory-observer"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.11"
+
+[entrypoint]
+run = "python3 -u observer.py"
+
+[capabilities]
+grants = [
+  "brain/write",
+  "llm/chat",
+]
+
+[sancho]
+tasks = [{ name = "session_memory_observer", interval = "1800s" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-meta-session-memory-observer"
+retention = "keep"

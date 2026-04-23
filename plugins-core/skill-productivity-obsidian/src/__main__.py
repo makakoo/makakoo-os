@@ -195,11 +195,21 @@ def sync_from_brain():
     brain_pages = brain / "pages"
     if brain_pages.exists():
         for src in brain_pages.rglob("*.md"):
-            dst = vault / "brain-sync" / src.name
+            dst = vault / "brain-sync" / "pages" / src.name
             dst.parent.mkdir(parents=True, exist_ok=True)
             if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
                 dst.write_text(src.read_text())
-        print(f"Synced pages from Brain to {vault}/brain-sync/")
+        print(f"Synced {len(list(brain_pages.rglob('*.md')))} pages from Brain to {vault}/brain-sync/pages/")
+
+    # Sync journals
+    brain_journals = brain / "journals"
+    if brain_journals.exists():
+        for src in brain_journals.glob("*.md"):
+            dst = vault / "brain-sync" / "journals" / src.name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
+                dst.write_text(src.read_text())
+        print(f"Synced {len(list(brain_journals.glob('*.md')))} journals to {vault}/brain-sync/journals/")
 
 
 def main():
