@@ -30,7 +30,7 @@ HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 HEARTBEAT_PATH = Path(HARVEY_HOME) / "HEARTBEAT.md"
 HEARTBEAT_STATE_PATH = Path(HARVEY_HOME) / "data" / "sancho_heartbeat_state.json"
 HEARTBEAT_OK_TOKEN = "HEARTBEAT_OK"
-HEARTBEAT_LLM_BASE_URL = "http://localhost:18080/v1"
+HEARTBEAT_LLM_BASE_URL = os.environ.get("AIL_BASE_URL", "http://localhost:18080/v1")
 HEARTBEAT_LLM_MODEL = os.environ.get("SANCHO_HEARTBEAT_MODEL", "auto")
 HEARTBEAT_LLM_TIMEOUT = int(os.environ.get("SANCHO_HEARTBEAT_TIMEOUT", "60"))
 
@@ -356,7 +356,13 @@ def _heartbeat_default_llm(prompt: str) -> str:
     catch and report.
     """
     from openai import OpenAI
-    client = OpenAI(api_key="local", base_url=HEARTBEAT_LLM_BASE_URL)
+    _key = os.environ.get("AIL_API_KEY")
+    if not _key:
+        raise RuntimeError(
+            "AIL_API_KEY env var not set — heartbeat handler cannot call LLM. "
+            "Run `makakoo secret set AIL_API_KEY` to configure."
+        )
+    client = OpenAI(api_key=_key, base_url=HEARTBEAT_LLM_BASE_URL)
     response = client.chat.completions.create(
         model=HEARTBEAT_LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -516,10 +522,13 @@ def handle_gym_hypothesize() -> Dict:
     """
     Layer 3 of Harvey's Mascot GYM — nightly hypothesis generator.
 
-    Reads today's clustered.json, runs autoimprover + meta-harness for
-    the top skill-class clusters, writes draft sprints to
-    data/improvements/pending/. Slow — this is the cold path. Runs
-    once per night behind a 23.5h time_gate + 01:00-04:00 active hours.
+    Reads today's clustered.json, generates two types of hypotheses:
+      - SKILL: autoimprover-proposed SKILL.md edits for skill-class clusters
+      - CODE:  LLM-generated unified diff patches for code-class clusters
+
+    Writes draft sprints to data/improvements/pending/. Slow — this is
+    the cold path. Runs once per night behind a 23.5h time_gate
+    + 01:00-04:00 active hours.
     """
     from core.gym.hypothesis import generate_hypotheses
 
@@ -527,13 +536,17 @@ def handle_gym_hypothesize() -> Dict:
     return {
         "status": "ok",
         "count": len(hyps),
+        "skill_count": sum(1 for h in hyps if h.patch_type == "skill"),
+        "code_count": sum(1 for h in hyps if h.patch_type == "code"),
         "hypotheses": [
             {
                 "id": h.id,
-                "skill": h.skill,
+                "patch_type": h.patch_type,
+                "skill_or_file": h.skill,
                 "delta": h.delta,
                 "baseline": h.baseline_score,
                 "improved": h.improved_score,
+                "gap_desc": h.gap_desc[:120],
             }
             for h in hyps
         ],

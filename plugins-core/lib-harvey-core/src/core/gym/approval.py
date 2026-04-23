@@ -61,6 +61,7 @@ class PendingApproval:
     """Everything a reviewer needs to see in one record."""
     id: str
     skill: str
+    patch_type: str  # "skill" or "code"
     delta: int
     baseline_score: int
     improved_score: int
@@ -68,8 +69,10 @@ class PendingApproval:
     confidence: float
     rationale: str
     sprint_path: str
-    improved_blob_path: str
-    skill_path: str
+    improved_blob_path: str  # for skill patches: improved SKILL.md blob
+    skill_path: str           # for skill patches: target SKILL.md
+    code_patch_path: str = ""  # for code patches: unified diff path
+    code_file_path: str = ""  # for code patches: file being patched
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -81,7 +84,8 @@ class ApprovalResult:
     git_sha: str
     git_tag: str
     committed: bool
-    skill_path: str
+    skill_path: str  # for skill patches; for code patches, this is the patched file
+    patch_type: str
     journal_entry: str
 
     def to_dict(self) -> Dict[str, Any]:
@@ -115,10 +119,12 @@ def list_approved() -> List[PendingApproval]:
         except (OSError, json.JSONDecodeError):
             pass
 
+        patch_type = prov.get("patch_type", "skill")
         out.append(
             PendingApproval(
                 id=hyp_id,
                 skill=prov.get("skill", "unknown"),
+                patch_type=patch_type,
                 delta=int(prov.get("delta", 0) or 0),
                 baseline_score=int(prov.get("baseline_score", 0) or 0),
                 improved_score=int(prov.get("improved_score", 0) or 0),
@@ -128,6 +134,8 @@ def list_approved() -> List[PendingApproval]:
                 sprint_path=str(sprint_md),
                 improved_blob_path=str(APPROVED_DIR / f"{hyp_id}.skill.md"),
                 skill_path=prov.get("skill_path", ""),
+                code_patch_path=prov.get("code_patch_path", ""),
+                code_file_path=prov.get("code_file_path", ""),
             )
         )
     return out
@@ -182,7 +190,8 @@ def approve(
     git_runner=subprocess.run,
 ) -> ApprovalResult:
     """
-    Apply the improved SKILL.md, git-commit, tag, and write a journal entry.
+    Apply either a SKILL.md edit (skill-class) or a unified diff (code-class),
+    git-commit, tag, and write a journal entry.
 
     Raises ApprovalError on any pre-check failure — the caller should surface
     the message and exit non-zero. Never routes around a pre-check.
@@ -193,31 +202,54 @@ def approve(
         )
 
     sprint_path = APPROVED_DIR / f"{hypothesis_id}.md"
-    blob_path = APPROVED_DIR / f"{hypothesis_id}.skill.md"
     prov_path = PROVENANCE_DIR / f"{hypothesis_id}.json"
 
     if not sprint_path.exists():
         raise ApprovalError(f"no approved sprint found for id: {hypothesis_id}")
-    if not blob_path.exists():
-        raise ApprovalError(
-            f"approved sprint {hypothesis_id} missing its improved blob at {blob_path}"
-        )
     if not prov_path.exists():
         raise ApprovalError(
             f"approved sprint {hypothesis_id} missing provenance at {prov_path}"
         )
 
     prov = json.loads(prov_path.read_text())
+    patch_type = prov.get("patch_type", "skill")
+    sprint_text = sprint_path.read_text()
+
+    if patch_type == "code":
+        return _approve_code_patch(hypothesis_id, prov, sprint_text, sprint_path,
+                                   reviewer_note, dry_run, git_runner)
+    else:
+        return _approve_skill_patch(hypothesis_id, prov, sprint_text, sprint_path,
+                                    reviewer_note, dry_run, git_runner)
+
+
+def _approve_skill_patch(
+    hypothesis_id: str,
+    prov: Dict[str, Any],
+    sprint_text: str,
+    sprint_path: Path,
+    reviewer_note: str,
+    dry_run: bool,
+    git_runner,
+) -> ApprovalResult:
+    """Apply an improved SKILL.md from the autoimprover."""
+    blob_path = APPROVED_DIR / f"{hypothesis_id}.skill.md"
+    if not blob_path.exists():
+        raise ApprovalError(
+            f"approved sprint {hypothesis_id} missing its improved blob at {blob_path}"
+        )
+
     skill_path = Path(prov.get("skill_path", ""))
     if not skill_path.exists():
         raise ApprovalError(f"target SKILL.md not found at {skill_path}")
 
-    # HARD RULE: reject core changes
     try:
         rel = skill_path.relative_to(HARVEY_HOME)
     except ValueError:
         rel = Path(str(skill_path))
     rel_str = str(rel).replace(os.sep, "/")
+
+    # HARD RULE: reject core changes
     if any(rel_str.startswith(p) for p in CORE_PATH_PREFIXES):
         raise ApprovalError(
             f"refusing to merge change to core path: {rel_str}. "
@@ -225,7 +257,6 @@ def approve(
         )
 
     # HARD RULE: sprint must only name files outside the core plugin/kernel tree.
-    sprint_text = sprint_path.read_text()
     claimed_files = _extract_claimed_files(sprint_text)
     for claimed in claimed_files:
         if any(claimed.startswith(p) for p in CORE_PATH_PREFIXES):
@@ -241,32 +272,16 @@ def approve(
             git_tag="(dry-run)",
             committed=False,
             skill_path=str(skill_path),
+            patch_type="skill",
             journal_entry=f"DRY RUN: would apply {hypothesis_id} to {rel_str}",
         )
 
     skill_path.write_text(new_content, encoding="utf-8")
 
-    # git-commit via the runner injection so tests can assert commands without
-    # ever shelling out.
     delta = int(prov.get("delta", 0))
     skill = prov.get("skill", "unknown")
-    message_lines = [
-        f"improve: {hypothesis_id} — {skill} (delta +{delta})",
-        "",
-        f"Autonomously generated by Harvey's Mascot GYM and manually approved.",
-    ]
-    if reviewer_note:
-        message_lines.extend(["", f"Reviewer note: {reviewer_note}"])
-    message_lines.extend([
-        "",
-        f"Source cluster: {prov.get('cluster_id', 'unknown')}",
-        f"Baseline score: {prov.get('baseline_score')} → improved {prov.get('improved_score')}",
-        f"Drafter model: {prov.get('drafter_model', 'unknown')}",
-        "",
-        "Co-Authored-By: Harvey Mascot GYM <gym@harvey-os.local>",
-    ])
+    message_lines = _build_commit_message(hypothesis_id, prov, skill, delta, reviewer_note)
     commit_message = "\n".join(message_lines)
-
     tag = f"improve/{hypothesis_id}"
 
     cwd = str(_git_root_for(skill_path))
@@ -278,20 +293,172 @@ def approve(
     sha = (result.stdout or "").strip()
     git_runner(["git", "-C", cwd, "tag", tag, sha], check=True, capture_output=True, text=True)
 
-    # Move sprint files to merged/
     MERGED_DIR.mkdir(parents=True, exist_ok=True)
     _move_pair_to(MERGED_DIR, hypothesis_id)
 
     journal_entry = _write_journal_entry(hypothesis_id, skill, delta, sha, reviewer_note)
-
     return ApprovalResult(
         id=hypothesis_id,
         git_sha=sha,
         git_tag=tag,
         committed=True,
         skill_path=str(skill_path),
+        patch_type="skill",
         journal_entry=journal_entry,
     )
+
+
+def _approve_code_patch(
+    hypothesis_id: str,
+    prov: Dict[str, Any],
+    sprint_text: str,
+    sprint_path: Path,
+    reviewer_note: str,
+    dry_run: bool,
+    git_runner,
+) -> ApprovalResult:
+    """Apply a unified diff to fix a code-level error."""
+    patch_path = Path(prov.get("code_patch_path", ""))
+    code_file_path = Path(prov.get("code_file_path", ""))
+
+    if not patch_path.exists():
+        raise ApprovalError(f"code patch not found at {patch_path}")
+    if not code_file_path.exists():
+        raise ApprovalError(f"target file not found at {code_file_path}")
+
+    try:
+        rel = code_file_path.relative_to(HARVEY_HOME)
+    except ValueError:
+        rel = Path(str(code_file_path))
+    rel_str = str(rel).replace(os.sep, "/")
+
+    # HARD RULE: reject core changes
+    if any(rel_str.startswith(p) for p in CORE_PATH_PREFIXES):
+        raise ApprovalError(
+            f"refusing to merge change to core path: {rel_str}. "
+            "Core changes require a hand-written sprint, not an autonomous hypothesis."
+        )
+
+    # HARD RULE: sprint must only name files outside the core plugin/kernel tree.
+    claimed_files = _extract_claimed_files(sprint_text)
+    for claimed in claimed_files:
+        if any(claimed.startswith(p) for p in CORE_PATH_PREFIXES):
+            raise ApprovalError(
+                f"sprint claims it will modify core file {claimed}. Refused."
+            )
+
+    if dry_run:
+        return ApprovalResult(
+            id=hypothesis_id,
+            git_sha="(dry-run)",
+            git_tag="(dry-run)",
+            committed=False,
+            skill_path=str(code_file_path),
+            patch_type="code",
+            journal_entry=f"DRY RUN: would apply {hypothesis_id} diff to {rel_str}",
+        )
+
+    # Apply the unified diff
+    result = git_runner(
+        ["patch", "-p1", "-i", str(patch_path)],
+        check=False, capture_output=True, text=True, cwd=HARVEY_HOME,
+    )
+    if result.returncode != 0:
+        raise ApprovalError(
+            f"patch application failed (exit {result.returncode}): "
+            f"{result.stderr.strip()[:200]}"
+        )
+
+    # Verify the patched file parses
+    compile_result = git_runner(
+        ["python3", "-m", "py_compile", str(code_file_path)],
+        check=False, capture_output=True, text=True,
+    )
+    if compile_result.returncode != 0:
+        # Revert the patch by restoring from git
+        git_runner(
+            ["git", "-C", HARVEY_HOME, "checkout", "--", str(rel)],
+            check=True, capture_output=True, text=True,
+        )
+        raise ApprovalError(
+            f"patched file fails py_compile: {compile_result.stderr.strip()[:200]}. "
+            "Patch has been reverted."
+        )
+
+    # Git commit
+    exception = prov.get("skill", "unknown")  # skill field holds the exception type for code patches
+    message_lines = [
+        f"fix: {hypothesis_id} — {exception} in {rel_str}",
+        "",
+        "Autonomously generated by Harvey's Mascot GYM CODE-class hypothesis. "
+        "Manually approved.",
+    ]
+    if reviewer_note:
+        message_lines.extend(["", f"Reviewer note: {reviewer_note}"])
+    message_lines.extend([
+        "",
+        f"Source cluster: {prov.get('cluster_id', 'unknown')}",
+        f"Patch type: unified diff (gym v0.2)",
+        "",
+        "Co-Authored-By: Harvey Mascot GYM <gym@harvey-os.local>",
+    ])
+    commit_message = "\n".join(message_lines)
+    tag = f"fix/{hypothesis_id}"
+
+    cwd = HARVEY_HOME
+    git_runner(["git", "-C", cwd, "add", str(code_file_path)], check=True, capture_output=True, text=True)
+    git_runner(["git", "-C", cwd, "commit", "-m", commit_message], check=True, capture_output=True, text=True)
+    result2 = git_runner(
+        ["git", "-C", cwd, "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    )
+    sha = (result2.stdout or "").strip()
+    git_runner(["git", "-C", cwd, "tag", tag, sha], check=True, capture_output=True, text=True)
+
+    MERGED_DIR.mkdir(parents=True, exist_ok=True)
+    _move_pair_to(MERGED_DIR, hypothesis_id)
+
+    delta = int(prov.get("delta", 0))
+    journal_entry = _write_journal_entry(
+        hypothesis_id,
+        f"code: {exception} in {rel_str}",
+        delta,
+        sha,
+        reviewer_note,
+    )
+    return ApprovalResult(
+        id=hypothesis_id,
+        git_sha=sha,
+        git_tag=tag,
+        committed=True,
+        skill_path=str(code_file_path),
+        patch_type="code",
+        journal_entry=journal_entry,
+    )
+
+
+def _build_commit_message(
+    hypothesis_id: str,
+    prov: Dict[str, Any],
+    skill: str,
+    delta: int,
+    reviewer_note: str,
+) -> List[str]:
+    lines = [
+        f"improve: {hypothesis_id} — {skill} (delta +{delta})",
+        "",
+        "Autonomously generated by Harvey's Mascot GYM and manually approved.",
+    ]
+    if reviewer_note:
+        lines.extend(["", f"Reviewer note: {reviewer_note}"])
+    lines.extend([
+        "",
+        f"Source cluster: {prov.get('cluster_id', 'unknown')}",
+        f"Baseline score: {prov.get('baseline_score')} → improved {prov.get('improved_score')}",
+        f"Drafter model: {prov.get('drafter_model', 'unknown')}",
+        "",
+        "Co-Authored-By: Harvey Mascot GYM <gym@harvey-os.local>",
+    ])
+    return lines
 
 
 def reject(hypothesis_id: str, reviewer_note: str = "") -> None:
@@ -335,7 +502,7 @@ def _extract_claimed_files(sprint_text: str) -> List[str]:
 def _move_pair_to(target: Path, hyp_id: str, from_dir: Path = APPROVED_DIR) -> None:
     import shutil
     target.mkdir(parents=True, exist_ok=True)
-    for suffix in (".md", ".skill.md", ".verdict.json"):
+    for suffix in (".md", ".skill.md", ".patch", ".verdict.json", ".human-rejection.md"):
         src = from_dir / f"{hyp_id}{suffix}"
         if src.exists():
             shutil.move(str(src), str(target / src.name))

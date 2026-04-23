@@ -9,7 +9,9 @@ morning report).
 Classification labels:
     ENVIRONMENTAL — network / auth / infra issue, not Harvey's fault
     USER          — user typo / wrong flag / bad path / permission denied
-    SKILL         — something Harvey could actually learn from
+    SKILL         — something Harvey could actually learn from (doc/skill-level)
+    CODE          — code-level bug: ImportError, AttributeError, KeyError, TypeError,
+                     traceback with a fixable source location in a Python file under Harvey's control
     UNKNOWN       — none of the above (conservative default)
 
 Dedup strategy:
@@ -57,6 +59,7 @@ def _load_blocklist() -> set:
 class ErrorClass(str, Enum):
     ENVIRONMENTAL = "environmental"
     SKILL = "skill"
+    CODE = "code"
     USER = "user"
     UNKNOWN = "unknown"
 
@@ -95,6 +98,28 @@ _ENVIRONMENTAL_PATTERNS = [
     re.compile(r"\bbroken\s+pipe\b", re.I),
 ]
 
+_CODE_PATTERNS = [
+    # Python exception types — strong signal of a fixable code bug
+    re.compile(r"\bImportError\b"),
+    re.compile(r"\bModuleNotFoundError\b"),
+    re.compile(r"\bAttributeError\b"),
+    re.compile(r"\bKeyError\b"),
+    re.compile(r"\bTypeError\b"),
+    re.compile(r"\bValueError\b"),
+    re.compile(r"\bIndexError\b"),
+    re.compile(r"\bRuntimeError\b"),
+    re.compile(r"\bTimeoutError\b"),
+    re.compile(r"\bConnectionError\b"),
+    re.compile(r"\bFileNotFoundError\b"),
+    re.compile(r"\bPermissionError\b"),
+    re.compile(r"\bJSONDecodeError\b"),
+    re.compile(r"\bOperationalError\b"),
+    # Traceback file locations pointing inside Harvey's codebase
+    re.compile(r"File \"(.*[/\\](?:plugins-core|harvey-os|agents|makakoo-os)[^\"]*\.py)\""),
+    re.compile(r"  File \"(.*[/\\]core[/\\][^\"]*\.py)\""),
+    re.compile(r"    raise \w+Error"),
+]
+
 _USER_PATTERNS = [
     re.compile(r"\bunknown\s+(?:option|flag|argument|command)\b", re.I),
     re.compile(r"\bunrecognized\s+(?:option|argument)\b", re.I),
@@ -110,6 +135,7 @@ _USER_PATTERNS = [
     re.compile(r"\bcommand\s+not\s+found\b", re.I),
 ]
 
+_CODE_FILE_RE = re.compile(r"File \"([^\"]*(?:plugins-core|harvey-os|agents|makakoo-os|core)[^\"]*\.py)\"")
 _PATH_SEGMENT_RE = re.compile(r"(?:/[\w.\-@]+)+")
 _DIGITS_RE = re.compile(r"\d+")
 _HEX_RE = re.compile(r"\b[0-9a-f]{8,}\b", re.I)
@@ -161,6 +187,10 @@ def classify_entry(entry: Dict[str, Any]) -> ErrorClass:
     for pat in _ENVIRONMENTAL_PATTERNS:
         if pat.search(text):
             return ErrorClass.ENVIRONMENTAL
+
+    for pat in _CODE_PATTERNS:
+        if pat.search(text):
+            return ErrorClass.CODE
 
     for pat in _USER_PATTERNS:
         if pat.search(text):
@@ -284,6 +314,75 @@ def _iter_day_entries(day_dir: Path) -> Iterable[Dict[str, Any]]:
             continue
 
 
+_CODE_TARGET_RE = re.compile(
+    r"File \"([^\"]*(?:plugins-core|harvey-os|agents|makakoo-os|core|skills)[^\"]*\.py)\""
+)
+
+
+def _extract_code_targets(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Extract fixable Python file locations from CODE-classified entries.
+
+    Returns a list of targets, each with:
+        file_path  — absolute path to the Python file with the bug
+        line_no    — best-effort line number from traceback (or None)
+        exception  — exception type (e.g. "ImportError", "KeyError")
+        stderr     — full stderr for context
+        count      — how many entries point to this same file
+    """
+    by_file: Dict[str, Dict[str, Any]] = {}
+
+    for entry in entries:
+        if classify_entry(entry) != ErrorClass.CODE:
+            continue
+        stderr = entry.get("stderr", "")
+
+        # Extract file location from traceback
+        path_match = _CODE_TARGET_RE.search(stderr)
+        if not path_match:
+            continue
+        file_path = path_match.group(1)
+
+        # Extract line number from traceback frame
+        line_no = None
+        frame_re = re.compile(r"\s+\d+\s+(.*\.py)", re.IGNORECASE)
+        for m in frame_re.finditer(stderr):
+            if m.group(1) == file_path:
+                # Try to extract the number from "  File "..." line
+                pass
+
+        # Simple line number extraction: look for "line <N>" near the file mention
+        line_re = re.compile(r"line (\d+)")
+        line_match = None
+        for m in line_re.finditer(stderr):
+            line_match = int(m.group(1))
+            break  # take first
+
+        # Extract exception type
+        exc_re = re.compile(r"(\w+Error|\w+Exception)\b")
+        exc_match = exc_re.search(stderr)
+        exc_type = exc_match.group(1) if exc_match else "Error"
+
+        slot = by_file.setdefault(file_path, {
+            "file_path": file_path,
+            "exception": exc_type,
+            "count": 0,
+            "line_no": line_no,
+            "stderr_samples": [],
+            "error_ids": [],
+        })
+        slot["count"] += 1
+        if len(slot["stderr_samples"]) < 3:
+            slot["stderr_samples"].append(stderr[:500])
+        eid = entry.get("_id")
+        if eid:
+            slot["error_ids"].append(eid)
+
+    # Sort by count desc
+    targets = sorted(by_file.values(), key=lambda t: -t["count"])
+    return targets
+
+
 def scan_day(date: Optional[str] = None, top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
     """
     Read every jsonl under data/errors/<date>/, classify + cluster, write
@@ -301,6 +400,7 @@ def scan_day(date: Optional[str] = None, top_n: int = DEFAULT_TOP_N) -> Dict[str
         "by_class": {c.value: 0 for c in ErrorClass},
         "by_source": {},
         "clusters": [],
+        "code_targets": [],  # populated after clustering: file paths with fixable errors
     }
 
     if not entries:
@@ -321,6 +421,10 @@ def scan_day(date: Optional[str] = None, top_n: int = DEFAULT_TOP_N) -> Dict[str
         summary["blocklist_suppressed"] = before - len(clusters)
     summary["cluster_count"] = len(clusters)
     summary["clusters"] = [c.to_dict() for c in clusters[:top_n]]
+
+    # Extract code-level fixable targets for Layer 3's code patch generator
+    code_targets = _extract_code_targets(entries)
+    summary["code_targets"] = code_targets[:10]  # top 10 files
 
     _write_clusters(day_dir, summary)
     return summary
