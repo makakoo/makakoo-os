@@ -234,6 +234,17 @@ impl IngestEngine {
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            if path.is_dir() {
+                // Recurse into subdirectories (e.g. pages/ai-impact/).
+                // Skip Logseq internals.
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') || name == "logseq" || name == "bak" {
+                        continue;
+                    }
+                }
+                self.sync_dir(&path, doc_type, existing, force, report, seen)?;
+                continue;
+            }
             if !is_indexable_md(&path) {
                 continue;
             }
@@ -552,5 +563,38 @@ mod tests {
         let stray = dir.path().join("loose.md");
         write(&stray, "- not under pages/journals/auto-memory — should error");
         assert!(engine.sync_file(&stray).is_err());
+    }
+
+    #[test]
+    fn sync_indexes_pages_in_subdirectories() {
+        let (dir, engine) = make_engine();
+        let brain = dir.path().join("data").join("Brain");
+        // Simulate pages/ai-impact/ subdirectory layout.
+        let subdir = brain.join("pages").join("ai-impact");
+        fs::create_dir_all(&subdir).unwrap();
+        write(
+            &subdir.join("hoCa-Technical-Spec.md"),
+            "# hoCa Technical Spec\n\nTech proposal for ai.impact GmbH. Long enough to index.",
+        );
+        write(
+            &subdir.join("ai-impact.md"),
+            "# ai.impact\n\nCompany page for [[ai.impact]] client project. Long enough to index.",
+        );
+        let report = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(report.pages, 2, "subdirectory pages must be indexed");
+    }
+
+    #[test]
+    fn sync_skips_logseq_bak_subdirectories() {
+        let (dir, engine) = make_engine();
+        let brain = dir.path().join("data").join("Brain");
+        let bak = brain.join("pages").join("logseq").join("bak");
+        fs::create_dir_all(&bak).unwrap();
+        write(
+            &bak.join("backup.md"),
+            "# Backup\n\nThis should not be indexed — lives in logseq/bak/.",
+        );
+        let report = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(report.pages, 0, "logseq/bak files must be skipped");
     }
 }
