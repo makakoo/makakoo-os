@@ -10,6 +10,32 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added — `makakoo setup` interactive wizard (`MAKAKOO-SETUP-WIZARD`, 2026-04-23)
+
+- **Section dispatcher** — the one-shot `makakoo setup` persona picker is
+  now the first section of a re-runnable wizard. Bare `makakoo setup`
+  walks every section; `makakoo setup <section>` runs one; `--only`
+  and `--skip` scope the list. Existing `--force` still applies to the
+  persona section.
+- **New sections:**
+  - `brain` — shells to the existing `skill-brain-multi-source` picker
+    to register Logseq / Obsidian / plain-markdown vaults.
+  - `cli-agent` — Y/n/s prompt + `npm install -g @mariozechner/pi-coding-agent`.
+  - `terminal` — macOS-only Y/n/s prompt + `brew install --cask ghostty`.
+  - `model-provider` — introduces `~/.makakoo/primary_adapter.toml`, a
+    single-field TOML pointing at the default routing adapter.
+  - `infect` — thin wrapper over `makakoo infect --verify` + `makakoo infect`.
+- **State file** at `$MAKAKOO_HOME/state/makakoo-setup/completed.json`
+  records per-section status with atomic writes + schema-versioned
+  forward-compat loader.
+- **Install hand-off** — `makakoo install` now offers to run the wizard
+  at the end. `--no-setup` flag skips the prompt; non-TTY installs
+  never prompt.
+- **New primitive in makakoo-core:** `adapter::registry::{primary_adapter_path, load_primary_adapter, write_primary_adapter}` — atomic, registry-validated, wizard-driven.
+- Docs: `docs/setup-wizard.md`.
+- Tests: 9 new primary-adapter unit tests in `makakoo-core`,
+  ~54 setup unit tests + 13 setup integration tests in `makakoo`.
+
 ### Fixed — v0.3.3 Security Lockdown (`MAKAKOO-OS-V0.3.3-SECURITY-LOCKDOWN`, 2026-04-21)
 - **Grant ownership check on revoke** (closes pi N3). New `owner`
   field on every grant captures the caller's plugin at create time;

@@ -57,6 +57,9 @@ cd makakoo-os
 cargo install --path makakoo
 cargo install --path makakoo-mcp
 makakoo install    # distro + daemon + infect + health
+makakoo setup      # interactive wizard — persona, brain, pi, Ghostty,
+                   # model provider, infect. Run it again any time
+                   # (docs/setup-wizard.md).
 ```
 
 **Uninstall** — symmetric inverse:

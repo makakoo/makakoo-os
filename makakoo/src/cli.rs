@@ -132,11 +132,33 @@ pub enum Commands {
     /// Print version, persona, and build metadata.
     Version,
 
-    /// Interactive first-run wizard — name your assistant, pick a
-    /// pronoun, pick a default voice. Writes `config/persona.json`.
-    /// Refuses to overwrite an existing file unless `--force`.
+    /// Interactive setup wizard — a re-runnable dispatcher with one
+    /// section per configurable area (persona, brain, cli-agent,
+    /// terminal, model-provider, infect). Run with no args to walk
+    /// every section in order; pass a section name to run just one;
+    /// or use `--only` / `--skip` to scope.
     Setup {
-        /// Overwrite an existing `config/persona.json`.
+        /// Run only this section. If omitted, every section runs in
+        /// order. Valid names: `persona`, `brain`, `cli-agent`,
+        /// `terminal` (macOS only), `model-provider`, `infect`.
+        section: Option<String>,
+        /// Run only the given sections (comma-separated or repeat).
+        /// Wins over `--skip` when both are set.
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
+        /// Skip these sections (comma-separated or repeat).
+        #[arg(long, value_delimiter = ',')]
+        skip: Vec<String>,
+        /// Don't prompt — print current state and exit 0. Also the
+        /// default behavior when stdin isn't a TTY.
+        #[arg(long)]
+        non_interactive: bool,
+        /// Wipe `$MAKAKOO_HOME/state/makakoo-setup/completed.json`
+        /// before running so every section re-asks.
+        #[arg(long)]
+        reset: bool,
+        /// Re-run the persona section and overwrite an existing
+        /// `config/persona.json`. Other sections ignore this flag.
         #[arg(long)]
         force: bool,
     },
@@ -285,6 +307,13 @@ pub enum Commands {
         /// Skip the `infect --global` step.
         #[arg(long)]
         skip_infect: bool,
+
+        /// Skip the post-install `setup` wizard hand-off. By default a
+        /// successful install offers to run `makakoo setup` interactively
+        /// — use this flag in CI / unattended installs. Non-TTY installs
+        /// never prompt regardless.
+        #[arg(long)]
+        no_setup: bool,
     },
 
     /// Manage user-managed write permissions — the runtime Layer-3 of
@@ -1493,6 +1522,7 @@ mod tests {
             yes,
             skip_daemon,
             skip_infect,
+            no_setup,
         } = cli.command
         {
             assert_eq!(distro, "core");
@@ -1500,6 +1530,7 @@ mod tests {
             assert!(!yes);
             assert!(!skip_daemon);
             assert!(!skip_infect);
+            assert!(!no_setup);
         } else {
             panic!("expected Install");
         }

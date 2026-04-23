@@ -38,6 +38,7 @@ pub async fn run(
     yes: bool,
     skip_daemon: bool,
     skip_infect: bool,
+    no_setup: bool,
 ) -> anyhow::Result<i32> {
     // Step 0: detection. Always runs, even in --dry-run — it's the
     // whole point of the plan output.
@@ -109,7 +110,42 @@ pub async fn run(
 
     println!();
     print_summary(&detected);
+
+    // Step 4 (optional) — offer the interactive setup wizard.
+    maybe_offer_setup(no_setup)?;
+
     Ok(0)
+}
+
+/// Prompt "Run setup wizard now? [Y/n]" if we're on a TTY and the user
+/// didn't pass `--no-setup`. Accepts y/yes/empty-line → runs `makakoo
+/// setup` in the same process. No-op on non-TTY or explicit opt-out.
+fn maybe_offer_setup(no_setup: bool) -> anyhow::Result<()> {
+    if no_setup {
+        return Ok(());
+    }
+    if !crate::commands::setup::is_interactive_stdin() {
+        return Ok(());
+    }
+    print!("\nRun the setup wizard now? Configures persona, brain, pi, Ghostty, model provider, and CLI infect. [Y/n]: ");
+    use std::io::Write as _;
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    let read = std::io::stdin().read_line(&mut line)?;
+    let trimmed = line.trim().to_lowercase();
+    if read == 0 || trimmed.is_empty() || trimmed == "y" || trimmed == "yes" {
+        println!();
+        let rc = crate::commands::setup::run(crate::commands::setup::SetupArgs::default())?;
+        if rc != 0 {
+            output::print_warn(format!("setup wizard returned non-zero exit code {rc}"));
+        }
+    } else {
+        println!();
+        output::print_info(
+            "Skipped. Run `makakoo setup` anytime, or `makakoo setup <section>` for one section.",
+        );
+    }
+    Ok(())
 }
 
 fn print_plan(
@@ -219,7 +255,19 @@ pub async fn dispatch(ctx: &CliContext, cmd: Commands) -> anyhow::Result<i32> {
             yes,
             skip_daemon,
             skip_infect,
-        } => run(ctx, distro, dry_run, yes, skip_daemon, skip_infect).await,
+            no_setup,
+        } => {
+            run(
+                ctx,
+                distro,
+                dry_run,
+                yes,
+                skip_daemon,
+                skip_infect,
+                no_setup,
+            )
+            .await
+        }
         _ => unreachable!("dispatch called with non-Install variant"),
     }
 }

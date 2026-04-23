@@ -62,7 +62,21 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         }
         Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,
         Commands::Version => version::run(),
-        Commands::Setup { force } => setup::run(force),
+        Commands::Setup {
+            section,
+            only,
+            skip,
+            non_interactive,
+            reset,
+            force,
+        } => setup::run(setup::SetupArgs {
+            section,
+            only,
+            skip,
+            non_interactive,
+            reset,
+            force,
+        }),
         Commands::Daemon { cmd } => {
             crate::daemon::dispatch(cmd).await?;
             Ok(0)

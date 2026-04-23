@@ -172,6 +172,120 @@ fn default_adapters_root() -> PathBuf {
         .join("adapters")
 }
 
+// ── primary-adapter primitive ───────────────────────────────────────────
+//
+// Names which registered adapter is the "primary" — the one the wizard
+// (and, eventually, routing consumers) treats as the default. Separate
+// from `Enabled`/`Disabled` toggles: several adapters can be enabled,
+// exactly zero or one is primary at any time.
+//
+// File: `~/.makakoo/primary_adapter.toml`. Minimal schema:
+//
+//     name = "switchailocal"
+//
+// The file is optional — absence means "no primary has been picked yet"
+// and consumers fall back to their pre-existing default behavior.
+
+/// Absolute path to `primary_adapter.toml`. Respects
+/// `MAKAKOO_ADAPTERS_HOME` so tests can redirect writes.
+pub fn primary_adapter_path() -> PathBuf {
+    // Adapters home is `~/.makakoo/adapters/` by default; primary marker
+    // sits one level up (`~/.makakoo/`) alongside `trust/` so it's
+    // trivially visible in a directory listing.
+    let adapters_root = default_adapters_root();
+    match adapters_root.parent() {
+        Some(p) => p.join("primary_adapter.toml"),
+        None => PathBuf::from("primary_adapter.toml"),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct PrimaryAdapterFile {
+    name: String,
+}
+
+/// Read the primary-adapter name from disk. Returns `None` when the
+/// file is missing, unreadable, malformed, or names an adapter not in
+/// the provided registry. Never panics — consumers can trust the result.
+pub fn load_primary_adapter(registry: &AdapterRegistry) -> Option<String> {
+    let path = primary_adapter_path();
+    load_primary_adapter_from(&path, registry)
+}
+
+/// Same as [`load_primary_adapter`] but reads from an explicit path.
+/// Separates the filesystem-IO seam from the default-path lookup so
+/// unit tests can target it directly without env-var trickery.
+pub fn load_primary_adapter_from(path: &Path, registry: &AdapterRegistry) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let parsed: PrimaryAdapterFile = toml::from_str(&raw).ok()?;
+    if registry.get(&parsed.name).is_some() {
+        Some(parsed.name)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum PrimaryAdapterError {
+    #[error("unknown adapter `{0}` — not registered in {1}")]
+    UnknownAdapter(String, PathBuf),
+    #[error("failed to write primary_adapter.toml at {path}: {source}")]
+    WriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to serialize primary_adapter.toml: {0}")]
+    SerializeFailed(#[from] toml::ser::Error),
+}
+
+/// Atomically persist `name` as the primary adapter.
+///
+/// - Rejects names that aren't in the registry.
+/// - Creates parent dirs on demand.
+/// - Writes to a sibling `*.tmp` then renames — safe under interrupt.
+pub fn write_primary_adapter(
+    name: &str,
+    registry: &AdapterRegistry,
+) -> Result<PathBuf, PrimaryAdapterError> {
+    let path = primary_adapter_path();
+    write_primary_adapter_to(&path, name, registry)?;
+    Ok(path)
+}
+
+/// Same as [`write_primary_adapter`] but writes to an explicit path.
+pub fn write_primary_adapter_to(
+    path: &Path,
+    name: &str,
+    registry: &AdapterRegistry,
+) -> Result<(), PrimaryAdapterError> {
+    if registry.get(name).is_none() {
+        return Err(PrimaryAdapterError::UnknownAdapter(
+            name.to_string(),
+            registry.root().to_path_buf(),
+        ));
+    }
+    let body = toml::to_string(&PrimaryAdapterFile {
+        name: name.to_string(),
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| PrimaryAdapterError::WriteFailed {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, body).map_err(|e| PrimaryAdapterError::WriteFailed {
+        path: tmp.clone(),
+        source: e,
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| PrimaryAdapterError::WriteFailed {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +402,118 @@ sandbox_profile = "network-io"
         let reg = AdapterRegistry::load(tmp.path()).unwrap();
         let err = reg.require("nope").unwrap_err();
         assert!(matches!(err, RegistryError::NotFound(_)));
+    }
+
+    // ── primary_adapter_path / load / write ────────────────────────────
+
+    fn registry_with_adapters(dir: &Path, names: &[&str]) -> AdapterRegistry {
+        for name in names {
+            let body = SAMPLE.replace(r#"name = "ref-adapter""#, &format!(r#"name = "{name}""#));
+            write(dir, &format!("{name}.toml"), &body);
+        }
+        AdapterRegistry::load(dir).unwrap()
+    }
+
+    #[test]
+    fn load_primary_returns_none_when_file_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
+        let path = tmp.path().join("no-such-file.toml");
+        assert_eq!(load_primary_adapter_from(&path, &reg), None);
+    }
+
+    #[test]
+    fn load_primary_returns_none_when_points_to_unknown_adapter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
+        let path = tmp.path().join("primary.toml");
+        fs::write(&path, r#"name = "nonexistent""#).unwrap();
+        assert_eq!(load_primary_adapter_from(&path, &reg), None);
+    }
+
+    #[test]
+    fn load_primary_returns_some_when_valid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal", "tytus-cli"]);
+        let path = tmp.path().join("primary.toml");
+        fs::write(&path, r#"name = "switchailocal""#).unwrap();
+        assert_eq!(
+            load_primary_adapter_from(&path, &reg),
+            Some("switchailocal".to_string())
+        );
+    }
+
+    #[test]
+    fn load_primary_returns_none_on_malformed_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
+        let path = tmp.path().join("primary.toml");
+        fs::write(&path, "this is not valid toml [").unwrap();
+        assert_eq!(load_primary_adapter_from(&path, &reg), None);
+    }
+
+    #[test]
+    fn write_primary_rejects_unknown_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
+        let path = tmp.path().join("primary.toml");
+        let err = write_primary_adapter_to(&path, "nonexistent", &reg).unwrap_err();
+        assert!(matches!(err, PrimaryAdapterError::UnknownAdapter(..)));
+        assert!(!path.exists(), "no file should be written on error");
+    }
+
+    #[test]
+    fn write_primary_happy_path_creates_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal", "tytus-cli"]);
+        let path = tmp.path().join("primary.toml");
+        write_primary_adapter_to(&path, "tytus-cli", &reg).unwrap();
+        assert!(path.exists());
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(body.contains(r#"name = "tytus-cli""#));
+    }
+
+    #[test]
+    fn write_primary_is_atomic_no_leftover_tmp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
+        let path = tmp.path().join("primary.toml");
+        write_primary_adapter_to(&path, "switchailocal", &reg).unwrap();
+        assert!(path.exists());
+        let tmp_sibling = path.with_extension("toml.tmp");
+        assert!(!tmp_sibling.exists(), "tmp sibling should be renamed away");
+    }
+
+    #[test]
+    fn write_primary_overwrites_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal", "tytus-cli"]);
+        let path = tmp.path().join("primary.toml");
+        write_primary_adapter_to(&path, "switchailocal", &reg).unwrap();
+        write_primary_adapter_to(&path, "tytus-cli", &reg).unwrap();
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(body.contains(r#"name = "tytus-cli""#));
+        assert!(!body.contains(r#"name = "switchailocal""#));
+    }
+
+    #[test]
+    fn write_primary_creates_parent_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
+        let nested = tmp.path().join("nested").join("deeper").join("primary.toml");
+        write_primary_adapter_to(&nested, "switchailocal", &reg).unwrap();
+        assert!(nested.exists());
+    }
+
+    #[test]
+    fn round_trip_write_then_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
+        let path = tmp.path().join("primary.toml");
+        write_primary_adapter_to(&path, "switchailocal", &reg).unwrap();
+        assert_eq!(
+            load_primary_adapter_from(&path, &reg),
+            Some("switchailocal".to_string())
+        );
     }
 }
