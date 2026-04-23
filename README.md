@@ -37,6 +37,12 @@ Your notes, your decisions, your arguments with yourself from three months ago �
 
 ## Install
 
+**First-time user?** Open [docs/getting-started.md](docs/getting-started.md)
+— a step-by-step guide with per-OS instructions, expected output at
+every step, and common-error fixes inline.
+
+**Already comfortable in a terminal? The short version:**
+
 **macOS / Linux** — one-liner (works after v0.1.0 release tag lands):
 
 ```sh
@@ -58,8 +64,8 @@ cargo install --path makakoo
 cargo install --path makakoo-mcp
 makakoo install    # distro + daemon + infect + health
 makakoo setup      # interactive wizard — persona, brain, pi, Ghostty,
-                   # model provider, infect. Run it again any time
-                   # (docs/setup-wizard.md).
+                   # model provider, infect. Run again any time.
+                   # See docs/user-manual/setup-wizard.md.
 ```
 
 **Uninstall** — symmetric inverse:
@@ -69,6 +75,18 @@ makakoo uninfect         # strip bootstrap from every CLI slot
 makakoo daemon uninstall # remove the auto-launch agent
 rm -rf ~/.makakoo ~/MAKAKOO
 ```
+
+## Documentation
+
+| I want to... | Read |
+|---|---|
+| Install Makakoo from zero (step-by-step, beginner-friendly) | [`docs/getting-started.md`](docs/getting-started.md) |
+| See what I can do with Makakoo day-to-day | [`docs/use-cases.md`](docs/use-cases.md) |
+| Understand the setup wizard's 6 sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
+| Look up a specific `makakoo` subcommand | [`docs/user-manual/`](docs/user-manual/index.md) |
+| Fix something that broke | [`docs/troubleshooting/`](docs/troubleshooting/index.md) |
+| Understand architecture / internals | [`docs/concepts/`](docs/concepts/) and [`spec/`](spec/) |
+| Write or publish an adapter | [`docs/adapters.md`](docs/adapters.md), [`docs/adapter-publishing.md`](docs/adapter-publishing.md) |
 
 ## Quickstart
 

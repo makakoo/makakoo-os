@@ -1,6 +1,21 @@
-# Makakoo CLI Reference
+# Makakoo User Manual
 
-Complete reference for all `makakoo` commands.
+Every command, every chapter, every way to do a thing.
+
+**New here?** Start with [Getting started](../getting-started.md) for a
+step-by-step install guide, or the [Use cases](../use-cases.md) page
+for "I want to X" recipes.
+
+## By task (start here if you have a goal in mind)
+
+| Chapter | What it covers |
+|---|---|
+| [Setup wizard](setup-wizard.md) | The 6 sections (persona, brain, cli-agent, terminal, model-provider, infect) walked through end-to-end. |
+| [Write-access grants (`makakoo perms`)](makakoo-perms.md) | Grant / revoke / audit runtime write permissions. |
+
+*(More task-oriented chapters coming — brain sources, adapter
+selection, plugin authoring. Until those land, look up the individual
+command below.)*
 
 ## Synopsis
 
@@ -12,6 +27,8 @@ makakoo <command> [options] [arguments]
 
 | Command | Description |
 |---------|-------------|
+| [setup](setup-wizard.md) | Interactive re-runnable wizard (persona / brain / cli-agent / terminal / model-provider / infect) |
+| [install](../getting-started.md) | One-shot installer umbrella — distro + daemon + infect + health + optional setup |
 | [query](makakoo-query.md) | Search the Brain with LLM synthesis |
 | [search](makakoo-search.md) | Full-text search the Brain |
 | [infect](makakoo-infect.md) | Infect AI CLIs with shared brain |
@@ -22,6 +39,7 @@ makakoo <command> [options] [arguments]
 | [distro](makakoo-distro.md) | Manage distro bundles |
 | [secret](makakoo-secret.md) | Manage secrets |
 | [perms](makakoo-perms.md) | Runtime write-access grants (v0.3 / hardened in v0.3.1-v0.3.2) |
+| [brain](setup-wizard.md#sections) | Multi-source brain registry (`list / add / remove / set-default / sync / init`) |
 | [status](makakoo-status.md) | Show system status |
 | [completion](makakoo-completion.md) | Shell completion setup |
 | [adapter](makakoo-adapter.md) | Manage AI adapters |

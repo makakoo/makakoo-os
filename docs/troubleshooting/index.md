@@ -2,6 +2,37 @@
 
 Common issues and their solutions.
 
+## First-time install didn't work?
+
+Before anything else, try the three-step self-check:
+
+```sh
+makakoo --version     # does the binary exist and run?
+makakoo status        # is the daemon up and are plugins loaded?
+makakoo health        # deep probe across all subsystems
+```
+
+If any step fails, skim the table below before reading further. The
+left column is the error message you see; the right column is the
+one-line fix.
+
+| Symptom | Fix |
+|---|---|
+| `command not found: makakoo` | `~/.local/bin` isn't on your PATH. Run `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc` (for bash, use `~/.bashrc`). |
+| `curl: (60) SSL certificate problem` | Your system clock is wrong or your corporate proxy intercepts HTTPS. Fix the clock (`sudo sntp -sS time.apple.com` on macOS) or run the installer from a network without the proxy. |
+| `zsh: permission denied: ./install.sh` when installing from source | `chmod +x install.sh` first, or run `sh install.sh`. |
+| "makakoo: cannot be opened because Apple cannot verify it" (macOS Gatekeeper) | Right-click the downloaded `makakoo` binary → Open → Open. Then re-run `makakoo install`. The warning only appears once per binary. |
+| `makakoo install` says `daemon install failed` | Usually a one-time macOS LaunchAgent permission prompt that got dismissed. Re-run `makakoo daemon install` alone and accept the prompt. |
+| Wizard says `not running on a live terminal` | You piped stdin or you're in CI. Re-run from a normal terminal, or use `makakoo setup --non-interactive` to just print current state. |
+| `makakoo brain init` can't find Python | Makakoo needs `python3` on PATH for the brain picker. Install via Homebrew (`brew install python3`) or your distro's package manager. |
+| `makakoo setup cli-agent` says `npm not found` | Install Node.js from [nodejs.org](https://nodejs.org) — npm ships with it. Then re-run `makakoo setup cli-agent`. |
+| `makakoo setup terminal` says `brew not found` (macOS) | Install Homebrew from [brew.sh](https://brew.sh), then re-run. |
+| Ubuntu/Debian: missing `libssl` | `sudo apt install libssl-dev ca-certificates` and re-install. |
+| After install, your AI CLI doesn't show the Makakoo bootstrap block | Run `makakoo infect --verify` to see drift, then `makakoo infect` to fix. |
+| "Makakoo seems installed but `makakoo query` returns nothing" | Your Brain is empty on a fresh install. Try `makakoo journal add "Hello, world"` and then `makakoo query "hello"` again. |
+
+If your symptom isn't in the table, keep reading.
+
 ## Quick Diagnostics
 
 Run these first:
