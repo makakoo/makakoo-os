@@ -13,10 +13,37 @@
 set -euo pipefail
 
 UPSTREAM_URL="${BROWSER_HARNESS_UPSTREAM:-https://github.com/browser-use/browser-harness}"
-UPSTREAM_REF="${BROWSER_HARNESS_REF:-main}"
+UPSTREAM_REF="${BROWSER_HARNESS_REF:-}"
 UPSTREAM_DIR="${MAKAKOO_PLUGIN_DIR}/upstream"
 
-echo "→ [agent-browser-harness] ensuring upstream clone at ${UPSTREAM_REF}"
+# Resolve UPSTREAM_REF: use env override if set, otherwise fetch the
+# latest browser-use/browser-harness GitHub release tag.
+# Falls back to 'main' only if network is unavailable.
+_resolve_ref() {
+    if [[ -n "${UPSTREAM_REF}" ]]; then
+        echo "${UPSTREAM_REF}"
+        return
+    fi
+    if command -v gh >/dev/null 2>&1; then
+        local tag
+        tag=$(gh api repos/browser-use/browser-harness/releases/latest --jq '.tag_name' 2>/dev/null) && \
+        [[ -n "${tag}" ]] && { echo "${tag}"; return; }
+    fi
+    # Fallback: parse GitHub tags page (works without gh CLI)
+    local tag
+    tag=$(curl -sSL --fail "https://api.github.com/repos/browser-use/browser-harness/releases/latest" \
+        -H "Accept: application/vnd.github+json" \
+        --max-time 10 2>/dev/null | grep '"tag_name"' | sed 's/.*": *"\([^"]*\)".*/\1/')
+    if [[ -n "${tag}" ]]; then
+        echo "${tag}"
+        return
+    fi
+    echo "main"  # last resort
+}
+
+UPSTREAM_REF=$(_resolve_ref)
+echo "→ [agent-browser-harness] upstream ref resolved to: ${UPSTREAM_REF}"
+echo "→ [agent-browser-harness] ensuring upstream clone"
 if [[ -d "${UPSTREAM_DIR}/.git" ]]; then
     git -C "${UPSTREAM_DIR}" fetch --depth 1 origin "${UPSTREAM_REF}" >/dev/null
     git -C "${UPSTREAM_DIR}" checkout -q FETCH_HEAD
