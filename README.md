@@ -87,6 +87,7 @@ rm -rf ~/.makakoo ~/MAKAKOO
 | Fix something that broke | [`docs/troubleshooting/`](docs/troubleshooting/index.md) |
 | Understand architecture / internals | [`docs/concepts/`](docs/concepts/) and [`spec/`](spec/) |
 | Write or publish an adapter | [`docs/adapters.md`](docs/adapters.md), [`docs/adapter-publishing.md`](docs/adapter-publishing.md) |
+| Answer a yes/no question ("does it phone home?", "is it free?") | [`docs/faq.md`](docs/faq.md) |
 
 ## Quickstart
 
