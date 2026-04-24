@@ -351,6 +351,26 @@ pub enum Commands {
         cmd: AdapterCmd,
     },
 
+    /// Harvey Octopus — signed-MCP peer federation.
+    ///
+    /// Peer a Tytus pod, another Mac, or an SME teammate with this
+    /// host so they can read/write your Brain via signed MCP. Thin
+    /// passthrough to the Python `core.octopus.bootstrap_wizard`
+    /// shipped with `lib-harvey-core`.
+    ///
+    /// Subcommands:
+    ///   makakoo octopus bootstrap [--peer-name N] [--force]
+    ///   makakoo octopus invite [--link] [--peer-name N] [--scope S] [--duration D]
+    ///   makakoo octopus join <token-or-link> [--peer-name N] [--pubkey KEY]
+    ///   makakoo octopus trust list [--all] [--json]
+    ///   makakoo octopus trust revoke <peer-name> [--reason R]
+    ///   makakoo octopus doctor
+    Octopus {
+        /// Arguments forwarded verbatim to the Python wizard.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// Emit a shell completion script for the chosen shell.
     ///
     /// Write the output to the shell's completion path to enable
