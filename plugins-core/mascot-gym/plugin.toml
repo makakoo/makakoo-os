@@ -37,6 +37,15 @@ tasks = [
   { name = "gym_lope_gate",      interval = "84600s", active_hours = [3, 6] },
   { name = "gym_morning_report", interval = "84600s", active_hours = [6, 9] },
   { name = "gym_weekly_report",  interval = "604800s", active_hours = [8, 11] },
+  # Mascot missions — one proactive chore per nursery mascot.
+  # Each writes a report under data/mascots/<mascot>/ and may append a
+  # single outliner line to today's Brain journal. All are read-only
+  # except Glimmer (archives empty Lead pages) and Olibia (writes digest).
+  { name = "mascot_pixel_doctor",     interval = "7200s",  active_hours = [7, 23] },
+  { name = "mascot_cinder_sentinel",  interval = "14400s", active_hours = [7, 23] },
+  { name = "mascot_ziggy_doctor",     interval = "86400s", active_hours = [8, 10] },
+  { name = "mascot_glimmer_garden",   interval = "86400s", active_hours = [22, 23] },
+  { name = "mascot_olibia_weekly",    interval = "604800s", active_hours = [9, 11] },
 ]
 
 [state]

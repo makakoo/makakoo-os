@@ -770,3 +770,39 @@ def handle_gym_weekly_report() -> Dict:
         "blocklist_size": len(blocklist_clusters),
         "counts": counts,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Mascot Missions — proactive daily chores (one per mascot)
+# See core/mascots/missions.py for the implementations.
+# ═════════════════════════════════════════════════════════════════════
+
+
+def handle_mascot_pixel_doctor() -> Dict:
+    """Pixel — SANCHO Doctor. Parse recent journals for repeated task failures."""
+    from core.mascots.missions import pixel_sancho_doctor
+    return pixel_sancho_doctor()
+
+
+def handle_mascot_cinder_sentinel() -> Dict:
+    """Cinder — Plugin Entrypoint Sentinel. Byte-compile every Python plugin entrypoint."""
+    from core.mascots.missions import cinder_entrypoint_sentinel
+    return cinder_entrypoint_sentinel()
+
+
+def handle_mascot_ziggy_doctor() -> Dict:
+    """Ziggy — SKILL.md Doctor. Lint every SKILL.md for completeness."""
+    from core.mascots.missions import ziggy_skill_md_doctor
+    return ziggy_skill_md_doctor()
+
+
+def handle_mascot_glimmer_garden() -> Dict:
+    """Glimmer — Brain Gardener. Archive empty Lead/Inbox pages >14d old."""
+    from core.mascots.missions import glimmer_brain_gardener
+    return glimmer_brain_gardener()
+
+
+def handle_mascot_olibia_weekly() -> Dict:
+    """Olibia — Weekly Home Digest. Aggregate commits/sancho/prospects/gym/brain."""
+    from core.mascots.missions import olibia_weekly_digest
+    return olibia_weekly_digest()

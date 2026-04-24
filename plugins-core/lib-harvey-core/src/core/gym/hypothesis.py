@@ -83,13 +83,30 @@ class HypothesisRecord:
 
 
 def _default_skill_improve_fn() -> Callable:
-    from skills.meta.autoimprover.evaluate_skill import improve_gap
+    # autoimprover was moved out of skills/ into skills-shared/harvey/meta/
+    # during the 2026-04-20 harvey-os retirement. Inject the new path
+    # before resolving so stale `from skills...` imports keep failing
+    # with a loud ImportError instead of silently loading the wrong copy.
+    _ensure_autoimprover_on_path()
+    from meta.autoimprover.evaluate_skill import improve_gap  # type: ignore[import-not-found]
     return improve_gap
 
 
 def _default_skill_score_fn() -> Callable:
-    from skills.meta.autoimprover.evaluate_skill import evaluate_with_llm
+    _ensure_autoimprover_on_path()
+    from meta.autoimprover.evaluate_skill import evaluate_with_llm  # type: ignore[import-not-found]
     return evaluate_with_llm
+
+
+def _ensure_autoimprover_on_path() -> None:
+    import sys
+    candidate = os.path.join(
+        os.environ.get("MAKAKOO_HOME", os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))),
+        "skills-shared",
+        "harvey",
+    )
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
 
 
 def _default_drafter_model() -> str:
