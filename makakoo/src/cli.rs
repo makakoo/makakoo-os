@@ -392,6 +392,56 @@ pub enum Commands {
         /// Target shell. Supported: bash, zsh, fish, elvish, powershell.
         shell: clap_complete::Shell,
     },
+
+    /// Drive an agent plugin's lifecycle entrypoint.
+    ///
+    /// Agent plugins declare `[entrypoint].start|stop|health` in their
+    /// `plugin.toml`. This subcommand resolves a plugin by name,
+    /// reads the relevant entry, runs it with `cwd = plugin.root` via
+    /// `/bin/sh -c`, and forwards the exit code. Thin wrapper — the
+    /// daemon is the primary lifecycle supervisor; this command is the
+    /// escape hatch for manual control, SKILL.md examples, and the
+    /// `sancho-task-plugin-update-check/post_update` hook.
+    ///
+    /// Subcommands:
+    ///   makakoo agent start  <name>
+    ///   makakoo agent stop   <name>
+    ///   makakoo agent status <name>
+    ///   makakoo agent health <name>
+    ///
+    /// `status` is not declared in plugin manifests today; it is derived
+    /// by invoking `[entrypoint].health` if present, else falling back to
+    /// a pgrep-style scan on the plugin name.
+    Agent {
+        #[command(subcommand)]
+        cmd: AgentCmd,
+    },
+}
+
+/// `makakoo agent <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum AgentCmd {
+    /// Run the plugin's `[entrypoint].start` script.
+    Start {
+        /// Plugin name (as reported by `makakoo plugin list`).
+        name: String,
+    },
+    /// Run the plugin's `[entrypoint].stop` script.
+    Stop {
+        /// Plugin name.
+        name: String,
+    },
+    /// Show whether the plugin's agent process is running. Uses the
+    /// plugin's `[entrypoint].health` script if declared, else pgrep.
+    Status {
+        /// Plugin name.
+        name: String,
+    },
+    /// Run the plugin's `[entrypoint].health` script (exits 0 if up).
+    Health {
+        /// Plugin name.
+        name: String,
+    },
 }
 
 /// `makakoo plugin <subcommand>`.

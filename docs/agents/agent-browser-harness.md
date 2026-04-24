@@ -26,7 +26,16 @@ makakoo plugin enable agent-browser-harness   # turn back on
 makakoo daemon restart                        # apply (also kicks a stuck daemon)
 ```
 
-Manual control (advanced — bypass the daemon supervisor):
+Direct lifecycle control (bypass the daemon supervisor):
+
+```sh
+makakoo agent start  agent-browser-harness
+makakoo agent stop   agent-browser-harness
+makakoo agent status agent-browser-harness
+makakoo agent health agent-browser-harness
+```
+
+Raw entrypoint (for wrapper debugging only):
 
 ```sh
 cd ~/MAKAKOO/plugins/agent-browser-harness

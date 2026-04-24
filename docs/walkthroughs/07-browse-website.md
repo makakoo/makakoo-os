@@ -83,7 +83,7 @@ If no match, force a restart:
 makakoo daemon restart
 ```
 
-> **Known doc gotcha (DOGFOOD-FINDINGS F-008):** some plugin SKILL.md files mention `makakoo agent start agent-browser-harness` — that subcommand **does not exist**. The daemon is the only lifecycle manager today.
+If you need to drive the agent directly (bypass the daemon), use `makakoo agent {start,stop,status,health} agent-browser-harness` — a thin wrapper around the plugin's declared `[entrypoint]` scripts. The daemon remains the primary supervisor; this subcommand is the escape hatch for manual control.
 
 ### 5. Open your AI CLI and ask Harvey to browse a page
 

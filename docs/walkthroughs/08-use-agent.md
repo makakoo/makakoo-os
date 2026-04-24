@@ -163,7 +163,24 @@ Back to normal.
 
 ## Manual control (advanced — bypass the daemon)
 
-If the daemon is mis-managing a specific agent and you need to drive it directly, every agent plugin ships with entrypoint scripts you can call by hand. For `agent-browser-harness`:
+If the daemon is mis-managing a specific agent and you need to drive it directly, there are two paths.
+
+### The preferred path: `makakoo agent`
+
+```sh
+makakoo agent start  agent-browser-harness
+makakoo agent stop   agent-browser-harness
+makakoo agent status agent-browser-harness
+makakoo agent health agent-browser-harness
+```
+
+`makakoo agent` is a thin wrapper: it resolves the plugin's `plugin.toml`, reads its declared `[entrypoint].{start,stop,health}` command, and runs it with `cwd = plugin.root`. Exit codes forward verbatim.
+
+`status` falls back to a `pgrep` scan if the plugin declares no `[entrypoint].health` hook.
+
+### The raw path: invoke the plugin's entrypoint script directly
+
+Every agent plugin's `[entrypoint]` section names a script. For `agent-browser-harness` it happens to be:
 
 ```sh
 cd ~/MAKAKOO/plugins/agent-browser-harness
@@ -172,13 +189,13 @@ cd ~/MAKAKOO/plugins/agent-browser-harness
 .venv/bin/python daemon_admin.py stop
 ```
 
-The exact script name (`daemon_admin.py` here) is declared in the plugin's `plugin.toml` under `[entrypoint]`. Read the manifest to find it:
+Read any plugin's entrypoint with:
 
 ```sh
 grep -A3 "^\[entrypoint\]" ~/MAKAKOO/plugins/<agent-name>/plugin.toml
 ```
 
-> **Known doc gotcha (DOGFOOD-FINDINGS F-008):** some SKILL.md files refer to `makakoo agent start <name>` — that subcommand does not exist today. Use `makakoo daemon restart` + plugin `enabled` toggle, or call the entrypoint script directly.
+Use this raw path only when debugging the wrapper itself; normally `makakoo agent` is the right call.
 
 ## What just happened?
 
