@@ -16,8 +16,12 @@ skill = "^1.0"
 [depends]
 python = ">=3.8"
 
+# skill-browser-qa-browse ships an upstream TypeScript/Bun project plus a
+# SKILL.md documenting the `browse` trigger. No Python runtime to invoke;
+# agents reach this capability through the `harvey_browse` MCP tool
+# (agent-browser-harness). See DOGFOOD-FINDINGS F-002.
 [entrypoint]
-run = "python3 -u -m src.__main__"
+run = "echo 'skill-browser-qa-browse is a documentation-only skill. The real capability is exposed as the harvey_browse MCP tool via agent-browser-harness.'"
 
 [capabilities]
 # Capability grants default empty — conservative for batch migration.
