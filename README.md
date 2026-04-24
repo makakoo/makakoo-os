@@ -68,6 +68,8 @@ makakoo setup      # interactive wizard — persona, brain, pi, Ghostty,
                    # See docs/user-manual/setup-wizard.md.
 ```
 
+**First time using Makakoo?** After install, start at [Walkthrough 01 — Fresh install on a new Mac](docs/walkthroughs/01-fresh-install-mac.md). The walkthroughs are a 12-guide tour through every major feature — copy-paste runnable, dependency-chained, in plain language.
+
 **Uninstall** — symmetric inverse:
 
 ```sh
