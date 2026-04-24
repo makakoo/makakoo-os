@@ -13,5 +13,15 @@ path = "plugins-core/lib-harvey-core/src"
 [depends]
 python = ">=3.9"
 
+[depends.python_packages]
+# Octopus Phase 1 signed-MCP peer federation — required on the host that
+# runs the HTTP shim for Ed25519 signing/verification + invite handshakes.
+cryptography = ">=41,<46"
+# Octopus Phase 3 mDNS discovery (_makakoo-peer._tcp.). Soft-imported in
+# core/octopus/discovery/mdns.py so the rest of the octopus stack works
+# on machines without the zeroconf runtime (pods often drop it to keep
+# image size down — invite-link onboarding is the fallback).
+zeroconf = { version = ">=0.132", optional = true }
+
 [capabilities]
 grants = []

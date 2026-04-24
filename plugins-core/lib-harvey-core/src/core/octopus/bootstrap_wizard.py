@@ -41,9 +41,7 @@ from typing import Sequence
 
 from . import CAPABILITIES, OCTOPUS_KEYS_DIR, SHIM_TRUST_FILE, TRUST_STORE_PATH
 from . import identity, onboarding, trust_store
-
-INVITE_URL_SCHEME = "makakoo"
-INVITE_URL_HOST = "join"
+from .discovery import invite as invite_mod
 
 
 # ────────────────────────── bootstrap ──────────────────────────────
@@ -135,41 +133,43 @@ def cmd_invite(args: argparse.Namespace) -> int:
 def _encode_invite_link(tok: onboarding.OnboardingToken, ident: identity.Identity) -> str:
     """Encode an invite into a ``makakoo://join?t=<base64>`` URL.
 
-    The payload is a compact JSON doc, base64-url-encoded. We include
-    the issuing peer's public key so the joiner's wizard can pre-populate
-    the TrustGrant without an extra round-trip. The shared secret makes
-    the handshake self-contained.
+    Thin wrapper over :func:`core.octopus.discovery.invite.encode_invite`
+    — the discovery module is the single source of truth for the invite
+    URL format so both the wizard (issuer side) and the automated
+    handshake (Phase 3) produce interoperable payloads.
     """
-    payload = {
-        "v": 1,
-        "tid": tok.token_id,
-        "sec": tok.shared_secret_b64,
-        "scope": tok.capability_scope,
-        "dur": tok.duration_default,
-        "exp": tok.expires_at_unix,
-        "iss": ident.peer_name,
-        "iss_pk": ident.public_key_b64,
-    }
-    if tok.proposed_peer_name:
-        payload["peer"] = tok.proposed_peer_name
-    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    b64 = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-    return f"{INVITE_URL_SCHEME}://{INVITE_URL_HOST}?t={b64}"
+    return invite_mod.encode_invite(
+        token_id=tok.token_id,
+        shared_secret_b64=tok.shared_secret_b64,
+        capability_scope=tok.capability_scope,
+        duration_default=tok.duration_default,
+        expires_at_unix=tok.expires_at_unix,
+        issuer_peer_name=ident.peer_name,
+        issuer_public_key_b64=ident.public_key_b64,
+        proposed_peer_name=tok.proposed_peer_name,
+    )
 
 
 def _decode_invite_link(link: str) -> dict:
-    parsed = urllib.parse.urlparse(link)
-    if parsed.scheme != INVITE_URL_SCHEME or parsed.netloc != INVITE_URL_HOST:
-        raise ValueError(
-            f"not a makakoo invite URL: scheme={parsed.scheme!r} host={parsed.netloc!r}"
-        )
-    qs = urllib.parse.parse_qs(parsed.query)
-    b64 = qs.get("t", [""])[0]
-    if not b64:
-        raise ValueError("invite URL missing `t` query param")
-    padded = b64 + "=" * ((4 - len(b64) % 4) % 4)
-    raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-    return json.loads(raw.decode("utf-8"))
+    """Decode a ``makakoo://join?t=...`` URL to the legacy dict shape.
+
+    Preserves backwards compatibility with Phase 2 tests + callers that
+    reach for dict-style access. Internally delegates to
+    :func:`core.octopus.discovery.invite.decode_invite` which returns a
+    typed :class:`InvitePayload`; we dict-ify it on the way out.
+    """
+    payload = invite_mod.decode_invite(link)
+    return {
+        "v": payload.version,
+        "tid": payload.token_id,
+        "sec": payload.shared_secret_b64,
+        "scope": payload.capability_scope,
+        "dur": payload.duration_default,
+        "exp": payload.expires_at_unix,
+        "iss": payload.issuer_peer_name,
+        "iss_pk": payload.issuer_public_key_b64,
+        "peer": payload.proposed_peer_name,
+    }
 
 
 # ────────────────────────── join ───────────────────────────────────
