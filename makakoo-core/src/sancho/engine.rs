@@ -124,9 +124,15 @@ impl SanchoEngine {
             {
                 let mut state = self.state.lock().await;
                 state.release(&name);
-                if report.ok {
-                    state.record_run(&name, Local::now());
-                }
+                // Always advance last_run, even on failure. Otherwise a
+                // failing task retries on the very next tick (every 60s)
+                // forever — the 2026-04-24 bug where `inbox_pipeline`
+                // with interval=4h was firing every minute, producing
+                // 800+ journal entries in 7 days. A broken task should
+                // respect its configured cadence; if the user wants a
+                // fast retry after fixing the bug, they can manually
+                // clear state via `makakoo sancho run <task>`.
+                state.record_run(&name, Local::now());
             }
             let _ = self.ctx.bus.publish(
                 "sancho.handler.tick",
