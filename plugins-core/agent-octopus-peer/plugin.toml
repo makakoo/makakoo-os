@@ -1,0 +1,53 @@
+[plugin]
+name = "agent-octopus-peer"
+version = "0.1.0"
+kind = "agent"
+language = "shell"
+summary = "Harvey Octopus peer stack — HTTP shim (launchd/systemd) + harvey-listen.js daemon. Manages the shim process, the listener polling loop, and the flock interlock for concurrent brain writes."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-octopus-peer"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+binaries = ["node"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+start = "install.sh start"
+stop = "install.sh stop"
+health = "install.sh health"
+
+[capabilities]
+grants = [
+    # The shim exposes the makakoo-mcp HTTP endpoint — peer auth via
+    # Ed25519 prevents unauthorized access. Grant is intentionally narrow:
+    # only the port the shim binds to (default 8765, overridable via
+    # MAKAKOO_MCP_HTTP_PORT).
+    "net/http:127.0.0.1:8765",
+    "net/http:0.0.0.0:8765",
+    # Listener reads the brain and calls brain_tail + brain_write_journal.
+    # These are local tool calls over stdio to makakoo-mcp, not network
+    # calls — the grant documents intent rather than enabling a network
+    # path.
+    "brain/read",
+    "brain/write",
+    # Node.js runtime for the listener.
+    "exec/binary:node",
+    "exec/binary:python3",
+    # launchd / systemd lifecycle for the shim HTTP server.
+    "exec/binary:launchctl",
+    "exec/binary:systemctl",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-octopus-peer"
+retention = "keep"
