@@ -73,6 +73,18 @@ from http.server import BaseHTTPRequestHandler
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 
+# Phase 4 enforcement layer — scope + per-peer write rate limit. Soft-
+# import so the shim stays usable even when `core.octopus` isn't on
+# PYTHONPATH (e.g. legacy installs that only ship the mcp subtree).
+try:
+    from core.octopus.enforce import enforce_request  # type: ignore
+    from core.octopus.ratelimit import PeerRateLimiter  # type: ignore
+    _ENFORCE_AVAILABLE = True
+except ImportError:
+    _ENFORCE_AVAILABLE = False
+    enforce_request = None  # type: ignore
+    PeerRateLimiter = None  # type: ignore
+
 # ────────────────────────── config ──────────────────────────────────
 
 BIND_HOST = os.environ.get("MAKAKOO_MCP_HTTP_BIND", "0.0.0.0")
@@ -270,6 +282,24 @@ def _get_mcp() -> McpStdioPool:
         if _mcp is None:
             _mcp = McpStdioPool(MAKAKOO_MCP_BIN, POOL_SIZE)
     return _mcp
+
+
+# Process-wide enforcement state (Phase 4). Created on first request so
+# the shim stays import-light for unit tests that don't exercise
+# dispatch.
+_limiter: "PeerRateLimiter | None" = None
+
+
+def _get_limiter():
+    """Return the shared :class:`PeerRateLimiter`, or None when
+    enforcement is unavailable (soft-import failed). Callers treat None
+    as "no rate limit" — Phase 1 behavior."""
+    global _limiter
+    if not _ENFORCE_AVAILABLE:
+        return None
+    if _limiter is None:
+        _limiter = PeerRateLimiter()  # type: ignore[misc]
+    return _limiter
 
 
 # ────────────────────────── brain write interlock ───────────────────
@@ -531,6 +561,39 @@ class RpcHandler(BaseHTTPRequestHandler):
             rpc_obj = json.loads(body)
         except Exception:
             rpc_obj = None
+
+        # Phase 4: scope + per-peer write rate limit. Runs AFTER
+        # signature verification (the peer is authenticated) and BEFORE
+        # dispatch (so a denied write doesn't touch the stdio pool or
+        # the brain write path).
+        limiter = _get_limiter()
+        if rpc_obj is not None and limiter is not None and enforce_request is not None:
+            try:
+                decision = enforce_request(
+                    peer_name=peer,
+                    rpc_method=rpc_obj.get("method", ""),
+                    rpc_params=rpc_obj.get("params") or {},
+                    limiter=limiter,
+                )
+            except Exception as exc:
+                log.error("enforce_request raised: %s", exc)
+                decision = None
+            if decision is not None and not decision.allowed:
+                status = decision.http_status
+                body_out = {"error": decision.error_message}
+                encoded = json.dumps(body_out).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.send_header("Connection", "close")
+                if status == 429 and decision.retry_after_s > 0:
+                    # Round up to whole seconds — RFC 7231 allows a
+                    # fractional value but some clients reject it.
+                    self.send_header("Retry-After", str(int(decision.retry_after_s) + 1))
+                self.end_headers()
+                self.wfile.write(encoded)
+                return
+
         shim_response = (
             _handle_tools_call_intercept(rpc_obj, nonce) if rpc_obj else None
         )
