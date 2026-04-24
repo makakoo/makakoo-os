@@ -105,6 +105,21 @@ impl Section for ModelProviderSection {
                     "model-provider: primary → {chosen}. Written to {}",
                     path.display()
                 ))?;
+                // Smoke-test hint per DOGFOOD-FINDINGS F-004. Picking an
+                // adapter does not verify that the adapter actually serves
+                // the default `makakoo query` model alias (ail-compound).
+                // A previous grandma-install shipped with an adapter that
+                // succeeded setup but then failed every `makakoo query`
+                // call with `unknown provider for model ail-compound`.
+                // Surface the smoke-test step inline so users catch it
+                // before their first real query.
+                ui.line("")?;
+                ui.line("Smoke-test: run  makakoo query 'hello'  in a new terminal.")?;
+                ui.line("  If it prints an answer, you're done.")?;
+                ui.line("  If it errors  \"unknown provider for model <alias>\"  —")?;
+                ui.line("  the adapter works but the default model alias isn't registered.")?;
+                ui.line("  Fix: run  makakoo query --model <alias-your-adapter-uses> 'hello'")?;
+                ui.line("  or see docs/troubleshooting/tree.md#error-llm-error.")?;
                 Ok(SectionOutcome::Installed)
             }
             Err(e) => {
