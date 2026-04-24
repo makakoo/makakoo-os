@@ -32,6 +32,26 @@ use crate::skill_runner::{build_skill_env, SkillRunner};
 pub const PLUGIN_SOCKET_ENV: &str = "MAKAKOO_SOCKET_PATH";
 
 pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Result<i32> {
+    // `makakoo skill list` and `makakoo skill info` are common mistakes —
+    // GYM captured 5+2 occurrences 2026-04-23. These look like subcommands
+    // but the CLI only has `makakoo skill <name>` for *running* a skill.
+    // Redirect with a helpful message so the caller can self-correct.
+    if name == "list" {
+        eprintln!("hint: `makakoo skill list` is not a valid subcommand.");
+        eprintln!("      To list installed skills, run:");
+        eprintln!("        makakoo plugin list");
+        eprintln!("      To list Python skill registry:");
+        eprintln!("        python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --list");
+        return Ok(1);
+    }
+    if name == "info" {
+        let skill_name = args.first().map(|s| s.as_str()).unwrap_or("<skill>");
+        eprintln!("hint: `makakoo skill info` is not a valid subcommand.");
+        eprintln!("      To run a skill, use:  makakoo skill {skill_name}");
+        eprintln!("      To see skill details: python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --match {skill_name}");
+        return Ok(1);
+    }
+
     let home = makakoo_home();
     let registry = PluginRegistry::load_default(&home).unwrap_or_default();
 
