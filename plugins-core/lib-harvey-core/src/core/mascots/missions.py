@@ -565,10 +565,21 @@ def olibia_weekly_digest(home: Optional[Path] = None) -> Dict[str, Any]:
     makakoo_os = Path(os.path.expanduser("~/makakoo-os"))
     commits_rust = _git_commits_past_week(makakoo_os)
 
-    # SANCHO health over past 7 journals
+    # SANCHO health over past 7 journals.
+    # We also track a "still firing" set — tasks with any entry in the
+    # last 2 days — so the top-failing list doesn't surface tasks that
+    # were removed from a plugin manifest and are just sitting in the
+    # 7-day historical window. Caught 2026-04-24: `freelance_*_tick`
+    # was removed 2026-04-22 but still showed 661 failures in digest.
     sancho_counts: Counter = Counter()
     task_failures: Counter = Counter()
     task_oks: Counter = Counter()
+    tasks_still_firing: set = set()
+    # "Recent" = today + yesterday only. 2-day windows include 3 calendar
+    # dates, which pulled in a retirement-day backlog (2026-04-22) that
+    # had no entries on 23/24 but still counted as "still firing". Caught
+    # 2026-04-24 after the first Olibia run.
+    recent_cutoff = (now - timedelta(days=1)).date()
     journals_dir = home / "data" / "Brain" / "journals"
     for delta in range(7):
         day = (now - timedelta(days=delta)).date()
@@ -579,14 +590,27 @@ def olibia_weekly_digest(home: Optional[Path] = None) -> Dict[str, Any]:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        is_recent = day >= recent_cutoff
         for m in _SANCHO_LINE_RE.finditer(text):
             status = m.group("status")
             task = m.group("task")
             sancho_counts[status] += 1
+            if is_recent:
+                tasks_still_firing.add(task)
             if status == "FAILED":
                 task_failures[task] += 1
             elif status == "ok":
                 task_oks[task] += 1
+
+    # Filter top-failing to only tasks that are still actively being
+    # scheduled. A task in the registry but not the recent window is
+    # either disabled or dead-manifest — not a current bug.
+    active_failures = Counter(
+        {t: n for t, n in task_failures.items() if t in tasks_still_firing}
+    )
+    dead_manifest_backlog = {
+        t: n for t, n in task_failures.items() if t not in tasks_still_firing
+    }
 
     # Plugin inventory
     plugins_dir = home / "plugins"
@@ -644,7 +668,10 @@ def olibia_weekly_digest(home: Optional[Path] = None) -> Dict[str, Any]:
         "commits_makakoo_os": len(commits_rust),
         "commits_sample": commits_rust[:10],
         "sancho_status_counts": dict(sancho_counts),
-        "sancho_top_failing_tasks": task_failures.most_common(5),
+        # Active tasks only — past-48h signal, not dead manifest entries
+        "sancho_top_failing_tasks": active_failures.most_common(5),
+        "sancho_dead_manifest_backlog": dead_manifest_backlog,
+        "tasks_still_firing_count": len(tasks_still_firing),
         "plugin_count": len(plugins),
         "prospect_pipeline": dict(prospect_counts),
         "gym_queue": gym_counts,
@@ -674,11 +701,20 @@ def olibia_weekly_digest(home: Optional[Path] = None) -> Dict[str, Any]:
         "## SANCHO health (past 7 days)",
         f"- Entries: ok={sancho_counts.get('ok', 0)} · failed={sancho_counts.get('FAILED', 0)} · "
         f"skipped={sancho_counts.get('skipped', 0)}",
+        f"- Tasks still firing (past 48h): **{len(tasks_still_firing)}**",
     ]
-    if task_failures:
-        md_lines.append("- Top failing tasks:")
-        for task, n in task_failures.most_common(5):
-            md_lines.append(f"  - `{task}` — {n} failures")
+    if active_failures:
+        md_lines.append("- Top failing (still-firing) tasks:")
+        for task, n in active_failures.most_common(5):
+            md_lines.append(f"  - `{task}` — {n} failures this week")
+    else:
+        md_lines.append("- _No still-firing task has any failures this week._")
+    if dead_manifest_backlog:
+        total_dead = sum(dead_manifest_backlog.values())
+        md_lines.append(
+            f"- Historical backlog (tasks no longer firing): **{total_dead}** failures "
+            f"across {len(dead_manifest_backlog)} retired task(s)"
+        )
 
     md_lines += [
         "",
