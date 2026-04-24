@@ -13,7 +13,8 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 │
 ├── 🚀 Getting Started
 │   ├── getting-started.md          ✅ Install in 5 minutes
-│   └── quickstart.md             ✅ 15-minute guide
+│   ├── quickstart.md             ✅ 15-minute guide
+│   └── walkthroughs/index.md      ✅ 12 copy-paste end-to-end guides
 │
 ├── 🧠 Concepts
 │   ├── concepts/index.md         ✅ Architecture overview
@@ -31,6 +32,12 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 ├── 🔌 Plugins
 │   ├── plugins/index.md         ✅ Using plugins
 │   └── plugins/writing.md      ✅ Creating plugins
+│
+├── 🤖 Agents
+│   └── agents/index.md          ✅ Per-agent user manuals (15 agents)
+│
+├── 🦊 Mascots
+│   └── mascots/index.md         ✅ Pixel, Cinder, Ziggy, Glimmer, Olibia
 │
 ├── 📡 API Reference
 │   └── api/mcp-tools.md         ✅ MCP tools reference
