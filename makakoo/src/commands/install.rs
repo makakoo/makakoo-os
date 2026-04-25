@@ -104,7 +104,7 @@ pub async fn run(
             .green()
             .bold()
         );
-        let report = crate::infect::run(true, false).await?;
+        let report = crate::infect::run(true, false, None).await?;
         print!("{}", report.human_summary());
     }
 
