@@ -146,8 +146,8 @@ pub fn load_bootstrap() -> Result<String> {
 /// Run infect across every built-in slot. `global` is reserved for a
 /// future `--local` mode that targets per-project `.harvey/context.md`
 /// instead; the 2026-04-14 cutover always operates globally.
-pub async fn run(_global: bool, dry_run: bool) -> Result<InfectReport> {
-    run_with_home(&dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?, dry_run).await
+pub async fn run(_global: bool, dry_run: bool, target_filter: Option<&[String]>) -> Result<InfectReport> {
+    run_with_home(&dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?, dry_run, target_filter).await
 }
 
 /// Build the structured JSON payload emitted by `infect --verify --json`.
@@ -372,7 +372,7 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
 
     // 1. Bootstrap (skipped when `--mcp` is set without `--global`).
     if !mcp_only || global {
-        let report = run(global, dry_run).await?;
+        let report = run(global, dry_run, target_filter).await?;
         print!("{}", report.human_summary());
         if report.error_count() > 0 {
             bootstrap_failed = true;
@@ -445,6 +445,11 @@ async fn dispatch_local_cli(args: InfectArgs) -> Result<i32> {
         remove: args.remove,
         dry_run: args.dry_run,
         ignore_derivatives: args.ignore_derivatives,
+        // Plumb --target through. Without this, `--target codex` was a
+        // silent no-op under --local — the dispatch ignored the field
+        // and every run wrote all 6 derivatives regardless. Reported by
+        // the user 2026-04-25 right after the grandma-docs sprint shipped.
+        target_filter: if args.target.is_empty() { None } else { Some(args.target.clone()) },
     };
     match local::dispatch_local(&start_dir, &home, opts) {
         Ok(report) => {
@@ -461,9 +466,9 @@ async fn dispatch_local_cli(args: InfectArgs) -> Result<i32> {
 /// Same as [`run`] but lets callers (tests, daemons) override the home
 /// directory where slots are written. The bootstrap body is still
 /// loaded from the real `$MAKAKOO_HOME/global_bootstrap.md`.
-pub async fn run_with_home(home: &Path, dry_run: bool) -> Result<InfectReport> {
+pub async fn run_with_home(home: &Path, dry_run: bool, target_filter: Option<&[String]>) -> Result<InfectReport> {
     let body = load_bootstrap()?;
-    run_with_home_and_body(home, &body, dry_run).await
+    run_with_home_and_body(home, &body, dry_run, target_filter).await
 }
 
 /// Fully hermetic variant used by tests — both the home directory and the
@@ -473,6 +478,7 @@ pub async fn run_with_home_and_body(
     home: &Path,
     body: &str,
     dry_run: bool,
+    target_filter: Option<&[String]>,
 ) -> Result<InfectReport> {
     let mut report = InfectReport {
         bootstrap_version: BLOCK_VERSION.to_string(),
@@ -480,6 +486,11 @@ pub async fn run_with_home_and_body(
         ..Default::default()
     };
     for slot in SLOTS {
+        if let Some(filter) = target_filter {
+            if !filter.iter().any(|t| t.eq_ignore_ascii_case(slot.name)) {
+                continue;
+            }
+        }
         let r = write_bootstrap_to_slot(slot, body, home, dry_run);
         report.results.push(r);
     }
@@ -669,7 +680,7 @@ mod tests {
     #[tokio::test]
     async fn run_with_fake_home_installs_all_eight() {
         let tmp = TempDir::new().unwrap();
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
             .await
             .unwrap();
         assert_eq!(report.results.len(), 8);
@@ -685,7 +696,7 @@ mod tests {
     #[tokio::test]
     async fn dry_run_writes_nothing() {
         let tmp = TempDir::new().unwrap();
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, true)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, true, None)
             .await
             .unwrap();
         assert_eq!(report.results.len(), 8);
@@ -698,10 +709,10 @@ mod tests {
     #[tokio::test]
     async fn second_run_is_unchanged() {
         let tmp = TempDir::new().unwrap();
-        run_with_home_and_body(tmp.path(), TEST_BODY, false)
+        run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
             .await
             .unwrap();
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
             .await
             .unwrap();
         assert_eq!(report.unchanged_count(), 8);
@@ -720,7 +731,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
             .await
             .unwrap();
         // Claude got updated, the other 7 got installed.
@@ -733,6 +744,24 @@ mod tests {
         assert!(content.contains("You are Harvey."));
         assert!(content.contains(&format!("v{}", super::slots::BLOCK_VERSION)));
         assert!(!content.contains("old body"));
+    }
+
+    #[tokio::test]
+    async fn target_filter_restricts_to_named_slots() {
+        let tmp = TempDir::new().unwrap();
+        let filter = vec!["claude".to_string()];
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, Some(&filter))
+            .await
+            .unwrap();
+        assert_eq!(report.results.len(), 1, "only claude should be written");
+        assert_eq!(report.results[0].path, tmp.path().join(".claude/CLAUDE.md"));
+        assert!(matches!(report.results[0].status, SlotStatus::Installed));
+        // Other slots must NOT exist on disk.
+        for slot in SLOTS {
+            if slot.name == "claude" { continue; }
+            let p = slot.absolute(tmp.path());
+            assert!(!p.exists(), "slot {} should not exist when filtered out", slot.name);
+        }
     }
 
     #[test]

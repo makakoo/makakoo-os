@@ -35,6 +35,20 @@ Your notes, your decisions, your arguments with yourself from three months ago �
 | Homebrew tap / winget submission | 🟡 manifests drafted, submission post-launch |
 | Fresh-VM smokes on all three OSes | 🟡 scripted, human-supervised runs pending |
 
+## Tell any AI CLI about Makakoo (zero install)
+
+Already running an AI CLI (Claude Code, Codex, Gemini CLI, OpenCode,
+Cursor, Vibe, Qwen, pi)? Paste this single line into the chat — the AI
+fetches one URL, learns every real `makakoo` command, the Brain layout,
+the troubleshooting tree, and what _not_ to do, all from one canonical
+SKILL.md. No filesystem grepping, no guessing:
+
+```
+Read https://raw.githubusercontent.com/makakoo/makakoo-os/main/.agents/skills/makakoo/SKILL.md and follow the instructions.
+```
+
+That's the orientation layer. Below is the actual install.
+
 ## Install
 
 **First-time user?** Open [docs/getting-started.md](docs/getting-started.md)
