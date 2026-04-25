@@ -1,0 +1,42 @@
+# garage-store — Makakoo-side adapter pointing at the standalone
+# garagetytus product (GARAGETYTUS-V0.1 Phase D).
+#
+# Per Q2 verdict (lope, pi+codex 2026-04-25 Option A), the bucket
+# lifecycle commands now shell out to `garagetytus bucket *` from
+# `makakoo/src/commands/bucket.rs` (the wrapper). This adapter.toml
+# captures the discovery probe + install hints that Makakoo surfaces
+# when garagetytus is missing.
+
+[adapter]
+name = "garagetytus"
+kind = "service-bridge"
+version = "0.1"
+endpoint = "http://127.0.0.1:3900"
+admin_endpoint = "http://127.0.0.1:3903"
+binary = "garagetytus"
+keychain_account = "s3-service"
+keychain_service = "garagetytus"
+
+[discovery]
+# `garagetytus capabilities --json` is the probe. Adapter health =
+# probe exits 0 with parseable JSON; otherwise garagetytus is treated
+# as missing and the install hint fires.
+probe = "garagetytus capabilities --json"
+required_version = "0.1"
+
+[install_hint]
+darwin = "brew install traylinx/tap/garagetytus"
+linux = "curl -fsSL garagetytus.dev/install | sh"
+# Windows targets v0.2 per Q1 verdict (Garage upstream ships no
+# Windows binary). Hint is informational only.
+windows = "v0.2 — see https://garagetytus.dev"
+
+[fallback]
+# Phase D.3 contract: when the adapter probe times out / errors,
+# Makakoo prints `garagetytus not found — install at
+# https://garagetytus.dev` and exits non-zero. **No silent fallback
+# to an embedded-Garage path** — Makakoo does NOT bundle its own
+# Garage in this universe; the standalone product is the single
+# source.
+embedded = false
+message = "garagetytus not found — install at https://garagetytus.dev"

@@ -1,19 +1,18 @@
 [plugin]
 name = "garage-store"
-version = "0.1.0"
-kind = "service"
+version = "0.2.0"
+kind = "adapter"
 language = "shell"
-summary = "Local S3-compatible object store backed by Garage (AGPLv3)"
+summary = "Adapter shim — daemon lifecycle now owned by standalone `garagetytus` binary (GARAGETYTUS-V0.1 Phase D)"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
-keywords = ["s3", "storage", "garage", "service"]
+keywords = ["s3", "storage", "garage", "adapter", "garagetytus"]
 
 [source]
 path = "plugins-core/garage-store"
 
 [depends]
-binaries = ["garage", "brew"]
-system = ["macOS"]
+binaries = ["garagetytus"]
 
 [install]
 unix = "bin/install.sh"
@@ -24,26 +23,21 @@ stop = "bin/garage-wrapper.sh stop"
 health = "bin/garage-wrapper.sh health"
 
 [service]
-# launchd owns process lifecycle. Plugin runner only loads/unloads
-# the plist (see bin/garage-wrapper.sh). Health is a curl probe
-# against the admin API. restart_policy = never because launchd
-# already enforces KeepAlive — three restart actors fight (caught
-# by qwen in lope round 2).
+# garagetytus owns process lifecycle on its end. The plugin runner
+# now just defers (start/stop/health all exec into the standalone
+# binary). restart_policy stays "never" — no double-actor situation
+# because Makakoo no longer manages the daemon process directly.
 restart_policy = "never"
 health_endpoint = "http://127.0.0.1:3903/health"
 health_interval_sec = 60
 
 [capabilities]
 grants = [
-  "exec/binary:/usr/local/opt/garage/bin/garage",
-  "exec/binary:/opt/homebrew/opt/garage/bin/garage",
-  "fs/read:$MAKAKOO_HOME/config/garage.toml",
-  "fs/write:$MAKAKOO_HOME/data/garage/**",
-  "fs/write:$MAKAKOO_HOME/data/garage-meta/**",
+  "exec/binary:/usr/local/bin/garagetytus",
+  "exec/binary:/opt/homebrew/bin/garagetytus",
+  "exec/binary:$HOME/.local/bin/garagetytus",
   "net/http:http://127.0.0.1:3900/*",
   "net/http:http://127.0.0.1:3903/*",
-  "secrets/read:makakoo-s3-service",
-  "secrets/write:makakoo-s3-service",
 ]
 
 [state]
