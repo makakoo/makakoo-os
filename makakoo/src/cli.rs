@@ -552,6 +552,38 @@ pub enum PluginCmd {
         json: bool,
     },
 
+    /// Start a service-kind or agent-kind plugin.
+    ///
+    /// Service plugins: backgrounded, stdout/stderr redirected to
+    /// `~/Library/Logs/makakoo/<plugin>.{out,err}.log` (macOS) or
+    /// `~/.local/state/makakoo/log/` (Linux).
+    /// Agent plugins: foreground exec — same as `makakoo agent start`.
+    Start {
+        /// Plugin name.
+        name: String,
+    },
+
+    /// Stop a service-kind or agent-kind plugin.
+    Stop {
+        /// Plugin name.
+        name: String,
+    },
+
+    /// Probe a service-kind or agent-kind plugin's health.
+    /// Service plugins: probes `[service].health_endpoint` (HTTP if URL,
+    /// otherwise shell) or falls back to `[entrypoint].health`.
+    /// Agent plugins: same fallback chain as `makakoo agent status`.
+    Status {
+        /// Plugin name.
+        name: String,
+    },
+
+    /// Stop then start a service-kind or agent-kind plugin.
+    Restart {
+        /// Plugin name.
+        name: String,
+    },
+
     /// Hidden: kernel-internal helpers a plugin's install.sh can invoke.
     /// Exposed for `makakoo-venv-bootstrap` — not part of the public
     /// CLI contract.

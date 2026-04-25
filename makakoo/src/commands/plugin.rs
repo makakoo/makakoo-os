@@ -43,6 +43,10 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
         }
         PluginCmd::Outdated { json } => outdated(ctx, json),
         PluginCmd::Sync { dry_run, force } => sync(ctx, dry_run, force),
+        PluginCmd::Start { name } => crate::commands::lifecycle::start(ctx, &name),
+        PluginCmd::Stop { name } => crate::commands::lifecycle::stop(ctx, &name),
+        PluginCmd::Status { name } => crate::commands::lifecycle::status(ctx, &name),
+        PluginCmd::Restart { name } => crate::commands::lifecycle::restart(ctx, &name),
         PluginCmd::Internal { cmd } => internal(ctx, cmd),
     }
 }

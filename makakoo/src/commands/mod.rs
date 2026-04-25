@@ -14,6 +14,7 @@ pub mod distro;
 pub mod dream;
 pub mod flag;
 pub mod install;
+pub mod lifecycle;
 pub mod mcp;
 pub mod memory;
 pub mod migrate;

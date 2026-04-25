@@ -30,7 +30,8 @@ pub use python_venv::{ensure_venv, EnsureVenvReport, InstallSpec, VenvError, Ven
 pub use manifest::{
     AbiTable, CapabilitiesTable, DependsTable, EntrypointTable, InfectTable, InstallTable,
     Manifest, ManifestError, McpTable, McpToolSpec, PluginKind, PluginLanguage, PluginTable,
-    SanchoTable, SanchoTaskSpec, SourceTable, StateRetention, StateTable,
+    RestartPolicy, SanchoTable, SanchoTaskSpec, ServiceTable, SourceTable, StateRetention,
+    StateTable,
 };
 pub use registry::{LoadedPlugin, PluginRegistry, RegistryError};
 pub use resolver::{resolve_load_order, ResolverError, KERNEL_ABI_SUPPORT};

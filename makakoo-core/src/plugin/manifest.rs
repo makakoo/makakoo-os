@@ -87,6 +87,12 @@ impl ManifestError {
 }
 
 /// Primary role of a plugin. Exactly one per manifest.
+///
+/// Note: `kind = "openai-compatible" | "subprocess" | "mcp-stdio"` are
+/// **adapter** kinds (see `adapter::manifest::AdapterKind`), not plugin
+/// kinds. They live in a parallel manifest schema for the universal
+/// bridge — adapters wrap external CLIs, plugins are first-class
+/// Makakoo citizens. Don't fold them in here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginKind {
@@ -97,6 +103,11 @@ pub enum PluginKind {
     Mascot,
     BootstrapFragment,
     Library,
+    /// Long-lived OS-level daemon supervised via `[service]` table.
+    /// Lifecycle hooks (`start`/`stop`/`health`) come from `[entrypoint]`;
+    /// `[service]` adds restart policy + health interval + optional
+    /// HTTP health endpoint. Driven by `makakoo plugin start|stop|status|restart`.
+    Service,
 }
 
 impl PluginKind {
@@ -109,6 +120,7 @@ impl PluginKind {
             PluginKind::Mascot => "mascot",
             PluginKind::BootstrapFragment => "bootstrap-fragment",
             PluginKind::Library => "library",
+            PluginKind::Service => "service",
         }
     }
 }
@@ -355,6 +367,69 @@ pub struct EmbeddingTable {
     pub provider: Option<String>,
 }
 
+/// Restart behavior for `kind = "service"` plugins. Driven by the
+/// service runner when a started service exits before `stop` is called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestartPolicy {
+    /// Always restart, regardless of exit code.
+    Always,
+    /// Restart only on non-zero exit. Default for service plugins.
+    OnFailure,
+    /// Never restart automatically — supervisor is external (e.g. launchd).
+    Never,
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        RestartPolicy::OnFailure
+    }
+}
+
+fn default_health_interval_sec() -> u32 {
+    60
+}
+
+/// `[service]` table — only meaningful when `plugin.kind = "service"`.
+/// Lifecycle commands come from `[entrypoint]` (start/stop/health).
+/// `[service]` overlays daemon-specific behavior on top.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceTable {
+    /// Optional override for `[entrypoint].start`. When absent, the
+    /// runner falls back to the entrypoint command.
+    #[serde(default)]
+    pub start_cmd: Option<String>,
+    /// Optional override for `[entrypoint].stop`.
+    #[serde(default)]
+    pub stop_cmd: Option<String>,
+    /// HTTP URL or shell command. Strings starting with `http://` /
+    /// `https://` are probed via GET (200/204 = healthy); everything
+    /// else is shelled out via `/bin/sh -c` (exit 0 = healthy).
+    /// When absent, the runner falls back to `[entrypoint].health`.
+    #[serde(default)]
+    pub health_endpoint: Option<String>,
+    /// Seconds between health probes when the runner is supervising.
+    /// Manual `makakoo plugin status` ignores this — it always probes once.
+    #[serde(default = "default_health_interval_sec")]
+    pub health_interval_sec: u32,
+    /// What the runner does when a started service exits before `stop`.
+    #[serde(default)]
+    pub restart_policy: RestartPolicy,
+}
+
+impl Default for ServiceTable {
+    fn default() -> Self {
+        Self {
+            start_cmd: None,
+            stop_cmd: None,
+            health_endpoint: None,
+            health_interval_sec: default_health_interval_sec(),
+            restart_policy: RestartPolicy::default(),
+        }
+    }
+}
+
 /// The parsed + validated `plugin.toml`.
 ///
 /// Note: no `deny_unknown_fields` at this level — unknown *top-level*
@@ -389,6 +464,8 @@ pub struct Manifest {
     pub test: TestTable,
     #[serde(default)]
     pub embedding: Option<EmbeddingTable>,
+    #[serde(default)]
+    pub service: Option<ServiceTable>,
 }
 
 /// Known top-level tables. Anything else triggers a forward-compat warning.
@@ -407,6 +484,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "state",
     "test",
     "embedding",
+    "service",
 ];
 
 /// Warnings collected during a single parse. Non-fatal — the caller decides
@@ -503,10 +581,12 @@ impl Manifest {
         }
 
         // Rule 7 (partial): [abi] must not be empty — except for library
-        // plugins which provide importable code, not a callable ABI surface.
+        // plugins (importable code, no callable ABI surface) and service
+        // plugins (just a long-lived daemon, no callable API).
         if self.abi.is_empty()
             && self.plugin.kind != PluginKind::Library
             && self.plugin.kind != PluginKind::BootstrapFragment
+            && self.plugin.kind != PluginKind::Service
         {
             return Err(ManifestError::invalid(
                 path,
@@ -541,6 +621,14 @@ impl Manifest {
                 }
             }
             _ => {}
+        }
+
+        // [service] table only meaningful for service-kind plugins.
+        if self.service.is_some() && self.plugin.kind != PluginKind::Service {
+            warnings.push(format!(
+                "[service] table declared but plugin.kind = {} — table will be ignored",
+                self.plugin.kind.as_str()
+            ));
         }
 
         // Reserved-prefix warning (rule 17 warnings section).
@@ -611,6 +699,35 @@ impl Manifest {
                             format!("[entrypoint].{field} required for kind = agent"),
                         ));
                     }
+                }
+            }
+            PluginKind::Service => {
+                // Service plugins draw start/stop/health from either
+                // [entrypoint] or [service]. Missing in both is an error.
+                let svc = self.service.as_ref();
+                let has_start = self.entrypoint.start.is_some()
+                    || svc.and_then(|s| s.start_cmd.as_ref()).is_some();
+                let has_stop = self.entrypoint.stop.is_some()
+                    || svc.and_then(|s| s.stop_cmd.as_ref()).is_some();
+                let has_health = self.entrypoint.health.is_some()
+                    || svc.and_then(|s| s.health_endpoint.as_ref()).is_some();
+                if !has_start {
+                    return Err(ManifestError::invalid(
+                        path,
+                        "kind = service requires [entrypoint].start or [service].start_cmd",
+                    ));
+                }
+                if !has_stop {
+                    return Err(ManifestError::invalid(
+                        path,
+                        "kind = service requires [entrypoint].stop or [service].stop_cmd",
+                    ));
+                }
+                if !has_health {
+                    return Err(ManifestError::invalid(
+                        path,
+                        "kind = service requires [entrypoint].health or [service].health_endpoint",
+                    ));
                 }
             }
             PluginKind::Mascot => {
@@ -966,6 +1083,228 @@ mascot = "^1.0"
 "#;
         let err = Manifest::parse(body, &p()).unwrap_err();
         assert!(format!("{err}").contains("[mascot]"));
+    }
+
+    #[test]
+    fn parses_minimal_service_kind() {
+        // Service kind with only [entrypoint] — no [service] table.
+        // Validates the "service can borrow start/stop/health from
+        // [entrypoint]" path.
+        let body = r#"
+[plugin]
+name = "garage-store"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/garage"
+
+[entrypoint]
+start = "/usr/local/opt/garage/bin/garage server"
+stop = "/usr/bin/pkill -f 'garage server'"
+health = "/usr/local/opt/garage/bin/garage status"
+"#;
+        let (m, w) = Manifest::parse(body, &p()).unwrap();
+        assert_eq!(m.plugin.kind, PluginKind::Service);
+        assert!(m.service.is_none());
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn parses_service_with_table() {
+        let body = r#"
+[plugin]
+name = "garage-store"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/garage"
+
+[service]
+start_cmd = "garage server --bind 127.0.0.1:3900"
+stop_cmd = "pkill -f garage"
+health_endpoint = "http://127.0.0.1:3903/health"
+health_interval_sec = 30
+restart_policy = "always"
+"#;
+        let (m, w) = Manifest::parse(body, &p()).unwrap();
+        assert_eq!(m.plugin.kind, PluginKind::Service);
+        let svc = m.service.expect("[service] table parsed");
+        assert_eq!(
+            svc.start_cmd.as_deref(),
+            Some("garage server --bind 127.0.0.1:3900")
+        );
+        assert_eq!(
+            svc.health_endpoint.as_deref(),
+            Some("http://127.0.0.1:3903/health")
+        );
+        assert_eq!(svc.health_interval_sec, 30);
+        assert_eq!(svc.restart_policy, RestartPolicy::Always);
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn service_default_health_interval_is_60() {
+        let body = r#"
+[plugin]
+name = "svc-test"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/svc"
+
+[service]
+start_cmd = "x start"
+stop_cmd = "x stop"
+health_endpoint = "x check"
+"#;
+        let (m, _) = Manifest::parse(body, &p()).unwrap();
+        let svc = m.service.unwrap();
+        assert_eq!(svc.health_interval_sec, 60);
+        assert_eq!(svc.restart_policy, RestartPolicy::OnFailure);
+    }
+
+    #[test]
+    fn service_kind_requires_start() {
+        let body = r#"
+[plugin]
+name = "svc-test"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/svc"
+
+[entrypoint]
+stop = "x stop"
+health = "x check"
+"#;
+        let err = Manifest::parse(body, &p()).unwrap_err();
+        let s = format!("{err}");
+        assert!(s.contains("kind = service"));
+        assert!(s.contains("start_cmd") || s.contains("entrypoint].start"));
+    }
+
+    #[test]
+    fn service_kind_requires_stop() {
+        let body = r#"
+[plugin]
+name = "svc-test"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/svc"
+
+[service]
+start_cmd = "x start"
+health_endpoint = "x check"
+"#;
+        let err = Manifest::parse(body, &p()).unwrap_err();
+        assert!(format!("{err}").contains("stop"));
+    }
+
+    #[test]
+    fn service_kind_requires_health() {
+        let body = r#"
+[plugin]
+name = "svc-test"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/svc"
+
+[service]
+start_cmd = "x start"
+stop_cmd = "x stop"
+"#;
+        let err = Manifest::parse(body, &p()).unwrap_err();
+        assert!(format!("{err}").contains("health"));
+    }
+
+    #[test]
+    fn service_table_warns_if_kind_mismatch() {
+        let body = r#"
+[plugin]
+name = "skill-test"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+
+[source]
+path = "local/skill"
+
+[abi]
+skill = "^1.0"
+
+[entrypoint]
+run = ".venv/bin/python -m skill"
+
+[service]
+start_cmd = "skill start"
+stop_cmd = "skill stop"
+health_endpoint = "skill check"
+"#;
+        let (_m, w) = Manifest::parse(body, &p()).unwrap();
+        assert!(
+            w.0.iter().any(|s| s.contains("[service] table") && s.contains("kind = skill")),
+            "expected mismatched-kind warning, got {:?}",
+            w.0
+        );
+    }
+
+    #[test]
+    fn service_kind_does_not_require_abi() {
+        // Services (like libraries) don't expose a callable ABI surface.
+        let body = r#"
+[plugin]
+name = "svc-test"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/svc"
+
+[entrypoint]
+start = "x start"
+stop = "x stop"
+health = "x check"
+"#;
+        let (m, _) = Manifest::parse(body, &p()).unwrap();
+        assert_eq!(m.plugin.kind, PluginKind::Service);
+    }
+
+    #[test]
+    fn rejects_unknown_restart_policy() {
+        let body = r#"
+[plugin]
+name = "svc-test"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+
+[source]
+path = "local/svc"
+
+[service]
+start_cmd = "x"
+stop_cmd = "x"
+health_endpoint = "x"
+restart_policy = "sometimes"
+"#;
+        let err = Manifest::parse(body, &p()).unwrap_err();
+        let s = format!("{err}");
+        assert!(s.contains("restart_policy") || s.contains("variant"));
     }
 
     #[test]
