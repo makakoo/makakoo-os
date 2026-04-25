@@ -426,6 +426,23 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: S3Cmd,
     },
+
+    /// Bucket lifecycle — create / grant / revoke / expire on top of
+    /// the local Garage backend (v0.7.1; AWS/R2/B2/Minio land in v0.8).
+    ///
+    /// Subcommands:
+    ///   makakoo bucket create   <name>  [--ttl <dur>] [--quota <size>]
+    ///   makakoo bucket list                                   [--json]
+    ///   makakoo bucket info     <name>                        [--json]
+    ///   makakoo bucket grant    <name> --to <label> --perms <r,w>
+    ///                                                         [--ttl <dur>]
+    ///   makakoo bucket revoke   <grant-id>
+    ///   makakoo bucket expire                  -- run TTL purge now
+    ///   makakoo bucket deny-all <name>  [--ttl <dur>]
+    Bucket {
+        #[command(subcommand)]
+        cmd: BucketCmd,
+    },
 }
 
 /// `makakoo s3 <subcommand>`.
@@ -507,6 +524,116 @@ pub enum S3EndpointCmd {
     Test {
         /// Endpoint name (defaults to the registered default).
         name: Option<String>,
+    },
+}
+
+/// `makakoo bucket <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum BucketCmd {
+    /// Create a new bucket on the chosen backend (default: local Garage).
+    /// Default TTL is 7 days; default quota is 10 GB. Pass
+    /// `--ttl permanent` or `--quota unlimited` with `--confirm-yes-really`
+    /// to override.
+    Create {
+        /// Bucket name. 3–63 chars, lowercase letters / digits / dot /
+        /// hyphen only; must start + end with alphanumeric. No
+        /// underscores. Validated Makakoo-side BEFORE backend dispatch.
+        name: String,
+
+        /// Backend endpoint name (defaults to registry default).
+        /// Garage-only in v0.7.1; non-Garage backends raise
+        /// `NotImplementedError`-equivalent CLI errors with v0.8 pointer.
+        #[arg(long)]
+        endpoint: Option<String>,
+
+        /// TTL — `30m | 1h | 24h | 7d | permanent`. Default `7d`.
+        #[arg(long, default_value = "7d")]
+        ttl: String,
+
+        /// Hard quota — e.g. `100M`, `1G`, `10G`, or `unlimited`.
+        /// Default `10G`.
+        #[arg(long, default_value = "10G")]
+        quota: String,
+
+        /// Required to use `--ttl permanent` or `--quota unlimited`.
+        #[arg(long)]
+        confirm_yes_really: bool,
+    },
+
+    /// List buckets known to Makakoo on the chosen backend.
+    List {
+        /// Backend endpoint name (default: every registered endpoint).
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Emit JSON instead of the default table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show one bucket's metadata (TTL, quota, usage %, grants).
+    Info {
+        /// Bucket name.
+        name: String,
+        /// Emit JSON instead of the default human view.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Grant a per-bucket scoped sub-keypair to a labeled consumer.
+    /// Returns `(endpoint_url, access_key, secret_key, expires_at)` on
+    /// stdout; the caller wires these into their own boto3 / aws-cli /
+    /// rclone config.
+    Grant {
+        /// Bucket name.
+        bucket: String,
+        /// Human-readable label for the grantee — appears in
+        /// `makakoo perms list` and audit log.
+        #[arg(long)]
+        to: String,
+        /// Comma-separated permission set: `read`, `read,write`, or
+        /// `read,write,owner`.
+        #[arg(long, default_value = "read,write")]
+        perms: String,
+        /// TTL — `30m | 1h | 24h | 7d | permanent`. Default `1h`.
+        #[arg(long, default_value = "1h")]
+        ttl: String,
+        /// Required to use `--ttl permanent`.
+        #[arg(long)]
+        confirm_yes_really: bool,
+        /// Emit JSON instead of the default human view.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Revoke a bucket grant by its ID. Atomic 3-state transition:
+    /// `active → revoking → revoked`. SANCHO retries the backend
+    /// delete every 60s if the first attempt fails (lope-1, qwen).
+    Revoke {
+        /// Grant ID (as printed by `bucket grant` or `perms list`).
+        grant_id: String,
+    },
+
+    /// Run the SANCHO `bucket-expire` task once, synchronously. Walks
+    /// the bucket registry, purges TTL'd buckets and TTL'd grants.
+    Expire {
+        /// Don't actually delete anything — just print what would happen.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Emergency stop: flip a bucket flag that makes Garage 403 every
+    /// read/write, including those carrying a still-valid presigned URL.
+    /// Mirrors the `LD#12 path 2` revocation semantics.
+    DenyAll {
+        /// Bucket name.
+        name: String,
+        /// TTL — flag clears automatically after this duration. Default
+        /// `1h`. `--ttl permanent` requires `--confirm-yes-really`.
+        #[arg(long, default_value = "1h")]
+        ttl: String,
+        /// Required to use `--ttl permanent`.
+        #[arg(long)]
+        confirm_yes_really: bool,
     },
 }
 

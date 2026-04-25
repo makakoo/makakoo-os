@@ -32,6 +32,7 @@ toml_edit.workspace = true
 reqwest.workspace = true
 flate2.workspace = true
 tar.workspace = true
+fs2.workspace = true
 # v0.6 Phase B — `adapter trust` + `adapter self-pubkey` subcommands
 # encode Ed25519 pubkeys for display.
 base64 = "0.22"

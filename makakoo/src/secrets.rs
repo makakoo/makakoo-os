@@ -57,6 +57,18 @@ impl SecretsStore {
         }
     }
 
+    /// Store a JSON-serialisable value under `key`.
+    pub fn set_json<T: serde::Serialize>(key: &str, value: &T) -> Result<()> {
+        let body = serde_json::to_string(value)?;
+        Self::set(key, &body)
+    }
+
+    /// Retrieve a JSON-deserialisable value under `key`.
+    pub fn get_json<T: serde::de::DeserializeOwned>(key: &str) -> Result<T> {
+        let raw = Self::get(key)?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+
     /// Resolve a secret with an env-var fallback. Returns:
     ///   1. keyring value for `key` if present, else
     ///   2. value of `env_name` if set, else

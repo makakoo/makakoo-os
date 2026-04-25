@@ -9,6 +9,7 @@
 pub mod adapter;
 pub mod adapter_gen;
 pub mod agent;
+pub mod bucket;
 pub mod buddy;
 pub mod distro;
 pub mod dream;
@@ -135,6 +136,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Octopus { args } => octopus::run(args),
         Commands::Agent { cmd } => agent::run(ctx, cmd),
         Commands::S3 { cmd } => s3::run(ctx, cmd),
+        Commands::Bucket { cmd } => bucket::run(ctx, cmd).await,
     }
 }
 

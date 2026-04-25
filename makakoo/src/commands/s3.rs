@@ -316,6 +316,11 @@ fn list_service_key_ids(ctx: &CliContext) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Public reflection of `parse_key_creds` for `commands::bucket` reuse.
+pub fn parse_key_creds_pub(out: &str) -> Result<(String, String)> {
+    parse_key_creds(out)
+}
+
 /// Parse `Key access ID: <access>` and `Secret access key: <secret>` (or
 /// `Key ID: <access>` / `Secret key: <secret>`) from `garage key
 /// create` / `garage key info` output.
