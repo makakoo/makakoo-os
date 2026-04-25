@@ -122,9 +122,21 @@ impl LocalReport {
 
 /// Walk upward from `start` looking for a directory that contains `.git/`
 /// or `.harvey/`. Falls back to `start` itself if neither is found.
-pub fn find_project_root(start: &Path) -> PathBuf {
+///
+/// `home` is treated as a hard ceiling: the walk stops *before* checking
+/// `$HOME` itself, because a stray `~/.harvey/` (legacy state from the
+/// pre-Makakoo rename) or a `~/.git/` (common with dotfile repos) would
+/// otherwise anchor the project root to `$HOME` and trip the safety guard
+/// that refuses to infect home. Reported by the user 2026-04-25 when
+/// `--dir ~/Projects/.../sub` failed because `~/.harvey/` existed.
+pub fn find_project_root(start: &Path, home: &Path) -> PathBuf {
     let mut cur = start.to_path_buf();
     loop {
+        if cur == home {
+            // Reached $HOME without a marker below it — anything in
+            // $HOME itself shouldn't anchor a project root.
+            return start.to_path_buf();
+        }
         if cur.join(".git").exists() || cur.join(".harvey").exists() {
             return cur;
         }
@@ -260,7 +272,7 @@ pub struct LocalOptions {
 /// find the project root. `home` is `$HOME` for dotdir probing + the safety
 /// guard that refuses `project_root == $HOME`.
 pub fn dispatch_local(dir: &Path, home: &Path, opts: LocalOptions) -> Result<LocalReport> {
-    let project_root = find_project_root(dir);
+    let project_root = find_project_root(dir, home);
 
     // Hard guard — infecting $HOME turns every shell session into a Harvey
     // project session, which is almost never what the user meant.
@@ -583,29 +595,52 @@ mod tests {
     #[test]
     fn find_project_root_walks_up_to_git() {
         let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
         let root = tmp.path().join("repo");
         let nested = root.join("src/components");
         fs::create_dir_all(&nested).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        assert_eq!(find_project_root(&nested), root);
+        assert_eq!(find_project_root(&nested, &home), root);
     }
 
     #[test]
     fn find_project_root_walks_up_to_harvey() {
         let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
         let root = tmp.path().join("repo");
         let nested = root.join("a/b/c");
         fs::create_dir_all(&nested).unwrap();
         fs::create_dir_all(root.join(".harvey")).unwrap();
-        assert_eq!(find_project_root(&nested), root);
+        assert_eq!(find_project_root(&nested, &home), root);
     }
 
     #[test]
     fn find_project_root_falls_back_to_start_when_neither() {
         let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
         let lonely = tmp.path().join("no-markers");
         fs::create_dir_all(&lonely).unwrap();
-        assert_eq!(find_project_root(&lonely), lonely);
+        assert_eq!(find_project_root(&lonely, &home), lonely);
+    }
+
+    /// Regression: a stray `~/.harvey/` (legacy state from the rename) or
+    /// a `~/.git/` (dotfile repos) must NOT anchor the walk to $HOME.
+    /// Reported 2026-04-25: `--dir ~/Projects/.../sub` walked up to
+    /// $HOME because `~/.harvey/` existed and was caught by the safety
+    /// guard. Walk should stop *before* checking $HOME.
+    #[test]
+    fn find_project_root_does_not_anchor_at_home_marker() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let project = home.join("Projects/foo/sub");
+        fs::create_dir_all(&project).unwrap();
+        // Stray legacy marker in $HOME — must be ignored.
+        fs::create_dir_all(home.join(".harvey")).unwrap();
+        // Walk falls back to start, not $HOME.
+        assert_eq!(find_project_root(&project, &home), project);
     }
 
     // --- dispatch_local defaults -----------------------------------------

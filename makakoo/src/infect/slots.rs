@@ -3,7 +3,7 @@
 //!
 //! Paths mirror `core/orchestration/infect_global.py` exactly so the Rust
 //! rewrite and the Python implementation can operate on the same files
-//! without fighting over format. Bootstrap version is currently **v11**;
+//! without fighting over format. Bootstrap version is currently **v12**;
 //! the regex `BLOCK_RE` still matches any prior version so the rewrite
 //! will upgrade older blocks in place on the next run.
 
@@ -13,19 +13,26 @@ use std::path::PathBuf;
 /// bootstrap body bumps this — anything older is considered stale and will
 /// be replaced in place on next `makakoo infect`.
 ///
+/// v12 (2026-04-25): pointer pattern. Each slot now holds a ~15-line
+///   pointer to `$MAKAKOO_HOME/bootstrap/global.md` instead of a 200-line
+///   copy of the bootstrap. Edit the canonical file once, every CLI sees
+///   the new content next session — no re-infect needed for content edits.
+///   Codex slot moved from `.codex/instructions.md` to `AGENTS.md` so it
+///   actually gets read by modern Codex CLI (it walks up looking for
+///   AGENTS.md and never reads .codex/instructions.md by default).
 /// v11 (2026-04-20): harvey-os/ references stripped — bootstrap now
 ///   points at `harvey skill info`/`$MAKAKOO_HOME/config/persona.json`
 ///   and kernel commands instead of python module paths inside
 ///   `harvey-os/core/`. Phase 4 of SPRINT-KILL-HARVEYOS-PYTHONPATH.
 /// v10 (2026-04-20): describe-vs-ingest dichotomy + rate-limit rule.
-pub const BLOCK_VERSION: &str = "11";
+pub const BLOCK_VERSION: &str = "12";
 
 /// Start marker written to every markdown slot. Keeps the legacy
 /// `harvey:infect-global` prefix so old installations with v8 blocks are
 /// matched by the upgrade regex and replaced — do NOT rename this to
 /// `makakoo:infect-global` without also teaching [`crate::infect::writer`]
 /// to find both.
-pub const BLOCK_START: &str = "<!-- harvey:infect-global START v11 -->";
+pub const BLOCK_START: &str = "<!-- harvey:infect-global START v12 -->";
 
 /// End marker — the version is NOT included in the end marker (mirrors
 /// Python) so the upgrade regex can match any prior version cleanly.
@@ -33,7 +40,7 @@ pub const BLOCK_END: &str = "<!-- harvey:infect-global END -->";
 
 /// JSON-tag prefix used by the OpenCode slot, which stores the bootstrap as
 /// an entry inside `instructions: [...]` rather than as a fenced block.
-pub const JSON_TAG_PREFIX: &str = "[harvey:infect-global v11]";
+pub const JSON_TAG_PREFIX: &str = "[harvey:infect-global v12]";
 
 /// Fingerprint checked against the first 40 characters of each entry in
 /// the opencode `instructions` array to locate the prior bootstrap.
@@ -82,9 +89,18 @@ pub const SLOTS: &[CliSlot] = &[
         rel_path: ".gemini/GEMINI.md",
         format: SlotFormat::Markdown,
     },
+    // Codex: modern Codex CLI walks up from cwd looking for AGENTS.md
+    // files at "/", in "~", and in git repos (its own docs verbatim). It
+    // does NOT read `.codex/instructions.md` unless `model_instructions_file`
+    // is explicitly set in `~/.codex/config.toml` — which we do not require
+    // users to configure. So the codex slot is the home-level `~/AGENTS.md`.
+    // The infect writer upserts a marker-bracketed block, so any pre-existing
+    // ~/AGENTS.md content (e.g. tytus instructions) is preserved alongside.
+    // Bug fixed 2026-04-25 — codex previously wrote to .codex/instructions.md
+    // and Codex never picked it up: identity stayed "Codex", not "Harvey".
     CliSlot {
         name: "codex",
-        rel_path: ".codex/instructions.md",
+        rel_path: "AGENTS.md",
         format: SlotFormat::Markdown,
     },
     CliSlot {
@@ -157,12 +173,26 @@ mod tests {
     }
 
     #[test]
-    fn markers_versioned_to_v11() {
-        assert_eq!(BLOCK_VERSION, "11");
-        assert!(BLOCK_START.contains("v11"));
-        assert!(JSON_TAG_PREFIX.contains("v11"));
+    fn markers_versioned_to_v12() {
+        assert_eq!(BLOCK_VERSION, "12");
+        assert!(BLOCK_START.contains("v12"));
+        assert!(JSON_TAG_PREFIX.contains("v12"));
         // END marker intentionally has no version — it matches any prior version.
+        assert!(!BLOCK_END.contains("v12"));
         assert!(!BLOCK_END.contains("v11"));
-        assert!(!BLOCK_END.contains("v10"));
+    }
+
+    #[test]
+    fn codex_slot_targets_home_agents_md() {
+        // 2026-04-25 regression — codex previously wrote to
+        // `.codex/instructions.md` which modern Codex CLI does not read.
+        // The slot must point at `AGENTS.md` at HOME, which Codex walks
+        // up from cwd to find natively.
+        let codex = SLOTS
+            .iter()
+            .find(|s| s.name == "codex")
+            .expect("codex slot must exist");
+        assert_eq!(codex.rel_path, "AGENTS.md");
+        assert!(matches!(codex.format, SlotFormat::Markdown));
     }
 }

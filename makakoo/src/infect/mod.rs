@@ -23,6 +23,7 @@ pub mod ext;
 pub mod hooks;
 pub mod local;
 pub mod mcp;
+pub mod pointer;
 pub mod renderer;
 pub mod slots;
 pub mod writer;
@@ -485,13 +486,36 @@ pub async fn run_with_home_and_body(
         dry_run,
         ..Default::default()
     };
+
+    // v12 pointer pattern: install the full bootstrap once at the
+    // canonical path, then write a thin pointer (referencing that path)
+    // into each CLI's slot. The canonical lives under $MAKAKOO_HOME on
+    // real installs (~/MAKAKOO/bootstrap/global.md). When `home` is a
+    // tmpdir for hermetic tests, it doubles as the canonical anchor so
+    // tests never pollute the real $MAKAKOO_HOME.
+    let makakoo_home = makakoo_core::platform::makakoo_home();
+    let canonical_anchor = if path_is_under(home, &dirs::home_dir().unwrap_or_default()) {
+        // Production: $HOME-rooted slot path → use real $MAKAKOO_HOME.
+        makakoo_home.as_path()
+    } else {
+        // Tests: tmp-rooted slot path → keep canonical under tmp too.
+        home
+    };
+    let canonical = ensure_canonical_bootstrap(canonical_anchor, body, dry_run)?;
+    let pointer_body = pointer::render_pointer_body(&canonical);
+    let opencode_body = pointer::render_pointer_for_opencode(&canonical);
+
     for slot in SLOTS {
         if let Some(filter) = target_filter {
             if !filter.iter().any(|t| t.eq_ignore_ascii_case(slot.name)) {
                 continue;
             }
         }
-        let r = write_bootstrap_to_slot(slot, body, home, dry_run);
+        let body_for_slot = match slot.format {
+            slots::SlotFormat::OpencodeJson => opencode_body.as_str(),
+            slots::SlotFormat::Markdown => pointer_body.as_str(),
+        };
+        let r = write_bootstrap_to_slot(slot, body_for_slot, home, dry_run);
         report.results.push(r);
     }
 
@@ -499,15 +523,102 @@ pub async fn run_with_home_and_body(
     // Targets are resolved from the current machine's filesystem — we
     // only write to a host if its config dir exists, so a user without
     // VSCode or JetBrains isn't surprised by unexpected file creations.
+    // Extension hosts are markdown-style so they get the same pointer.
     for target in ext_targets_from(home) {
-        // Dry-run + target-doesn't-exist = nothing to do. Writing to a
-        // fresh Cline/Continue dir is safe because detect_ext_hosts
-        // already told us the parent is present.
-        let r = ext::write_ext_host(&target, body, dry_run);
+        let r = ext::write_ext_host(&target, &pointer_body, dry_run);
         report.results.push(r);
     }
 
+    // Clean up old slot locations that v12 abandoned. We strip our
+    // marker block from those files so the user isn't left with a
+    // stale harvey block in a file that no CLI reads. We do NOT delete
+    // the file itself — the user may keep their own prose there.
+    cleanup_orphan_v11_slots(home, dry_run);
+
     Ok(report)
+}
+
+/// Slot paths that previous infect versions wrote to, but which v12 no
+/// longer uses. We strip our marker block from these on every infect so
+/// users don't accumulate orphaned blocks.
+const ORPHAN_SLOT_PATHS: &[&str] = &[
+    // Codex moved off `.codex/instructions.md` in v12 (2026-04-25): modern
+    // Codex CLI doesn't read it. New canonical slot is `AGENTS.md`.
+    ".codex/instructions.md",
+];
+
+fn cleanup_orphan_v11_slots(home: &Path, dry_run: bool) {
+    for rel in ORPHAN_SLOT_PATHS {
+        let path = home.join(rel);
+        if !path.exists() {
+            continue;
+        }
+        let prior = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let (next, removed) = writer::remove_markdown_block(&prior);
+        if !removed || dry_run {
+            continue;
+        }
+        // If the file is now empty (only contained our block), delete it
+        // so we don't leave an empty stub. Otherwise keep the user prose.
+        if next.trim().is_empty() {
+            let _ = std::fs::remove_file(&path);
+        } else {
+            let _ = writer::atomic_write(&path, &next);
+        }
+    }
+}
+
+/// Canonical bootstrap location: `<anchor>/bootstrap/global.md`. This is
+/// the single source of truth that every CLI's pointer references. On
+/// real installs the anchor is `$MAKAKOO_HOME`. On hermetic tests it's
+/// the test tmpdir.
+pub fn canonical_bootstrap_path(anchor: &Path) -> PathBuf {
+    anchor.join("bootstrap").join("global.md")
+}
+
+/// True iff `path` is `parent` itself or a descendant of it. Used to
+/// distinguish "real `$HOME`" from "test tmpdir" so we never write a
+/// production-rooted canonical bootstrap during tests.
+fn path_is_under(path: &Path, parent: &Path) -> bool {
+    if parent.as_os_str().is_empty() {
+        return false;
+    }
+    path == parent || path.starts_with(parent)
+}
+
+/// Idempotently install the canonical bootstrap to
+/// `<home>/bootstrap/global.md`. Returns the canonical path.
+///
+/// Honors `dry_run`: when true, the path is computed and returned but no
+/// disk write happens. The path returned is still suitable for embedding
+/// in pointer text for dry-run preview.
+fn ensure_canonical_bootstrap(home: &Path, body: &str, dry_run: bool) -> Result<PathBuf> {
+    let path = canonical_bootstrap_path(home);
+    if dry_run {
+        return Ok(path);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            anyhow!("failed to create canonical bootstrap dir {}: {}", parent.display(), e)
+        })?;
+    }
+    let normalized = if body.ends_with('\n') {
+        body.to_string()
+    } else {
+        format!("{body}\n")
+    };
+    let needs_write = match std::fs::read_to_string(&path) {
+        Ok(prior) => prior != normalized,
+        Err(_) => true,
+    };
+    if needs_write {
+        writer::atomic_write(&path, &normalized)
+            .map_err(|e| anyhow!("failed to write canonical bootstrap {}: {}", path.display(), e))?;
+    }
+    Ok(path)
 }
 
 /// Resolve extension-host write targets for the current machine. Only
@@ -741,9 +852,18 @@ mod tests {
         let content = std::fs::read_to_string(&claude_path).unwrap();
         assert!(content.contains("# My own notes"));
         assert!(content.contains("After block."));
-        assert!(content.contains("You are Harvey."));
+        // v12 pointer pattern — slot content references the canonical
+        // bootstrap path instead of inlining the full body.
+        assert!(content.contains("Makakoo OS bootstrap"));
+        assert!(content.contains("bootstrap/global.md"));
         assert!(content.contains(&format!("v{}", super::slots::BLOCK_VERSION)));
         assert!(!content.contains("old body"));
+
+        // Canonical file is the source of truth and DOES contain the
+        // full body that the test fixture supplied.
+        let canonical = canonical_bootstrap_path(tmp.path());
+        let canonical_body = std::fs::read_to_string(&canonical).unwrap();
+        assert!(canonical_body.contains("You are Harvey."));
     }
 
     #[tokio::test]

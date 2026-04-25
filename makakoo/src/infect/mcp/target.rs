@@ -96,7 +96,11 @@ impl McpTarget {
         match self {
             McpTarget::Claude => ".claude/CLAUDE.md",
             McpTarget::Gemini => ".gemini/GEMINI.md",
-            McpTarget::Codex => ".codex/instructions.md",
+            // Codex moved off `.codex/instructions.md` 2026-04-25 — modern
+            // Codex CLI walks up from cwd to find AGENTS.md and never reads
+            // .codex/instructions.md unless `model_instructions_file` is set
+            // in config.toml. The bootstrap now lives in `~/AGENTS.md`.
+            McpTarget::Codex => "AGENTS.md",
             McpTarget::OpenCode => ".config/opencode/opencode.json",
             McpTarget::Vibe => ".vibe/instructions.md",
             McpTarget::Qwen => ".qwen/QWEN.md",
