@@ -294,7 +294,11 @@ enum McpEntryStatus {
 /// same comparison logic and can never disagree.
 fn check_mcp_entry(home: &Path, target: &McpTarget, spec: &McpServerSpec) -> McpEntryStatus {
     use crate::infect::mcp::{ChangeKind, SyncOutcome};
-    let outcome = crate::infect::mcp::sync_one(home, target, spec, true);
+    // Drift uses sync in dry-run mode as the comparison oracle, so
+    // pass the same makakoo_home that prod uses. Resolve via the
+    // platform helper since drift doesn't have it plumbed in.
+    let makakoo_home = makakoo_core::platform::makakoo_home();
+    let outcome = crate::infect::mcp::sync_one(home, &makakoo_home, target, spec, true);
     match outcome {
         SyncOutcome::Unchanged => McpEntryStatus::Ok,
         SyncOutcome::WouldChange { kind: ChangeKind::Add } => McpEntryStatus::Missing,

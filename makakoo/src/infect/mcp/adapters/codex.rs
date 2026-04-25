@@ -22,7 +22,12 @@ use crate::infect::mcp::{ChangeKind, McpServerSpec, SyncOutcome};
 
 const SERVER_KEY: &str = "harvey";
 
-pub fn sync(path: &Path, spec: &McpServerSpec, dry_run: bool) -> SyncOutcome {
+pub fn sync(
+    path: &Path,
+    spec: &McpServerSpec,
+    dry_run: bool,
+    model_instructions_file: Option<&Path>,
+) -> SyncOutcome {
     let mut doc = match read_doc(path) {
         Ok(d) => d,
         Err(e) => {
@@ -32,11 +37,14 @@ pub fn sync(path: &Path, spec: &McpServerSpec, dry_run: bool) -> SyncOutcome {
         }
     };
 
-    // Snapshot the current `harvey` block (if any) for an
-    // already-equal short-circuit.
-    let before = render_harvey(&doc);
+    // Snapshot the current `harvey` block + model_instructions_file key
+    // for an already-equal short-circuit.
+    let before = render_managed(&doc);
     upsert_harvey(&mut doc, spec);
-    let after = render_harvey(&doc);
+    if let Some(p) = model_instructions_file {
+        upsert_model_instructions_file(&mut doc, p);
+    }
+    let after = render_managed(&doc);
 
     let kind = match (before.as_deref(), after.as_deref()) {
         (None, _) => ChangeKind::Add,
@@ -58,6 +66,31 @@ pub fn sync(path: &Path, spec: &McpServerSpec, dry_run: bool) -> SyncOutcome {
         ChangeKind::Add => SyncOutcome::Added,
         ChangeKind::Update => SyncOutcome::Updated,
     }
+}
+
+/// Render the parts of the doc that infect manages (harvey MCP block +
+/// model_instructions_file), so the change-detection short-circuit
+/// doesn't trip on user-edited keys (`personality`, `model`, etc.).
+fn render_managed(doc: &DocumentMut) -> Option<String> {
+    let harvey = render_harvey(doc).unwrap_or_default();
+    let mif = doc
+        .get("model_instructions_file")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    if harvey.is_empty() && mif.is_empty() {
+        None
+    } else {
+        Some(format!("{harvey}|{mif}"))
+    }
+}
+
+/// Set `model_instructions_file = "<path>"` at the top level of the
+/// Codex config. This is Codex's official knob for loading custom
+/// system instructions every session, replacing the deprecated
+/// `experimental_instructions_file`.
+fn upsert_model_instructions_file(doc: &mut DocumentMut, p: &Path) {
+    let path_str = p.display().to_string();
+    doc["model_instructions_file"] = value(path_str);
 }
 
 fn read_doc(path: &Path) -> std::io::Result<DocumentMut> {
@@ -181,7 +214,7 @@ mod tests {
     fn add_to_empty_file_creates_block() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let outcome = sync(&path, &spec(), false);
+        let outcome = sync(&path, &spec(), false, None);
         assert_eq!(outcome, SyncOutcome::Added);
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains("[mcp_servers.harvey]"));
@@ -194,8 +227,8 @@ mod tests {
     fn second_run_is_unchanged() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let _ = sync(&path, &spec(), false);
-        let outcome = sync(&path, &spec(), false);
+        let _ = sync(&path, &spec(), false, None);
+        let outcome = sync(&path, &spec(), false, None);
         assert_eq!(outcome, SyncOutcome::Unchanged);
     }
 
@@ -215,7 +248,7 @@ HARVEY_HOME = "/h"
 "#,
         )
         .unwrap();
-        let outcome = sync(&path, &spec(), false);
+        let outcome = sync(&path, &spec(), false, None);
         assert_eq!(outcome, SyncOutcome::Updated);
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains(r#"command = "/opt/cargo/bin/makakoo-mcp""#));
@@ -247,7 +280,7 @@ approval_mode = "approve"
         )
         .unwrap();
 
-        let outcome = sync(&path, &spec(), false);
+        let outcome = sync(&path, &spec(), false, None);
         assert_eq!(outcome, SyncOutcome::Updated);
         let body = fs::read_to_string(&path).unwrap();
 
@@ -265,7 +298,7 @@ approval_mode = "approve"
     fn dry_run_writes_nothing() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let outcome = sync(&path, &spec(), true);
+        let outcome = sync(&path, &spec(), true, None);
         assert_eq!(outcome, SyncOutcome::WouldChange { kind: ChangeKind::Add });
         assert!(!path.exists());
     }
@@ -275,7 +308,7 @@ approval_mode = "approve"
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         fs::write(&path, "not = valid = toml [[[").unwrap();
-        let outcome = sync(&path, &spec(), false);
+        let outcome = sync(&path, &spec(), false, None);
         assert!(matches!(outcome, SyncOutcome::Error { .. }));
     }
 
@@ -293,7 +326,7 @@ theme = "dark"
 "#,
         )
         .unwrap();
-        let _ = sync(&path, &spec(), false);
+        let _ = sync(&path, &spec(), false, None);
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains("[features]"));
         assert!(body.contains("sandbox = true"));

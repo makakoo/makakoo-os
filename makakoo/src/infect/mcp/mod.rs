@@ -231,7 +231,7 @@ pub fn sync_all(
                 continue;
             }
         }
-        let outcome = sync_one(cli_home, target, &spec, dry_run);
+        let outcome = sync_one(cli_home, makakoo_home, target, &spec, dry_run);
         report.results.push((*target, outcome));
     }
     report
@@ -241,6 +241,7 @@ pub fn sync_all(
 /// the target's `format`.
 pub fn sync_one(
     home: &Path,
+    makakoo_home: &Path,
     target: &McpTarget,
     spec: &McpServerSpec,
     dry_run: bool,
@@ -265,7 +266,16 @@ pub fn sync_one(
             adapters::json::sync(target, &path, spec, dry_run, true)
         }
         McpFormat::TomlInlineTable => {
-            adapters::codex::sync(&path, spec, dry_run)
+            // Codex doesn't read ~/AGENTS.md from $HOME by default —
+            // its walk-up search stops at project markers, so the
+            // home-level pointer never reaches it. We patch the
+            // canonical bootstrap path directly into ~/.codex/config.toml
+            // via `model_instructions_file`, which Codex DOES load on
+            // every session. Discovered 2026-04-25 in live test —
+            // Codex resolved $MAKAKOO_HOME via printenv and missed
+            // every paths/conventions in the bootstrap until this fix.
+            let canonical = crate::infect::canonical_bootstrap_path(makakoo_home);
+            adapters::codex::sync(&path, spec, dry_run, Some(&canonical))
         }
         McpFormat::TomlArrayOfTables => adapters::vibe::sync(&path, spec, dry_run),
     }
