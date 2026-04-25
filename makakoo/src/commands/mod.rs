@@ -25,6 +25,7 @@ pub mod plugin;
 pub mod promotions;
 pub mod query;
 pub mod s3;
+pub mod s3_endpoint;
 pub mod sancho;
 pub mod search;
 pub mod session;

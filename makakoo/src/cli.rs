@@ -443,6 +443,71 @@ pub enum S3Cmd {
         #[arg(long)]
         force_rotate: bool,
     },
+
+    /// Manage the multi-backend S3 endpoint registry —
+    /// `$MAKAKOO_HOME/config/s3_endpoints.json` + per-endpoint
+    /// credentials in the OS keychain.
+    Endpoint {
+        #[command(subcommand)]
+        cmd: S3EndpointCmd,
+    },
+}
+
+/// `makakoo s3 endpoint <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum S3EndpointCmd {
+    /// List every registered endpoint. Default endpoint marked with `*`.
+    List {
+        /// Emit JSON instead of the default table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Register a new endpoint and store its credentials in the keychain.
+    Add {
+        /// Endpoint name — referenced by `--endpoint` flags later.
+        name: String,
+        /// Endpoint URL (e.g. `https://s3.amazonaws.com`).
+        #[arg(long)]
+        url: String,
+        /// AWS region string (e.g. `us-east-1` for AWS, `garage` for
+        /// the local Garage backend).
+        #[arg(long)]
+        region: String,
+        /// Backend kind. Drives backend-specific quirks Phase C wires up.
+        #[arg(long, value_parser = ["garage-local", "aws", "r2", "b2", "minio"])]
+        kind: String,
+        /// Access key ID.
+        #[arg(long)]
+        access_key: String,
+        /// Secret access key.
+        #[arg(long)]
+        secret_key: String,
+        /// Permit JSON-file fallback when keychain write fails. Without
+        /// this flag, a keychain failure refuses the operation rather
+        /// than silently downgrading to plaintext-on-disk creds.
+        #[arg(long)]
+        allow_file_creds: bool,
+    },
+
+    /// Remove an endpoint. Wipes its keychain entry too.
+    Remove {
+        /// Endpoint name.
+        name: String,
+    },
+
+    /// Set which endpoint is used when `--endpoint` is omitted.
+    Default {
+        /// Endpoint name.
+        name: String,
+    },
+
+    /// Health-probe an endpoint by attempting `ListBuckets`. Reports
+    /// OK / auth-fail / network-fail / endpoint-404.
+    Test {
+        /// Endpoint name (defaults to the registered default).
+        name: Option<String>,
+    },
 }
 
 /// `makakoo agent <subcommand>`.

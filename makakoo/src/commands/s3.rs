@@ -41,6 +41,7 @@ const ADMIN_API_URL: &str = "http://127.0.0.1:3903";
 pub fn run(ctx: &CliContext, cmd: S3Cmd) -> Result<i32> {
     match cmd {
         S3Cmd::Bootstrap { force_rotate } => bootstrap(ctx, force_rotate),
+        S3Cmd::Endpoint { cmd } => crate::commands::s3_endpoint::run(ctx, cmd),
     }
 }
 
@@ -151,6 +152,12 @@ fn bootstrap(ctx: &CliContext, force_rotate: bool) -> Result<i32> {
 }
 
 fn command_exists(name: &str) -> bool {
+    cmd_exists_pub(name)
+}
+
+/// Public reflection of `command_exists`. Used by `s3_endpoint::test`
+/// to fall back to a curl probe when `aws-cli` isn't on PATH.
+pub fn cmd_exists_pub(name: &str) -> bool {
     Command::new("/usr/bin/which")
         .arg(name)
         .output()
