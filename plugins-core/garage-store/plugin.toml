@@ -1,0 +1,51 @@
+[plugin]
+name = "garage-store"
+version = "0.1.0"
+kind = "service"
+language = "shell"
+summary = "Local S3-compatible object store backed by Garage (AGPLv3)"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+keywords = ["s3", "storage", "garage", "service"]
+
+[source]
+path = "plugins-core/garage-store"
+
+[depends]
+binaries = ["garage", "brew"]
+system = ["macOS"]
+
+[install]
+unix = "bin/install.sh"
+
+[entrypoint]
+start = "bin/garage-wrapper.sh start"
+stop = "bin/garage-wrapper.sh stop"
+health = "bin/garage-wrapper.sh health"
+
+[service]
+# launchd owns process lifecycle. Plugin runner only loads/unloads
+# the plist (see bin/garage-wrapper.sh). Health is a curl probe
+# against the admin API. restart_policy = never because launchd
+# already enforces KeepAlive — three restart actors fight (caught
+# by qwen in lope round 2).
+restart_policy = "never"
+health_endpoint = "http://127.0.0.1:3903/health"
+health_interval_sec = 60
+
+[capabilities]
+grants = [
+  "exec/binary:/usr/local/opt/garage/bin/garage",
+  "exec/binary:/opt/homebrew/opt/garage/bin/garage",
+  "fs/read:$MAKAKOO_HOME/config/garage.toml",
+  "fs/write:$MAKAKOO_HOME/data/garage/**",
+  "fs/write:$MAKAKOO_HOME/data/garage-meta/**",
+  "net/http:http://127.0.0.1:3900/*",
+  "net/http:http://127.0.0.1:3903/*",
+  "secrets/read:makakoo-s3-service",
+  "secrets/write:makakoo-s3-service",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/garage-store"
+retention = "keep"

@@ -416,6 +416,33 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: AgentCmd,
     },
+
+    /// S3 endpoint operations — bootstrap the Makakoo-owned service
+    /// keypair against the local Garage instance.
+    ///
+    /// Subcommands:
+    ///   makakoo s3 bootstrap [--force-rotate]
+    S3 {
+        #[command(subcommand)]
+        cmd: S3Cmd,
+    },
+}
+
+/// `makakoo s3 <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum S3Cmd {
+    /// Bootstrap the `makakoo-s3-service` keypair against the local
+    /// Garage admin API. Idempotent — re-running is a no-op when the
+    /// keypair already exists in the keychain. Designed to be called
+    /// by `plugins-core/garage-store/bin/garage-wrapper.sh` as a
+    /// fire-and-forget after `garage server` reaches ready state, and
+    /// by operators who need the key present before Phase C bucket ops.
+    Bootstrap {
+        /// Delete the existing keypair (in Garage + keychain) and
+        /// generate a fresh one. Emits `s3.service_key_rotated` event.
+        #[arg(long)]
+        force_rotate: bool,
+    },
 }
 
 /// `makakoo agent <subcommand>`.

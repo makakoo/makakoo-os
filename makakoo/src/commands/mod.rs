@@ -24,6 +24,7 @@ pub mod perms;
 pub mod plugin;
 pub mod promotions;
 pub mod query;
+pub mod s3;
 pub mod sancho;
 pub mod search;
 pub mod session;
@@ -132,6 +133,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Adapter { cmd } => adapter::run(ctx, cmd).await,
         Commands::Octopus { args } => octopus::run(args),
         Commands::Agent { cmd } => agent::run(ctx, cmd),
+        Commands::S3 { cmd } => s3::run(ctx, cmd),
     }
 }
 
