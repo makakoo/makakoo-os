@@ -1348,6 +1348,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "garagetytus-grants"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fs2",
+ "rand 0.8.5",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2072,6 +2087,7 @@ dependencies = [
  "ed25519-dalek",
  "flate2",
  "fs2",
+ "garagetytus-grants",
  "libc",
  "once_cell",
  "petgraph",
