@@ -15,10 +15,6 @@ sancho-task = "^1.0"
 [depends]
 python = ">=3.11"
 
-[install]
-unix = "install.sh"
-windows = "install.ps1"
-
 [entrypoint]
 run = "python3 -u src/run-sancho-task.py"
 

@@ -12,7 +12,7 @@ use makakoo_core::distro::{
     resolve_distro, DistroFile, DistroTable, KernelTable, PluginPin, PluginPinFull,
 };
 use makakoo_core::plugin::{
-    install_from_path, InstallRequest, PluginSource, PluginsLock,
+    install_from_path, InstallError, InstallRequest, PluginSource, PluginsLock,
 };
 
 use crate::cli::DistroCmd;
@@ -173,6 +173,14 @@ fn install(
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut failed: Vec<(String, String)> = Vec::new();
+    // Plugins where ONLY the [install].unix script failed — the source
+    // is on disk and lock entry exists, but the post-install hook
+    // returned non-zero. Demoted to a warning instead of an umbrella
+    // failure: the hook usually depends on environmental tools (git,
+    // pip, network, Chrome with CDP) that aren't required for v0.1's
+    // launch promise. User can re-run `makakoo plugin install <name>`
+    // once the env is ready.
+    let mut script_only_failures: usize = 0;
 
     for pin in &resolved.plugins {
         let source_path = match &plugins_core {
@@ -180,10 +188,9 @@ fn install(
             None => PathBuf::from(&pin.name),
         };
         if !source_path.is_dir() {
-            failed.push((
-                pin.name.clone(),
-                format!("source not found: {}", source_path.display()),
-            ));
+            let msg = format!("source not found: {}", source_path.display());
+            output::print_warn(format!("  failed {}: {msg}", pin.name));
+            failed.push((pin.name.clone(), msg));
             continue;
         }
 
@@ -215,6 +222,9 @@ fn install(
                 installed += 1;
             }
             Err(e) => {
+                if matches!(e, InstallError::InstallScriptFailed { .. }) {
+                    script_only_failures += 1;
+                }
                 failed.push((pin.name.clone(), e.to_string()));
                 output::print_warn(format!("  failed {}: {e}", pin.name));
             }
@@ -243,7 +253,20 @@ fn install(
         println!("{msg}");
     }
 
-    Ok(if failed.is_empty() { 0 } else { 1 })
+    // Critical failures are anything OTHER than [install].unix script
+    // exits — manifest parse errors, missing source, blake3 mismatch,
+    // io errors. Those mean the plugin is genuinely broken and the
+    // distro install must fail. Script-only failures are environmental
+    // (the plugin source landed on disk, lock entry was NOT touched,
+    // user can re-run `makakoo plugin install <name>` later) so they
+    // don't gate the umbrella result.
+    let critical_failures = failed.len().saturating_sub(script_only_failures);
+    if script_only_failures > 0 {
+        output::print_warn(format!(
+            "{script_only_failures} plugin install hook(s) failed (non-fatal — re-run `makakoo plugin install <name>` once the environment is ready)"
+        ));
+    }
+    Ok(if critical_failures > 0 { 1 } else { 0 })
 }
 
 fn save(
@@ -355,8 +378,11 @@ fn save(
     Ok(0)
 }
 
-/// Resolve the distros dir. `$MAKAKOO_DISTROS` env var wins, otherwise
-/// walk upward from CWD looking for a `distros/` directory.
+/// Resolve the distros dir.
+///
+/// Precedence: `$MAKAKOO_DISTROS` env var → walk upward from CWD looking
+/// for a `distros/` directory → bundled `<exe>/../share/makakoo/distros/`
+/// (the curl-pipe install layout) → error.
 fn resolve_distros_dir() -> anyhow::Result<PathBuf> {
     if let Ok(root) = std::env::var("MAKAKOO_DISTROS") {
         return Ok(PathBuf::from(root));
@@ -364,6 +390,12 @@ fn resolve_distros_dir() -> anyhow::Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     if let Some(p) = crate::commands::plugin::walk_up_for(&cwd, "distros") {
         return Ok(p);
+    }
+    if let Some(share) = crate::commands::plugin::share_dir() {
+        let candidate = share.join("distros");
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
     }
     anyhow::bail!(
         "can't find distros/ — set $MAKAKOO_DISTROS or run from a checkout that contains distros/"

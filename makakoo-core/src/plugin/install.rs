@@ -563,19 +563,18 @@ fn run_install_script(
     script: &str,
 ) -> Result<(), InstallError> {
     // Resolve the script. If `script` is a bare filename that exists in
-    // the plugin dir (e.g. `install.sh`), execute it via the absolute
-    // path — `sh -c "install.sh"` doesn't check CWD for executables
-    // (PATH-only), so the bare-filename form would fail with
-    // "command not found" even though the file is right there. Caught
-    // live 2026-04-21 installing agent-browser-harness.
+    // the plugin dir (e.g. `install.sh`), invoke `sh <abs-path>` so
+    // shipping a script without the +x bit Just Works (sh reads the
+    // file directly instead of execve'ing it). Falls back to `sh -c
+    // <command>` for non-file scripts (e.g. an inline command string).
+    // The bare-filename "install.sh" form would fail under `sh -c`
+    // with "command not found" since . is not in PATH — caught live
+    // 2026-04-21 installing agent-browser-harness, then again
+    // 2026-04-26 (chmod-bit drop) on sancho-task-plugin-update-check.
     let resolved_script = plugin_dir.join(script);
-    let command_string: String = if resolved_script.is_file() {
-        resolved_script.to_string_lossy().into_owned()
-    } else {
-        script.to_string()
-    };
+    let invoke_as_file = resolved_script.is_file();
     debug!(
-        "running [install].unix for {plugin} in {}: {command_string}",
+        "running [install].unix for {plugin} in {} (as_file={invoke_as_file}): {script}",
         plugin_dir.display()
     );
     // Make Makakoo-provided shell shims (e.g. `makakoo-venv-bootstrap`)
@@ -588,9 +587,13 @@ fn run_install_script(
         Ok(existing) => format!("{}:{existing}", shim_dir.display()),
         Err(_) => shim_dir.display().to_string(),
     };
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(&command_string)
+    let mut cmd = Command::new("sh");
+    if invoke_as_file {
+        cmd.arg(&resolved_script);
+    } else {
+        cmd.arg("-c").arg(script);
+    }
+    let out = cmd
         .current_dir(plugin_dir)
         .env("MAKAKOO_PLUGIN_DIR", plugin_dir)
         .env("MAKAKOO_HOME", makakoo_home)

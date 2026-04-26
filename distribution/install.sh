@@ -68,16 +68,30 @@ mkdir -p "$PREFIX/bin"
 
 # Some release tarballs nest the binaries under a top-level dir; handle both.
 if [ -f "$TMP/makakoo" ]; then
-  install -m 755 "$TMP/makakoo"     "$PREFIX/bin/makakoo"
-  install -m 755 "$TMP/makakoo-mcp" "$PREFIX/bin/makakoo-mcp"
+  INNER_DIR="$TMP"
 else
   INNER="$(find "$TMP" -type f -name makakoo -not -name '*.tar.gz' | head -n1)"
   INNER_DIR="$(dirname "$INNER")"
-  install -m 755 "$INNER_DIR/makakoo"     "$PREFIX/bin/makakoo"
-  install -m 755 "$INNER_DIR/makakoo-mcp" "$PREFIX/bin/makakoo-mcp"
 fi
 
+install -m 755 "$INNER_DIR/makakoo"     "$PREFIX/bin/makakoo"
+install -m 755 "$INNER_DIR/makakoo-mcp" "$PREFIX/bin/makakoo-mcp"
+
+# Bundled runtime data: distros/ + plugins-core/ go to
+# $PREFIX/share/makakoo/. The binary's resolve_distros_dir() and
+# plugins_core_root() walk <exe>/../share/makakoo/ as a fallback when
+# $MAKAKOO_DISTROS / $MAKAKOO_PLUGINS_CORE are unset and CWD walkup fails.
+SHARE="$PREFIX/share/makakoo"
+mkdir -p "$SHARE"
+for dir in distros plugins-core; do
+  if [ -d "$INNER_DIR/$dir" ]; then
+    rm -rf "$SHARE/$dir"
+    cp -R "$INNER_DIR/$dir" "$SHARE/$dir"
+  fi
+done
+
 echo "✓ installed makakoo to $PREFIX/bin"
+echo "✓ bundled distros + plugins-core to $SHARE"
 echo ""
 echo "  run: $PREFIX/bin/makakoo version"
 echo "  add to PATH: export PATH=\"\$PATH:$PREFIX/bin\""

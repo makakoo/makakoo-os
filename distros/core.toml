@@ -37,7 +37,7 @@ version = "^0.1"
 
 # Watchdogs — wake up the services Harvey depends on.
 "watchdog-switchailocal" = { version = "*" }
-"watchdog-postgres" = { version = "*" }
+"agent-pg-watchdog" = { version = "*" }
 "watchdog-infect" = { version = "*" }
 "monitor-hackernews" = { version = "*" }
 

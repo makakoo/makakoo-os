@@ -1051,10 +1051,20 @@ fn uninstall(ctx: &CliContext, name: &str, purge: bool) -> anyhow::Result<i32> {
     }
 }
 
+/// Return the bundled-content share dir: `<exe-dir>/../share/makakoo/`.
+/// install.sh / install.ps1 place bundled `distros/` + `plugins-core/`
+/// here so a curl-pipe install works without a repo checkout.
+pub(crate) fn share_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let prefix = exe.parent()?.parent()?;
+    Some(prefix.join("share").join("makakoo"))
+}
+
 /// Return the `plugins-core/` root directory.
 ///
 /// Precedence: `$MAKAKOO_PLUGINS_CORE` env var → walk upward from CWD
-/// looking for a `plugins-core/` dir → error.
+/// looking for a `plugins-core/` dir → bundled `<exe>/../share/makakoo/
+/// plugins-core/` → error.
 pub(crate) fn plugins_core_root() -> anyhow::Result<PathBuf> {
     if let Ok(root) = std::env::var("MAKAKOO_PLUGINS_CORE") {
         return Ok(PathBuf::from(root));
@@ -1062,6 +1072,12 @@ pub(crate) fn plugins_core_root() -> anyhow::Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     if let Some(p) = walk_up_for(&cwd, "plugins-core") {
         return Ok(p);
+    }
+    if let Some(share) = share_dir() {
+        let candidate = share.join("plugins-core");
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
     }
     anyhow::bail!(
         "can't find plugins-core/ — set $MAKAKOO_PLUGINS_CORE or run from a checkout that contains plugins-core/"

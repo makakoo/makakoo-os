@@ -138,13 +138,36 @@ try {
         Write-Error "makakoo.exe not found in downloaded archive"
         exit 1
     }
+    $stageDir = $binSrc.Directory.FullName
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     $binDst = Join-Path $InstallDir "makakoo.exe"
     Move-Item -LiteralPath $binSrc.FullName -Destination $binDst -Force
 
+    # makakoo-mcp.exe lives next to makakoo.exe in the zip — install it too.
+    $mcpSrc = Join-Path $stageDir "makakoo-mcp.exe"
+    if (Test-Path -LiteralPath $mcpSrc) {
+        $mcpDst = Join-Path $InstallDir "makakoo-mcp.exe"
+        Move-Item -LiteralPath $mcpSrc -Destination $mcpDst -Force
+    }
+
+    # Bundled runtime data: distros/ + plugins-core/ extract to
+    # <InstallDir>\..\share\makakoo\. The binary's resolve_distros_dir()
+    # and plugins_core_root() walk <exe>/../share/makakoo/ as a fallback.
+    $shareRoot = Join-Path (Split-Path -Parent $InstallDir) "share\makakoo"
+    New-Item -ItemType Directory -Path $shareRoot -Force | Out-Null
+    foreach ($dir in @("distros", "plugins-core")) {
+        $src = Join-Path $stageDir $dir
+        if (Test-Path -LiteralPath $src) {
+            $dst = Join-Path $shareRoot $dir
+            if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Recurse -Force }
+            Copy-Item -LiteralPath $src -Destination $dst -Recurse -Force
+        }
+    }
+
     Write-Host ""
     Write-Host "installed: $binDst"
+    Write-Host "bundled distros + plugins-core: $shareRoot"
 
     # ─── PATH hint ───────────────────────────────────────────────────
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
