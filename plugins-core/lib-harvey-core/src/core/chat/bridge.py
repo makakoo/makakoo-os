@@ -252,10 +252,31 @@ def render_system_prompt(
             bullets.append(f"  - `{r}{trailing}`  — baseline")
     allowed_paths = "\n".join(bullets) if bullets else "  (no writable paths configured)"
 
-    return HARVEY_SYSTEM_PROMPT.format(
+    base_prompt = HARVEY_SYSTEM_PROMPT.format(
         channel=channel,
         allowed_paths=allowed_paths,
     )
+
+    # v12 pointer pattern: append the canonical Makakoo bootstrap so
+    # HarveyChat (Olibia) stays in sync with the CLI hosts. Without this,
+    # Olibia keeps her old embedded prompt and misses every alias-map
+    # update / new flow / etc. Reported 2026-04-26 — Olibia kept punting
+    # to the terminal for "give me access to shared folders" because
+    # her embedded prompt didn't know the discovery algorithm.
+    canonical = os.path.expanduser("~/MAKAKOO/bootstrap/global.md")
+    try:
+        with open(canonical, "r", encoding="utf-8") as f:
+            bootstrap = f.read()
+        return (
+            f"{base_prompt}\n\n"
+            f"---\n"
+            f"# Canonical Makakoo bootstrap (single source of truth)\n"
+            f"---\n\n"
+            f"{bootstrap}"
+        )
+    except OSError as e:
+        log.warning("render_system_prompt: canonical bootstrap unreachable (%s) — using embedded only", e)
+        return base_prompt
 
 
 # Minimal system prompt for Anthropic fallback (no tools)

@@ -112,6 +112,55 @@ Quote the tool's return string to the user **verbatim** — do not rewrite it. E
 
 For scripted / CI workflows, the equivalent CLI surface is `makakoo perms {list,grant,revoke,purge,audit,show}` — same store, same guardrails.
 
+### Path aliases — resolve common phrases to absolute paths
+
+When the user says *"give X access to <alias>"* or *"can <agent> read <alias>"*, resolve the alias to its absolute path BEFORE calling `grant_write_access`. The grants API takes paths, not aliases. This is the canonical alias map — same on every infected CLI:
+
+| Phrase the user says | Absolute path | Notes |
+|---|---|---|
+| `the brain` / `brain` / `brain folder` | `$MAKAKOO_HOME/data/Brain/` | |
+| `today's journal` / `journal` | `$MAKAKOO_HOME/data/Brain/journals/YYYY_MM_DD.md` | compute today's date |
+| `auto-memory` / `memory` / `cross-session memory` | `$MAKAKOO_HOME/data/auto-memory/` | |
+| `mascot folder` / `mascots` | `$MAKAKOO_HOME/data/mascots/` | |
+| `pages` / `wiki pages` | `$MAKAKOO_HOME/data/Brain/pages/` | |
+| `tmp` / `scratch` / `temp` | `$MAKAKOO_HOME/tmp/` | |
+| `reports` / `output` / `outputs` | `$MAKAKOO_HOME/data/reports/` | |
+| `drafts` | `$MAKAKOO_HOME/data/drafts/` | |
+| `inbox` / `email inbox` | `$MAKAKOO_HOME/data/inbox-triage/` | |
+| `shared folders` / `shared bucket` / `shared drive` | **see below** — discovery, not a fixed path | |
+
+**Resolve `$MAKAKOO_HOME`** to the user's actual home — usually `/Users/<user>/MAKAKOO/` on macOS, `/home/<user>/MAKAKOO/` on Linux, `C:\Users\<user>\MAKAKOO\` on Windows. The `MAKAKOO_HOME` env var holds the absolute path; read it via shell or just rebuild from `$HOME`.
+
+### "Shared folders" — discovery, not a fixed path
+
+"Shared folders" has TWO valid interpretations and the AI must figure out which one the user means:
+
+1. **Local shared dir** — `$MAKAKOO_HOME/data/shared/`. A drop-zone for files any agent on this machine can pick up. No cross-machine sync. Use this when the user is talking about agent-to-agent file passing on the same machine.
+2. **Distributed shared (garagetytus)** — a user-chosen folder bound to a Garage S3 bucket via `garagetytus folder bind`, syncing every 60s with rclone bisync. Use this when the user says *"share with the pod"*, *"sync with droplet"*, or has multiple bindings already.
+
+**Resolution algorithm — DO NOT skip steps:**
+
+1. Run `garagetytus folder list --json 2>/dev/null` if the binary exists. Three branches:
+   - **0 bindings**: ask the user *"You don't have any garagetytus bindings yet. Do you mean (a) the local shared drop-zone at `$MAKAKOO_HOME/data/shared/`, or (b) bind a new folder for cross-machine sync?"*. Don't assume.
+   - **1 binding**: that's the unambiguous answer. Use its local path. Tell the user *"Resolving 'shared folders' to your single binding: `<path>` ↔ `<bucket>`."*.
+   - **N bindings**: list them and ask *"You have N shared bindings — which one? `1) <path-A>`, `2) <path-B>`, ..."*.
+2. Only after the path is resolved, call `grant_write_access(path=<resolved>, duration="1h", label=<requesting-party>)`.
+
+**The flow when the user says *"give Olibia access to shared folders"*:**
+
+1. Run discovery (`garagetytus folder list --json` or check `$MAKAKOO_HOME/data/shared/` existence).
+2. Confirm: *"Resolving 'shared folders' to `<path>`. Grant Olibia 1h write access? (Say `yes` to proceed.)"*
+3. On `yes` → call `grant_write_access(path=<resolved>, duration="1h", label="olibia")`. The `label` carries the requesting party's name into `makakoo perms list` and the audit log so the user can revoke later by who-not-what.
+4. Quote the tool's return verbatim: *"Granted g_…. <path>/** writable until …. Revoke: makakoo perms revoke g_…"*.
+
+**Anti-pattern: do NOT punt to the terminal.** If the user asks Olibia to give herself access to shared folders and no binding exists, do NOT respond with *"You need to run garagetytus folder bind in your terminal first."* Instead, OFFER to bind it conversationally:
+
+> *"No shared folders bound yet. Want me to bind `~/Documents/shared-with-pods/` to a new bucket and grant myself 1h access? Say `yes` to proceed."*
+
+On `yes`, the AI runs `garagetytus folder bind <path> <bucket-name> --auto-sync` itself (via shell exec / agent.run / equivalent), then calls `grant_write_access`. Punting to the terminal is a UX failure — the whole point of the conversational flow is that Sebastian shouldn't need to leave the chat.
+
+**If the user uses an alias not in the list above**, ask: *"Which path do you mean by '<alias>'?"*. Don't guess — guessing creates audit-log entries that mention the wrong directory.
+
 ## Skill Discovery + Dispatch
 
 Every infected CLI can discover AND execute any skill via the unified v4 dispatcher, regardless of whether the host CLI has native slash-command support. The dispatcher is invoked as `harvey` — the command name matches the persona and stays stable through the rename:
