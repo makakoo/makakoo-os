@@ -33,6 +33,7 @@ base64 = "0.22"
 hex = "0.4"
 hmac = "0.12"
 petgraph = "0.6"
+sha1 = "0.10"
 toml.workspace = true
 semver.workspace = true
 ed25519-dalek.workspace = true

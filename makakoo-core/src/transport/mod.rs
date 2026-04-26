@@ -28,6 +28,7 @@ pub mod secrets;
 pub mod slack;
 pub mod status;
 pub mod telegram;
+pub mod voice_twilio;
 pub mod web;
 pub mod whatsapp;
 

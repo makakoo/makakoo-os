@@ -152,9 +152,18 @@ impl<'de> Deserialize<'de> for TransportEntry {
                 })?;
                 TransportConfig::Web(cfg)
             }
+            "voice_twilio" => {
+                let cfg: VoiceTwilioConfig = wire.config.try_into().map_err(|e| {
+                    de::Error::custom(format!(
+                        "transport '{}' kind=voice_twilio: invalid [config] body: {}",
+                        wire.id, e
+                    ))
+                })?;
+                TransportConfig::VoiceTwilio(cfg)
+            }
             other => {
                 return Err(de::Error::custom(format!(
-                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord | whatsapp | web)",
+                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord | whatsapp | web | voice_twilio)",
                     wire.id, other
                 )));
             }
@@ -189,6 +198,7 @@ pub enum TransportConfig {
     Discord(DiscordConfig),
     WhatsApp(WhatsAppConfig),
     Web(WebConfig),
+    VoiceTwilio(VoiceTwilioConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -354,6 +364,42 @@ fn default_web_cookie_ttl() -> u64 {
     30 * 24 * 3600
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VoiceTwilioConfig {
+    /// Twilio Account SID (`AC…`). Required for both webhook
+    /// signature verification and Recording-URL basic-auth.
+    pub account_sid: String,
+
+    /// Auth token used for basic-auth on recording fetches AND for
+    /// X-Twilio-Signature HMAC. SecretRef shape.
+    #[serde(default)]
+    pub auth_token_env: Option<String>,
+    #[serde(default)]
+    pub auth_token_ref: Option<String>,
+    #[serde(default)]
+    pub inline_auth_token_dev: Option<String>,
+
+    /// Allowed caller E.164 numbers (with `+`). Empty = least-
+    /// privilege deny-all.
+    #[serde(default)]
+    pub allowed_caller_ids: Vec<String>,
+
+    /// Base URL the public webhook is reachable at — used to
+    /// construct the recording-callback URL Twilio POSTs to.
+    /// Production sets this to the public makakoo-mcp URL.
+    pub public_base_url: String,
+}
+
+impl VoiceTwilioConfig {
+    pub fn auth_token_secret(&self) -> SecretRef {
+        SecretRef::from_flat(
+            self.auth_token_env.clone(),
+            self.auth_token_ref.clone(),
+            self.inline_auth_token_dev.clone(),
+        )
+    }
+}
+
 impl TransportEntry {
     /// Resolve the bot-token slot into a `SecretRef`.
     pub fn bot_token_ref(&self) -> SecretRef {
@@ -380,9 +426,14 @@ impl TransportEntry {
                 "transport.id must not be empty".into(),
             ));
         }
-        // Web chat is bot-tokenless (no upstream provider — visitors
-        // identify via signed cookies, not a bot token).
-        if self.kind != "web" {
+        // Some transports manage credentials in their config block
+        // rather than the top-level secret_*. Skip the bot-token
+        // requirement for those:
+        //   - web: bot-tokenless (cookie-signed visitor auth)
+        //   - voice_twilio: auth_token lives under [config]
+        let kind_without_top_token =
+            matches!(self.kind.as_str(), "web" | "voice_twilio");
+        if !kind_without_top_token {
             let bot_token = self.bot_token_ref();
             if bot_token.is_empty() {
                 return Err(MakakooError::InvalidInput(format!(
@@ -453,8 +504,29 @@ impl TransportEntry {
                 }
                 Ok(())
             }
+            ("voice_twilio", TransportConfig::VoiceTwilio(v)) => {
+                if v.account_sid.is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=voice_twilio: account_sid must not be empty",
+                        self.id
+                    )));
+                }
+                if v.auth_token_secret().is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=voice_twilio: auth_token must be set (locked Q9 — required for X-Twilio-Signature verify + recording basic-auth)",
+                        self.id
+                    )));
+                }
+                if v.public_base_url.is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=voice_twilio: public_base_url must not be empty (used to build the recording-callback URL Twilio POSTs to)",
+                        self.id
+                    )));
+                }
+                Ok(())
+            }
             (k, _) => Err(MakakooError::InvalidInput(format!(
-                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord | whatsapp | web)",
+                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord | whatsapp | web | voice_twilio)",
                 self.id, k
             ))),
         }
@@ -635,6 +707,65 @@ mod tests {
         e.config = TransportConfig::Telegram(TelegramConfig::default());
         let err = e.validate().unwrap_err();
         assert!(format!("{err}").contains("doesn't match"));
+    }
+
+    fn voice_entry(id: &str) -> TransportEntry {
+        TransportEntry {
+            id: id.into(),
+            kind: "voice_twilio".into(),
+            enabled: true,
+            account_id: None,
+            secret_ref: None,
+            secret_env: None,
+            inline_secret_dev: None,
+            app_token_ref: None,
+            app_token_env: None,
+            inline_app_token_dev: None,
+            allowed_users: vec![],
+            config: TransportConfig::VoiceTwilio(VoiceTwilioConfig {
+                account_sid: "ACdeadbeef".into(),
+                auth_token_env: None,
+                auth_token_ref: None,
+                inline_auth_token_dev: Some("AUTHTOK".into()),
+                allowed_caller_ids: vec![],
+                public_base_url: "https://example.com".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn voice_entry_validates() {
+        voice_entry("voice-main").validate().unwrap();
+    }
+
+    #[test]
+    fn voice_requires_account_sid() {
+        let mut e = voice_entry("v");
+        if let TransportConfig::VoiceTwilio(ref mut v) = e.config {
+            v.account_sid = "".into();
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("account_sid"));
+    }
+
+    #[test]
+    fn voice_requires_auth_token() {
+        let mut e = voice_entry("v");
+        if let TransportConfig::VoiceTwilio(ref mut v) = e.config {
+            v.inline_auth_token_dev = None;
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("auth_token"));
+    }
+
+    #[test]
+    fn voice_requires_public_base_url() {
+        let mut e = voice_entry("v");
+        if let TransportConfig::VoiceTwilio(ref mut v) = e.config {
+            v.public_base_url = "".into();
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("public_base_url"));
     }
 
     fn web_entry(id: &str) -> TransportEntry {
