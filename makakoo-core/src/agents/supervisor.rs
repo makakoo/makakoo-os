@@ -236,18 +236,22 @@ impl GatewayLaunchSpec {
     }
 
     /// Default gateway spec for the bundled harveychat Python
-    /// gateway (Phase 3 ships the actual implementation).
+    /// gateway. Phase 3 of v2-mega ships the actual gateway as a
+    /// proper Python package; we invoke it as a module
+    /// (`python3 -m plugins_core.agent_harveychat.python.gateway`)
+    /// so relative imports inside the package work without sys.path
+    /// gymnastics.
     pub fn harveychat_default(makakoo_home: &Path, slot_id: &str) -> Self {
+        let home_str = makakoo_home.to_string_lossy().into_owned();
         Self::new("python3")
-            .arg(
-                makakoo_home
-                    .join("plugins-core/agent-harveychat/python/gateway.py")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
+            .arg("-m")
+            .arg("plugins_core.agent_harveychat.python.gateway")
             .arg("--slot")
             .arg(slot_id)
             .env("MAKAKOO_AGENT_SLOT", slot_id)
+            .env("MAKAKOO_HOME", &home_str)
+            .env("PYTHONPATH", &home_str)
+            .cwd(makakoo_home.to_path_buf())
     }
 }
 
@@ -456,12 +460,23 @@ mod tests {
     }
 
     #[test]
-    fn gateway_launch_spec_default_has_slot_env() {
+    fn gateway_launch_spec_default_has_slot_env_and_python_module() {
         let home = PathBuf::from("/Users/sebastian/MAKAKOO");
         let spec = GatewayLaunchSpec::harveychat_default(&home, "secretary");
         assert_eq!(spec.program, "python3");
-        assert!(spec.envs.iter().any(|(k, v)| k == "MAKAKOO_AGENT_SLOT" && v == "secretary"));
-        assert!(spec.args.iter().any(|a| a.contains("gateway.py")));
-        assert!(spec.args.iter().any(|a| a == "secretary"));
+        // Module-form invocation lets relative imports work.
+        assert_eq!(spec.args[0], "-m");
+        assert_eq!(spec.args[1], "plugins_core.agent_harveychat.python.gateway");
+        assert_eq!(spec.args[2], "--slot");
+        assert_eq!(spec.args[3], "secretary");
+        // Env carries slot id, makakoo home, and PYTHONPATH so the
+        // package is importable from the supervisor's cwd.
+        assert!(spec
+            .envs
+            .iter()
+            .any(|(k, v)| k == "MAKAKOO_AGENT_SLOT" && v == "secretary"));
+        assert!(spec.envs.iter().any(|(k, _)| k == "MAKAKOO_HOME"));
+        assert!(spec.envs.iter().any(|(k, _)| k == "PYTHONPATH"));
+        assert_eq!(spec.cwd.as_deref(), Some(home.as_path()));
     }
 }
