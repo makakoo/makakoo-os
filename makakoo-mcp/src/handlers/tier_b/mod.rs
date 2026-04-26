@@ -7,6 +7,7 @@
 
 pub mod agents;
 pub mod browse;
+pub mod channel_ops;
 pub mod infect;
 pub mod journal;
 pub mod knowledge;
@@ -79,4 +80,36 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     registry.register(Arc::new(perms::GrantWriteAccessHandler::new(ctx.clone())));
     registry.register(Arc::new(perms::RevokeWriteAccessHandler::new(ctx.clone())));
     registry.register(Arc::new(perms::ListWriteGrantsHandler::new(ctx.clone())));
+
+    // v2-MEGA Phase 6: OpenClaw-parity channel-ops trait surface.
+    registry.register(Arc::new(channel_ops::ChannelDirectoryListChannelsHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelDirectoryListUsersHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelDirectoryLookupUserHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelMessagingSendDmHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelMessagingSendChannelHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelMessagingBroadcastHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelThreadingCreateThreadHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelThreadingListThreadsHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelThreadingFollowThreadHandler::new(
+        ctx.clone(),
+    )));
+    registry.register(Arc::new(channel_ops::ChannelApprovalRequestHandler::new(
+        ctx.clone(),
+    )));
 }

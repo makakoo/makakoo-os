@@ -65,6 +65,7 @@ use std::sync::Arc;
 use crate::jsonrpc::{RpcError, METHOD_NOT_FOUND};
 
 use makakoo_core::agents::AgentScaffold;
+use makakoo_core::channel_ops::ChannelOpsRegistry;
 use makakoo_core::chat::ChatStore;
 use makakoo_core::embeddings::EmbeddingClient;
 use makakoo_core::event_bus::PersistentEventBus;
@@ -129,6 +130,7 @@ pub struct ToolContext {
     pub costs: Option<Arc<CostTracker>>,
     pub agents: Option<Arc<AgentScaffold>>,
     pub swarm_state: Option<Arc<SwarmState>>,
+    pub channel_ops: Option<Arc<ChannelOpsRegistry>>,
 }
 
 impl ToolContext {
@@ -153,6 +155,7 @@ impl ToolContext {
             costs: None,
             agents: None,
             swarm_state: None,
+            channel_ops: None,
         }
     }
 
@@ -231,6 +234,11 @@ impl ToolContext {
     #[allow(dead_code)]
     pub fn with_swarm_state(mut self, swarm_state: Arc<SwarmState>) -> Self {
         self.swarm_state = Some(swarm_state);
+        self
+    }
+    #[allow(dead_code)]
+    pub fn with_channel_ops(mut self, registry: Arc<ChannelOpsRegistry>) -> Self {
+        self.channel_ops = Some(registry);
         self
     }
 }

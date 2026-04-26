@@ -9,6 +9,7 @@
 pub mod adapter;
 pub mod agents;
 pub mod capability;
+pub mod channel_ops;
 pub mod chat;
 pub mod config;
 pub mod db;
