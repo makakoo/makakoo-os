@@ -197,11 +197,14 @@ secretary
 ## 6. Cross-transport reply is forbidden
 
 Slack inbound → Telegram outbound is rejected at the router. The LLM
-cannot work around this; Phase 1 IPC contract: outbound
-`transport_id` MUST equal an inbound `transport_id` from the same
-slot. If you ask the secretary to "send the reply via Telegram
-instead", it will tell you it can only reply on the channel you
-addressed.
+cannot work around this. Phase 1 IPC contract: an outbound reply
+MUST go to the **originating** `transport_id` of the current inbound
+turn. Even when the same slot has received messages on both
+Telegram and Slack, the secretary can never switch transports
+mid-turn — replies are pinned to the channel that delivered the
+inbound message they're answering. If you ask the secretary to
+"send the reply via Telegram instead", it will tell you it can
+only reply on the channel you addressed.
 
 ---
 
@@ -210,8 +213,21 @@ addressed.
 ```sh
 makakoo agent stop secretary
 makakoo agent stop career
-makakoo agent destroy secretary    # archives TOML + DB to ~/.makakoo/archive/
 ```
+
+To fully decommission a slot today, manually:
+
+```sh
+rm ~/MAKAKOO/config/agents/<slot>.toml
+mv ~/MAKAKOO/data/agents/<slot> ~/MAKAKOO/archive/<slot>-$(date +%s)
+makakoo secret delete agent/<slot>/telegram-main/bot_token
+# …delete any other secret refs the slot used
+```
+
+A first-class `makakoo agent destroy <slot>` (interactive
+teardown — stops the process, archives TOML + DB to
+`~/.makakoo/archive/agents/<slot>-<ts>/`, optionally revokes the
+bot token) is a Phase 5 follow-up.
 
 `harveychat` is preserved indefinitely — it carries the legacy
 Olibia conversation history.

@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-pub use crate::transport::status::{TransportRunState, TransportStatus};
+pub use crate::transport::status::TransportRunState;
 
 /// Handle one transport adapter writes status updates to.  Cheap
 /// to clone (`Arc`-backed) and lock-free on the read path.

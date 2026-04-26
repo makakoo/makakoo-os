@@ -182,6 +182,125 @@ spam-route every channel the bot is invited to).
 
 ---
 
+## Slack: `invalid Socket Mode app token`
+
+`makakoo agent validate <slot>` reports:
+
+```
+slack apps.connections.open (Socket Mode probe) failed: not_allowed_token_type
+```
+
+**Cause:** The `app_token` slot was populated with a regular bot
+token (`xoxb-…`) or a user token (`xoxp-…`) instead of an
+app-level token (`xapp-…`). Socket Mode requires the app-level
+variant generated under `Basic Information → App-Level Tokens`.
+
+**Fix:** Mint a fresh app token with the `connections:write` scope,
+then `makakoo secret set agent/<slot>/slack-main/app_token <xapp-…>`.
+
+---
+
+## Cross-transport outbound rejected
+
+Tool call returns:
+
+```
+RouterError::UnknownTransport { slot_id: "secretary", transport_id: "slack-main" }
+```
+
+Or a logged WARN:
+
+```
+outbound transport_id 'slack-main' has no matching transport on slot 'secretary' — cross-transport reply is forbidden in v1
+```
+
+**Cause:** The Python gateway tried to send a reply on a
+`transport_id` that doesn't match the inbound turn's originating
+transport. v1 forbids cross-transport replies — every reply MUST
+go back to the channel the inbound message arrived on.
+
+**Fix:** This is a contract violation by the gateway, not a user
+error. If you see this in production, it's a bug in the dispatch
+layer: file an issue with the matching inbound + outbound frame
+JSON. The router never invokes the adapter when this trips, so no
+message goes out.
+
+---
+
+## Per-slot queue overflow (`queue.overflow`)
+
+```
+{"event":"queue.overflow","transport_id":"telegram-main","action":"drop_newest"}
+```
+
+**Cause:** The per-slot asyncio queue (locked at 100 frames) is
+full. Either:
+- The LLM dispatcher is wedged (slow tool call, infinite loop in
+  the model).
+- A transport is hosing the slot with messages faster than the
+  LLM can process them.
+
+The newest frame is dropped (NOT the oldest) so already-queued
+messages still get a reply — this favors fairness over recency.
+
+**Fix:** Check `makakoo agent status <slot>` for `queue_depth`. If
+it's stuck at 100, restart the slot's gateway:
+`makakoo agent restart <slot>`. If it climbs again, the LLM
+backend is the bottleneck — investigate the gateway log for
+slow tool calls.
+
+---
+
+## Tool not in scope (`ToolNotInScope`)
+
+LLM response surfaces:
+
+```
+tool 'run_command' is not in scope for slot 'career'; allowed: brain_search, write_file, linkedin, gmail
+```
+
+**Cause:** The LLM tried to invoke a tool not on the slot's
+`tools` whitelist. Phase 3 enforces least-privilege.
+
+**Fix:** Either grant the tool by editing the slot's TOML and
+re-validating:
+
+```sh
+# in ~/MAKAKOO/config/agents/career.toml:
+tools = ["brain_search", "write_file", "linkedin", "gmail", "run_command"]
+makakoo agent restart career
+```
+
+Or — preferably — leave the whitelist tight and rephrase the user
+request so the agent uses an allowed tool.
+
+---
+
+## Path not in scope (`PathNotInScope`)
+
+LLM response surfaces:
+
+```
+path '/etc/passwd' is not in scope for slot 'career'; allowed: ~/CV/, ~/MAKAKOO/data/career/; forbidden: (none)
+```
+
+Or the least-privilege variant:
+
+```
+path '/etc/passwd' is not in scope for slot 'career'; allowed: (none — least-privilege default); forbidden: (none)
+```
+
+**Cause:** The path the LLM tried to read or write is outside the
+slot's `allowed_paths`, OR `allowed_paths` is empty (which denies
+everything by default).
+
+**Fix:** Add the path to `allowed_paths` in the slot's TOML, OR
+issue a runtime grant via `makakoo perms grant` (CLI grants are
+machine-global; MCP-issued grants bind to the calling slot per
+Phase 3).
+
+---
+
 ## "Inline secret value used (dev-only fallback)"
 
 WARNING in the agent log on startup:
