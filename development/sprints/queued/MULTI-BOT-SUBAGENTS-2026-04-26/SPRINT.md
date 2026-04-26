@@ -505,9 +505,8 @@ Unix-domain socket.
   (app-level token, not user-token OAuth — suitable for local workstation
   dogfood without a public webhook endpoint). Events API `message.im` and
   `message.channel` events are handled; `app_mention` events deferred to Phase 3.
-- **Inbound IPC frame (`MakokooInboundFrame`):**
+- **Inbound IPC frame (`MakakooInboundFrame`):**
   ```
-  slot_id: String             # resolved by router from (transport_id, account_id)
   slot_id: String                 # set by the transport task from spawn ctx
   transport_id: String             # PRIMARY routing key, e.g. "telegram-main"
   transport_kind: String           # "telegram" | "slack" — type dispatch
@@ -608,7 +607,7 @@ Unix-domain socket.
 - `makakoo-core/src/transport/outbound.rs` — outbound frame adapter
 - `makakoo-core/src/transport/status.rs` — transport status adapter
 - `makakoo-core/src/transport/pairing.rs` — allowlist adapter
-- `makakoo-core/src/ipc/mod.rs` — IPC frame types (`MakokooFrame` enum)
+- `makakoo-core/src/ipc/mod.rs` — IPC frame types (`MakakooFrame` enum)
 - `makakoo-core/src/ipc/unix_socket.rs` — Unix-domain socket bridge
 - `makakoo-core/Cargo.toml`
 
