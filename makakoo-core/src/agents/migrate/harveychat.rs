@@ -2,18 +2,33 @@
 //! `~/MAKAKOO/data/chat/config.json` → new
 //! `~/MAKAKOO/config/agents/harveychat.toml`.
 //!
-//! Locked by SPRINT.md "Olibia migration (explicit)" section:
+//! Locked by SPRINT.md "Olibia migration (explicit)" section.  All
+//! side effects live here so library callers (Phase 3 supervisor,
+//! tests, future setup wizard) and the CLI wrapper see identical
+//! behavior:
+//!
 //!   - slot id is `harveychat` (NEVER `olibia` — Olibia is the
 //!     display `name` only)
-//!   - bot token preserved verbatim
-//!   - allowed_users carry the legacy chat_id list
+//!   - bot token preserved as `inline_secret_dev` fallback;
+//!     `secret_ref` + `secret_env` populated for the keychain
+//!     migration path
+//!   - allowed_users carry the legacy chat_id list (string-encoded)
 //!   - persona = null inherits HARVEY_SYSTEM_PROMPT (don't strip)
-//!   - conversations.db archived (not merged) at
-//!     `data/agents/harveychat/conversations.db.bak`
-//!   - new per-agent DB starts empty at
-//!     `data/agents/harveychat/conversations.db`
-//!   - migration is IDEMPOTENT: re-running on an already-migrated
-//!     slot is a no-op (returns `Ok(MigrationOutcome::AlreadyMigrated)`)
+//!   - legacy `conversations.db` archived (not merged) at
+//!     `data/agents/harveychat/conversations.db.bak` — original
+//!     preserved for rollback
+//!   - legacy `data/chat/config.json` archived to
+//!     `data/agents/harveychat/config.json.bak` — same rollback
+//!     rationale
+//!   - fresh per-agent `conversations.db` seeded at
+//!     `data/agents/harveychat/conversations.db` (SQLite would
+//!     create on first open; explicit creation surfaces permission
+//!     errors at migration time)
+//!   - migration is IDEMPOTENT: a TOML-already-present run returns
+//!     `MigrationOutcome::AlreadyMigrated { backfilled_artifacts }`,
+//!     where the vec lists any missing artifacts (config archive,
+//!     DB archive, fresh DB) re-created during the re-run. Empty vec
+//!     means the previous migration was already complete.
 
 use std::path::{Path, PathBuf};
 
