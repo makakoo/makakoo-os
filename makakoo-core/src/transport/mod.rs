@@ -28,6 +28,7 @@ pub mod secrets;
 pub mod slack;
 pub mod status;
 pub mod telegram;
+pub mod whatsapp;
 
 pub use frame::{MakakooFrame, MakakooInboundFrame, MakakooOutboundFrame, ThreadKind};
 pub use router::{RouterError, TransportRouter};

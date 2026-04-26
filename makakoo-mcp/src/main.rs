@@ -37,6 +37,7 @@ mod jsonrpc;
 mod server;
 mod slack_events;
 mod webhook_router;
+mod whatsapp_webhook;
 
 use dispatch::{ToolContext, ToolRegistry};
 

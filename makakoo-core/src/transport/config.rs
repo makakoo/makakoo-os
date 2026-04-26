@@ -134,9 +134,18 @@ impl<'de> Deserialize<'de> for TransportEntry {
                 })?;
                 TransportConfig::Discord(cfg)
             }
+            "whatsapp" => {
+                let cfg: WhatsAppConfig = wire.config.try_into().map_err(|e| {
+                    de::Error::custom(format!(
+                        "transport '{}' kind=whatsapp: invalid [config] body: {}",
+                        wire.id, e
+                    ))
+                })?;
+                TransportConfig::WhatsApp(cfg)
+            }
             other => {
                 return Err(de::Error::custom(format!(
-                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord)",
+                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord | whatsapp)",
                     wire.id, other
                 )));
             }
@@ -169,6 +178,7 @@ pub enum TransportConfig {
     Telegram(TelegramConfig),
     Slack(SlackConfig),
     Discord(DiscordConfig),
+    WhatsApp(WhatsAppConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -252,6 +262,63 @@ pub struct DiscordConfig {
     pub support_thread: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WhatsAppConfig {
+    /// WhatsApp Business phone number identifier (issued by Meta).
+    /// Outbound message URL is `/v18.0/{phone_number_id}/messages`.
+    pub phone_number_id: String,
+
+    /// Cloud API graph version. Default `v18.0`. Bumped via slot
+    /// TOML when Meta deprecates a version.
+    #[serde(default = "default_whatsapp_graph_version")]
+    pub graph_version: String,
+
+    /// Verify token used for the `hub.challenge` GET handshake. The
+    /// adapter stores it as a SecretRef shape (env/keyring/inline)
+    /// so production keeps the literal value out of the TOML.
+    #[serde(default)]
+    pub verify_token_env: Option<String>,
+    #[serde(default)]
+    pub verify_token_ref: Option<String>,
+    #[serde(default)]
+    pub inline_verify_token_dev: Option<String>,
+
+    /// App-secret used for the X-Hub-Signature-256 HMAC over the
+    /// raw POST body. SecretRef shape (env/keyring/inline).
+    #[serde(default)]
+    pub app_secret_env: Option<String>,
+    #[serde(default)]
+    pub app_secret_ref: Option<String>,
+    #[serde(default)]
+    pub inline_app_secret_dev: Option<String>,
+
+    /// Allowed sender wa_ids (E.164 without +). Empty = least-
+    /// privilege deny-all.
+    #[serde(default)]
+    pub allowed_wa_ids: Vec<String>,
+}
+
+fn default_whatsapp_graph_version() -> String {
+    "v18.0".into()
+}
+
+impl WhatsAppConfig {
+    pub fn verify_token_secret(&self) -> SecretRef {
+        SecretRef::from_flat(
+            self.verify_token_env.clone(),
+            self.verify_token_ref.clone(),
+            self.inline_verify_token_dev.clone(),
+        )
+    }
+    pub fn app_secret(&self) -> SecretRef {
+        SecretRef::from_flat(
+            self.app_secret_env.clone(),
+            self.app_secret_ref.clone(),
+            self.inline_app_secret_dev.clone(),
+        )
+    }
+}
+
 impl TransportEntry {
     /// Resolve the bot-token slot into a `SecretRef`.
     pub fn bot_token_ref(&self) -> SecretRef {
@@ -316,8 +383,29 @@ impl TransportEntry {
                 Ok(())
             }
             ("discord", TransportConfig::Discord(_)) => Ok(()),
+            ("whatsapp", TransportConfig::WhatsApp(w)) => {
+                if w.phone_number_id.is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=whatsapp: phone_number_id must not be empty",
+                        self.id
+                    )));
+                }
+                if w.verify_token_secret().is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=whatsapp: verify_token must be set (verify_token_env / verify_token_ref / inline_verify_token_dev)",
+                        self.id
+                    )));
+                }
+                if w.app_secret().is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=whatsapp: app_secret must be set (app_secret_env / app_secret_ref / inline_app_secret_dev)",
+                        self.id
+                    )));
+                }
+                Ok(())
+            }
             (k, _) => Err(MakakooError::InvalidInput(format!(
-                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord)",
+                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord | whatsapp)",
                 self.id, k
             ))),
         }
@@ -498,6 +586,95 @@ mod tests {
         e.config = TransportConfig::Telegram(TelegramConfig::default());
         let err = e.validate().unwrap_err();
         assert!(format!("{err}").contains("doesn't match"));
+    }
+
+    fn whatsapp_entry(id: &str) -> TransportEntry {
+        TransportEntry {
+            id: id.into(),
+            kind: "whatsapp".into(),
+            enabled: true,
+            account_id: None,
+            secret_ref: None,
+            secret_env: None,
+            inline_secret_dev: Some("ACCESS".into()),
+            app_token_ref: None,
+            app_token_env: None,
+            inline_app_token_dev: None,
+            allowed_users: vec![],
+            config: TransportConfig::WhatsApp(WhatsAppConfig {
+                phone_number_id: "12345".into(),
+                graph_version: "v18.0".into(),
+                verify_token_env: None,
+                verify_token_ref: None,
+                inline_verify_token_dev: Some("HUBVERIFY".into()),
+                app_secret_env: None,
+                app_secret_ref: None,
+                inline_app_secret_dev: Some("APPSECRET".into()),
+                allowed_wa_ids: vec![],
+            }),
+        }
+    }
+
+    #[test]
+    fn whatsapp_entry_validates() {
+        whatsapp_entry("wa-main").validate().unwrap();
+    }
+
+    #[test]
+    fn whatsapp_requires_phone_number_id() {
+        let mut e = whatsapp_entry("wa");
+        if let TransportConfig::WhatsApp(ref mut w) = e.config {
+            w.phone_number_id = "".into();
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("phone_number_id"));
+    }
+
+    #[test]
+    fn whatsapp_requires_verify_token() {
+        let mut e = whatsapp_entry("wa");
+        if let TransportConfig::WhatsApp(ref mut w) = e.config {
+            w.inline_verify_token_dev = None;
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("verify_token"));
+    }
+
+    #[test]
+    fn whatsapp_requires_app_secret() {
+        let mut e = whatsapp_entry("wa");
+        if let TransportConfig::WhatsApp(ref mut w) = e.config {
+            w.inline_app_secret_dev = None;
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("app_secret"));
+    }
+
+    #[test]
+    fn whatsapp_round_trip_via_toml() {
+        let raw = r#"
+id = "wa-main"
+kind = "whatsapp"
+enabled = true
+inline_secret_dev = "ACCESS"
+
+[config]
+phone_number_id = "12345"
+graph_version = "v18.0"
+inline_verify_token_dev = "HUBVERIFY"
+inline_app_secret_dev = "APPSECRET"
+allowed_wa_ids = ["34000000001"]
+"#;
+        let entry: TransportEntry = toml::from_str(raw).unwrap();
+        assert_eq!(entry.kind, "whatsapp");
+        match &entry.config {
+            TransportConfig::WhatsApp(w) => {
+                assert_eq!(w.phone_number_id, "12345");
+                assert_eq!(w.allowed_wa_ids, vec!["34000000001".to_string()]);
+            }
+            _ => panic!("expected whatsapp variant"),
+        }
+        entry.validate().unwrap();
     }
 
     #[test]
