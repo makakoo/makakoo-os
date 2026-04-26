@@ -1,0 +1,90 @@
+
+Lope review: /tmp/phase2-diff.txt  (29067 chars)
+Validators: pi, codex, opencode
+Focus: Phase 2 of v2-mega: makakoo agent destroy. Verify Phase 2 exit criteria from SPR...
+Timeout: 600s per validator
+
+
+━━━ pi ━━━
+
+
+## Phase 2 Review — `makakoo agent destroy`
+
+### Exit criteria analysis
+
+**1. Interactive teardown moves TOML + data dir to `$MAKAKOO_HOME/archive/agents/<slot>-<ts>/`**
+
+`destroy_slot()` reads the TOML before moving it (so `scan_secret_refs` sees it), then `fs::rename` TOML → `dst/<slot>.toml`, and conditionally `fs::rename` the data dir → `dst/data/`. The `DestroyOutcome` carries both `archived_toml` and `archived_data_dir` (Option). Tests `destroy_moves_toml_and_data_to_archive` and `destroy_works_when_data_dir_absent` cover both paths. Archive collision is rejected with `DestroyError::ArchiveExists` and TOML preserved (test `destroy_refuses_overwriting_existing_archive`). **PASS.**
+
+**2. Restore one-liner printed**
+
+`render_restore_one_liner()` assembles `mv <archive>/<slot>.toml <home>/config/agents/ && mv <archive>/data <home>/data/agents/<slot>`. Test `restore_one_liner_includes_archive_path` validates the output contains both paths. **PASS.**
+
+**3. `--yes` does NOT auto-revoke secrets**
+
+The CLI checks `if !yes { prompt_confirm(...) }`. If `yes` is true, it skips directly to `destroy_slot()`. `SecretsStore::revoke` is only called inside the `if revoke_secrets { ... }` branch. These are independent flags. However, there is **no test asserting that `--yes` without `--revoke-secrets` leaves secrets intact**. This is a real gap — the code is correct but the invariant is untested at the CLI layer. **NEEDS_FIX.**
+
+**4. `--keep-secrets` is accepted (no-op since default preserves)**
+
+`keep_secrets` is accepted in `DestroyArgs`, bound with `let _ = keep_secrets;`, and test `destroy_keep_secrets_is_a_noop` confirms it doesn't crash. **PASS.**
+
+**5. harveychat refuses without `--really-destroy-harveychat` (EX_USAGE 64)**
+
+`destroy_slot` returns `DestroyError::HarveychatProtected` when `PROTECTED_SLOT` is detected and the flag is false. The CLI maps this to `return Ok(64)`. Test `destroy_harveychat_without_flag_returns_64` asserts `assert_eq!(rc, 64)` and confirms TOML is preserved. `destroy_harveychat_with_flag_succeeds` confirms the happy path. **PASS.**
+
+**6. Test coverage**
+
+The `agents::destroy` module has 11 unit tests. The CLI layer in `agent_destroy.rs` has 6 tests. Total: 17 tests.
+
+Gaps:
+- No test for `--yes` alone (without `--revoke-secrets`) confirming secrets are NOT revoked. The interaction between the two flags is only validated by code inspection.
+- No test for the `--revoke-secrets` path at the CLI layer (integration of `SecretsStore::delete` with the output flow). This is understandable since `SecretsStore::delete` is a real keyring call and not mocked — but without it, the revoke path has zero CLI-layer test coverage.
+
+### Verdict
+
+**NEEDS_FIX.** The implementation is correct end-to-end. Two test gaps:
+
+1. Add a CLI-level test that with `yes=true, revoke_secrets=false` (the `--yes` alone case), the output contains the "(secrets PRESERVED)" message — not the revoke output. This closes the gap for criteria 3.
+2. Document or stub the `--revoke-secrets` integration path. If `SecretsStore::delete` can't be cleanly mocked in the test binary, add a comment explaining why the path is tested at the core level (`destroy_slot` returns `detected_secrets`) and trusted at the CLI level, or wire up a `SecretsStore` trait for test injection.
+
+━━━ codex ━━━
+Phase 2 mostly lands the shape, but it does **not** meet exit criteria cleanly.
+
+Critical fixes:
+
+1. **Protected `harveychat` can be stopped before refusal.**  
+   `agent_destroy::run()` prompts/stops before `destroy_slot()` enforces `--really-destroy-harveychat`. So `makakoo agent destroy harveychat --yes` returns 64 and preserves TOML, but may still stop the supervisor first. “Refuses” should mean no teardown side effects. Guard `harveychat` before prompt/stop.
+
+2. **Interactive secret offer is missing.**  
+   Locked Q3 says after listing detected refs: prompt `Revoke these N detected secrets too? [y/N]`. Current behavior only revokes with `--revoke-secrets`; interactive mode just prints preserved message. Goal says “interactive teardown with archive + secret offer.” Add post-destroy prompt when `!yes && !revoke_secrets && detected_secrets nonempty`.
+
+3. **Restore one-liner can be invalid.**  
+   `destroy_slot()` allows missing data dir and sets `archived_data_dir = None`, but `render_restore_one_liner()` always prints `mv <archive>/data <home>/data/agents/<slot>`. That fails for slots with no data dir. Either always create/archive an empty `data/` dir, or render a conditional restore line.
+
+4. **Archive exit criterion says archive contains `<slot>.toml` + `data/`.**  
+   Current implementation only archives `data/` if source exists. If no data dir exists, archive lacks `data/`. That contradicts the strict Phase 2 wording.
+
+5. **Test coverage incomplete.**  
+   Good core coverage for archive layout, scanning, harveychat guard, and `--keep-secrets`. Missing/weak:
+   - deterministic CLI test for restore one-liner actually working
+   - test that `--yes` does **not** revoke detected secrets
+   - test that `--revoke-secrets` does revoke detected secrets
+   - test for interactive revoke prompt/default preserve
+   - deterministic archive collision CLI test currently accepts `rc == 0 || rc == 1`, so it proves nothing
+
+6. **Stop behavior is too best-effort for locked Q3.**  
+   Q3 step 1 is `makakoo agent stop <slot>` before archive. Current code ignores stop failure. If supervisor remains alive, destroy can move config/data underneath it. At minimum surface a warning; better fail unless already stopped/not installed.
+
+Other notes:
+
+- `--yes` correctly does not auto-revoke secrets.
+- `--keep-secrets` is accepted as no-op.
+- `--revoke-secrets` is separate and explicit.
+- TOML/data movement path is broadly correct when data exists.
+- `harveychat` returns 64, but side-effect bug above blocks acceptance.
+
+NEEDS_FIX
+
+━━━ opencode ━━━
+[ERROR] opencode run timed out after 600s
+

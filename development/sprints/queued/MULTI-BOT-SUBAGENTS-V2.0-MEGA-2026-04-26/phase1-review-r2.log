@@ -1,0 +1,72 @@
+
+Lope review: /tmp/phase1-r2-diff.txt  (101881 chars)
+Validators: pi, codex, opencode
+Focus: Phase 1 round-2 of v2-mega: addressing codex round-1 NEEDS_FIX. Verify each fix ...
+Timeout: 900s per validator
+
+
+━━━ opencode ━━━
+[ERROR] opencode returned no text events; stdout head: {"type":"step_start","timestamp":1777213253791,"sessionID":"ses_235d5f55dffeEWNenApM6vwccs","part":{"id":"prt_dca2a289b001N7fircLdgJS3p5","messageID":"msg_dca2a0f9a001hctswQSBNScPOR","sessionID":"ses_235d5f55dffeEWNenApM6vwccs","snapshot":"527e5764a8114e41930b59d47fda1f71c700e4da","type":"step-start
+
+━━━ codex ━━━
+NEEDS_FIX.
+
+Fix-by-fix:
+
+1. **OS user home vs `MAKAKOO_HOME` separation — mostly closed.**  
+   `LaunchAgentPlist::from_slot(..., os_home, makakoo_home)` and `SystemdUserUnit::from_slot(..., os_home, makakoo_home)` correctly put plist/unit files under OS `$HOME` and logs under `MAKAKOO_HOME/data/log`. `run_dir()` also uses `MAKAKOO_HOME`. Good.
+
+2. **`MAKAKOO_AGENT_SUPERVISOR=foreground` escape hatch — implemented, but risky.**  
+   macOS/Linux `start_slot()` bypasses launchd/systemd and calls `run_supervisor_command()`. That is a real foreground escape hatch.  
+   Caveat: `run_supervisor()` can hang forever if `spawn_gateway()` fails initially, because the status writer is spawned and then awaited, but no shutdown notification is sent on watcher error. Phase 1 default gateway path likely does not exist yet, so foreground mode can wedge.
+
+3. **`start_slot` returns within 2s — service path closed.**  
+   launchd/systemd paths wait max 2s for `status.json`, then return `0` or `2`. That matches the exit criterion.  
+   Foreground mode intentionally blocks, so I’m not counting that against this criterion.
+
+4. **`status_slot` renders Phase 4 v1 layout via `SlotStatus::render_human()` — closed.**  
+   It constructs `SlotStatus` and prints `render_human()`, then appends supervisor metadata below. Acceptable if parsers only depend on the top locked block.
+
+5. **MockChild integration tests — not closed.**  
+   There is **no `MockChild` abstraction**. Runtime tests use real `sleep`, `true`, and `false` processes.  
+   The circuit-breaker watcher test is also weak: it accepts `tripped || count >= 4`, so it does not actually prove six crashes trip the breaker.  
+   `MockLaunchctl` exists, but only as a unit-test fake inside `launchd.rs`; lifecycle `start_slot()` still hardcodes `RealLaunchctl`, so the CLI integration path is not mock-tested.
+
+6. **XML/INI path escaping — partially closed.**  
+   XML escaping is solid.  
+   systemd quoting exists, but Linux CI will likely fail one included test: `unit_body_embeds_slot_supervisor_invocation` still expects unquoted `ExecStart=/usr/local/bin/makakoo ...`, while renderer now always emits `ExecStart="/usr/local/bin/makakoo" ...`. Also worth validating `StandardOutput=append:"/path with spaces"` against real systemd parsing.
+
+Additional blocker: shutdown signaling uses `tokio::sync::Notify::notify_waiters()`, which is not durable. If a task is not waiting at the exact moment of notification, it can miss shutdown. Use `CancellationToken`, `watch`, or `broadcast` for supervisor-wide shutdown.
+
+So: fixes 1, 3, 4 are basically closed; 2 is present but has a foreground hang edge; 5 is not closed; 6 needs Linux test correction / validation.
+
+━━━ pi ━━━
+
+
+`MockChild` is absent from the entire codebase. Here is the full item-by-item:
+
+**(1) OS home vs MAKAKOO_HOME separation** — ✓ **CLOSED.**
+Both `LaunchAgentPlist::from_slot` and `SystemdUserUnit::from_slot` take `os_home` and `makakoo_home` as distinct parameters. Plist/unit files land under `os_home/Library/LaunchAgents` and `os_home/.config/systemd/user` respectively; log paths go to `makakoo_home/data/log/agent-{slot}.{out,err}.log`. The test `plist_path_uses_os_home_log_paths_use_makakoo_home` and its systemd twin assert both paths independently, and the inverse (plist NOT under makakoo_home) is also checked.
+
+**(2) MAKAKOO_AGENT_SUPERVISOR=foreground escape hatch** — ✓ **CLOSED.**
+`FOREGROUND_ENV_VAR = "MAKAKOO_AGENT_SUPERVISOR"` is checked in both the macOS and Linux `start_slot` bodies (`if std::env::var(FOREGROUND_ENV_VAR).as_deref() == Ok("foreground")`). When set, both bypass launchd/systemd entirely and call `run_supervisor_command` synchronously. The unsupported-platform stub also surfaces the escape hatch in its error message.
+
+**(3) start_slot returns within 2s exit criterion** — ✓ **CLOSED.**
+Both `start_slot` implementations call `wait_for_state(..., Duration::from_secs(2))` waiting for `SupervisorState::Starting | Running | Crashed` — supervisor-state observable, not gateway PID. The diff comment reads "Phase 1 exit criterion: command returns within 2s once supervisor PID is in status.json. Gateway PID can take up to 10s; we don't block waiting for it." Timeout path prints a helpful warning pointing to `$MAKAKOO_HOME/data/log/agent-{slot}.err.log`.
+
+**(4) status_slot renders Phase 4 v1 layout via SlotStatus::render_human()** — ✓ **CLOSED.**
+`status_slot` constructs `SlotStatus { slot_id, gateway, transports }` from the status file and calls `render_human()` on it, producing the locked multi-line layout (gateway line + per-transport lines). An augmenting `state=… supervisor_pid=… restart_count=…` line is appended *below* the locked block, preserving parser stability for the Phase 4 block.
+
+**(5) MockChild integration tests** — ✗ **NEEDS_FIX.**
+- `MockLaunchctl` (with `bootstrap`/`bootout` call recording + scripted output) is present in `launchd.rs` ✓  
+- `watcher_handles_sigterm_with_grace` (SIGTERM → shutdown within SHUTDOWN_GRACE, gateway_pid cleared, state=Stopped) is present in `supervisor_runtime.rs` ✓  
+- `watcher_circuit_breaks_after_six_crashes` (restart budget exhausted → is_tripped true, state Crashed) is present ✓  
+- **`MockChild` does not exist** anywhere in `makakoo-core/src/`. The runtime tests substitute real system binaries (`sleep`, `true`, `false`) instead of a typed mock, meaning crash/signal/timeout injection is limited to whatever `spawn` can reach on the host.
+
+**(6) XML/INI path escaping** — ✓ **CLOSED.**
+`xml_escape` (launchd) handles `& → &amp;`, `< → &lt;`, `> → &gt;`, `" → &quot;`, `'` → `&apos;` — the full set required for PLIST `<string>` bodies. `systemd_quote` wraps every path in double-quotes and escapes `\` and `"` per `systemd.unit(5)`. Tests `plist_xml_escapes_special_chars_in_paths` and `unit_quotes_paths_with_spaces` cover both.
+
+---
+
+**NEEDS_FIX.** Item 5 has an incomplete `MockChild` stub. The codex explicitly called for `MockChild integration tests + MockLaunchctl`; `MockLaunchctl` is done but `MockChild` is absent. The `supervisor_runtime` integration tests use bare `sleep`/`true`/`false` processes, which is reasonable but does not fulfill the named requirement. A `MockChild` trait + `MockGateway` struct in `supervisor_runtime.rs` (or a `mock` module gated behind `#[cfg(test)]`) would close the gap, allowing tests to simulate exit codes, delayed spawn, and SIGTERM-without-grace without relying on specific host binaries.
+

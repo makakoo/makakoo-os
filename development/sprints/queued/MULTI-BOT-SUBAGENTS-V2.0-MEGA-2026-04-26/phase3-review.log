@@ -1,0 +1,116 @@
+
+Lope review: /tmp/phase3-diff.txt  (69364 chars)
+Validators: pi, codex, opencode
+Focus: Phase 3 of v2-mega: Python gateway integration. Verify exit criteria from SPRINT...
+Timeout: 600s per validator
+
+
+━━━ pi ━━━
+
+
+**PASS**
+
+All 8 exit criteria are satisfied in the diff. Here's the verification ledger:
+
+| # | Criterion | Evidence |
+|---|-----------|----------|
+| 1 | bridge.py IPC client with reconnect | `IpcClient.frames()` loops on `ConnectionResetError`/`BrokenPipeError` with `backoff_for_attempt(attempt)`. Backoff schedule locked: 0.5s × 2ⁿ → 30s cap, ±25% jitter. Per-writer `asyncio.Lock` serializes concurrent sends. |
+| 2 | gateway.py locked identity-block rendering | `render_identity_block()` emits `[agent:]`, `[transport:]`, `[user:]`, `[scope.tools:]`, `[scope.paths.allowed/forbidden]` in locked phrasing. Matches Rust spec. |
+| 3 | tool_dispatcher.py whitelist preflight | `check_tool()` enforces: non-empty list = membership check; empty + `inherit_baseline=true` = permit-all; empty + `inherit_baseline=false` = deny-all. Rust is authoritative by design comment. |
+| 4 | file_enforcement.py path scope preflight | `check_path()` implements: forbidden veto before allowed; empty allowed = least-privilege deny; prefix-match with tilde expansion; exact-match guard against `/prefix` matching `/prefix-evil`. |
+| 5 | brain_sync.py `[agent:slot]` prefix | `prefix_line()` and `render_logseq_bullet()` produce `- [agent:<slot_id>] <body>\n`. Idempotent on double-call. `append_journal_line()` opens in append mode, creates dirs. |
+| 6 | docs/specs/ipc-contract-v2.md | Full spec: transport (Unix socket, newline-JSON), frame envelope (kind/inbound/outbound), inbound/outbound field tables, identity block semantics, scope enforcement division of authority, brain attribution, cross-transport reply rule, versioning policy. |
+| 7 | Supervisor invokes gateway as module | `GatewayLaunchSpec::harveychat_default()` now emits `python3 -m plugins_core.agent_harveychat.python.gateway` with `MAKAKOO_HOME`, `PYTHONPATH`, `MAKAKOO_AGENT_SLOT`, and `cwd` set. Test updated accordingly. |
+| 8 | Cross-language contract test | `test_contract.py` holds a locked Rust-sample inbound JSON fixture and asserts Python parses every field verbatim. Outbound roundtrip asserts exact shape the Rust router decodes. ThreadKind snake_case variants covered. |
+
+**Quality notes (non-blocking):**
+
+- The TOML loader in `gateway.py` falls back through `tomllib` → `tomli` → `toml` for Python 3.9 compatibility — fine, but pin `tomli` in `plugin.toml` dependencies to avoid a runtime `pip install` on the first cold start.
+- `test_contract.py`'s `RUST_SAMPLE_INBOUND` fixture is the right approach; a follow-up PR should wire it into `cargo test` in `frame.rs` so the Rust side fails if it drifts from the fixture, closing the contract loop in both directions.
+- `conftest.py` uses runtime `sys.modules` patching to handle the hyphen→underscore module alias — clean for tests, but `PYTHONPATH` (set by the supervisor in prod) handles this without the gymnastics. The conftest alias is defensible as a test isolation layer.
+
+━━━ opencode ━━━
+All 8 exit criteria verified against the diff. Here's the accounting:
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `bridge.py` IPC client with reconnect | ✅ | `IpcClient` with `_connect()` retry loop, `frames()` reconnect on disconnect, `send()` re-lock-and-retry. Backoff 500ms→30s jittered ±25% |
+| 2 | `gateway.py` locked identity-block rendering | ✅ | `render_identity_block()` produces `[agent: slot]` / `[transport: …]` / `[user: …]` / `[scope.tools: …]` / `[scope.paths.{allowed,forbidden}: …]` matching the spec and Rust impl |
+| 3 | `tool_dispatcher.py` whitelist preflight | ✅ | `ToolScope` + `check_tool()` with explicit whitelist, `inherit_baseline=true` passthrough, `inherit_baseline=false` least-privilege deny. Docstring explicitly calls out Rust as authoritative |
+| 4 | `file_enforcement.py` path scope preflight | ✅ | `PathScope` + `check_path()` with forbidden veto, empty-allowed least-privilege default, prefix matching after tilde expansion. Rust-is-authoritative disclaimer present |
+| 5 | `brain_sync.py` `[agent:slot]` prefix | ✅ | `prefix_line()` with idempotency guard, `render_logseq_bullet()` producing `- [agent:…]`, `append_journal_line()` with mkdir |
+| 6 | `docs/specs/ipc-contract-v2.md` materialized | ✅ | 150-line spec covering transport, envelope, inbound/outbound schema with all fields/required/notes, identity block, scope enforcement, brain attribution, cross-transport reply rule, versioning |
+| 7 | Supervisor invokes as Python module with env | ✅ | `GatewayLaunchSpec::harveychat_default()` now uses `python3 -m plugins_core.agent_harveychat.python.gateway`, sets `MAKAKOO_HOME`, `PYTHONPATH`, `MAKAKOO_AGENT_SLOT`, and `cwd`. Unit test verifies all four envs + module args |
+| 8 | Cross-language contract test | ✅ | `test_contract.py` with `RUST_SAMPLE_INBOUND` fixture matching Rust wire shape, outbound shape assertion, `telegram_forum` / `slack_thread` enum serialization tests |
+
+**Supporting infra also present:** `pytest.ini` with `asyncio_mode = auto` (needed by the async gateway tests), `conftest.py` with hyphens→underscores module aliasing, `__init__.py` with `__version__ = "2.0.0"`, and 36 total tests across 6 test files.
+
+**PASS**
+
+━━━ codex ━━━
+NEEDS_FIX.
+
+Phase 3 does not meet exit criteria yet. Main blockers:
+
+1. **Supervisor module invocation is broken**
+   - `GatewayLaunchSpec` invokes:
+     `python3 -m plugins_core.agent_harveychat.python.gateway`
+   - But repo path is `plugins-core/agent-harveychat/python/`.
+   - There is **no real `plugins_core/` package** on disk. The underscore alias exists only in `conftest.py`, so tests can import it, but the live supervisor process cannot.
+   - `PYTHONPATH=$MAKAKOO_HOME` does not fix a hyphenated directory name.
+   - Result: gateway likely fails at startup with `ModuleNotFoundError: No module named 'plugins_core'`.
+
+2. **Identity block rendering is not locked-compatible with Rust**
+   - Rust `agents::identity::render_identity_block` currently renders prose like:
+     `You are Olibia. Your slot id is secretary. This message arrived via telegram. Your allowed tools are ...`
+   - Python renders bracket blocks:
+     `[agent: secretary]`
+     `[transport: telegram-main (telegram)]`
+     etc.
+   - That contradicts the explicit criterion: “locked identity-block rendering” / “same block bytes”.
+   - Docs/spec and Python agree with each other, but not with live Rust.
+
+3. **Tool whitelist preflight exists but is not integrated**
+   - `tool_dispatcher.py` defines `check_tool`.
+   - `gateway.py` imports `ToolScope`, but never calls `check_tool`.
+   - `handle_inbound()` just calls `dispatch(request)` and returns the reply.
+   - Criterion (3) is only structurally present, not functionally wired.
+
+4. **Path scope preflight exists but is not integrated**
+   - `file_enforcement.py` defines `check_path`.
+   - `gateway.py` imports `PathScope`, but never calls path checking.
+   - Comment says path checking only happens “when the LLM tries to call a write tool,” but no tool-call layer exists here yet.
+   - Criterion (4) not satisfied beyond helper module + tests.
+
+5. **Cross-language contract test is not actually cross-language**
+   - `test_contract.py` uses a hand-written Python fixture claiming to be Rust output.
+   - It does not invoke Rust serialization, consume a Rust-generated golden fixture, or compare against `makakoo-core/src/transport/frame.rs`.
+   - This catches Python self-consistency, not Rust/Python drift.
+   - Criterion (8) needs a real Rust↔Python contract check.
+
+6. **`bridge.py` reconnect mostly exists, but send-side failure handling is weak**
+   - Read loop reconnects.
+   - Initial connect retries.
+   - But `send()` on `BrokenPipeError` / reset does not clear writer and retry; a race after disconnect can throw out of gateway handling.
+   - Not necessarily fatal for criterion (1), but incomplete robustness.
+
+Criteria status:
+
+- (1) `bridge.py` IPC client with reconnect: **PARTIAL**
+- (2) `gateway.py` locked identity-block rendering: **FAIL**
+- (3) `tool_dispatcher.py` whitelist preflight: **PARTIAL / not wired**
+- (4) `file_enforcement.py` path scope preflight: **PARTIAL / not wired**
+- (5) `brain_sync.py [agent:slot] prefix`: **PASS**
+- (6) `docs/specs/ipc-contract-v2.md` materialized: **PASS**
+- (7) supervisor invokes gateway as Python module with env: **FAIL** because module path is not importable live
+- (8) cross-language contract test: **FAIL**
+
+Also unrelated noise: the diff includes smoke workflow/install changes that are outside Phase 3 gateway scope.
+
+Fix minimum before PASS:
+
+- Add a real importable package path, or invoke the actual file path instead of `-m plugins_core...`.
+- Make Python identity rendering byte-match Rust, or update Rust and tests together so there is one canonical renderer.
+- Wire tool/path preflight into the actual tool-call path, not just standalone helpers.
+- Replace Python-only contract fixture with Rust-generated golden output or an integration test that runs Rust encode/decode against Python encode/decode.
+
