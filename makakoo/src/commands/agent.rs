@@ -48,6 +48,9 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             slot,
             name,
             persona,
+            allowed_paths,
+            forbidden_paths,
+            tools,
             from_toml,
             telegram_token,
             telegram_allowed,
@@ -62,6 +65,9 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 slot,
                 name,
                 persona,
+                allowed_paths,
+                forbidden_paths,
+                tools,
                 from_toml,
                 telegram_token,
                 telegram_allowed,
@@ -72,6 +78,9 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 skip_credential_check,
             },
         ),
+        AgentCmd::MigrateHarveychat => {
+            crate::commands::agent_slot::migrate_harveychat(ctx)
+        }
     }
 }
 

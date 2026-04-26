@@ -207,23 +207,28 @@ pub fn inventory(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
         registry.slots.iter().map(|s| s.slot_id.clone()).collect();
 
     use makakoo_core::plugin::manifest::PluginKind;
+    // `active` = the legacy plugin still has a live process. We detect
+    // it by pgrep on the plugin name. A plugin can be both `active` AND
+    // `migrated` (the operator hasn't shut down the legacy process yet),
+    // so the status string captures both: `active+migrated`, `active`,
+    // `migrated`, or `pending`.
     let agent_plugins: Vec<_> = plugins
         .plugins()
         .iter()
         .filter(|p| p.manifest.plugin.kind == PluginKind::Agent)
         .map(|p| {
             let plugin_name = p.manifest.plugin.name.clone();
-            // Convention: `agent-<slot>` plugin maps to slot `<slot>`.
-            // `agent-harveychat` → `harveychat`. Plugins not following
-            // this prefix are treated as `pending` (never been mapped).
             let slot_guess = plugin_name
                 .strip_prefix("agent-")
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| plugin_name.clone());
-            let status = if migrated_slot_ids.contains(&slot_guess) {
-                "migrated"
-            } else {
-                "pending"
+            let migrated = migrated_slot_ids.contains(&slot_guess);
+            let active = is_plugin_process_active(&plugin_name);
+            let status = match (active, migrated) {
+                (true, true) => "active+migrated",
+                (true, false) => "active",
+                (false, true) => "migrated",
+                (false, false) => "pending",
             };
             (plugin_name, slot_guess, status.to_string())
         })
@@ -261,6 +266,9 @@ pub struct CreateArgs {
     pub slot: String,
     pub name: Option<String>,
     pub persona: Option<String>,
+    pub allowed_paths: Vec<String>,
+    pub forbidden_paths: Vec<String>,
+    pub tools: Vec<String>,
     pub from_toml: Option<PathBuf>,
     pub telegram_token: Option<String>,
     pub telegram_allowed: Vec<String>,
@@ -294,12 +302,33 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         }
         let raw = std::fs::read_to_string(path)?;
         let mut s: AgentSlot = toml::from_str(&raw)?;
+        // Reject slot_id mismatch — caller intent is unambiguous
+        // when a slot_id is in the source file.  Empty slot_id in
+        // the source is treated as "use the CLI argument".
+        if !s.slot_id.is_empty() && s.slot_id != args.slot {
+            anyhow::bail!(
+                "--from-toml file has slot_id '{}' but CLI requested slot '{}' — they must match",
+                s.slot_id,
+                args.slot
+            );
+        }
         s.slot_id = args.slot.clone();
         if let Some(n) = args.name.clone() {
             s.name = n;
         }
         if let Some(p) = args.persona.clone() {
             s.persona = Some(p);
+        }
+        // Override scope flags only if explicitly passed (non-empty
+        // CLI list takes precedence over the file).
+        if !args.allowed_paths.is_empty() {
+            s.allowed_paths = args.allowed_paths.clone();
+        }
+        if !args.forbidden_paths.is_empty() {
+            s.forbidden_paths = args.forbidden_paths.clone();
+        }
+        if !args.tools.is_empty() {
+            s.tools = args.tools.clone();
         }
         s.validate()?;
         s
@@ -406,13 +435,87 @@ fn build_slot_from_flags(args: &CreateArgs) -> anyhow::Result<AgentSlot> {
         name: args.name.clone().unwrap_or_else(|| args.slot.clone()),
         persona: args.persona.clone(),
         inherit_baseline: true,
-        allowed_paths: vec![],
-        forbidden_paths: vec![],
-        tools: vec![],
+        allowed_paths: args.allowed_paths.clone(),
+        forbidden_paths: args.forbidden_paths.clone(),
+        tools: args.tools.clone(),
         process_mode: "supervised_pair".into(),
         transports,
     };
     slot.validate()?;
     Ok(slot)
+}
+
+/// Best-effort check for a live plugin process via pgrep on its
+/// canonical plugin name.  Returns `false` on any pgrep error
+/// (missing binary, unsupported platform) — the inventory output
+/// is informational, never gates other commands.
+fn is_plugin_process_active(plugin_name: &str) -> bool {
+    use std::process::Command;
+    Command::new("pgrep")
+        .arg("-f")
+        .arg(plugin_name)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// `makakoo agent migrate-harveychat` — runs the
+/// HarveyChat→harveychat-slot migration once.  Idempotent.
+pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
+    use makakoo_core::agents::migrate::harveychat::{migrate, MigrationOutcome};
+
+    let outcome = migrate(ctx.home())?;
+    match outcome {
+        MigrationOutcome::Migrated {
+            toml_path,
+            archived_db,
+        } => {
+            output::print_info(format!(
+                "harveychat migrated: {} ← data/chat/config.json",
+                toml_path.display()
+            ));
+            if let Some(db) = archived_db {
+                println!("  legacy conversations.db archived at {}", db.display());
+            }
+            // Archive the legacy config.json alongside the DB so a
+            // future operator can find both pieces of legacy state
+            // in one place. Original is preserved (copy semantics).
+            let legacy_config = ctx.home().join("data").join("chat").join("config.json");
+            let archive_dir = ctx
+                .home()
+                .join("data")
+                .join("agents")
+                .join("harveychat");
+            if legacy_config.exists() {
+                std::fs::create_dir_all(&archive_dir)?;
+                let archive_config = archive_dir.join("config.json.bak");
+                std::fs::copy(&legacy_config, &archive_config)?;
+                println!("  legacy config.json archived at {}", archive_config.display());
+            }
+            // Touch a fresh per-agent conversations.db so the gateway
+            // starts with an empty DB at the canonical path. SQLite
+            // would create it on first open anyway, but explicit
+            // creation surfaces permission errors at migration time.
+            let new_db = archive_dir.join("conversations.db");
+            if !new_db.exists() {
+                std::fs::create_dir_all(&archive_dir)?;
+                std::fs::File::create(&new_db)?;
+                println!("  fresh conversations.db seeded at {}", new_db.display());
+            }
+            Ok(0)
+        }
+        MigrationOutcome::AlreadyMigrated => {
+            output::print_info(
+                "harveychat already migrated — nothing to do (re-run safe)".to_string(),
+            );
+            Ok(0)
+        }
+        MigrationOutcome::NothingToMigrate => {
+            output::print_warn(
+                "no legacy data/chat/config.json found — nothing to migrate".to_string(),
+            );
+            Ok(0)
+        }
+    }
 }
 

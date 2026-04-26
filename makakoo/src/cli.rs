@@ -704,6 +704,17 @@ pub enum AgentCmd {
         /// omitting the flag.
         #[arg(long)]
         persona: Option<String>,
+        /// Allowed filesystem paths (comma-separated). The slot's
+        /// scope for read/write tool access.
+        #[arg(long, value_name = "PATHS", value_delimiter = ',')]
+        allowed_paths: Vec<String>,
+        /// Forbidden paths (comma-separated). Overrides
+        /// allowed_paths.
+        #[arg(long, value_name = "PATHS", value_delimiter = ',')]
+        forbidden_paths: Vec<String>,
+        /// Tool whitelist (comma-separated tool names).
+        #[arg(long, value_name = "TOOLS", value_delimiter = ',')]
+        tools: Vec<String>,
         /// Path to a TOML file pre-built by the operator (multi-
         /// transport configs). Mutually exclusive with --telegram-token
         /// and --slack-* flags.
@@ -736,6 +747,11 @@ pub enum AgentCmd {
         #[arg(long)]
         skip_credential_check: bool,
     },
+
+    /// Migrate the legacy HarveyChat (`Olibia`) bot from
+    /// `data/chat/config.json` to a `harveychat` subagent slot.
+    /// Idempotent: re-running on an already-migrated slot is a no-op.
+    MigrateHarveychat,
 }
 
 /// `makakoo plugin <subcommand>`.
