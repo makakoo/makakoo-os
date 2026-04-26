@@ -184,14 +184,19 @@ mod tests {
         let bin = PathBuf::from("/usr/local/bin/makakoo");
         let u = SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
         assert!(u.unit_body.contains("Description=Makakoo agent slot secretary"));
+        // Paths are always double-quoted per systemd.unit(5) — even
+        // when no spaces — so a future path with embedded whitespace
+        // doesn't break parsing.
         assert!(
             u.unit_body
-                .contains("ExecStart=/usr/local/bin/makakoo agent _supervisor --slot secretary")
+                .contains(r#"ExecStart="/usr/local/bin/makakoo" agent _supervisor --slot secretary"#),
+            "ExecStart must double-quote the binary path; got body:\n{}",
+            u.unit_body
         );
         assert!(u.unit_body.contains("Environment=MAKAKOO_AGENT_SLOT=secretary"));
         assert!(u.unit_body.contains("Restart=on-failure"));
         assert!(u.unit_body.contains("RestartSec=10"));
-        assert!(u.unit_body.contains("StandardOutput=append:"));
+        assert!(u.unit_body.contains(r#"StandardOutput=append:""#));
     }
 
     #[test]
