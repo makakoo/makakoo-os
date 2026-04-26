@@ -31,9 +31,15 @@ pub enum MigrationOutcome {
     Migrated {
         toml_path: PathBuf,
         archived_db: Option<PathBuf>,
+        archived_config: Option<PathBuf>,
+        new_db: Option<PathBuf>,
     },
-    /// Slot TOML already exists — no-op.
-    AlreadyMigrated,
+    /// Slot TOML already exists. The migration MAY have backfilled
+    /// missing artifacts (fresh DB, archived config) — see
+    /// `backfilled_artifacts`.
+    AlreadyMigrated {
+        backfilled_artifacts: Vec<PathBuf>,
+    },
     /// Source `data/chat/config.json` does not exist — nothing to do.
     NothingToMigrate,
 }
@@ -50,10 +56,43 @@ struct LegacyConfig {
 /// Makakoo workspace (`$MAKAKOO_HOME`).
 pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
     let toml_path = slot_path(makakoo_home, "harveychat");
-    if toml_path.exists() {
-        return Ok(MigrationOutcome::AlreadyMigrated);
-    }
     let legacy_path = makakoo_home.join("data").join("chat").join("config.json");
+    if toml_path.exists() {
+        // Slot already migrated — but a previous run might have
+        // skipped some artifacts (older versions of this code only
+        // archived the DB). Backfill anything missing so re-runs
+        // always converge on a fully migrated state.
+        let mut backfilled = Vec::new();
+        let agent_dir = makakoo_home.join("data").join("agents").join("harveychat");
+        std::fs::create_dir_all(&agent_dir)?;
+
+        if legacy_path.exists() {
+            let archived_config = agent_dir.join("config.json.bak");
+            if !archived_config.exists() {
+                std::fs::copy(&legacy_path, &archived_config)?;
+                backfilled.push(archived_config);
+            }
+        }
+        let legacy_db = makakoo_home
+            .join("data")
+            .join("chat")
+            .join("conversations.db");
+        if legacy_db.exists() {
+            let archived_db = agent_dir.join("conversations.db.bak");
+            if !archived_db.exists() {
+                std::fs::copy(&legacy_db, &archived_db)?;
+                backfilled.push(archived_db);
+            }
+        }
+        let new_db = agent_dir.join("conversations.db");
+        if !new_db.exists() {
+            std::fs::File::create(&new_db)?;
+            backfilled.push(new_db);
+        }
+        return Ok(MigrationOutcome::AlreadyMigrated {
+            backfilled_artifacts: backfilled,
+        });
+    }
     if !legacy_path.exists() {
         return Ok(MigrationOutcome::NothingToMigrate);
     }
@@ -115,17 +154,22 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
     };
     AgentRegistry::create(makakoo_home, &slot)?;
 
-    // Archive the conversations DB and seed a fresh per-agent DB
-    // location.  The legacy DB stays at its original path AS WELL
-    // as the archive path — Phase 2 spec says "archived (not
-    // migrated)", and we keep the original for rollback safety.
+    // Always create the per-agent data directory so DB seeding +
+    // config archive land in the same place.
+    let agent_dir = makakoo_home
+        .join("data")
+        .join("agents")
+        .join("harveychat");
+    std::fs::create_dir_all(&agent_dir)?;
+
+    // Archive the conversations DB. Original is preserved AS WELL
+    // as the archive copy — Phase 2 spec says "archived (not
+    // migrated)", original kept for rollback safety.
     let legacy_db = makakoo_home
         .join("data")
         .join("chat")
         .join("conversations.db");
     let archived_db = if legacy_db.exists() {
-        let agent_dir = makakoo_home.join("data").join("agents").join("harveychat");
-        std::fs::create_dir_all(&agent_dir)?;
         let dst = agent_dir.join("conversations.db.bak");
         std::fs::copy(&legacy_db, &dst)?;
         Some(dst)
@@ -133,9 +177,31 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         None
     };
 
+    // Archive the legacy config.json so a future operator can find
+    // both pieces of legacy state in one place. Original preserved
+    // (copy semantics) for the same rollback rationale.
+    let archived_config = {
+        let dst = agent_dir.join("config.json.bak");
+        std::fs::copy(&legacy_path, &dst)?;
+        Some(dst)
+    };
+
+    // Seed a fresh per-agent conversations.db at the canonical
+    // path. SQLite would create it on first open, but explicit
+    // creation surfaces permission errors at migration time.
+    let new_db = agent_dir.join("conversations.db");
+    let new_db = if !new_db.exists() {
+        std::fs::File::create(&new_db)?;
+        Some(new_db)
+    } else {
+        Some(new_db)
+    };
+
     Ok(MigrationOutcome::Migrated {
         toml_path,
         archived_db,
+        archived_config,
+        new_db,
     })
 }
 
@@ -192,7 +258,7 @@ mod tests {
         let first = migrate(dir.path()).unwrap();
         assert!(matches!(first, MigrationOutcome::Migrated { .. }));
         let second = migrate(dir.path()).unwrap();
-        assert_eq!(second, MigrationOutcome::AlreadyMigrated);
+        assert!(matches!(second, MigrationOutcome::AlreadyMigrated { .. }));
     }
 
     #[test]
@@ -224,8 +290,81 @@ mod tests {
         // No conversations.db present.
         let outcome = migrate(dir.path()).unwrap();
         match outcome {
-            MigrationOutcome::Migrated { archived_db, .. } => assert!(archived_db.is_none()),
+            MigrationOutcome::Migrated { archived_db, new_db, .. } => {
+                assert!(archived_db.is_none());
+                // Fresh per-agent DB still seeded even when no
+                // legacy DB existed.
+                let new_db = new_db.expect("fresh new_db path");
+                assert!(new_db.exists());
+            }
             other => panic!("expected Migrated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migrate_archives_legacy_config_json() {
+        let dir = tempfile::tempdir().unwrap();
+        write_legacy_config(dir.path(), "9999:legacy-token", &[1]);
+        let original_config = dir.path().join("data").join("chat").join("config.json");
+        let outcome = migrate(dir.path()).unwrap();
+        match outcome {
+            MigrationOutcome::Migrated { archived_config, .. } => {
+                let archived = archived_config.expect("archived config path");
+                assert!(archived.exists());
+                assert!(original_config.exists(), "original config preserved");
+                assert_eq!(
+                    archived.file_name().and_then(|s| s.to_str()),
+                    Some("config.json.bak")
+                );
+            }
+            other => panic!("expected Migrated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migrate_seeds_fresh_per_agent_db() {
+        let dir = tempfile::tempdir().unwrap();
+        write_legacy_config(dir.path(), "9999:legacy-token", &[1]);
+        let outcome = migrate(dir.path()).unwrap();
+        match outcome {
+            MigrationOutcome::Migrated { new_db, .. } => {
+                let new_db = new_db.expect("fresh new_db path");
+                assert!(new_db.exists(), "fresh per-agent conversations.db seeded");
+                assert_eq!(
+                    new_db.file_name().and_then(|s| s.to_str()),
+                    Some("conversations.db")
+                );
+                assert_eq!(
+                    new_db.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()),
+                    Some("harveychat")
+                );
+            }
+            other => panic!("expected Migrated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migrate_already_migrated_backfills_missing_artifacts() {
+        // Simulate a partial first migration: TOML exists, but
+        // backup files do NOT (older code path).
+        let dir = tempfile::tempdir().unwrap();
+        write_legacy_config(dir.path(), "9999:legacy-token", &[1]);
+        // First migration creates everything.
+        let _ = migrate(dir.path()).unwrap();
+        // Delete the artifacts to simulate the partial-state
+        // scenario.
+        let agent_dir = dir.path().join("data").join("agents").join("harveychat");
+        let _ = std::fs::remove_file(agent_dir.join("config.json.bak"));
+        let _ = std::fs::remove_file(agent_dir.join("conversations.db"));
+        // Re-run — should backfill the deleted artifacts.
+        let outcome = migrate(dir.path()).unwrap();
+        match outcome {
+            MigrationOutcome::AlreadyMigrated { backfilled_artifacts } => {
+                assert!(!backfilled_artifacts.is_empty(), "backfill must happen");
+                assert!(agent_dir.join("config.json.bak").exists());
+                assert!(agent_dir.join("conversations.db").exists());
+            }
+            other => panic!("expected AlreadyMigrated with backfill, got {:?}", other),
         }
     }
 }

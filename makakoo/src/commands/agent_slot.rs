@@ -460,15 +460,20 @@ fn is_plugin_process_active(plugin_name: &str) -> bool {
 }
 
 /// `makakoo agent migrate-harveychat` — runs the
-/// HarveyChat→harveychat-slot migration once.  Idempotent.
+/// HarveyChat→harveychat-slot migration once.  Idempotent.  All
+/// side effects (DB archive, config archive, fresh DB seeding,
+/// backfill on re-run) live in
+/// `makakoo_core::agents::migrate::harveychat::migrate` so library
+/// callers and the CLI behave identically.
 pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
     use makakoo_core::agents::migrate::harveychat::{migrate, MigrationOutcome};
 
-    let outcome = migrate(ctx.home())?;
-    match outcome {
+    match migrate(ctx.home())? {
         MigrationOutcome::Migrated {
             toml_path,
             archived_db,
+            archived_config,
+            new_db,
         } => {
             output::print_info(format!(
                 "harveychat migrated: {} ← data/chat/config.json",
@@ -477,37 +482,30 @@ pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
             if let Some(db) = archived_db {
                 println!("  legacy conversations.db archived at {}", db.display());
             }
-            // Archive the legacy config.json alongside the DB so a
-            // future operator can find both pieces of legacy state
-            // in one place. Original is preserved (copy semantics).
-            let legacy_config = ctx.home().join("data").join("chat").join("config.json");
-            let archive_dir = ctx
-                .home()
-                .join("data")
-                .join("agents")
-                .join("harveychat");
-            if legacy_config.exists() {
-                std::fs::create_dir_all(&archive_dir)?;
-                let archive_config = archive_dir.join("config.json.bak");
-                std::fs::copy(&legacy_config, &archive_config)?;
-                println!("  legacy config.json archived at {}", archive_config.display());
+            if let Some(cfg) = archived_config {
+                println!("  legacy config.json archived at {}", cfg.display());
             }
-            // Touch a fresh per-agent conversations.db so the gateway
-            // starts with an empty DB at the canonical path. SQLite
-            // would create it on first open anyway, but explicit
-            // creation surfaces permission errors at migration time.
-            let new_db = archive_dir.join("conversations.db");
-            if !new_db.exists() {
-                std::fs::create_dir_all(&archive_dir)?;
-                std::fs::File::create(&new_db)?;
-                println!("  fresh conversations.db seeded at {}", new_db.display());
+            if let Some(db) = new_db {
+                println!("  fresh conversations.db seeded at {}", db.display());
             }
             Ok(0)
         }
-        MigrationOutcome::AlreadyMigrated => {
-            output::print_info(
-                "harveychat already migrated — nothing to do (re-run safe)".to_string(),
-            );
+        MigrationOutcome::AlreadyMigrated {
+            backfilled_artifacts,
+        } => {
+            if backfilled_artifacts.is_empty() {
+                output::print_info(
+                    "harveychat already migrated — nothing to do (re-run safe)".to_string(),
+                );
+            } else {
+                output::print_info(format!(
+                    "harveychat already migrated — backfilled {} missing artifact(s)",
+                    backfilled_artifacts.len()
+                ));
+                for path in &backfilled_artifacts {
+                    println!("  + {}", path.display());
+                }
+            }
             Ok(0)
         }
         MigrationOutcome::NothingToMigrate => {
