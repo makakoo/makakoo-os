@@ -15,6 +15,7 @@
 //! * entry file (`run.py`, `run.sh`, or a Rust `Cargo.toml`-backed
 //!   binary depending on `kind`).
 
+pub mod destroy;
 pub mod identity;
 pub mod lifecycle;
 pub mod migrate;

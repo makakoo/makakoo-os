@@ -9,6 +9,7 @@
 pub mod adapter;
 pub mod adapter_gen;
 pub mod agent;
+pub mod agent_destroy;
 pub mod agent_lifecycle;
 pub mod agent_slot;
 pub mod default_banner;

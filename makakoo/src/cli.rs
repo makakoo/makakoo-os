@@ -762,6 +762,34 @@ pub enum AgentCmd {
         name: String,
     },
 
+    /// Destroy a slot interactively. Stops the supervisor (if
+    /// running), archives the TOML + data dir to
+    /// `$MAKAKOO_HOME/archive/agents/<slot>-<unix_ts>/`, and lists
+    /// any direct `secret_ref = "..."` literals found in the TOML
+    /// (the operator decides whether to revoke them via the
+    /// separate `--revoke-secrets` flag).
+    Destroy {
+        /// Slot id to destroy.
+        slot: String,
+        /// Skip the destroy confirmation prompt. Does NOT
+        /// auto-revoke secrets.
+        #[arg(long)]
+        yes: bool,
+        /// Also revoke detected secrets from the keyring after a
+        /// successful destroy. Off by default.
+        #[arg(long)]
+        revoke_secrets: bool,
+        /// No-op flag accepted for explicit clarity (secrets are
+        /// preserved by default already).
+        #[arg(long)]
+        keep_secrets: bool,
+        /// Required to destroy the legacy `harveychat` slot. Without
+        /// it, attempting to destroy `harveychat` is rejected to
+        /// protect the legacy Olibia conversation history.
+        #[arg(long)]
+        really_destroy_harveychat: bool,
+    },
+
     // ── Internal: invoked by launchd / systemd, NOT for direct use. ──
     /// Internal: the long-running per-slot supervisor process. The
     /// LaunchAgent plist / systemd unit invokes this. Users should

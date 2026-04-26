@@ -114,6 +114,22 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
         AgentCmd::MigrateHarveychat => {
             crate::commands::agent_slot::migrate_harveychat(ctx)
         }
+        AgentCmd::Destroy {
+            slot,
+            yes,
+            revoke_secrets,
+            keep_secrets,
+            really_destroy_harveychat,
+        } => crate::commands::agent_destroy::run(
+            ctx,
+            crate::commands::agent_destroy::DestroyArgs {
+                slot,
+                yes,
+                revoke_secrets,
+                keep_secrets,
+                really_destroy_harveychat,
+            },
+        ),
     }
 }
 
