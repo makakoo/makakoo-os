@@ -1,0 +1,54 @@
+
+Lope review: development/sprints/queued/MULTI-BOT-SUBAGENTS-V2.0-MEGA-2026-04-26/SPRINT.md  (42302 chars)
+Validators: pi, codex, opencode
+Focus: Round-2 architecture lock for Q1-Q15. Round-1 raised these issues; verify each i...
+Timeout: 600s per validator
+
+
+━━━ codex ━━━
+Q1 — LOCKED. Supervisor/process model now has clear daemon strategy, restart budget, no unsafe nohup fallback, foreground escape hatch, and stale-status behavior. Residual: make sure slot names are sanitized before embedding in LaunchAgent/systemd filenames/labels.
+
+Q2 — LOCKED. Python gateway boundary is now correctly non-authoritative, with Rust MCP/grant layer as source of truth. IPC spec pre-work resolves the prior drift risk. Brain attribution via bound grant is the right fix.
+
+Q3 — LOCKED. Destroy semantics are explicit and safe: archive-first, secrets preserved by default, `--yes` does not silently revoke, harveychat protected. Limitation on nested/env secrets is documented enough.
+
+Q4 — LOCKED. LLM override precedence is clean. Offline validation warning is acceptable as long as create-time online rejection still works when catalog is reachable.
+
+Q5 — NEEDS_REVISION. Slack Events shape mostly resolves Round-1 issues: raw-body HMAC before JSON parse, opaque path, challenge handling, route isolation, blast-radius doc. Residual: text says “opaque UUIDs” but transport path is SHA-256 truncated to 8 bytes hex. That is not a UUID and gives only 64-bit collision space. Either call it an opaque transport handle or use stored UUIDs for both slot and transport.
+
+Q6 — LOCKED. Discord plan is sane: serenity, privileged intent default-off, guild allowlist, degraded mode. Good.
+
+Q7 — LOCKED. WhatsApp Cloud API shape is now acceptable. Verify token + `X-Hub-Signature-256` + explicit media-drop behavior resolves the likely prior gaps.
+
+Q8 — LOCKED. Email adapter is production-shaped enough: IDLE cap, TLS required, OAuth2 for Gmail, full mailbox `account_id`, raw body preserved. App-password risk is explicitly documented.
+
+Q9 — NEEDS_REVISION. Voice state machine is much stronger now, but Twilio webhook signature verification is only visible in Phase 10 tests, not locked into Q9 itself. Add explicit requirement: verify `X-Twilio-Signature` on all Twilio webhooks before processing, with audit on failure. Otherwise voice webhooks are spoofable in the architecture text.
+
+Q10 — NEEDS_REVISION. Web chat cookie/session design is good, but WS needs an Origin allowlist. HMAC cookie alone does not fully defend browser-driven cross-site WebSocket abuse. Add `[transport.config] allowed_origins = [...]`, reject missing/untrusted Origin in production, allow localhost in dev.
+
+Q11 — LOCKED. Fault harness is good: mock-only, gated, includes OOM split, scope violations, rate burst, socket unlink. Minor implementation note: `gateway-oom` “retry budget exhaustion” requires repeated crashes, not one simulated OOM.
+
+Q12 — BLOCKER. Resource-limit semantics are internally inconsistent. “Warn-only” cannot mean “rlimits set as soft limits” — OS soft limits still enforce. If default is warn-only, do not set hard/soft kill limits by default; use RSS monitoring/audit warnings only. Only call `setrlimit` when `[agents] enforce_rlimits = true`. Also supervisor `RLIMIT_AS = 256MB` hard-enforced on startup contradicts warn-default and may self-kill under dependency spikes. Fix before lock.
+
+Q13 — LOCKED. Rate limiting now has per-sender + per-slot global tier, verification bypass, and no-LLM reply protocol. Good.
+
+Q14 — NEEDS_REVISION. Audit log design is mostly solid, but “PII NEVER logged” conflicts with schema fields likely containing actor/sender identifiers such as email address, phone number, Slack user ID, WhatsApp ID. Either hash/pseudonymize actor/target by default or soften the claim to “secret values and message bodies never logged; actor IDs may be logged as identifiers.” Also keep `agents.alerts.log` bounded or explicitly state it is low-volume and monitored.
+
+Q15 — NEEDS_REVISION. Adding HTTP scaffolding before Slack Events resolves the sequencing gap. But the trait shape is underspecified for raw-body verification and WS upgrades. `verify(req) → handle(req)` can accidentally consume the body before handler parse. Define a buffered `WebhookRequest { headers, path, raw_body, extensions }` or equivalent, with verify-before-parse guaranteed by type shape. Also note how WS upgrade handlers plug into or bypass this trait.
+
+New issues surfaced:
+
+- Transport count inconsistency: sprint says “7 transports” but lists Telegram, Slack Socket, Slack Events, Discord, WhatsApp, Email, Voice, Web. That is 8 if Slack modes count separately, 7 if Slack is one transport with two modes. Normalize wording.
+- Phase 13 path says `harvey-os/skills/meta/agent-wizard/SKILL.md (or makakoo-os equivalent)`. In this repo, avoid legacy ambiguous path. Lock the actual Makakoo path.
+- Q5/Q15 shared HTTP server is central infrastructure. Add explicit graceful shutdown/drain behavior for active WS/voice recording requests during `makakoo-mcp` restart, or document dropped in-flight sessions as accepted.
+
+Overall: NEEDS_FIX.
+
+Most architecture is lockable, but Q12 is a real blocker and Q9/Q10/Q14/Q15 need small but important revisions before implementation.
+
+━━━ pi ━━━
+[ERROR] pi timed out after 300s
+
+━━━ opencode ━━━
+[ERROR] opencode run timed out after 600s
+

@@ -1,0 +1,161 @@
+
+Lope review: development/sprints/queued/MULTI-BOT-SUBAGENTS-V2.0-MEGA-2026-04-26/SPRINT.md  (25746 chars)
+Validators: pi, codex, opencode
+Focus: Architecture lock for Q1-Q14: identify any decisions that need revision before i...
+Timeout: 600s per validator
+
+
+━━━ codex ━━━
+Q1 — NEEDS_REVISION. Process topology confused: “supervisor spawns Rust gateway + Python dispatcher pair” vs Q2 “Python gateway connects to Rust supervisor IPC.” Fix: one Rust `agentd` supervisor hosts transports + IPC server, spawns Python gateway/dispatcher child only. Status writer in supervisor. LaunchAgent/systemd wrapper starts `makakoo agentd --slot <slot>`.
+
+Q2 — NEEDS_REVISION. Python may do defense-in-depth, but cannot be authoritative for tool/path scope. Fix: Rust MCP/grant layer enforces final scope; Python preflights only. Audit violations in Rust source-of-truth path.
+
+Q3 — NEEDS_REVISION. Archive path violates repo rule: never touch `~/.makakoo/archive`. Fix archive to `$MAKAKOO_HOME/archive/agents/<slot>-<ts>/`. Also `--yes` must not auto-revoke secrets; keep secrets unless `--revoke-secrets` explicit. Slot.toml scan is weak; use secret ref index or conservative “maybe shared” handling.
+
+Q4 — LOCKED. Precedence sane. Add validation that model id exists in configured AIL registry; unknown model fails `agent validate`, not at runtime.
+
+Q5 — LOCKED. Add explicit raw-body HMAC verification + timestamp replay check before JSON parse. Otherwise shape good.
+
+Q6 — NEEDS_REVISION. `MESSAGE_CONTENT` is privileged and may fail for normal users. Fix: support degraded mode: DMs always, guild mentions/buttons/slash-command style without content intent where possible; validate intent availability separately.
+
+Q7 — LOCKED. Cloud API only is right. Ensure webhook verification includes Meta `hub.challenge` GET flow plus POST signature over raw body.
+
+Q8 — NEEDS_REVISION. `account_id = mailbox local-part` collides across domains. Fix: account_id = full normalized mailbox address. Also “strip quoted replies aggressively” risks data loss; keep raw body in metadata/audit-debug, send stripped text to LLM.
+
+Q9 — NEEDS_REVISION. Flow impossible as written: Twilio recording-complete webhook cannot return TwiML `<Play>` to same already-ended request reliably. Fix: use `<Gather>/<Record>` loop with callback URL that returns next TwiML, or outbound call update API. Lock exact call-state machine before implementation.
+
+Q10 — NEEDS_REVISION. “Ed25519-signed cookie” over random visitor id is overkill/awkward; use HMAC/AEAD app secret unless repo already has Ed25519 key infra. Also Secure cookie breaks localhost demo unless special-case dev. Fix: prod Secure=true, localhost dev exception.
+
+Q11 — LOCKED. Good harness. Add “no real transport credentials/network” invariant; all scenarios mock-only unless explicit dogfood flag.
+
+Q12 — NEEDS_REVISION. `RLIMIT_AS = 512MB` will break Python/LLM deps on macOS unpredictably; `RLIMIT_NPROC` macOS caveat already known. Fix: configurable per slot, default soft observe/warn first or higher default; hard enforce only after measured baseline. Slot cap 32 locked.
+
+Q13 — LOCKED. Inbound-only token bucket sane. Add transport-level bypass for provider verification/challenge webhooks so Slack/Meta verification cannot be rate-limited.
+
+Q14 — NEEDS_REVISION. Logging `secret.resolve` can leak secret names/targets if detail sloppy. Fix schema: never log secret values; detail is typed redacted object. Also 100MB rotation needs total cap from R9 in Q14 itself, not only risk table.
+
+━━━ pi ━━━
+
+
+## Architecture Review: Q1–Q14
+
+**Q1 — Supervisor process model**
+NEEDS_REVISION. Two issues:
+1. "holds `TransportStatusHandle` clones in memory" blurs the supervisor's role — it's not just process babysitting, it's transport state. Clarify whether status handles live in the supervisor or in a separate transport router.
+2. The `nohup` fallback on macOS requires the supervisor itself to implement restart-on-crash logic. launchd handles this automatically; without it, a supervisor crash leaves the slot dead until `makakoo agent restart` is manually called. Either document this explicitly as a known limitation or require launchd on macOS.
+
+**Q2 — Python gateway boundary**
+LOCKED. IPC contract is clean. One note: `plugins-core/agent-harveychat/python/` is a plugin dir; shipping the reference gateway there is fine but ensure it doesn't conflate "plugin" (user-extensible) with "required runtime dependency."
+
+**Q3 — Destroy semantics**
+LOCKED. TOML scan for secret refs only works for direct `secret_ref = "..."` literals. If secrets are nested in `[transport.config]` sub-tables or referenced via env-var interpolation (`SECRET_REF=<ref>`), the scan misses them. Document this scope limitation and consider whether the prompt should suggest `--keep-secrets` by default.
+
+**Q4 — LLM override precedence**
+LOCKED.
+
+**Q5 — Slack Events API webhook**
+BLOCKER. Routing all transport webhooks through `makakoo-mcp --http`'s axum server creates a single point of failure: if makakoo-mcp crashes or restarts, *all* webhook-based transports (Slack Events, WhatsApp, Voice Twilio, Web) go dark simultaneously. This defeats the per-slot independence that the supervisor model claims. Options:
+1. Give each transport its own lightweight HTTP listener (polls `status.json` for its own health).
+2. Keep a shared HTTP server but document the blast radius explicitly and add a "shared infrastructure health" alert.
+Option 2 is acceptable with explicit documentation. Option 1 is the right fix.
+
+**Q6 — Discord adapter**
+LOCKED. serenity is the right call.
+
+**Q7 — WhatsApp Cloud API**
+LOCKED.
+
+**Q8 — Email adapter**
+NEEDS_REVISION. `email-reply-parser` is a Python library; the spec says "crate" but this is a Python dep. The email adapter is Rust, so either:
+1. Use a Rust alternative (`neckermann` or custom header/body parsing), or
+2. Call `email-reply-parser` via `std::process::Command` (ugly but pragmatic for initial ship).
+
+Also: "OAuth2 for Gmail + plain login for everything else" means production email adapters for non-Gmail providers ship with plaintext passwords. That's a grandma-security gap. Either require app-passwords for non-Gmail (documented prominently) or defer non-Gmail to v2.1.
+
+**Q9 — Voice adapter**
+BLOCKER. Step 5 says "whisper-1 STT" without clarifying the integration path. Step 6 says "ElevenLabs/OpenAI TTS" — two different providers with different APIs, no fallback strategy. The spec must pick one TTS provider with an explicit fallback chain. Also: Twilio's recording webhook gives an unauthenticated URL; `whisper-1` fetching it means the audio must be publicly accessible or Twilio credentials must be passed to the STT call. Clarify this.
+
+**Q10 — Web chat adapter**
+LOCKED. Minor: the visitor_id is 128-bit random and stored in the cookie. This is fine. The Ed25519 cookie signing is solid.
+
+**Q11 — Fault injection**
+LOCKED. Good gating discipline with `MAKAKOO_DEV_FAULTS=1`. One observation: `gateway-oom` scenario assumes exit code 137 is detectable. This is only true if the OOM killer sends SIGKILL — memory-exhausted processes sometimes just get killed by the OS scheduler or hit the RLIMIT_AS before the OOM killer fires. The test must handle both subcases.
+
+**Q12 — Per-slot resource limits**
+NEEDS_REVISION. Setting `RLIMIT_AS = 512MB` *before* fork means the supervisor itself is capped at 512MB (the limit inherits to children, not replaces). The supervisor holds status handles and restart state — 512MB may be too tight. Suggest: supervisor gets its own limit (`RLIMIT_AS = 256MB`, unshared), then children get `RLIMIT_AS = 512MB` via `prctl(PR_SET_CHILD_MAX)` or equivalent. Also: the 32-slot cap limits the *number* of supervisors, but each supervisor + gateway pair is a new process group. A misbehaving slot's fork bomb still creates unbounded processes under that one slot's cgroup. The cap helps but doesn't eliminate the blast radius.
+
+**Q13 — Rate limiting**
+NEEDS_REVISION. "reply with locked message: … (or the slot's persona equivalent)" — the Python gateway owns the reply text. The rate limiter lives in Rust (per Q12: token bucket in `makakoo-core`). Either the Rust rate limiter sends a custom frame type (`{type: "rate_limited", message: "..."}`) that the gateway relays verbatim, or the gateway must look up the persona's custom message from TOML (extra IPC roundtrip). Specify the frame protocol.
+
+**Q14 — Audit log**
+LOCKED. Add one hardening note: audit lines contain `actor` (sender identity) and `target` (tool/path accessed). These can be sensitive. Recommend file permissions `0600` and a post-rotate check that the new file is also `0600`. Also consider whether the user wants `detail` fields (tool args, file paths) redacted in the default CLI output vs. raw log.
+
+---
+
+**Summary:** 1 blocker (Q5: shared HTTP server blast radius), 4 need-revision (Q1: nohup gap + handle clarity, Q8: Python dep + non-Gmail passwords, Q9: STT/TTS ambiguity, Q12: supervisor memory cap, Q13: rate-limit reply protocol), 9 locked.
+
+━━━ opencode ━━━
+**Q1 — Supervisor process model: NEEDS_REVISION**
+
+Two issues. First, `~/Library/LaunchAgents` write on modern macOS triggers a privacy dialog (Files & Folders consent). If the user hasn't granted it, `launchctl load` fails silently and the nohup fallback kicks in — but the user won't know why launchd registration didn't stick. The `makakoo agent start` output should detect this and print a remediation hint. Second, the per-slot supervisor model means N supervisors for N slots — no shared resource broker across them. The 32-slot cap (`Q12`) limits blast radius but doesn't help with coordinated actions (e.g., "stop all slots"). This is an acceptable trade-off but should be called out explicitly in the risk register.
+
+**Q2 — Python gateway boundary: LOCKED**
+
+The IPC contract needs to be materialized as its own file (e.g., `docs/specs/ipc-contract-v2.md`) before Phase 3 starts, otherwise alternate gateways and the contract test (R1) have nothing to validate against. Also: the Python gateway needs a pre-granted write path to the Brain journal (`[agent:<slot>]` prefix) — confirm this is in the supervisor's grant-issuance code and not assumed.
+
+**Q3 — Destroy semantics: LOCKED**
+
+Minor: document what happens when `makakoo agent create` re-uses a destroyed slot name — does it restore from archive or create fresh? Specify archive overwrite semantics.
+
+**Q4 — LLM override precedence: NEEDS_REVISION**
+
+The three-tier hierarchy is sound. The naming is not. `[llm.defaults]` vs system-level defaults leaves users unsure which is which. A user editing `slot.toml` sees `[llm.defaults]` and `[llm.override]` and has to guess what the difference is. Rename `[llm.defaults]` to `[llm.inherit]` (these flow down from the system default) or collapse to a single `[llm.override]` section with the semantics "any field not set here inherits from system defaults." Example showing the effective resolution in `makakoo agent show` output will also clarify.
+
+**Q5 — Slack Events API webhook: NEEDS_REVISION**
+
+The route path `/transport/slack/<slot_id>/<transport_id>/events` embeds a user-defined string (`transport_id`) directly in a public-facing URL path. This creates collision and guessing surface. Use a path-safe slot UUID or hash instead. Also: `makakoo-mcp --http` now serves a dual surface (MCP tools + transport webhooks) on the same axum server. The security boundary between them must be documented — can a webhook caller exploit the MCP tool surface through route confusion? Different routes, but the attack surface grows. Add explicit route isolation docs.
+
+**Q6 — Discord adapter: LOCKED**
+
+Add an optional `guild_ids` allowlist to `DiscordConfig`. Without it, the bot responds in *any* guild it's invited to — which may be surprising if someone adds the bot to a guild the slot owner didn't intend.
+
+**Q7 — WhatsApp Cloud API: NEEDS_REVISION**
+
+Two gaps. (1) The `verify_token` sent in Meta's webhook challenge handshake must be stored in the TOML config (e.g., `verify_token_ref`). The proposal says it "responds to URL verification challenge automatically" but doesn't say where the expected token value lives. (2) Media message handling is listed as "media stub" — specify the stub behavior explicitly: silently ignore, drop with error, or return a "I can't process images yet" reply. Users sending photos will hit this immediately.
+
+**Q8 — Email adapter: LOCKED**
+
+Ensure Phase 13 wizard includes Gmail OAuth setup instructions (app password path + refresh token flow). The wizard currently doesn't mention email transport setup in Phase 13's description — `makakoo agent wizard` must handle OAuth consent URL generation.
+
+**Q9 — Voice adapter: NEEDS_REVISION**
+
+The `<Record>` action attribute must be a dynamically-generated URL that includes the `CallSid` so the recording-completed webhook can correlate audio to the conversation. This means the initial TwiML response isn't static — it needs to embed the recording-status URL. Specify this in the adapter logic. Also confirm whisper-1 availability through SwitchAILocal's model catalog. If it routes to an OpenAI call, the user needs an OpenAI key in their SwitchAILocal config. Worth a brief note in the risk register.
+
+**Q10 — Web chat adapter: NEEDS_REVISION**
+
+Two omissions. (1) The Ed25519 cookie signing key must be persisted to disk (e.g., `~/.makakoo/keys/web-chat-ed25519`) — a fresh key on every `makakoo-mcp` restart invalidates all active sessions, which is broken for any real use. (2) WS cookie authentication flow: the browser `WebSocket` constructor sends cookies on upgrade, but the adapter must explicitly read the `Cookie` header from the HTTP upgrade request. Document this in the adapter code, not just in spec — it's invisible and will fail silently if missing.
+
+**Q11 — Fault injection: LOCKED**
+
+The scenario list is thorough and the MockAdapter/MockGateway pattern keeps tests deterministic. No changes needed.
+
+**Q12 — Per-slot resource limits: LOCKED**
+
+Minor documentation note: the 512MB RLIMIT_AS applies to each *child* (gateway + adapter), not the supervisor itself. Total per-slot memory is supervisor (~20MB Rust) + children (~512MB each). With 32 slots, theoretical peak exceeds 16GB. The supervisor should enforce a per-slot RSS ceiling via `status.json` monitoring (soft enforcement) in addition to rlimits.
+
+**Q13 — Rate limiting: NEEDS_REVISION**
+
+Per-`(slot_id, sender_id)` works for Telegram (user_id), Slack (user_id), Discord (user_id), and Web (visitor_id) — but not for Email (From header is trivially spoofable) or Voice (caller ID is the only identity, and a single caller can't flood). Document per-transport key derivation explicitly. Also consider a second-tier *global* per-slot rate limit (all senders combined) to prevent a multi-account attack on Email/WhatsApp transports where sender_id is less reliable.
+
+**Q14 — Audit log: NEEDS_REVISION**
+
+The 1GB emergency cap says "alert" but there's no alerting infrastructure in this plan. Define the alert mechanism: write to stderr? Drop to a secondary capped file? Crash? Also expand the `kind` enum — missing `rate.limit` (rate limit hits), `slot.start`, `slot.stop`, and `fault.test` entries. If the audit log is the compliance evidence, lifecycle events must be recorded.
+
+---
+
+**Cross-cutting concern (not a Q, but architecture-impacting):**
+
+The HTTP webhook server is built in Phase 5 (Slack Events), but transports in Phases 7-11 all depend on it. That's ~5 phases gated on Phase 5 completing. Extract the HTTP server scaffolding into its own sub-phase before Phase 5 — or explicitly note the dependency chain in the risk register. If Phase 5 slips, 5 transports slip with it.
+
+Also: the Python gateway lives at `plugins-core/agent-harveychat/python/`, but the sprint header claims "Cross-repo touches: none planned." If `plugins-core` is outside the makakoo-os repo, that *is* a cross-repo touch. Clarify whether this path is in-repo or external, and if external, whether Phase 3 can land without a coordinated release.
+

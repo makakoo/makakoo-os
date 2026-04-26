@@ -1,0 +1,61 @@
+
+Lope review: development/sprints/queued/MULTI-BOT-SUBAGENTS-V2.0-MEGA-2026-04-26/SPRINT.md  (46706 chars)
+Validators: pi, codex, opencode
+Focus: Round-4 final lock. Round-3 left 2 trivial NEEDS_FIX: (a) codex Q15 async trait ...
+Timeout: 900s per validator
+
+
+━━━ codex ━━━
+Both Round-3 fixes are closed.
+
+- Q15 async trait object-safety: closed. `WebhookHandler` and `WsUpgradeHandler` explicitly use `#[async_trait::async_trait]`, and the text explains the boxed-future expansion/dyn-compatibility.
+- Acceptance criterion transport count: closed. AC item 2 now says **7 transport adapter families** and treats Slack Socket Mode + Events API as one family. Phase 13 docs wording also matches.
+
+PASS
+
+━━━ opencode ━━━
+Both fixes confirmed in the file:
+
+- **(a) Codex Q15 — async trait object-safety**: Lines 525 and 536 show `#[async_trait::async_trait]` on both `WebhookHandler` and `WsUpgradeHandler` traits. Doc comment at line 520 explicitly explains the object-safety resolution. **CLOSED.**
+
+- **(b) Pi AC item 2 — transport count**: Line 965: "all 7 transport adapters (Telegram, Slack, Discord, WhatsApp, Email, Voice, Web — Slack ships in two modes Socket+Events but is one adapter family)". Line 1001: "7 transport adapter families operational in code: Telegram, Slack (Socket Mode + Events API webhook), Discord, WhatsApp, Email, Voice, Web." No enumeration mismatch. **CLOSED.**
+
+**PASS**
+
+━━━ pi ━━━
+
+
+Both fixes verified in the sprint doc:
+
+**(a) Q15 async trait object-safety — CLOSED ✅**
+
+Q15 (lines ~504–525) now shows explicit `#[async_trait::async_trait]` on both traits:
+```rust
+#[async_trait::async_trait]
+pub trait WebhookHandler: Send + Sync {
+    fn verify(&self, req: &WebhookRequest) -> Result<(), VerifyError>;
+    async fn handle(&self, req: WebhookRequest) -> Response;
+}
+
+#[async_trait::async_trait]
+pub trait WsUpgradeHandler: Send + Sync {
+    fn verify_upgrade(&self, req: &Request<Body>) -> Result<(), VerifyError>;
+    async fn on_upgrade(&self, ws: WebSocketUpgrade) -> Response;
+}
+```
+The doc comment explicitly explains *why* the macro is needed (concrete expansion to `Pin<Box<dyn Future<Output=Response> + Send + 'a>>`, which is dyn-compatible — unexpanded async fns in traits generate RPITIT opaque futures that are `!Sync`, breaking object-safety). This is the correct fix.
+
+**(b) AC item 2 transport count (7 adapter families) — CLOSED ✅**
+
+Three mentions, all consistent with each other:
+- **AC item 2 (line 1001):** "7 transport adapter families operational in code: Telegram, Slack (Socket Mode + Events API webhook), Discord, WhatsApp, Email, Voice, Web."
+- **Phase 13 doc walkthrough (line 965):** "covering all 7 transport adapters (Telegram, Slack, Discord, WhatsApp, Email, Voice, Web — Slack ships in two modes Socket+Events but is one adapter family)"
+- **How-to resume (line 1075):** "runs all 7 transports"
+- **Goals line 31** correctly says "5 high-value transports **beyond** Telegram/Slack" (= 7 total, not a contradiction)
+
+No enumeration mismatch. Slack is explicitly disambiguated as "one adapter family with two modes."
+
+---
+
+**PASS**
+
