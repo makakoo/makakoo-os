@@ -125,9 +125,18 @@ impl<'de> Deserialize<'de> for TransportEntry {
                 })?;
                 TransportConfig::Slack(cfg)
             }
+            "discord" => {
+                let cfg: DiscordConfig = wire.config.try_into().map_err(|e| {
+                    de::Error::custom(format!(
+                        "transport '{}' kind=discord: invalid [config] body: {}",
+                        wire.id, e
+                    ))
+                })?;
+                TransportConfig::Discord(cfg)
+            }
             other => {
                 return Err(de::Error::custom(format!(
-                    "transport '{}' has unsupported kind '{}' (v1 supports telegram | slack)",
+                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord)",
                     wire.id, other
                 )));
             }
@@ -159,6 +168,7 @@ impl<'de> Deserialize<'de> for TransportEntry {
 pub enum TransportConfig {
     Telegram(TelegramConfig),
     Slack(SlackConfig),
+    Discord(DiscordConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -212,6 +222,34 @@ pub struct SlackConfig {
 
 fn default_slack_mode() -> String {
     "socket".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiscordConfig {
+    /// Whether the bot's Identify payload requests the privileged
+    /// MESSAGE_CONTENT intent. Default `false` (Discord developer
+    /// portal requires explicit opt-in for this intent — Q6).
+    /// When false the bot still receives MESSAGE_CREATE events but
+    /// the `content` field arrives empty for non-DM, non-mention
+    /// messages.
+    #[serde(default)]
+    pub message_content: bool,
+
+    /// Allowlist of guild ids the bot accepts inbound from. Empty =
+    /// allow every guild the bot is in (the spec calls this "optional";
+    /// production deployments typically pin to a fixed set).
+    #[serde(default)]
+    pub guild_ids: Vec<u64>,
+
+    /// Allowlist of channel ids; empty means any channel within the
+    /// guild allowlist is accepted.
+    #[serde(default)]
+    pub channels: Vec<String>,
+
+    /// Whether to populate `thread_id` for messages that arrive in
+    /// a Discord thread (vs the parent channel).
+    #[serde(default)]
+    pub support_thread: bool,
 }
 
 impl TransportEntry {
@@ -277,8 +315,9 @@ impl TransportEntry {
                 }
                 Ok(())
             }
+            ("discord", TransportConfig::Discord(_)) => Ok(()),
             (k, _) => Err(MakakooError::InvalidInput(format!(
-                "transport '{}' has kind '{}' that doesn't match its config payload (v1 supports telegram | slack)",
+                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord)",
                 self.id, k
             ))),
         }
@@ -420,6 +459,71 @@ mod tests {
     fn two_telegram_distinct_ids_accepted() {
         let entries = vec![telegram_entry("tg-a"), telegram_entry("tg-b")];
         validate_transport_list(&entries).unwrap();
+    }
+
+    fn discord_entry(id: &str) -> TransportEntry {
+        TransportEntry {
+            id: id.into(),
+            kind: "discord".into(),
+            enabled: true,
+            account_id: None,
+            secret_ref: None,
+            secret_env: None,
+            inline_secret_dev: Some("BOTTOK".into()),
+            app_token_ref: None,
+            app_token_env: None,
+            inline_app_token_dev: None,
+            allowed_users: vec![],
+            config: TransportConfig::Discord(DiscordConfig::default()),
+        }
+    }
+
+    #[test]
+    fn discord_entry_validates_with_bot_token() {
+        let e = discord_entry("discord-main");
+        e.validate().unwrap();
+    }
+
+    #[test]
+    fn discord_entry_requires_bot_token() {
+        let mut e = discord_entry("d");
+        e.inline_secret_dev = None;
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("no bot-token source"));
+    }
+
+    #[test]
+    fn discord_kind_must_match_config_payload() {
+        let mut e = discord_entry("d");
+        e.config = TransportConfig::Telegram(TelegramConfig::default());
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("doesn't match"));
+    }
+
+    #[test]
+    fn discord_round_trip_via_toml() {
+        let raw = r#"
+id = "discord-main"
+kind = "discord"
+enabled = true
+inline_secret_dev = "BOTTOK"
+allowed_users = ["9000"]
+
+[config]
+message_content = false
+guild_ids = [42, 99]
+support_thread = false
+"#;
+        let entry: TransportEntry = toml::from_str(raw).unwrap();
+        assert_eq!(entry.kind, "discord");
+        match &entry.config {
+            TransportConfig::Discord(d) => {
+                assert!(!d.message_content);
+                assert_eq!(d.guild_ids, vec![42, 99]);
+            }
+            _ => panic!("expected discord variant"),
+        }
+        entry.validate().unwrap();
     }
 
     #[test]

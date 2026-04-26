@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use crate::Result;
 
 pub mod config;
+pub mod discord;
 pub mod frame;
 pub mod gateway;
 pub mod outbound;

@@ -25,6 +25,7 @@
 
 pub mod approval;
 pub mod directory;
+pub mod discord;
 pub mod messaging;
 pub mod slack;
 pub mod telegram;
