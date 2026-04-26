@@ -35,6 +35,8 @@ mod handlers;
 mod http_server;
 mod jsonrpc;
 mod server;
+mod slack_events;
+mod webhook_router;
 
 use dispatch::{ToolContext, ToolRegistry};
 

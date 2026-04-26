@@ -2134,6 +2134,7 @@ dependencies = [
  "dirs 5.0.1",
  "ed25519-dalek",
  "hex",
+ "hmac",
  "makakoo-core",
  "rand 0.8.5",
  "reqwest",
