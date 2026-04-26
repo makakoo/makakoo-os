@@ -1,33 +1,60 @@
-//! Secrets precedence adapter (Q11).
+//! Secrets precedence adapter (Q11, locked).
 //!
 //! Resolution order (highest → lowest):
-//!   1. `secret_ref` → makakoo keyring lookup via `keyring` crate
-//!   2. `env`        → process environment variable
-//!   3. `inline`     → TOML literal (dev-only; logs WARNING)
+//!   1. **Environment variable** (`secret_env`, `app_token_env`,
+//!      `bot_token_env`).
+//!   2. **`makakoo secret` keyring store** (`secret_ref`,
+//!      `app_token_ref`, `bot_token_ref`).
+//!   3. **TOML inline** (`inline_secret_dev`). Logs WARNING. Refuses
+//!      to load in non-dev mode (enforced at config load).
 //!
-//! Encoded in TOML as one of:
-//!     token.secret_ref = "secret:telegram/secretary-bot-token"
-//!     token.env        = "SECRETARY_TELEGRAM_MAIN_TOKEN"
-//!     token            = "literal-bot-token-value"
+//! In TOML this looks like:
+//!     [[transport]]
+//!     id = "telegram-main"
+//!     kind = "telegram"
+//!     secret_ref       = "agent/secretary/telegram-main/bot_token"
+//!     secret_env       = "SECRETARY_TELEGRAM_MAIN_TOKEN"
+//!     inline_secret_dev = ""
 
 use serde::{Deserialize, Serialize};
 
 use crate::{MakakooError, Result};
 
-/// A reference to a secret value, resolved at adapter-startup time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum SecretRef {
-    Structured(StructuredSecret),
-    Inline(String),
+/// One secret slot — collects the env var name, keyring entry name,
+/// and inline literal that may resolve to its value.  At least one
+/// of the three MUST be populated for the adapter to start.
+///
+/// All three fields are optional in TOML so the entry can be entered
+/// flat at the `[[transport]]` level (e.g. `secret_ref = "…"` on its
+/// own line).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretRef {
+    /// Environment variable name.
+    pub env: Option<String>,
+    /// `makakoo secret` keyring entry name (no `secret:` prefix).
+    pub keyring_ref: Option<String>,
+    /// TOML inline literal — dev-only fallback.
+    pub inline: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StructuredSecret {
-    /// `"secret:<namespace>/<key>"` lookup in the makakoo keyring.
-    pub secret_ref: Option<String>,
-    /// Environment-variable name to read.
-    pub env: Option<String>,
+impl SecretRef {
+    /// Build from the flat TOML triple at the `[[transport]]` level.
+    /// Empty strings count as "absent" — TOML linters often emit
+    /// `inline_secret_dev = ""` even when the field isn't set.
+    pub fn from_flat(env: Option<String>, keyring_ref: Option<String>, inline: Option<String>) -> Self {
+        fn norm(s: Option<String>) -> Option<String> {
+            s.and_then(|v| if v.is_empty() { None } else { Some(v) })
+        }
+        Self {
+            env: norm(env),
+            keyring_ref: norm(keyring_ref),
+            inline: norm(inline),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.env.is_none() && self.keyring_ref.is_none() && self.inline.is_none()
+    }
 }
 
 /// A resolved secret value plus the source it came from (for
@@ -40,8 +67,8 @@ pub struct ResolvedSecret {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretSource {
-    Keyring,
     Env,
+    Keyring,
     Inline,
 }
 
@@ -52,66 +79,50 @@ pub trait SecretsAdapter: Send + Sync {
     /// the next precedence layer).
     fn lookup_keyring(&self, secret_ref: &str) -> Result<Option<String>>;
 
+    /// Resolve a `SecretRef` honoring env > keyring > inline.
     fn resolve(&self, reference: &SecretRef) -> Result<ResolvedSecret> {
-        match reference {
-            SecretRef::Structured(s) => {
-                if let Some(key) = &s.secret_ref {
-                    if let Some(value) = self.lookup_keyring(key)? {
-                        return Ok(ResolvedSecret {
-                            value,
-                            source: SecretSource::Keyring,
-                        });
-                    }
-                    return Err(MakakooError::Config(format!(
-                        "secret_ref '{}' not found in keyring",
-                        key
-                    )));
+        if let Some(env_name) = &reference.env {
+            if let Ok(value) = std::env::var(env_name) {
+                if !value.is_empty() {
+                    return Ok(ResolvedSecret {
+                        value,
+                        source: SecretSource::Env,
+                    });
                 }
-                if let Some(env_name) = &s.env {
-                    return std::env::var(env_name)
-                        .map(|value| ResolvedSecret {
-                            value,
-                            source: SecretSource::Env,
-                        })
-                        .map_err(|_| {
-                            MakakooError::Config(format!(
-                                "environment variable '{}' is not set",
-                                env_name
-                            ))
-                        });
-                }
-                Err(MakakooError::Config(
-                    "structured SecretRef must have either `secret_ref` or `env`".into(),
-                ))
-            }
-            SecretRef::Inline(value) => {
-                tracing::warn!(
-                    target: "makakoo_core::transport::secrets",
-                    "inline secret value used (dev-only fallback) — move to makakoo secret store before production"
-                );
-                Ok(ResolvedSecret {
-                    value: value.clone(),
-                    source: SecretSource::Inline,
-                })
             }
         }
+        if let Some(key) = &reference.keyring_ref {
+            if let Some(value) = self.lookup_keyring(key)? {
+                return Ok(ResolvedSecret {
+                    value,
+                    source: SecretSource::Keyring,
+                });
+            }
+        }
+        if let Some(value) = &reference.inline {
+            tracing::warn!(
+                target: "makakoo_core::transport::secrets",
+                "inline secret value used (dev-only fallback) — move to env var or makakoo secret store before production"
+            );
+            return Ok(ResolvedSecret {
+                value: value.clone(),
+                source: SecretSource::Inline,
+            });
+        }
+        Err(MakakooError::Config(
+            "no secret source resolved (env unset, keyring miss, no inline) — adapter cannot start".into(),
+        ))
     }
 }
 
 /// Production resolver — backed by the OS keyring through the
 /// `keyring` crate. Service name is `"makakoo"` to match the
 /// existing `SecretsStore` (see makakoo/src/secrets.rs).
-///
-/// `secret_ref` is the keyring entry name; the `secret:` prefix is
-/// stripped before lookup so the actual entry can be addressed
-/// either with or without the namespace prefix in the keyring CLI.
 pub struct KeyringSecrets;
 
 impl SecretsAdapter for KeyringSecrets {
     fn lookup_keyring(&self, secret_ref: &str) -> Result<Option<String>> {
         let key = secret_ref.strip_prefix("secret:").unwrap_or(secret_ref);
-        // The `keyring` crate is sync — wrap in a blocking call.
-        // In v1 this runs once at adapter startup, not per message.
         let entry = keyring::Entry::new("makakoo", key)
             .map_err(|e| MakakooError::Config(format!("keyring entry '{}': {}", key, e)))?;
         match entry.get_password() {
@@ -126,7 +137,7 @@ impl SecretsAdapter for KeyringSecrets {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -137,7 +148,7 @@ mod tests {
     }
 
     impl MemSecrets {
-        fn with(items: &[(&str, &str)]) -> Self {
+        pub fn with(items: &[(&str, &str)]) -> Self {
             let mut map = HashMap::new();
             for (k, v) in items {
                 map.insert((*k).to_string(), (*v).to_string());
@@ -155,65 +166,83 @@ mod tests {
     }
 
     #[test]
-    fn inline_resolves() {
-        let secrets = MemSecrets::with(&[]);
-        let r = secrets
-            .resolve(&SecretRef::Inline("hello".into()))
-            .unwrap();
-        assert_eq!(r.value, "hello");
-        assert_eq!(r.source, SecretSource::Inline);
+    fn from_flat_normalises_empty() {
+        let r = SecretRef::from_flat(
+            Some("".into()),
+            Some("agent/secretary/tg/bot".into()),
+            Some("".into()),
+        );
+        assert!(r.env.is_none());
+        assert!(r.keyring_ref.is_some());
+        assert!(r.inline.is_none());
     }
 
     #[test]
-    fn keyring_takes_precedence_when_present() {
-        let secrets = MemSecrets::with(&[("secret:tg/main", "kr-value")]);
+    fn empty_secret_ref_fails_to_resolve() {
+        let secrets = MemSecrets::with(&[]);
+        let err = secrets.resolve(&SecretRef::default()).unwrap_err();
+        assert!(format!("{err}").contains("no secret source resolved"));
+    }
+
+    #[test]
+    fn env_takes_precedence_over_keyring() {
+        let key = "MAKAKOO_TEST_SECRETS_PRECEDENCE_VAR";
+        std::env::set_var(key, "env-value");
+        let secrets = MemSecrets::with(&[("agent/x", "kr-value")]);
         let r = secrets
-            .resolve(&SecretRef::Structured(StructuredSecret {
-                secret_ref: Some("secret:tg/main".into()),
+            .resolve(&SecretRef {
+                env: Some(key.into()),
+                keyring_ref: Some("agent/x".into()),
+                inline: Some("inline-value".into()),
+            })
+            .unwrap();
+        assert_eq!(r.value, "env-value");
+        assert_eq!(r.source, SecretSource::Env);
+        std::env::remove_var(key);
+    }
+
+    #[test]
+    fn keyring_takes_precedence_over_inline() {
+        let secrets = MemSecrets::with(&[("agent/y", "kr-value")]);
+        let r = secrets
+            .resolve(&SecretRef {
                 env: None,
-            }))
+                keyring_ref: Some("agent/y".into()),
+                inline: Some("inline-value".into()),
+            })
             .unwrap();
         assert_eq!(r.value, "kr-value");
         assert_eq!(r.source, SecretSource::Keyring);
     }
 
     #[test]
-    fn missing_keyring_secret_errors() {
-        let secrets = MemSecrets::with(&[]);
-        let err = secrets
-            .resolve(&SecretRef::Structured(StructuredSecret {
-                secret_ref: Some("secret:missing/x".into()),
-                env: None,
-            }))
-            .unwrap_err();
-        assert!(format!("{err}").contains("not found in keyring"));
-    }
-
-    #[test]
-    fn env_var_resolves() {
-        let key = "MAKAKOO_TEST_SECRETS_ENV_VAR_X";
-        std::env::set_var(key, "envval");
+    fn inline_used_when_others_empty() {
         let secrets = MemSecrets::with(&[]);
         let r = secrets
-            .resolve(&SecretRef::Structured(StructuredSecret {
-                secret_ref: None,
-                env: Some(key.into()),
-            }))
+            .resolve(&SecretRef {
+                env: None,
+                keyring_ref: None,
+                inline: Some("inline-value".into()),
+            })
             .unwrap();
-        assert_eq!(r.value, "envval");
-        assert_eq!(r.source, SecretSource::Env);
-        std::env::remove_var(key);
+        assert_eq!(r.value, "inline-value");
+        assert_eq!(r.source, SecretSource::Inline);
     }
 
     #[test]
-    fn missing_env_errors() {
-        let secrets = MemSecrets::with(&[]);
-        let err = secrets
-            .resolve(&SecretRef::Structured(StructuredSecret {
-                secret_ref: None,
-                env: Some("MAKAKOO_TEST_NEVER_SET_VAR".into()),
-            }))
-            .unwrap_err();
-        assert!(format!("{err}").contains("not set"));
+    fn empty_env_var_falls_through_to_keyring() {
+        let key = "MAKAKOO_TEST_EMPTY_ENV_FALLTHROUGH";
+        std::env::set_var(key, "");
+        let secrets = MemSecrets::with(&[("agent/z", "kr-value")]);
+        let r = secrets
+            .resolve(&SecretRef {
+                env: Some(key.into()),
+                keyring_ref: Some("agent/z".into()),
+                inline: None,
+            })
+            .unwrap();
+        assert_eq!(r.value, "kr-value");
+        assert_eq!(r.source, SecretSource::Keyring);
+        std::env::remove_var(key);
     }
 }

@@ -18,6 +18,7 @@ pub mod error;
 pub mod event_bus;
 pub mod gimmicks;
 pub mod gym;
+pub mod ipc;
 pub mod kernel_config;
 pub mod llm;
 pub mod memory;
@@ -31,6 +32,7 @@ pub mod source_fetch;
 pub mod superbrain;
 pub mod swarm;
 pub mod telemetry;
+pub mod transport;
 pub mod wiki;
 
 pub use error::{MakakooError, Result};

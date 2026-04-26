@@ -2088,6 +2088,7 @@ dependencies = [
  "flate2",
  "fs2",
  "garagetytus-grants",
+ "keyring",
  "libc",
  "once_cell",
  "petgraph",
