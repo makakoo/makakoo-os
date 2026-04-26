@@ -16,7 +16,14 @@
 //!   binary depending on `kind`).
 
 pub mod lifecycle;
+pub mod migrate;
+pub mod registry;
 pub mod scaffold;
+pub mod slot;
+
+pub use registry::AgentRegistry;
+pub use slot::{registry_dir, slot_path, validate_slot_id, AgentSlot};
+
 pub use lifecycle::{
     AgentLaunchSpec, AgentProcess, AgentSupervisor, HealthStatus,
 };

@@ -14,14 +14,19 @@
 //! `[transport.config]` block holds adapter-specific routing /
 //! polling / mode settings only.
 
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::transport::secrets::SecretRef;
 use crate::{MakakooError, Result};
 
 /// One `[[transport]]` block. Fields between `id` and `config` are
-/// transport-agnostic; the `config` body is discriminated by `kind`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// transport-agnostic; the `config` body is discriminated by the
+/// outer `kind` field via a custom `Deserialize` (TOML doesn't
+/// support internal-tagged enums whose discriminator sits one
+/// level above the payload, and serde's `untagged` enum picks
+/// `TelegramConfig` first because every Telegram field is optional).
+#[derive(Debug, Clone, Serialize)]
 pub struct TransportEntry {
     /// Slot-unique transport identifier (e.g. `"telegram-main"`).
     pub id: String,
@@ -65,6 +70,83 @@ pub struct TransportEntry {
 
 fn default_true() -> bool {
     true
+}
+
+/// Wire-shape used during deserialization.  Reads `config` as a
+/// raw `toml::Value` so we can dispatch the inner type by the
+/// outer `kind` field.
+#[derive(Deserialize)]
+struct TransportEntryWire {
+    id: String,
+    kind: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    account_id: Option<String>,
+    #[serde(default)]
+    secret_ref: Option<String>,
+    #[serde(default)]
+    secret_env: Option<String>,
+    #[serde(default)]
+    inline_secret_dev: Option<String>,
+    #[serde(default)]
+    app_token_ref: Option<String>,
+    #[serde(default)]
+    app_token_env: Option<String>,
+    #[serde(default)]
+    inline_app_token_dev: Option<String>,
+    #[serde(default)]
+    allowed_users: Vec<String>,
+    config: toml::Value,
+}
+
+impl<'de> Deserialize<'de> for TransportEntry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TransportEntryWire::deserialize(deserializer)?;
+        let config = match wire.kind.as_str() {
+            "telegram" => {
+                let cfg: TelegramConfig = wire.config.try_into().map_err(|e| {
+                    de::Error::custom(format!(
+                        "transport '{}' kind=telegram: invalid [config] body: {}",
+                        wire.id, e
+                    ))
+                })?;
+                TransportConfig::Telegram(cfg)
+            }
+            "slack" => {
+                let cfg: SlackConfig = wire.config.try_into().map_err(|e| {
+                    de::Error::custom(format!(
+                        "transport '{}' kind=slack: invalid [config] body: {}",
+                        wire.id, e
+                    ))
+                })?;
+                TransportConfig::Slack(cfg)
+            }
+            other => {
+                return Err(de::Error::custom(format!(
+                    "transport '{}' has unsupported kind '{}' (v1 supports telegram | slack)",
+                    wire.id, other
+                )));
+            }
+        };
+        Ok(TransportEntry {
+            id: wire.id,
+            kind: wire.kind,
+            enabled: wire.enabled,
+            account_id: wire.account_id,
+            secret_ref: wire.secret_ref,
+            secret_env: wire.secret_env,
+            inline_secret_dev: wire.inline_secret_dev,
+            app_token_ref: wire.app_token_ref,
+            app_token_env: wire.app_token_env,
+            inline_app_token_dev: wire.inline_app_token_dev,
+            allowed_users: wire.allowed_users,
+            config,
+        })
+    }
 }
 
 /// Adapter-specific config payload, discriminated by the parent
