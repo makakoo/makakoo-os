@@ -38,17 +38,37 @@ pub struct TelegramAdapter {
     /// Last-seen update offset for `getUpdates` long polling.
     pub offset: Mutex<i64>,
     pub http: reqwest::Client,
+    /// Resolved bot identity from `verify_credentials`.  Stamps
+    /// `account_id` on inbound frames and identifies self-loop
+    /// messages we should suppress.
+    identity: Mutex<Option<crate::transport::VerifiedIdentity>>,
+    /// Per-transport allowlist (Q7 simplified): inbound frames
+    /// from senders not in this list are dropped at the transport
+    /// layer.  Empty = least-privilege deny-all.
+    allowed_users: Vec<String>,
 }
 
 impl TelegramAdapter {
-    pub fn new(ctx: TransportContext, config: TelegramConfig, bot_token: String) -> Self {
-        Self::with_api_base(ctx, config, bot_token, TELEGRAM_API_BASE.into())
+    pub fn new(
+        ctx: TransportContext,
+        config: TelegramConfig,
+        bot_token: String,
+        allowed_users: Vec<String>,
+    ) -> Self {
+        Self::with_api_base(
+            ctx,
+            config,
+            bot_token,
+            allowed_users,
+            TELEGRAM_API_BASE.into(),
+        )
     }
 
     pub fn with_api_base(
         ctx: TransportContext,
         config: TelegramConfig,
         bot_token: String,
+        allowed_users: Vec<String>,
         api_base: String,
     ) -> Self {
         Self {
@@ -61,6 +81,8 @@ impl TelegramAdapter {
                 .timeout(Duration::from_secs(60))
                 .build()
                 .expect("reqwest client"),
+            identity: Mutex::new(None),
+            allowed_users,
         }
     }
 
@@ -175,11 +197,13 @@ impl Transport for TelegramAdapter {
         let user = resp
             .result
             .ok_or_else(|| MakakooError::internal("getMe returned ok=true but no result"))?;
-        Ok(VerifiedIdentity {
+        let identity = VerifiedIdentity {
             account_id: user.id.to_string(),
             tenant_id: None,
             display_name: user.username.or(user.first_name),
-        })
+        };
+        *self.identity.lock().await = Some(identity.clone());
+        Ok(identity)
     }
 
     async fn send(&self, frame: &MakakooOutboundFrame) -> Result<()> {
@@ -235,6 +259,11 @@ impl Transport for TelegramAdapter {
 #[async_trait]
 impl Gateway for TelegramAdapter {
     async fn start(&self, sink: InboundSink) -> Result<()> {
+        // Cache the bot identity so inbound frames can stamp
+        // `account_id` and self-loop suppression works.
+        if self.identity.lock().await.is_none() {
+            self.verify_credentials().await?;
+        }
         loop {
             let timeout = self.config.polling_timeout_seconds.max(1);
             let offset = { *self.offset.lock().await };
@@ -294,7 +323,9 @@ impl Gateway for TelegramAdapter {
                 }
                 let Some(msg) = update.message else { continue };
                 let Some(text) = msg.text.clone() else { continue };
-                let frame = self.build_inbound_frame(msg, text);
+                let Some(frame) = self.build_inbound_frame(msg, text).await else {
+                    continue;
+                };
                 if sink.send(frame).await.is_err() {
                     tracing::error!(
                         target: "makakoo_core::transport::telegram",
@@ -309,30 +340,66 @@ impl Gateway for TelegramAdapter {
 }
 
 impl TelegramAdapter {
-    /// Build an inbound frame from a Telegram update.  Pure (no I/O)
-    /// so unit tests can exercise the field mapping with a fixture.
-    pub(crate) fn build_inbound_frame(
+    /// Build an inbound frame from a Telegram update.  Returns
+    /// `None` for events we drop in v1:
+    ///   - sender id matches our own bot id (self-loop)
+    ///   - sender id is not in the per-transport allow-list
+    ///   - allow-list is empty (least-privilege deny-all)
+    pub(crate) async fn build_inbound_frame(
         &self,
         msg: TelegramMessage,
         text: String,
-    ) -> MakakooInboundFrame {
+    ) -> Option<MakakooInboundFrame> {
         let conversation_id = msg.chat.id.to_string();
         let sender_id = msg
             .from
             .as_ref()
             .map(|u| u.id.to_string())
             .unwrap_or_else(|| conversation_id.clone());
+
+        // Self-loop suppression — never deliver our own bot's
+        // messages to the LLM.
+        let identity = self.identity.lock().await.clone();
+        if let Some(id) = identity.as_ref() {
+            if sender_id == id.account_id {
+                tracing::debug!(
+                    target: "makakoo_core::transport::telegram",
+                    transport_id = self.ctx.transport_id,
+                    "suppressing telegram self-loop event (sender matches own bot id)"
+                );
+                return None;
+            }
+        }
+
+        // Per-transport allowlist (Q7 simplified).  Empty list =
+        // least-privilege deny-all.
+        if self.allowed_users.is_empty()
+            || !self.allowed_users.iter().any(|u| u == &sender_id)
+        {
+            tracing::debug!(
+                target: "makakoo_core::transport::telegram",
+                transport_id = self.ctx.transport_id,
+                sender_id = sender_id,
+                "telegram inbound from non-allowlisted sender — dropping"
+            );
+            return None;
+        }
+
         let (thread_id, thread_kind) = match msg.message_thread_id {
             Some(t) if self.config.support_thread => {
                 (Some(t.to_string()), Some(ThreadKind::TelegramForum))
             }
             _ => (None, None),
         };
-        MakakooInboundFrame {
+        let account_id = identity
+            .as_ref()
+            .map(|i| i.account_id.clone())
+            .unwrap_or_default();
+        Some(MakakooInboundFrame {
             agent_slot_id: self.ctx.slot_id.clone(),
             transport_id: self.ctx.transport_id.clone(),
             transport_kind: "telegram".into(),
-            account_id: String::new(), // filled in by verify_credentials at startup
+            account_id,
             conversation_id,
             sender_id,
             thread_id,
@@ -342,7 +409,7 @@ impl TelegramAdapter {
             transport_timestamp: Some(msg.date.to_string()),
             received_at: chrono::Utc::now(),
             raw_metadata: Default::default(),
-        }
+        })
     }
 }
 
@@ -373,6 +440,30 @@ mod tests {
         }
     }
 
+    fn allowed() -> Vec<String> {
+        vec!["746496145".into()]
+    }
+
+    async fn primed_adapter(
+        cfg: TelegramConfig,
+        allowed: Vec<String>,
+        bot_id: &str,
+    ) -> TelegramAdapter {
+        let adapter = TelegramAdapter::with_api_base(
+            ctx(),
+            cfg,
+            "123:abc".into(),
+            allowed,
+            "http://unused.invalid".into(),
+        );
+        *adapter.identity.lock().await = Some(VerifiedIdentity {
+            account_id: bot_id.into(),
+            tenant_id: None,
+            display_name: None,
+        });
+        adapter
+    }
+
     #[tokio::test]
     async fn verify_credentials_returns_bot_id() {
         let server = MockServer::start().await;
@@ -388,6 +479,7 @@ mod tests {
             ctx(),
             config(),
             "123:abc".into(),
+            allowed(),
             server.uri(),
         );
         let id = adapter.verify_credentials().await.unwrap();
@@ -407,8 +499,13 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let adapter =
-            TelegramAdapter::with_api_base(ctx(), config(), "bad".into(), server.uri());
+        let adapter = TelegramAdapter::with_api_base(
+            ctx(),
+            config(),
+            "bad".into(),
+            allowed(),
+            server.uri(),
+        );
         let err = adapter.verify_credentials().await.unwrap_err();
         assert!(format!("{err}").contains("Unauthorized"));
     }
@@ -419,6 +516,7 @@ mod tests {
             ctx(),
             config(),
             "123:abc".into(),
+            allowed(),
             "http://unused.invalid".into(),
         );
         let frame = MakakooOutboundFrame {
@@ -448,6 +546,7 @@ mod tests {
             ctx(),
             config(),
             "123:abc".into(),
+            allowed(),
             server.uri(),
         );
         let frame = MakakooOutboundFrame {
@@ -463,14 +562,9 @@ mod tests {
         adapter.send(&frame).await.unwrap();
     }
 
-    #[test]
-    fn build_inbound_frame_maps_fields() {
-        let adapter = TelegramAdapter::with_api_base(
-            ctx(),
-            config(),
-            "123:abc".into(),
-            "http://unused.invalid".into(),
-        );
+    #[tokio::test]
+    async fn build_inbound_frame_maps_fields() {
+        let adapter = primed_adapter(config(), allowed(), "8675309").await;
         let msg = TelegramMessage {
             message_id: 42,
             date: 1714123456,
@@ -486,7 +580,7 @@ mod tests {
             text: Some("hi".into()),
             message_thread_id: None,
         };
-        let frame = adapter.build_inbound_frame(msg, "hi".into());
+        let frame = adapter.build_inbound_frame(msg, "hi".into()).await.unwrap();
         assert_eq!(frame.transport_id, "telegram-main");
         assert_eq!(frame.transport_kind, "telegram");
         assert_eq!(frame.conversation_id, "746496145");
@@ -494,18 +588,14 @@ mod tests {
         assert_eq!(frame.message_id, "42");
         assert_eq!(frame.text, "hi");
         assert_eq!(frame.transport_timestamp.as_deref(), Some("1714123456"));
+        assert_eq!(frame.account_id, "8675309");
     }
 
-    #[test]
-    fn build_inbound_frame_drops_thread_when_unsupported() {
+    #[tokio::test]
+    async fn build_inbound_frame_drops_thread_when_unsupported() {
         let mut cfg = config();
         cfg.support_thread = false;
-        let adapter = TelegramAdapter::with_api_base(
-            ctx(),
-            cfg,
-            "123:abc".into(),
-            "http://unused.invalid".into(),
-        );
+        let adapter = primed_adapter(cfg, vec!["1".into()], "999").await;
         let msg = TelegramMessage {
             message_id: 1,
             date: 0,
@@ -514,21 +604,16 @@ mod tests {
             text: Some("x".into()),
             message_thread_id: Some(99),
         };
-        let frame = adapter.build_inbound_frame(msg, "x".into());
+        let frame = adapter.build_inbound_frame(msg, "x".into()).await.unwrap();
         assert!(frame.thread_id.is_none());
         assert!(frame.thread_kind.is_none());
     }
 
-    #[test]
-    fn build_inbound_frame_includes_thread_when_supported() {
+    #[tokio::test]
+    async fn build_inbound_frame_includes_thread_when_supported() {
         let mut cfg = config();
         cfg.support_thread = true;
-        let adapter = TelegramAdapter::with_api_base(
-            ctx(),
-            cfg,
-            "123:abc".into(),
-            "http://unused.invalid".into(),
-        );
+        let adapter = primed_adapter(cfg, vec!["1".into()], "999").await;
         let msg = TelegramMessage {
             message_id: 1,
             date: 0,
@@ -537,8 +622,58 @@ mod tests {
             text: Some("x".into()),
             message_thread_id: Some(99),
         };
-        let frame = adapter.build_inbound_frame(msg, "x".into());
+        let frame = adapter.build_inbound_frame(msg, "x".into()).await.unwrap();
         assert_eq!(frame.thread_id.as_deref(), Some("99"));
         assert_eq!(frame.thread_kind, Some(ThreadKind::TelegramForum));
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_self_loop() {
+        let adapter = primed_adapter(config(), vec!["8675309".into()], "8675309").await;
+        let msg = TelegramMessage {
+            message_id: 1,
+            date: 0,
+            chat: TelegramChat { id: 100, kind: "private".into() },
+            from: Some(TelegramUser {
+                id: 8675309,
+                username: Some("MakakooBot".into()),
+                first_name: None,
+            }),
+            text: Some("self echo".into()),
+            message_thread_id: None,
+        };
+        assert!(adapter.build_inbound_frame(msg, "self echo".into()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_non_allowlisted_sender() {
+        let adapter = primed_adapter(config(), vec!["111".into()], "999").await;
+        let msg = TelegramMessage {
+            message_id: 1,
+            date: 0,
+            chat: TelegramChat { id: 222, kind: "private".into() },
+            from: Some(TelegramUser {
+                id: 222,
+                username: None,
+                first_name: None,
+            }),
+            text: Some("hi".into()),
+            message_thread_id: None,
+        };
+        assert!(adapter.build_inbound_frame(msg, "hi".into()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_when_allowlist_empty() {
+        let adapter = primed_adapter(config(), vec![], "999").await;
+        let msg = TelegramMessage {
+            message_id: 1,
+            date: 0,
+            chat: TelegramChat { id: 1, kind: "private".into() },
+            from: Some(TelegramUser { id: 1, username: None, first_name: None }),
+            text: Some("hi".into()),
+            message_thread_id: None,
+        };
+        assert!(adapter.build_inbound_frame(msg, "hi".into()).await.is_none());
     }
 }

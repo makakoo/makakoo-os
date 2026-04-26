@@ -1,23 +1,31 @@
 //! Slack transport adapter (Socket Mode).
 //!
-//! Locked by SPRINT-MULTI-BOT-SUBAGENTS Q11:
-//!   - bot-token verification: `auth.test` HTTP call
+//! Locked by SPRINT-MULTI-BOT-SUBAGENTS Q11 + Phase 1:
+//!   - bot-token verification: `auth.test` HTTP call (rejects on
+//!     `team_id` mismatch).
 //!   - app-token Socket Mode probe: `apps.connections.open` HTTP
-//!     call (returns a `wss://` URL — actually opening that URL to
-//!     receive Events API envelopes lives in Phase 2 alongside the
-//!     `tokio-tungstenite` dep introduction; v1 ships the credential
-//!     verifier + outbound + inbound frame mapping).
-//!   - outbound: `chat.postMessage` with `thread_ts` and
-//!     reply-target coercion.
-//!
-//! Inbound frame construction is exercised by unit tests against
-//! sample Events API envelopes (`message.im`, `message.channel`).
+//!     call (returns a `wss://` URL).
+//!   - WebSocket lifecycle: dial the wss URL, send `acknowledge`
+//!     for each envelope, exponential-backoff reconnect (1 s → 60 s
+//!     jittered) on disconnect, emit `status.reconnecting` on
+//!     reconnect path.
+//!   - Inbound de-dup: 5-minute sliding window keyed on
+//!     `(channel, event.ts)`.
+//!   - Self-loop suppression: drop events where `event.user` matches
+//!     our resolved bot user_id, OR where `event.bot_id` is set.
+//!   - `dm_only` / `channels` allowlist enforcement on inbound.
+//!   - Outbound `chat.postMessage` with `thread_ts` and reply-target
+//!     coercion.
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::transport::config::SlackConfig;
 use crate::transport::frame::{MakakooInboundFrame, MakakooOutboundFrame, ThreadKind};
@@ -26,6 +34,9 @@ use crate::transport::{Transport, TransportContext, VerifiedIdentity};
 use crate::{MakakooError, Result};
 
 const SLACK_API_BASE: &str = "https://slack.com/api";
+const RECONNECT_INITIAL_MS: u64 = 1_000;
+const RECONNECT_CAP_MS: u64 = 60_000;
+const DEDUP_WINDOW: Duration = Duration::from_secs(300);
 
 /// Slack adapter (Socket Mode).
 pub struct SlackAdapter {
@@ -35,6 +46,15 @@ pub struct SlackAdapter {
     pub app_token: String,
     pub api_base: String,
     pub http: reqwest::Client,
+    /// Resolved bot identity (`auth.test.bot_id`/`user_id` +
+    /// `team_id`) — populated by `verify_credentials`.  Used to
+    /// stamp `account_id` on inbound frames and to suppress
+    /// self-loop events.
+    identity: Mutex<Option<VerifiedIdentity>>,
+    /// Recent `(channel, ts)` keys we've already delivered.  Used
+    /// to drop duplicates that arrive over multiple Socket Mode
+    /// connections within `DEDUP_WINDOW`.
+    dedup: Mutex<HashMap<(String, String), Instant>>,
 }
 
 impl SlackAdapter {
@@ -64,6 +84,8 @@ impl SlackAdapter {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("reqwest client"),
+            identity: Mutex::new(None),
+            dedup: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -73,7 +95,6 @@ impl SlackAdapter {
 #[derive(Debug, Deserialize)]
 struct SlackResponse {
     ok: bool,
-    #[serde(default)]
     error: Option<String>,
     #[serde(flatten)]
     rest: serde_json::Map<String, serde_json::Value>,
@@ -87,6 +108,11 @@ pub(crate) struct SlackAuthTest {
     pub team: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AppsConnectionsOpenResp {
+    url: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ChatPostMessage<'a> {
     channel: &'a str,
@@ -96,12 +122,8 @@ struct ChatPostMessage<'a> {
 }
 
 /// One inbound Events API envelope as delivered over Socket Mode.
-/// Phase 1 deserializes it to validate the field mapping; Phase 2
-/// adds the WebSocket loop that pulls envelopes from `wss://…` and
-/// drains them into `build_inbound_frame`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct SlackEnvelope {
-    #[serde(default)]
     pub envelope_id: Option<String>,
     pub payload: SlackEventPayload,
 }
@@ -113,7 +135,7 @@ pub(crate) struct SlackEventPayload {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum SlackEvent {
     Message(SlackMessageEvent),
     #[serde(other)]
@@ -123,15 +145,47 @@ pub(crate) enum SlackEvent {
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct SlackMessageEvent {
     pub channel: String,
-    pub user: String,
-    pub text: String,
+    /// Some Slack message subtypes (`message_changed`,
+    /// `message_deleted`, `bot_message` from older apps) omit
+    /// `user` — we drop those events at frame-mapping time.
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
     pub ts: String,
-    #[serde(default)]
     pub thread_ts: Option<String>,
-    #[serde(default)]
     pub channel_type: Option<String>,
-    #[serde(default)]
     pub bot_id: Option<String>,
+    /// Subtype tag — `Some("message_changed")`, `"message_deleted"`,
+    /// etc.  v1 only delivers events with no subtype (regular
+    /// user messages).
+    pub subtype: Option<String>,
+}
+
+/// Socket Mode envelope wrapper used both for inbound payloads and
+/// the `acknowledge` outbound.  We tag-decode on the `type` field.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SocketFrame {
+    EventsApi {
+        envelope_id: String,
+        payload: SlackEventPayload,
+    },
+    Hello {
+        #[serde(default)]
+        debug_info: Option<serde_json::Value>,
+    },
+    Disconnect {
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Serialize)]
+struct SocketAck<'a> {
+    envelope_id: &'a str,
 }
 
 // ── Transport impl ────────────────────────────────────────────────
@@ -188,18 +242,19 @@ impl Transport for SlackAdapter {
                 probe.error.unwrap_or_else(|| "unknown".into())
             )));
         }
-        // The `url` field on success is the wss:// endpoint Phase 2
-        // will dial; we don't connect here.
 
         let account_id = auth
             .bot_id
-            .or(auth.user_id)
+            .clone()
+            .or(auth.user_id.clone())
             .unwrap_or_else(|| "unknown".into());
-        Ok(VerifiedIdentity {
+        let identity = VerifiedIdentity {
             account_id,
-            tenant_id: Some(auth.team_id),
-            display_name: auth.team,
-        })
+            tenant_id: Some(auth.team_id.clone()),
+            display_name: auth.team.clone(),
+        };
+        *self.identity.lock().await = Some(identity.clone());
+        Ok(identity)
     }
 
     async fn send(&self, frame: &MakakooOutboundFrame) -> Result<()> {
@@ -220,17 +275,15 @@ impl Transport for SlackAdapter {
             None
         };
 
-        // Q11 reply_to_message_id coercion for Slack: pass the
-        // string through if it looks like a Slack thread_ts (matches
-        // /^\d+\.\d+$/). Otherwise drop with WARN. We use this only
-        // when explicit thread_ts isn't already set (Slack treats
-        // thread_ts as the reply anchor).
+        // Reply-to coercion (Q11): only honor when looks like a
+        // valid Slack thread_ts (`^\d+\.\d+$`).
         let reply_thread_ts = if thread_ts.is_none() {
             frame.reply_to_message_id.as_deref().and_then(|raw| {
                 let looks_like_ts = raw
                     .split_once('.')
                     .map(|(a, b)| {
-                        !a.is_empty() && !b.is_empty() && a.chars().all(|c| c.is_ascii_digit())
+                        !a.is_empty() && !b.is_empty()
+                            && a.chars().all(|c| c.is_ascii_digit())
                             && b.chars().all(|c| c.is_ascii_digit())
                     })
                     .unwrap_or(false);
@@ -278,27 +331,168 @@ impl Transport for SlackAdapter {
 
 #[async_trait]
 impl Gateway for SlackAdapter {
-    async fn start(&self, _sink: InboundSink) -> Result<()> {
-        // Phase 1 ships the credential verifier + outbound + inbound
-        // frame mapping; the WebSocket loop body lands in Phase 2
-        // alongside the tokio-tungstenite dep introduction.  For
-        // Phase 1 we no-op the listener so adapters compile and
-        // can be wired into the router for unit tests.
-        tracing::warn!(
-            target: "makakoo_core::transport::slack",
-            transport_id = self.ctx.transport_id,
-            "slack Socket Mode WebSocket loop is a Phase 2 deliverable; Phase 1 ships verifier + outbound + envelope parser only"
-        );
-        Ok(())
+    async fn start(&self, sink: InboundSink) -> Result<()> {
+        // Verify credentials (also caches the bot identity).
+        if self.identity.lock().await.is_none() {
+            self.verify_credentials().await?;
+        }
+        let mut backoff_ms = RECONNECT_INITIAL_MS;
+        loop {
+            // Open a fresh Socket Mode session for each connection.
+            let url = match self.open_socket_url().await {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "makakoo_core::transport::slack",
+                        transport_id = self.ctx.transport_id,
+                        error = %e,
+                        backoff_ms,
+                        "apps.connections.open failed — reconnecting after backoff"
+                    );
+                    self.sleep_backoff(backoff_ms).await;
+                    backoff_ms = (backoff_ms.saturating_mul(2)).min(RECONNECT_CAP_MS);
+                    continue;
+                }
+            };
+            tracing::info!(
+                target: "makakoo_core::transport::slack",
+                transport_id = self.ctx.transport_id,
+                event = "status.reconnecting",
+                "dialing slack socket mode wss"
+            );
+            match self.run_socket_session(&url, &sink).await {
+                Ok(reason) => {
+                    tracing::info!(
+                        target: "makakoo_core::transport::slack",
+                        transport_id = self.ctx.transport_id,
+                        reason = %reason,
+                        "slack socket session ended cleanly — reconnecting"
+                    );
+                    backoff_ms = RECONNECT_INITIAL_MS;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "makakoo_core::transport::slack",
+                        transport_id = self.ctx.transport_id,
+                        error = %e,
+                        backoff_ms,
+                        "slack socket session error — reconnecting after backoff"
+                    );
+                    self.sleep_backoff(backoff_ms).await;
+                    backoff_ms = (backoff_ms.saturating_mul(2)).min(RECONNECT_CAP_MS);
+                }
+            }
+        }
     }
 }
 
 impl SlackAdapter {
-    /// Build an inbound frame from a Socket Mode Events API envelope.
-    /// Pure (no I/O) so unit tests can exercise the field mapping
-    /// without a live WebSocket.  Returns `None` for envelopes we
-    /// don't translate in v1 (non-`message` events, bot echoes).
-    pub(crate) fn build_inbound_frame(
+    async fn sleep_backoff(&self, base_ms: u64) {
+        use rand::Rng;
+        let jitter = rand::thread_rng().gen_range(base_ms / 2..=base_ms);
+        tokio::time::sleep(Duration::from_millis(jitter)).await;
+    }
+
+    async fn open_socket_url(&self) -> Result<String> {
+        let resp: SlackResponse = self
+            .http
+            .post(format!("{}/apps.connections.open", self.api_base))
+            .bearer_auth(&self.app_token)
+            .send()
+            .await?
+            .json()
+            .await?;
+        if !resp.ok {
+            return Err(MakakooError::Config(format!(
+                "slack apps.connections.open failed: {}",
+                resp.error.unwrap_or_else(|| "unknown".into())
+            )));
+        }
+        let parsed: AppsConnectionsOpenResp =
+            serde_json::from_value(serde_json::Value::Object(resp.rest))
+                .map_err(|e| MakakooError::Internal(format!("apps.connections.open parse: {}", e)))?;
+        Ok(parsed.url)
+    }
+
+    /// Run one Socket Mode WebSocket session.  Returns when the
+    /// server sends a `disconnect` frame (with the reason) or
+    /// errors when the WebSocket closes unexpectedly.
+    async fn run_socket_session(&self, url: &str, sink: &InboundSink) -> Result<String> {
+        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .map_err(|e| MakakooError::Internal(format!("slack ws connect: {}", e)))?;
+        let (mut writer, mut reader) = ws_stream.split();
+        while let Some(msg) = reader.next().await {
+            let msg = msg.map_err(|e| MakakooError::Internal(format!("slack ws recv: {}", e)))?;
+            let text = match msg {
+                Message::Text(t) => t,
+                Message::Ping(payload) => {
+                    let _ = writer.send(Message::Pong(payload)).await;
+                    continue;
+                }
+                Message::Close(_) => {
+                    return Ok("ws-close".into());
+                }
+                _ => continue,
+            };
+            let frame: SocketFrame = match serde_json::from_str(&text) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::debug!(
+                        target: "makakoo_core::transport::slack",
+                        transport_id = self.ctx.transport_id,
+                        error = %e,
+                        text = %text,
+                        "slack ws frame parse failed — skipping"
+                    );
+                    continue;
+                }
+            };
+            match frame {
+                SocketFrame::Hello { .. } => continue,
+                SocketFrame::Disconnect { reason } => {
+                    return Ok(reason.unwrap_or_else(|| "disconnect".into()));
+                }
+                SocketFrame::Other => continue,
+                SocketFrame::EventsApi {
+                    envelope_id,
+                    payload,
+                } => {
+                    // Acknowledge first — Slack expects an ack
+                    // within ~3s or it'll redeliver.
+                    let ack = serde_json::to_string(&SocketAck {
+                        envelope_id: &envelope_id,
+                    })
+                    .map_err(|e| MakakooError::Internal(format!("ack serialise: {}", e)))?;
+                    if let Err(e) = writer.send(Message::Text(ack)).await {
+                        return Err(MakakooError::Internal(format!("slack ws ack: {}", e)));
+                    }
+                    let envelope = SlackEnvelope {
+                        envelope_id: Some(envelope_id),
+                        payload,
+                    };
+                    if let Some(frame) = self.build_inbound_frame(envelope).await {
+                        if sink.send(frame).await.is_err() {
+                            tracing::error!(
+                                target: "makakoo_core::transport::slack",
+                                transport_id = self.ctx.transport_id,
+                                "inbound sink closed — slack listener exiting"
+                            );
+                            return Ok("sink-closed".into());
+                        }
+                    }
+                }
+            }
+        }
+        Ok("ws-eof".into())
+    }
+
+    /// Build an inbound frame from a Socket Mode Events API
+    /// envelope.  Async because it consults the dedup map and the
+    /// cached identity.  Returns `None` for events we don't deliver
+    /// in v1 (non-`message`, subtype != regular, bot echo, self-loop,
+    /// blocked by allowlists, dedup hit, team mismatch).
+    pub(crate) async fn build_inbound_frame(
         &self,
         envelope: SlackEnvelope,
     ) -> Option<MakakooInboundFrame> {
@@ -306,28 +500,104 @@ impl SlackAdapter {
         let SlackEvent::Message(msg) = envelope.payload.event else {
             return None;
         };
-        // Suppress bot echoes — we don't want the agent replying to
-        // its own messages.
+        // Drop edited / deleted / channel-system messages.
+        if msg.subtype.is_some() {
+            tracing::debug!(
+                target: "makakoo_core::transport::slack",
+                transport_id = self.ctx.transport_id,
+                subtype = ?msg.subtype,
+                "dropping slack message with non-empty subtype"
+            );
+            return None;
+        }
+        // Suppress bot echoes — neither generic bot_id nor our
+        // own user_id should be delivered to the LLM.
         if msg.bot_id.is_some() {
             return None;
         }
+        let identity = self.identity.lock().await.clone();
+        if let (Some(user), Some(id)) = (msg.user.as_ref(), identity.as_ref()) {
+            if user == &id.account_id {
+                tracing::debug!(
+                    target: "makakoo_core::transport::slack",
+                    transport_id = self.ctx.transport_id,
+                    "suppressing slack self-loop event (user matches own bot id)"
+                );
+                return None;
+            }
+            // Also reject if the inbound team_id doesn't match the
+            // adapter's verified tenant.
+            if let Some(expected) = identity.as_ref().and_then(|i| i.tenant_id.as_ref()) {
+                if expected != &team_id {
+                    tracing::warn!(
+                        target: "makakoo_core::transport::slack",
+                        transport_id = self.ctx.transport_id,
+                        inbound_team_id = team_id,
+                        expected_team_id = expected,
+                        "dropping slack event from unexpected team_id"
+                    );
+                    return None;
+                }
+            }
+        }
+        let user = msg.user.as_ref()?.clone();
+
+        // Allowlist enforcement.
+        if !self.config.dm_only {
+            if !self.config.channels.iter().any(|c| c == &msg.channel) {
+                return None;
+            }
+        } else {
+            // dm_only: drop channel events (channel ids start with C).
+            if msg.channel_type.as_deref() != Some("im")
+                && !msg.channel.starts_with('D')
+            {
+                return None;
+            }
+        }
+
+        // Dedup: 5-minute sliding window keyed on (channel, ts).
+        let key = (msg.channel.clone(), msg.ts.clone());
+        {
+            let mut dedup = self.dedup.lock().await;
+            // Sweep stale entries while we're here.
+            let cutoff = Instant::now() - DEDUP_WINDOW;
+            dedup.retain(|_, t| *t > cutoff);
+            if dedup.contains_key(&key) {
+                tracing::debug!(
+                    target: "makakoo_core::transport::slack",
+                    transport_id = self.ctx.transport_id,
+                    channel = msg.channel,
+                    ts = msg.ts,
+                    "dropping slack duplicate within 5-minute window"
+                );
+                return None;
+            }
+            dedup.insert(key, Instant::now());
+        }
+
         let (thread_id, thread_kind) = match &msg.thread_ts {
             Some(ts) if self.config.support_thread => {
                 (Some(ts.clone()), Some(ThreadKind::SlackThread))
             }
             _ => (None, None),
         };
+        let account_id = identity
+            .as_ref()
+            .map(|i| i.account_id.clone())
+            .unwrap_or_default();
+        let text = msg.text.clone().unwrap_or_default();
         Some(MakakooInboundFrame {
             agent_slot_id: self.ctx.slot_id.clone(),
             transport_id: self.ctx.transport_id.clone(),
             transport_kind: "slack".into(),
-            account_id: format!("{}:{}", team_id, msg.channel_type.clone().unwrap_or_default()),
+            account_id,
             conversation_id: msg.channel.clone(),
-            sender_id: msg.user.clone(),
+            sender_id: user,
             thread_id,
             thread_kind,
             message_id: msg.ts.clone(),
-            text: msg.text.clone(),
+            text,
             transport_timestamp: Some(msg.ts.clone()),
             received_at: chrono::Utc::now(),
             raw_metadata: Default::default(),
@@ -363,37 +633,84 @@ mod tests {
         }
     }
 
+    fn envelope(
+        team_id: &str,
+        channel: &str,
+        user: Option<&str>,
+        ts: &str,
+        thread_ts: Option<&str>,
+        bot_id: Option<&str>,
+        subtype: Option<&str>,
+        channel_type: Option<&str>,
+    ) -> SlackEnvelope {
+        SlackEnvelope {
+            envelope_id: Some("env-1".into()),
+            payload: SlackEventPayload {
+                team_id: team_id.into(),
+                event: SlackEvent::Message(SlackMessageEvent {
+                    channel: channel.into(),
+                    user: user.map(Into::into),
+                    text: Some("hi".into()),
+                    ts: ts.into(),
+                    thread_ts: thread_ts.map(Into::into),
+                    channel_type: channel_type.map(Into::into),
+                    bot_id: bot_id.map(Into::into),
+                    subtype: subtype.map(Into::into),
+                }),
+            },
+        }
+    }
+
+    async fn primed_adapter(
+        cfg: SlackConfig,
+        team_id: &str,
+        bot_id: &str,
+    ) -> SlackAdapter {
+        let adapter = SlackAdapter::with_api_base(
+            ctx(),
+            cfg,
+            "xoxb".into(),
+            "xapp".into(),
+            "http://unused.invalid".into(),
+        );
+        *adapter.identity.lock().await = Some(VerifiedIdentity {
+            account_id: bot_id.into(),
+            tenant_id: Some(team_id.into()),
+            display_name: None,
+        });
+        adapter
+    }
+
     #[tokio::test]
     async fn verify_credentials_succeeds_with_matching_team() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/auth.test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": true,
-                "team_id": "T0123ABCD",
-                "bot_id": "B0123BOT",
-                "team": "Acme"
+                "ok": true, "team_id": "T0123ABCD",
+                "bot_id": "B0123BOT", "team": "Acme"
             })))
             .mount(&server)
             .await;
         Mock::given(method("POST"))
             .and(path("/apps.connections.open"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": true,
-                "url": "wss://wss.slack.com/socket/123"
+                "ok": true, "url": "wss://wss.slack.com/socket/123"
             })))
             .mount(&server)
             .await;
         let adapter = SlackAdapter::with_api_base(
             ctx(),
             config(),
-            "xoxb-bot".into(),
-            "xapp-app".into(),
+            "xoxb".into(),
+            "xapp".into(),
             server.uri(),
         );
         let id = adapter.verify_credentials().await.unwrap();
         assert_eq!(id.account_id, "B0123BOT");
         assert_eq!(id.tenant_id.as_deref(), Some("T0123ABCD"));
+        // Identity cached for inbound use.
+        assert!(adapter.identity.lock().await.is_some());
     }
 
     #[tokio::test]
@@ -402,9 +719,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/auth.test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": true,
-                "team_id": "T9999OTHER",
-                "bot_id": "B0123BOT"
+                "ok": true, "team_id": "T9999OTHER", "bot_id": "B0123BOT"
             })))
             .mount(&server)
             .await;
@@ -425,8 +740,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/auth.test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": false,
-                "error": "invalid_auth"
+                "ok": false, "error": "invalid_auth"
             })))
             .mount(&server)
             .await;
@@ -525,130 +839,198 @@ mod tests {
             thread_id: None,
             thread_kind: None,
             text: "hi".into(),
-            // Telegram-shaped reply_to (numeric int, not float-string)
             reply_to_message_id: Some("42".into()),
         };
         adapter.send(&frame).await.unwrap();
     }
 
-    #[test]
-    fn build_inbound_frame_dm() {
-        let adapter = SlackAdapter::with_api_base(
-            ctx(),
-            config(),
-            "xoxb".into(),
-            "xapp".into(),
-            "http://unused.invalid".into(),
+    #[tokio::test]
+    async fn build_inbound_frame_dm() {
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U0123USER"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("im"),
         );
-        let env = SlackEnvelope {
-            envelope_id: Some("env-1".into()),
-            payload: SlackEventPayload {
-                team_id: "T0123ABCD".into(),
-                event: SlackEvent::Message(SlackMessageEvent {
-                    channel: "D0123ABCD".into(),
-                    user: "U0123USER".into(),
-                    text: "hi".into(),
-                    ts: "1714123456.000100".into(),
-                    thread_ts: None,
-                    channel_type: Some("im".into()),
-                    bot_id: None,
-                }),
-            },
-        };
-        let frame = adapter.build_inbound_frame(env).unwrap();
+        let frame = adapter.build_inbound_frame(env).await.unwrap();
         assert_eq!(frame.transport_kind, "slack");
         assert_eq!(frame.conversation_id, "D0123ABCD");
         assert_eq!(frame.sender_id, "U0123USER");
         assert_eq!(frame.message_id, "1714123456.000100");
+        assert_eq!(frame.account_id, "B0123BOT");
     }
 
-    #[test]
-    fn build_inbound_frame_channel() {
-        let adapter = SlackAdapter::with_api_base(
-            ctx(),
-            SlackConfig {
-                dm_only: false,
-                channels: vec!["C0123DEFG".into()],
-                ..config()
-            },
-            "xoxb".into(),
-            "xapp".into(),
-            "http://unused.invalid".into(),
+    #[tokio::test]
+    async fn build_inbound_frame_channel() {
+        let mut cfg = config();
+        cfg.dm_only = false;
+        cfg.channels = vec!["C0123DEFG".into()];
+        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "C0123DEFG",
+            Some("U0123USER"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("channel"),
         );
-        let env = SlackEnvelope {
-            envelope_id: None,
-            payload: SlackEventPayload {
-                team_id: "T0123ABCD".into(),
-                event: SlackEvent::Message(SlackMessageEvent {
-                    channel: "C0123DEFG".into(),
-                    user: "U0123USER".into(),
-                    text: "hi".into(),
-                    ts: "1714123456.000100".into(),
-                    thread_ts: None,
-                    channel_type: Some("channel".into()),
-                    bot_id: None,
-                }),
-            },
-        };
-        let frame = adapter.build_inbound_frame(env).unwrap();
+        let frame = adapter.build_inbound_frame(env).await.unwrap();
         assert_eq!(frame.conversation_id, "C0123DEFG");
     }
 
-    #[test]
-    fn build_inbound_frame_drops_bot_echoes() {
-        let adapter = SlackAdapter::with_api_base(
-            ctx(),
-            config(),
-            "xoxb".into(),
-            "xapp".into(),
-            "http://unused.invalid".into(),
+    #[tokio::test]
+    async fn build_inbound_frame_drops_bot_echoes() {
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U0123BOTUSER"),
+            "1714123456.000100",
+            None,
+            Some("B0123BOT"),
+            None,
+            Some("im"),
         );
-        let env = SlackEnvelope {
-            envelope_id: None,
-            payload: SlackEventPayload {
-                team_id: "T0123ABCD".into(),
-                event: SlackEvent::Message(SlackMessageEvent {
-                    channel: "D0123ABCD".into(),
-                    user: "U0123BOTUSER".into(),
-                    text: "hi".into(),
-                    ts: "1714123456.000100".into(),
-                    thread_ts: None,
-                    channel_type: Some("im".into()),
-                    bot_id: Some("B0123BOT".into()),
-                }),
-            },
-        };
-        assert!(adapter.build_inbound_frame(env).is_none());
+        assert!(adapter.build_inbound_frame(env).await.is_none());
     }
 
-    #[test]
-    fn build_inbound_frame_includes_thread_when_supported() {
-        let adapter = SlackAdapter::with_api_base(
-            ctx(),
-            SlackConfig {
-                support_thread: true,
-                ..config()
-            },
-            "xoxb".into(),
-            "xapp".into(),
-            "http://unused.invalid".into(),
+    #[tokio::test]
+    async fn build_inbound_frame_drops_self_loop() {
+        let adapter = primed_adapter(config(), "T0123ABCD", "U0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U0123BOT"), // SAME as cached account_id
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("im"),
         );
-        let env = SlackEnvelope {
-            envelope_id: None,
-            payload: SlackEventPayload {
-                team_id: "T0123ABCD".into(),
-                event: SlackEvent::Message(SlackMessageEvent {
-                    channel: "C0123DEFG".into(),
-                    user: "U0123USER".into(),
-                    text: "in thread".into(),
-                    ts: "1714123456.000200".into(),
-                    thread_ts: Some("1714123456.000100".into()),
-                    channel_type: Some("channel".into()),
-                    bot_id: None,
-                }),
-            },
-        };
-        let frame = adapter.build_inbound_frame(env).unwrap();
+        assert!(adapter.build_inbound_frame(env).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_subtype() {
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U0123USER"),
+            "1714123456.000100",
+            None,
+            None,
+            Some("message_changed"),
+            Some("im"),
+        );
+        assert!(adapter.build_inbound_frame(env).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_unexpected_team() {
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T9999OTHER",
+            "D0123ABCD",
+            Some("U0123USER"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("im"),
+        );
+        assert!(adapter.build_inbound_frame(env).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_channel_event_in_dm_only() {
+        // dm_only=true; a channel event (channel id starts with C)
+        // must be dropped.
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "C0123DEFG",
+            Some("U0123USER"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("channel"),
+        );
+        assert!(adapter.build_inbound_frame(env).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_dedups_within_window() {
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let env1 = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U0123USER"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("im"),
+        );
+        let env2 = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U0123USER"),
+            "1714123456.000100", // SAME ts, SAME channel
+            None,
+            None,
+            None,
+            Some("im"),
+        );
+        assert!(adapter.build_inbound_frame(env1).await.is_some());
+        assert!(adapter.build_inbound_frame(env2).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_channel_not_in_allowlist() {
+        let mut cfg = config();
+        cfg.dm_only = false;
+        cfg.channels = vec!["C_ALLOWED".into()];
+        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "C_OTHER",
+            Some("U0123USER"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("channel"),
+        );
+        assert!(adapter.build_inbound_frame(env).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_includes_thread_when_supported() {
+        let mut cfg = config();
+        cfg.support_thread = true;
+        cfg.dm_only = false;
+        cfg.channels = vec!["C0123DEFG".into()];
+        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT").await;
+        let env = envelope(
+            "T0123ABCD",
+            "C0123DEFG",
+            Some("U0123USER"),
+            "1714123456.000200",
+            Some("1714123456.000100"),
+            None,
+            None,
+            Some("channel"),
+        );
+        let frame = adapter.build_inbound_frame(env).await.unwrap();
         assert_eq!(frame.thread_id.as_deref(), Some("1714123456.000100"));
         assert_eq!(frame.thread_kind, Some(ThreadKind::SlackThread));
     }
