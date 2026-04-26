@@ -36,6 +36,7 @@ mod http_server;
 mod jsonrpc;
 mod server;
 mod slack_events;
+mod web_chat_ws;
 mod webhook_router;
 mod whatsapp_webhook;
 

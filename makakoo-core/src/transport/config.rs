@@ -143,9 +143,18 @@ impl<'de> Deserialize<'de> for TransportEntry {
                 })?;
                 TransportConfig::WhatsApp(cfg)
             }
+            "web" => {
+                let cfg: WebConfig = wire.config.try_into().map_err(|e| {
+                    de::Error::custom(format!(
+                        "transport '{}' kind=web: invalid [config] body: {}",
+                        wire.id, e
+                    ))
+                })?;
+                TransportConfig::Web(cfg)
+            }
             other => {
                 return Err(de::Error::custom(format!(
-                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord | whatsapp)",
+                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord | whatsapp | web)",
                     wire.id, other
                 )));
             }
@@ -179,6 +188,7 @@ pub enum TransportConfig {
     Slack(SlackConfig),
     Discord(DiscordConfig),
     WhatsApp(WhatsAppConfig),
+    Web(WebConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -319,6 +329,31 @@ impl WhatsAppConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebConfig {
+    /// Origin allowlist for WS upgrade. Required in production
+    /// (locked Q10 round-2 fix). When empty, only loopback origins
+    /// (`http://localhost`, `http://127.0.0.1`) are accepted —
+    /// useful for local dev but never sufficient for a public
+    /// deployment. validate() enforces this when
+    /// `production_mode = true`.
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+
+    /// Toggle the production-mode origin requirement. Set true to
+    /// fail validation when `allowed_origins` is empty.
+    #[serde(default)]
+    pub production_mode: bool,
+
+    /// Visitor cookie max-age in seconds. Default 30 days.
+    #[serde(default = "default_web_cookie_ttl")]
+    pub cookie_ttl_seconds: u64,
+}
+
+fn default_web_cookie_ttl() -> u64 {
+    30 * 24 * 3600
+}
+
 impl TransportEntry {
     /// Resolve the bot-token slot into a `SecretRef`.
     pub fn bot_token_ref(&self) -> SecretRef {
@@ -345,12 +380,16 @@ impl TransportEntry {
                 "transport.id must not be empty".into(),
             ));
         }
-        let bot_token = self.bot_token_ref();
-        if bot_token.is_empty() {
-            return Err(MakakooError::InvalidInput(format!(
-                "transport '{}' has no bot-token source (set one of secret_env / secret_ref / inline_secret_dev)",
-                self.id
-            )));
+        // Web chat is bot-tokenless (no upstream provider — visitors
+        // identify via signed cookies, not a bot token).
+        if self.kind != "web" {
+            let bot_token = self.bot_token_ref();
+            if bot_token.is_empty() {
+                return Err(MakakooError::InvalidInput(format!(
+                    "transport '{}' has no bot-token source (set one of secret_env / secret_ref / inline_secret_dev)",
+                    self.id
+                )));
+            }
         }
         match (&self.kind[..], &self.config) {
             ("telegram", TransportConfig::Telegram(_)) => Ok(()),
@@ -404,8 +443,18 @@ impl TransportEntry {
                 }
                 Ok(())
             }
+            ("web", TransportConfig::Web(w)) => {
+                if w.production_mode && w.allowed_origins.is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=web: production_mode = true requires \
+                         a non-empty allowed_origins list (locked Q10)",
+                        self.id
+                    )));
+                }
+                Ok(())
+            }
             (k, _) => Err(MakakooError::InvalidInput(format!(
-                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord | whatsapp)",
+                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord | whatsapp | web)",
                 self.id, k
             ))),
         }
@@ -586,6 +635,74 @@ mod tests {
         e.config = TransportConfig::Telegram(TelegramConfig::default());
         let err = e.validate().unwrap_err();
         assert!(format!("{err}").contains("doesn't match"));
+    }
+
+    fn web_entry(id: &str) -> TransportEntry {
+        TransportEntry {
+            id: id.into(),
+            kind: "web".into(),
+            enabled: true,
+            account_id: None,
+            secret_ref: None,
+            secret_env: None,
+            inline_secret_dev: None,
+            app_token_ref: None,
+            app_token_env: None,
+            inline_app_token_dev: None,
+            allowed_users: vec![],
+            config: TransportConfig::Web(WebConfig::default()),
+        }
+    }
+
+    #[test]
+    fn web_entry_validates_without_bot_token() {
+        // Web chat is bot-tokenless — visitors identify via signed cookies.
+        web_entry("web-main").validate().unwrap();
+    }
+
+    #[test]
+    fn web_production_mode_requires_allowed_origins() {
+        let mut e = web_entry("web");
+        if let TransportConfig::Web(ref mut w) = e.config {
+            w.production_mode = true;
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("allowed_origins"));
+    }
+
+    #[test]
+    fn web_production_mode_with_allowlist_is_ok() {
+        let mut e = web_entry("web");
+        if let TransportConfig::Web(ref mut w) = e.config {
+            w.production_mode = true;
+            w.allowed_origins = vec!["https://harvey.example".into()];
+        }
+        e.validate().unwrap();
+    }
+
+    #[test]
+    fn web_round_trip_via_toml() {
+        let raw = r#"
+id = "web-main"
+kind = "web"
+enabled = true
+
+[config]
+allowed_origins = ["https://harvey.example"]
+production_mode = true
+cookie_ttl_seconds = 86400
+"#;
+        let entry: TransportEntry = toml::from_str(raw).unwrap();
+        assert_eq!(entry.kind, "web");
+        match &entry.config {
+            TransportConfig::Web(w) => {
+                assert!(w.production_mode);
+                assert_eq!(w.allowed_origins, vec!["https://harvey.example".to_string()]);
+                assert_eq!(w.cookie_ttl_seconds, 86400);
+            }
+            _ => panic!("expected web variant"),
+        }
+        entry.validate().unwrap();
     }
 
     fn whatsapp_entry(id: &str) -> TransportEntry {
