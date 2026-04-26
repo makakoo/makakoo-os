@@ -19,6 +19,7 @@ use crate::Result;
 
 pub mod config;
 pub mod discord;
+pub mod email;
 pub mod frame;
 pub mod gateway;
 pub mod outbound;

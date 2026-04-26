@@ -203,7 +203,8 @@ async fn verify_one(
         TransportConfig::Discord(_)
         | TransportConfig::WhatsApp(_)
         | TransportConfig::Web(_)
-        | TransportConfig::VoiceTwilio(_) => {
+        | TransportConfig::VoiceTwilio(_)
+        | TransportConfig::Email(_) => {
             // Phase 7-11 transports verify credentials via their own
             // adapters; the simplified registry path here doesn't run
             // a network probe yet (Phase 13 wires per-kind verifiers).

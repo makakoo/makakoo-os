@@ -161,9 +161,18 @@ impl<'de> Deserialize<'de> for TransportEntry {
                 })?;
                 TransportConfig::VoiceTwilio(cfg)
             }
+            "email" => {
+                let cfg: EmailConfig = wire.config.try_into().map_err(|e| {
+                    de::Error::custom(format!(
+                        "transport '{}' kind=email: invalid [config] body: {}",
+                        wire.id, e
+                    ))
+                })?;
+                TransportConfig::Email(cfg)
+            }
             other => {
                 return Err(de::Error::custom(format!(
-                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord | whatsapp | web | voice_twilio)",
+                    "transport '{}' has unsupported kind '{}' (supported: telegram | slack | discord | whatsapp | web | voice_twilio | email)",
                     wire.id, other
                 )));
             }
@@ -199,6 +208,7 @@ pub enum TransportConfig {
     WhatsApp(WhatsAppConfig),
     Web(WebConfig),
     VoiceTwilio(VoiceTwilioConfig),
+    Email(EmailConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -400,6 +410,47 @@ impl VoiceTwilioConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EmailConfig {
+    /// Full mailbox address — used as `account_id` AND as the SMTP
+    /// envelope sender.
+    pub account_id: String,
+
+    /// `"oauth2"` (mandatory for Gmail) or `"app_password"`
+    /// (acceptable for IMAP servers that still allow it; documented
+    /// as weaker — adapter logs a WARN on every start).
+    #[serde(default = "default_email_auth_mode")]
+    pub auth_mode: String,
+
+    pub imap_server: String,
+    #[serde(default = "default_imaps_port")]
+    pub imap_port: u16,
+
+    pub smtp_server: String,
+    #[serde(default = "default_smtps_port")]
+    pub smtp_port: u16,
+
+    /// Allowed sender addresses (case-insensitive match on the
+    /// inbound `From` header).
+    #[serde(default)]
+    pub allowed_senders: Vec<String>,
+
+    /// When true, outbound replies stamp `In-Reply-To` and
+    /// `References` headers from the inbound `Message-ID`.
+    #[serde(default = "default_true")]
+    pub support_thread: bool,
+}
+
+fn default_email_auth_mode() -> String {
+    "oauth2".into()
+}
+fn default_imaps_port() -> u16 {
+    993
+}
+fn default_smtps_port() -> u16 {
+    465
+}
+
 impl TransportEntry {
     /// Resolve the bot-token slot into a `SecretRef`.
     pub fn bot_token_ref(&self) -> SecretRef {
@@ -504,6 +555,35 @@ impl TransportEntry {
                 }
                 Ok(())
             }
+            ("email", TransportConfig::Email(e)) => {
+                if e.account_id.is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=email: account_id (full mailbox address) must not be empty",
+                        self.id
+                    )));
+                }
+                if e.imap_server.is_empty() || e.smtp_server.is_empty() {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=email: both imap_server and smtp_server must be set",
+                        self.id
+                    )));
+                }
+                // Plain (non-TLS) ports rejected by validate (locked Q8).
+                if e.imap_port == 143 || e.smtp_port == 25 {
+                    return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=email: plain IMAP (143) or SMTP (25) is rejected — use STARTTLS or implicit TLS (993/465/587)",
+                        self.id
+                    )));
+                }
+                match e.auth_mode.as_str() {
+                    "oauth2" | "app_password" => {}
+                    other => return Err(MakakooError::InvalidInput(format!(
+                        "transport '{}' kind=email: auth_mode must be 'oauth2' or 'app_password', got '{}'",
+                        self.id, other
+                    ))),
+                }
+                Ok(())
+            }
             ("voice_twilio", TransportConfig::VoiceTwilio(v)) => {
                 if v.account_sid.is_empty() {
                     return Err(MakakooError::InvalidInput(format!(
@@ -526,7 +606,7 @@ impl TransportEntry {
                 Ok(())
             }
             (k, _) => Err(MakakooError::InvalidInput(format!(
-                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord | whatsapp | web | voice_twilio)",
+                "transport '{}' has kind '{}' that doesn't match its config payload (supported: telegram | slack | discord | whatsapp | web | voice_twilio | email)",
                 self.id, k
             ))),
         }
@@ -707,6 +787,77 @@ mod tests {
         e.config = TransportConfig::Telegram(TelegramConfig::default());
         let err = e.validate().unwrap_err();
         assert!(format!("{err}").contains("doesn't match"));
+    }
+
+    fn email_entry(id: &str) -> TransportEntry {
+        TransportEntry {
+            id: id.into(),
+            kind: "email".into(),
+            enabled: true,
+            account_id: None,
+            secret_ref: None,
+            secret_env: None,
+            inline_secret_dev: Some("APP_PASSWORD".into()),
+            app_token_ref: None,
+            app_token_env: None,
+            inline_app_token_dev: None,
+            allowed_users: vec![],
+            config: TransportConfig::Email(EmailConfig {
+                account_id: "secretary@example.com".into(),
+                auth_mode: "app_password".into(),
+                imap_server: "imap.example.com".into(),
+                imap_port: 993,
+                smtp_server: "smtp.example.com".into(),
+                smtp_port: 465,
+                allowed_senders: vec!["alice@example.com".into()],
+                support_thread: true,
+            }),
+        }
+    }
+
+    #[test]
+    fn email_entry_validates() {
+        email_entry("email-main").validate().unwrap();
+    }
+
+    #[test]
+    fn email_rejects_plain_imap_port() {
+        let mut e = email_entry("e");
+        if let TransportConfig::Email(ref mut c) = e.config {
+            c.imap_port = 143;
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("plain"));
+    }
+
+    #[test]
+    fn email_rejects_plain_smtp_port() {
+        let mut e = email_entry("e");
+        if let TransportConfig::Email(ref mut c) = e.config {
+            c.smtp_port = 25;
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("plain"));
+    }
+
+    #[test]
+    fn email_rejects_unknown_auth_mode() {
+        let mut e = email_entry("e");
+        if let TransportConfig::Email(ref mut c) = e.config {
+            c.auth_mode = "ldap".into();
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("auth_mode"));
+    }
+
+    #[test]
+    fn email_requires_account_id() {
+        let mut e = email_entry("e");
+        if let TransportConfig::Email(ref mut c) = e.config {
+            c.account_id = "".into();
+        }
+        let err = e.validate().unwrap_err();
+        assert!(format!("{err}").contains("account_id"));
     }
 
     fn voice_entry(id: &str) -> TransportEntry {

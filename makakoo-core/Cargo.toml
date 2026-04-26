@@ -34,6 +34,8 @@ hex = "0.4"
 hmac = "0.12"
 petgraph = "0.6"
 sha1 = "0.10"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+mailparse = "0.16"
 toml.workspace = true
 semver.workspace = true
 ed25519-dalek.workspace = true
