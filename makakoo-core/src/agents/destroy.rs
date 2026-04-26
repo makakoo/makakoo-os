@@ -146,19 +146,28 @@ pub fn destroy_slot(
         }
     })?;
 
-    // Move the data dir if it exists. Some slots (never started, or
-    // freshly created) won't have one — that's fine.
+    // Always create `<archive>/data/`. If the source data dir
+    // exists, move its contents in; otherwise the archive ships an
+    // empty `data/` so the locked Q3 archive shape (`<slot>.toml +
+    // data/`) is invariant. Restoration semantics differ between
+    // the two cases (see `render_restore_one_liner`).
+    let data_dst = dst.join("data");
     let data_src = slot_data_dir(makakoo_home, slot_id);
     let archived_data_dir = if data_src.exists() {
-        let data_dst = dst.join("data");
         std::fs::rename(&data_src, &data_dst).map_err(|e| {
             DestroyError::SlotNotFound {
                 slot_id: format!("could not move slot data dir: {e}"),
                 path: data_src.clone(),
             }
         })?;
-        Some(data_dst)
+        Some(data_dst.clone())
     } else {
+        std::fs::create_dir_all(&data_dst).map_err(|e| {
+            DestroyError::SlotNotFound {
+                slot_id: format!("could not create empty data archive: {e}"),
+                path: data_dst.clone(),
+            }
+        })?;
         None
     };
 
@@ -244,14 +253,21 @@ fn extract_quoted(s: &str) -> Option<String> {
 }
 
 /// Render the locked restore one-liner the CLI prints on success.
+/// When the source slot had no data dir (`archived_data_dir = None`),
+/// the data-restore arm is omitted — restoring TOML alone is the
+/// correct action.
 pub fn render_restore_one_liner(outcome: &DestroyOutcome, makakoo_home: &Path) -> String {
     let slot = &outcome.slot_id;
     let archive = outcome.archive_dir.display();
     let cfg = makakoo_home.join("config/agents").display().to_string();
-    let data = slot_data_dir(makakoo_home, slot).display().to_string();
-    format!(
-        "to restore: mv {archive}/{slot}.toml {cfg}/ && mv {archive}/data {data}"
-    )
+    if outcome.archived_data_dir.is_some() {
+        let data = slot_data_dir(makakoo_home, slot).display().to_string();
+        format!(
+            "to restore: mv {archive}/{slot}.toml {cfg}/ && mv {archive}/data {data}"
+        )
+    } else {
+        format!("to restore: mv {archive}/{slot}.toml {cfg}/")
+    }
 }
 
 #[cfg(test)]
@@ -432,5 +448,44 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
         assert!(line.contains("mv "));
         assert!(line.contains("/m/archive/agents/secretary-1700000000/secretary.toml"));
         assert!(line.contains("/m/config/agents/"));
+        assert!(line.contains("/m/archive/agents/secretary-1700000000/data"));
+    }
+
+    #[test]
+    fn restore_one_liner_omits_data_arm_when_no_data_archived() {
+        // Round-2 fix: the restore line must not reference a data/ dir
+        // that doesn't exist. Slots that never started have
+        // archived_data_dir = None.
+        let outcome = DestroyOutcome {
+            slot_id: "secretary".into(),
+            archive_dir: PathBuf::from("/m/archive/agents/secretary-1700000000"),
+            archived_toml: PathBuf::from("/m/archive/agents/secretary-1700000000/secretary.toml"),
+            archived_data_dir: None,
+            detected_secrets: vec![],
+        };
+        let line = render_restore_one_liner(&outcome, Path::new("/m"));
+        assert!(line.contains("mv "));
+        assert!(line.contains("/m/archive/agents/secretary-1700000000/secretary.toml"));
+        assert!(
+            !line.contains("data"),
+            "no data restore arm should appear; got: {line}"
+        );
+    }
+
+    #[test]
+    fn destroy_creates_empty_data_dir_in_archive_when_source_absent() {
+        // Locked Q3 archive shape is `<slot>.toml + data/` always.
+        let tmp = TempDir::new().unwrap();
+        write_slot(tmp.path(), "secretary", "slot_id = \"secretary\"\n");
+        let outcome = destroy_slot(tmp.path(), "secretary", false, 1700000007).unwrap();
+        assert!(
+            outcome.archived_data_dir.is_none(),
+            "outcome reflects that source had no data"
+        );
+        let archive_data = outcome.archive_dir.join("data");
+        assert!(
+            archive_data.exists() && archive_data.is_dir(),
+            "archive must include empty data/ dir when source had none"
+        );
     }
 }
