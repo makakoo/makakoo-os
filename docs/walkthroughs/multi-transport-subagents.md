@@ -75,7 +75,11 @@ makakoo secret set agent/secretary/slack-main/app_token     'xapp-…'
 
 Build a TOML file (multi-transport slots aren't constructible from
 flags alone — `--telegram-token` + `--slack-bot-token` together still
-go through `--from-toml` for this case):
+go through `--from-toml` for this case).
+
+**Shortcut:** [`templates/agents/secretary-freelance.toml`](../../templates/agents/secretary-freelance.toml)
+is exactly this archetype — copy it, swap the `<PLACEHOLDER>` chat IDs,
+done. The full TOML is shown below for reference:
 
 ```toml
 # ~/secretary.toml

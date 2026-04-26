@@ -1,0 +1,72 @@
+# ──────────────────────────────────────────────────────────────────
+# Support inbox slot — Email + Web chat
+#
+# Public-facing slot that takes long-form email correspondence AND
+# in-page chat from a website widget.
+#
+# v2.0 ships Email SMTP outbound + parse helpers. The IMAP IDLE
+# listener that drains incoming mail lands in v2.1 — until then,
+# the email transport is outbound-only (responses to web-chat
+# threads can still mail customers; inbound email is queued in
+# the mailbox for v2.1 processing).
+#
+# Web chat requires a public HTTPS endpoint with a configured
+# Origin allowlist (your website's domain).
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "support"
+name    = "Support"
+persona = """
+You are the public-facing support agent for <YOUR_PRODUCT>.
+
+Customers reach you on the website chat widget OR by email. Reply
+on the channel that delivered the message — you cannot bridge a
+web-chat conversation to email or vice versa.
+
+Be concise, accurate, friendly. If you don't know the answer,
+say so plainly and offer to escalate. Never invent product
+behavior — search the brain for the canonical answer first.
+
+Log every conversation thread to the brain so support history
+is searchable.
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/MAKAKOO/data/agents/support/",
+  "~/MAKAKOO/data/Brain/",
+]
+tools = [
+  "brain_search",
+  "brain_write_journal",
+  "write_file",
+]
+
+process_mode = "supervised_pair"
+
+# ── Email (SMTP outbound today, IMAP IDLE inbound in v2.1) ────────
+[[transport]]
+id         = "email-main"
+kind       = "email"
+secret_ref = "agent/support/email-main/oauth2_refresh_token"
+
+[transport.config]
+account_id      = "support@<YOUR_DOMAIN>"
+auth_mode       = "oauth2"            # OR "app_password" (logs WARN)
+imap_server     = "imap.gmail.com"
+imap_port       = 993
+smtp_server     = "smtp.gmail.com"
+smtp_port       = 465
+allowed_senders = []                  # empty = accept any sender (public inbox)
+support_thread  = true                # threads via Message-ID
+
+# ── Web chat (drop-in widget) ─────────────────────────────────────
+[[transport]]
+id   = "web-main"
+kind = "web"
+
+[transport.config]
+public_base_url   = "https://<YOUR_WEBSITE>"
+origin_allowlist  = ["https://<YOUR_WEBSITE>"]   # MUST match exactly in production
+cookie_name       = "support_visitor"
+cookie_ttl_hours  = 168                          # 7 days

@@ -1,0 +1,46 @@
+# ──────────────────────────────────────────────────────────────────
+# Community bot slot — Discord (single guild)
+#
+# Bot presence in one Discord guild. Per-guild allowlist means even
+# if someone invites your bot to another guild, it'll ignore traffic
+# from anywhere except `guild_ids`.
+#
+# MESSAGE_CONTENT is a privileged Discord intent — leave OFF unless
+# you genuinely need to read every guild message (most slots only
+# need to read mentions + DMs, both of which work without it).
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "community"
+name    = "Community"
+persona = """
+You are the community bot for <YOUR_DISCORD_GUILD>.
+
+You respond to:
+  - direct mentions (@CommunityBot ...)
+  - DMs from members in your allowlist
+  - thread replies where you've been pinged
+
+You do NOT respond to every message — MESSAGE_CONTENT is off by
+default. Be helpful, be concise, link to the docs when relevant.
+"""
+inherit_baseline = false
+
+allowed_paths = ["~/MAKAKOO/data/agents/community/"]
+tools = [
+  "brain_search",
+  "brain_write_journal",
+  "write_file",
+]
+
+process_mode = "supervised_pair"
+
+[[transport]]
+id            = "discord-main"
+kind          = "discord"
+secret_ref    = "agent/community/discord-main/bot_token"
+allowed_users = ["<YOUR_DISCORD_USER_ID>"]   # who can DM the bot
+
+[transport.config]
+message_content = false                       # leave OFF unless you need every-message access
+guild_ids       = [<YOUR_GUILD_ID>]           # numeric ID, single guild
+support_thread  = true
