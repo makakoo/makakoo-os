@@ -319,3 +319,202 @@ remove the inline value from the TOML or leave it as a fallback
 (the keyring entry takes precedence anyway). For production
 deployments, populate `secret_env` and inject via the
 LaunchAgent / systemd unit's environment block.
+
+---
+
+# v2-MEGA failure modes (Discord / WhatsApp / Voice / Web / Email)
+
+## Webhook 401 — Slack / WhatsApp / Twilio signature mismatch
+
+`makakoo agent audit <slot> --kind webhook_invalid_signature --last 5`
+shows a recent entry, and the upstream UI reports "Webhook delivery
+failed".
+
+**Cause:** the secret used to compute the HMAC on the verify side
+doesn't match what the provider signs with.
+
+| Transport | Header | Secret slot |
+|---|---|---|
+| Slack Events | `X-Slack-Signature` (`v0=...`) | `signing_secret_ref` |
+| WhatsApp | `X-Hub-Signature-256` (`sha256=...`) | `app_secret_ref` |
+| Twilio Voice | `X-Twilio-Signature` | `auth_token_ref` |
+
+**Fix:** re-stash the secret via `makakoo secret set <ref> <value>`
+and `makakoo agent restart <slot>`. Confirm the upstream UI shows
+the same secret (the dashboards all let you regenerate / re-reveal).
+
+---
+
+## Webhook GET 401 — WhatsApp `hub.challenge` handshake fails
+
+The Meta dashboard's "Verify and Save" button shows red.
+
+**Cause:** the `verify_token` you typed in the Meta UI does not
+match the value Makakoo resolved from `verify_token_ref`. The GET
+handshake compares them in constant time; mismatch is `BadCookie`
+(401).
+
+**Fix:** confirm both sides use the EXACT same string. Whitespace
++ case sensitivity matter.
+
+---
+
+## Twilio webhook 401 with the right `auth_token`
+
+You're sure the auth token is correct, but every POST hits
+`webhook_invalid_signature` in audit.
+
+**Cause:** Twilio signs the FULL public URL — including scheme,
+host, path, AND query string — byte for byte. If your
+`public_base_url` in the slot TOML disagrees with what Twilio
+actually sees (because of a TLS terminator rewriting `https://` to
+`http://`, or a port mismatch), the signature won't match.
+
+**Fix:** set `public_base_url` to exactly what Twilio dials. If
+you're behind a reverse proxy that strips the scheme, configure it
+to forward `X-Forwarded-Proto` and trust it (or hardcode `https://`
+in `public_base_url`).
+
+---
+
+## Discord: bot online but DMs work, guild channels are silent
+
+You're sending messages in a guild channel where the bot is a
+member, but the LLM never sees them.
+
+**Cause:** `MESSAGE_CONTENT` intent is OFF (the v2 default).
+Discord delivers the MESSAGE_CREATE event but the `content` field
+arrives empty for non-DM, non-mention messages. The frame-mapping
+layer accepts the empty-text frame (Q6 "graceful"), but the LLM
+has nothing to act on.
+
+**Fix:** either mention the bot (`@MyBot ...`) — mentions ride the
+event with content populated — or opt into MESSAGE_CONTENT in the
+Discord developer portal AND set `[transport.config] message_content
+= true` in the slot TOML.
+
+---
+
+## Discord: messages from a specific guild are silently dropped
+
+`makakoo agent audit secretary --last 20` shows no inbound events
+from the affected guild.
+
+**Cause:** the guild id is not in `[transport.config] guild_ids`.
+Empty `guild_ids` allows every guild the bot is in; non-empty
+restricts to the listed set.
+
+**Fix:** add the guild id (numeric, copy via Discord → Developer
+Mode → Copy Server ID) to `guild_ids` and `makakoo agent restart`.
+
+---
+
+## Web chat: 403 BadOrigin on every WS upgrade
+
+The browser console shows the upgrade request returning 403; the
+audit log shows `webhook_bad_origin`.
+
+**Cause:** the requesting Origin is not in `[transport.config]
+allowed_origins` AND `production_mode = true`. Loopback origins
+(`localhost`, `127.0.0.1`, `::1`) bypass the allowlist ONLY when
+`production_mode = false` (dev mode).
+
+**Fix:** add the public-facing origin (scheme + host + optional
+non-default port — exact match) to `allowed_origins`. For dev,
+flip `production_mode = false` so loopback works.
+
+---
+
+## Web chat: cookies vanish after restart
+
+A reconnecting visitor gets a brand-new visitor_id every time.
+
+**Cause:** the cookie-signing key file at
+`$MAKAKOO_HOME/keys/web-chat-hmac` was deleted. The adapter
+auto-regenerates it on next start, which invalidates every prior
+cookie.
+
+**Fix:** if you're rotating keys intentionally, the old cookies
+SHOULD be invalidated — that's correct behavior. If you're not,
+restore the key file from backup. The file is mode `0600` and 32
+bytes of random; treat it as a long-lived secret.
+
+---
+
+## Email: `validate` rejects port 143 / 25
+
+```
+transport 'email-main' kind=email: plain IMAP (143) or SMTP (25)
+is rejected — use STARTTLS or implicit TLS (993/465/587)
+```
+
+**Cause:** `[transport.config] imap_port = 143` or `smtp_port = 25`.
+v2-MEGA hard-rejects plain (non-TLS) ports per Q8.
+
+**Fix:** use 993 (implicit TLS IMAP), 465 (implicit TLS SMTP), or
+587 (STARTTLS SMTP). If your provider only offers plain ports, get
+a different provider — there is no opt-out.
+
+---
+
+## Email: SMTP send works but no inbound
+
+You're shipping outbound emails fine but inbound never arrives.
+
+**Cause:** v2.0 ships SMTP outbound + the inbound parser as
+separate units; the IMAP IDLE listener loop is v2.1. The slot's
+`Gateway::start` parks intentionally.
+
+**Fix:** wait for v2.1, or wire your own polling loop that calls
+`makakoo_core::transport::email::parse_inbound_to_frame` against
+raw RFC822 bytes you fetch yourself (e.g. via a cron job hitting
+your IMAP server).
+
+---
+
+## Rate limit hit ("system_message: rate_limited")
+
+A user reports getting "I'm receiving messages too fast — please
+slow down." (or your slot's custom rate-limit message).
+
+**Cause:** the per-`(slot, transport, sender_key)` token bucket
+hit its cap (locked default: 60 messages per 5 minutes). The
+second-tier per-slot global cap is 600/5min.
+
+**Fix:** either raise the cap in the slot TOML's `[rate_limit]`
+section, or wait the window out. The supervisor refunds the
+global token when the per-sender bucket denies — so a single
+flooding sender doesn't burn the global budget.
+
+---
+
+## Audit log doesn't seem to grow
+
+You expect to see events but `makakoo agent audit` shows nothing.
+
+**Cause:** check the file at
+`$MAKAKOO_HOME/data/audit/agents.jsonl`. If it doesn't exist, no
+auditable event has happened yet (a fresh install is silent until
+the first scope check / webhook / lifecycle event).
+
+**Fix:** trigger an event:
+- `MAKAKOO_DEV_FAULTS=1 makakoo agent test-faults --scenario
+  tool-scope-violation` writes a `fault_test` entry.
+- Or `makakoo agent start <slot>` writes a `slot_start`.
+- Or send any inbound that fails ACL → `scope_tool` / `scope_path`.
+
+---
+
+## `agent test-faults` refuses to run
+
+```
+fault-injection runner is gated — set MAKAKOO_DEV_FAULTS=1 to enable.
+```
+
+**Cause:** by design. v2-MEGA gates the fault-injection harness
+behind `MAKAKOO_DEV_FAULTS=1` so production cannot trigger
+destructive scenarios.
+
+**Fix:** prefix the command: `MAKAKOO_DEV_FAULTS=1 makakoo agent
+test-faults`. Don't add this to your shell rc — it's intentionally
+opt-in per invocation.

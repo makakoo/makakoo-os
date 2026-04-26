@@ -241,3 +241,72 @@ See `docs/troubleshooting/agents.md` for common failure modes:
 - Telegram `Unauthorized` (token revoked)
 - IPC `gateway_unavailable` drops
 - `bound_to_agent` grant invisibility
+- Webhook 401 (Slack / WhatsApp / Twilio signature mismatch)
+- Discord intent gating (MESSAGE_CONTENT off behavior)
+- Web chat Origin rejection in production
+
+---
+
+## 8. Beyond Telegram + Slack — the v2-MEGA transports
+
+v2.0 adds five more transport kinds. Each ships with a per-transport
+walkthrough in `docs/walkthroughs/`; this section is the index +
+trade-off summary so you know which to reach for.
+
+| Kind | When to use | Walkthrough |
+|---|---|---|
+| `discord` | Reach users where they already hang out (gaming, communities). Per-guild allowlist. MESSAGE_CONTENT default OFF (privileged Discord intent — leave off unless you genuinely need to read every guild message). | `discord-bot.md` |
+| `whatsapp` | Reach phones over Meta's network. Cloud API only. Inbound media → polite drop-reply (no STT in v1). | `whatsapp-business.md` |
+| `voice_twilio` | Inbound phone calls. Push-to-talk (caller leaves a message, slot processes it). Real-time streaming + LLM-driven `<Play>` deferred to v2.1. | `voice-quickstart.md` |
+| `email` | Long-form correspondence with proper Message-ID threading. v2.0 ships SMTP outbound + a parser for inbound; full IMAP IDLE listener lands in v2.1. | `email-secretary.md` |
+| `web` | Drop-in chat widget for your website / dashboard. HMAC-SHA256 visitor cookies; Origin allowlist required in production. | `web-chat-demo.html` (static client) |
+
+### Mixing transports on one slot
+
+Same rules as Section 6: cross-transport reply is forbidden. A
+secretary slot reachable on Telegram + Discord + Email replies on
+the same channel that delivered the inbound — the LLM cannot
+"send the reply via email instead". Multi-transport slots are
+about reach, not about cross-channel routing.
+
+### Webhook-vs-listener model
+
+| Model | Transports | What runs |
+|---|---|---|
+| Per-task listener | `telegram` (long-poll), `slack` (Socket Mode), `discord` (gateway WS) | One async task per slot+transport; supervisor restarts on crash. |
+| Shared webhook router | `whatsapp`, `voice_twilio` | One axum HTTP server hosts all webhooks at `/transport/<slot_uuid>/<transport_uuid>/<kind>`; HMAC verify before parse. |
+| Shared WS upgrade | `web` | Same router, `/ws` suffix; cookies issued at upgrade. |
+| Outbound only (v2.0) | `email` | SMTP via lettre; the IMAP IDLE listener is v2.1. |
+
+The Q15 contract says webhook handlers MUST verify the signature
+against the **buffered raw body** before parsing — see
+`docs/specs/http-server-security.md` for the locked status-code
+matrix + redaction rules.
+
+### Common ops once a slot is running
+
+```sh
+makakoo agent status secretary           # per-transport health + RSS
+makakoo agent audit secretary --last 30  # recent audit events
+makakoo agent restart secretary          # graceful supervisor restart
+makakoo agent destroy secretary --revoke-secrets  # clean teardown
+```
+
+---
+
+## 9. Section 7 superseded — `agent destroy` is a first-class command
+
+The "manually rm + mv + secret delete" footnote at the end of
+Section 7 was a Phase-5 placeholder. v2-MEGA ships
+`makakoo agent destroy <slot>` which:
+
+- Stops the supervisor (if running)
+- Archives the TOML + data dir to `$MAKAKOO_HOME/archive/agents/<slot>-<unix_ts>/`
+- Lists detected secret refs from the TOML and prompts whether
+  to revoke them
+- Refuses to destroy `harveychat` without `--really-destroy-harveychat`
+  (legacy Olibia conversation history protection)
+
+Secrets are PRESERVED by default unless `--revoke-secrets` is
+passed; this lets you re-create the slot tomorrow and reuse the
+same keys.
