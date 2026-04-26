@@ -46,9 +46,9 @@ tempfile.workspace = true
 # Backward-compat re-export — actual user_grants implementation lives
 # in the standalone garagetytus repo as of GARAGETYTUS-V0.1 Phase A.5
 # (2026-04-25). makakoo-core::capability::user_grants is now a thin
-# pub-use shim. Path dep until garagetytus-grants is published to
-# crates.io (Phase A.1–A.4); then this flips to a version pin.
-garagetytus-grants = { path = "/Users/sebastian/garagetytus/crates/garagetytus-grants" }
+# pub-use shim. Pinned by rev until garagetytus-grants is published
+# to crates.io; flips to a version pin once on crates.io.
+garagetytus-grants = { git = "https://github.com/traylinx/garagetytus", rev = "3b199e94ac2bcf86e1e91eca07237edc367d2153" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
