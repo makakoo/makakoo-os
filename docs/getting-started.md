@@ -123,6 +123,15 @@ Still in the terminal, run:
 makakoo install
 ```
 
+> 🍎 **macOS users — heads up.** The first time the install runs, macOS
+> may show a security prompt about a "background item" trying to load.
+> **Click Allow** in the dialog (or open **System Settings → General →
+> Login Items → Allow in the Background** and toggle Makakoo on). If
+> you miss the prompt, the install finishes but the daemon won't start
+> — you'll see "daemon install failed" and need to re-run
+> `makakoo daemon install` after enabling the background item. This
+> is a one-time approval; future installs are silent.
+
 **What this does:** installs the `core` set of plugins (the default
 bundle), starts the background daemon that keeps Makakoo alive, and
 "infects" every AI CLI you have installed so they all share the same
