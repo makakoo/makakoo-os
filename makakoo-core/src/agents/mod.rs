@@ -22,6 +22,7 @@ pub mod registry;
 pub mod scaffold;
 pub mod scope;
 pub mod slot;
+pub mod status;
 
 pub use identity::{
     load_identity, render_identity_block, resolve, slot_from_env, AgentIdentity, IdentityError,
