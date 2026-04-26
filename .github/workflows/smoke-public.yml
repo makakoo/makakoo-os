@@ -1,0 +1,100 @@
+name: Smoke (post-public anonymous)
+
+# Cross-OS install one-liner smoke test against ANONYMOUS public URLs.
+# This is the post-tag, post-public-flip smoke that proves the
+# `curl … | sh` / `iwr | iex` paths work for users who don't have a
+# GitHub login, before we point any external announcement at them.
+#
+# Difference from smoke.yml: this workflow uses ZERO authentication
+# (no GITHUB_TOKEN passed to the install scripts). install.sh +
+# install.ps1 must hit the public release URLs cleanly. If the
+# release is private, every job fails — that's the point.
+#
+# Trigger: workflow_dispatch with `version` input (default `latest`).
+# Fire after Phase E (tag + repo public flip) and BEFORE any external
+# announcement. Three green = ready to tweet / post / email.
+#
+# Codex round-2 pushback per the v0.1-endgame verdict — the false-
+# confidence gap that smoke.yml leaves open (authenticated download
+# != anonymous public URL) gets closed here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to install (e.g. 0.1.0, latest). Passed verbatim to MAKAKOO_VERSION."
+        required: false
+        default: "latest"
+
+permissions: {}
+
+# Override the default GITHUB_TOKEN so install scripts run without
+# accidental auth. We want the curl / iwr to hit the public URL the
+# same way a fresh user would.
+env:
+  GH_TOKEN: ""
+
+jobs:
+  smoke-public-macos:
+    name: anonymous install macOS
+    runs-on: macos-latest
+    steps:
+      - name: Run anonymous install one-liner
+        run: |
+          # NOTE: this URL must work without any GitHub login. If
+          # the repo is still private, this fails — which is the
+          # point: the post-public smoke gates on actual public
+          # accessibility.
+          export MAKAKOO_VERSION="${{ inputs.version }}"
+          curl -fsSL https://raw.githubusercontent.com/makakoo/makakoo-os/main/distribution/install.sh | bash
+
+      - name: Verify --version
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo --version
+
+      - name: Verify install --skip-daemon
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo install --skip-daemon --skip-infect
+
+  smoke-public-ubuntu:
+    name: anonymous install Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run anonymous install one-liner
+        run: |
+          export MAKAKOO_VERSION="${{ inputs.version }}"
+          curl -fsSL https://raw.githubusercontent.com/makakoo/makakoo-os/main/distribution/install.sh | bash
+
+      - name: Verify --version
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo --version
+
+      - name: Verify install --skip-daemon
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo install --skip-daemon --skip-infect
+
+  smoke-public-windows:
+    name: anonymous install Windows
+    runs-on: windows-latest
+    steps:
+      - name: Run anonymous install one-liner
+        shell: pwsh
+        run: |
+          $env:MAKAKOO_VERSION = "${{ inputs.version }}"
+          iwr -useb https://raw.githubusercontent.com/makakoo/makakoo-os/main/install/install.ps1 | iex
+
+      - name: Verify --version
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:LOCALAPPDATA\Makakoo\bin;$env:PATH"
+          makakoo --version
+
+      - name: Verify install --skip-daemon
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:LOCALAPPDATA\Makakoo\bin;$env:PATH"
+          makakoo install --skip-daemon --skip-infect

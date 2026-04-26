@@ -1,0 +1,166 @@
+name: Smoke (pre-public)
+
+# Cross-OS install-path smoke test against a CANDIDATE GitHub release.
+# Tests the install one-liners (install.sh / install.ps1) end-to-end:
+# download the published tarball, untar/unzip into PATH, run
+# `makakoo --version`, run `makakoo install --skip-daemon`. Three OS
+# runners cover the matrix that release.yml builds for (Mac arm64,
+# Linux x86_64, Windows x86_64).
+#
+# Trigger: workflow_dispatch with `release-tag` input (default
+# `latest`). Use to validate a candidate `vX.Y.Z-rc.N` tag BEFORE
+# flipping the repo public + announcing.
+#
+# Auth: uses GITHUB_TOKEN to fetch private-release artifacts. This
+# means a green run proves "the install code path works against this
+# tarball," not "the anonymous public URL serves these bytes." The
+# latter is covered by smoke-public.yml, which fires AFTER the public
+# tag + repo-public flip.
+#
+# Phase D' of MAKAKOO-OS-V0.1-CLOSE-AND-SHIP per the codex+opencode
+# ratified verdict. Skip-public-anonymous-smoke gap is opened after
+# Phase E (tag) and closed by smoke-public.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: "Tag to smoke (e.g. v0.1.0 or v0.1.0-rc.1). 'latest' = newest release."
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-macos:
+    name: smoke macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target tag
+        id: tag
+        run: |
+          if [ "${{ inputs.release-tag }}" = "latest" ]; then
+            tag="$(gh release view --json tagName -q .tagName)"
+          else
+            tag="${{ inputs.release-tag }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download macOS arm64 tarball
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --pattern 'makakoo-aarch64-apple-darwin.tar.gz' \
+            --dir /tmp/artifacts
+          ls -la /tmp/artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run install.sh against local artifact
+        run: |
+          export MAKAKOO_LOCAL_TARBALL=/tmp/artifacts/makakoo-aarch64-apple-darwin.tar.gz
+          bash distribution/install.sh
+
+      - name: Verify --version
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo --version
+
+      - name: Verify install --skip-daemon
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo install --skip-daemon --skip-infect
+
+  smoke-ubuntu:
+    name: smoke Ubuntu (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target tag
+        id: tag
+        run: |
+          if [ "${{ inputs.release-tag }}" = "latest" ]; then
+            tag="$(gh release view --json tagName -q .tagName)"
+          else
+            tag="${{ inputs.release-tag }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Linux x86_64 tarball
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --pattern 'makakoo-x86_64-unknown-linux-gnu.tar.gz' \
+            --dir /tmp/artifacts
+          ls -la /tmp/artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run install.sh against local artifact
+        run: |
+          export MAKAKOO_LOCAL_TARBALL=/tmp/artifacts/makakoo-x86_64-unknown-linux-gnu.tar.gz
+          bash distribution/install.sh
+
+      - name: Verify --version
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo --version
+
+      - name: Verify install --skip-daemon
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          makakoo install --skip-daemon --skip-infect
+
+  smoke-windows:
+    name: smoke Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ("${{ inputs.release-tag }}" -eq "latest") {
+            $tag = (gh release view --json tagName -q .tagName)
+          } else {
+            $tag = "${{ inputs.release-tag }}"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Windows zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\artifacts | Out-Null
+          gh release download "${{ steps.tag.outputs.tag }}" `
+            --pattern 'makakoo-x86_64-pc-windows-msvc.zip' `
+            --dir C:\artifacts
+          Get-ChildItem C:\artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run install.ps1 against local archive
+        shell: pwsh
+        run: |
+          $env:MAKAKOO_LOCAL_TARBALL = "C:\artifacts\makakoo-x86_64-pc-windows-msvc.zip"
+          .\install\install.ps1
+
+      - name: Verify --version
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:LOCALAPPDATA\Makakoo\bin;$env:PATH"
+          makakoo --version
+
+      - name: Verify install --skip-daemon
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:LOCALAPPDATA\Makakoo\bin;$env:PATH"
+          makakoo install --skip-daemon --skip-infect
