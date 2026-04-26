@@ -46,11 +46,22 @@ pub struct SlackAdapter {
     pub app_token: String,
     pub api_base: String,
     pub http: reqwest::Client,
+    /// Per-transport allowlist (Q7 simplified): inbound events
+    /// from Slack `event.user` ids not in this list are dropped at
+    /// the transport layer.  Empty = least-privilege deny-all.
+    allowed_users: Vec<String>,
     /// Resolved bot identity (`auth.test.bot_id`/`user_id` +
-    /// `team_id`) — populated by `verify_credentials`.  Used to
-    /// stamp `account_id` on inbound frames and to suppress
-    /// self-loop events.
+    /// `team_id`) — populated by `verify_credentials`.  The
+    /// `account_id` on `VerifiedIdentity` is populated from the
+    /// Slack USER id (`U…`) — Slack `event.user` carries that
+    /// same value, so self-loop comparison `msg.user ==
+    /// identity.account_id` matches the bot's own outgoing
+    /// messages.  The `bot_id` (`B…`) is kept separately for
+    /// diagnostic use.
     identity: Mutex<Option<VerifiedIdentity>>,
+    /// Slack `bot_id` (`B…`) — set alongside `identity` so we
+    /// can render diagnostic logs without needing a second lookup.
+    bot_id: Mutex<Option<String>>,
     /// Recent `(channel, ts)` keys we've already delivered.  Used
     /// to drop duplicates that arrive over multiple Socket Mode
     /// connections within `DEDUP_WINDOW`.
@@ -63,8 +74,16 @@ impl SlackAdapter {
         config: SlackConfig,
         bot_token: String,
         app_token: String,
+        allowed_users: Vec<String>,
     ) -> Self {
-        Self::with_api_base(ctx, config, bot_token, app_token, SLACK_API_BASE.into())
+        Self::with_api_base(
+            ctx,
+            config,
+            bot_token,
+            app_token,
+            allowed_users,
+            SLACK_API_BASE.into(),
+        )
     }
 
     pub fn with_api_base(
@@ -72,6 +91,7 @@ impl SlackAdapter {
         config: SlackConfig,
         bot_token: String,
         app_token: String,
+        allowed_users: Vec<String>,
         api_base: String,
     ) -> Self {
         Self {
@@ -84,7 +104,9 @@ impl SlackAdapter {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("reqwest client"),
+            allowed_users,
             identity: Mutex::new(None),
+            bot_id: Mutex::new(None),
             dedup: Mutex::new(HashMap::new()),
         }
     }
@@ -243,10 +265,15 @@ impl Transport for SlackAdapter {
             )));
         }
 
+        // Slack `event.user` carries the bot's USER id (`U…`),
+        // not the bot id (`B…`).  Self-loop suppression compares
+        // `msg.user == identity.account_id`, so we set
+        // `account_id = user_id` here and stash `bot_id` in a
+        // sibling field for diagnostic visibility.
         let account_id = auth
-            .bot_id
+            .user_id
             .clone()
-            .or(auth.user_id.clone())
+            .or(auth.bot_id.clone())
             .unwrap_or_else(|| "unknown".into());
         let identity = VerifiedIdentity {
             account_id,
@@ -254,6 +281,7 @@ impl Transport for SlackAdapter {
             display_name: auth.team.clone(),
         };
         *self.identity.lock().await = Some(identity.clone());
+        *self.bot_id.lock().await = auth.bot_id.clone();
         Ok(identity)
     }
 
@@ -361,14 +389,32 @@ impl Gateway for SlackAdapter {
                 "dialing slack socket mode wss"
             );
             match self.run_socket_session(&url, &sink).await {
+                Ok(reason) if reason == "sink-closed" => {
+                    // Python gateway socket gone — exit the loop;
+                    // the supervised process pair will restart us.
+                    tracing::error!(
+                        target: "makakoo_core::transport::slack",
+                        transport_id = self.ctx.transport_id,
+                        "inbound sink closed — slack listener exiting (supervisor will restart)"
+                    );
+                    return Ok(());
+                }
                 Ok(reason) => {
-                    tracing::info!(
+                    // Slack closed the WebSocket. Per Phase 1 spec,
+                    // any non-intentional disconnect must reconnect
+                    // through exponential backoff — we do NOT reset
+                    // backoff to 1s on every clean close, otherwise
+                    // a flapping Slack connection becomes a tight
+                    // loop.
+                    tracing::warn!(
                         target: "makakoo_core::transport::slack",
                         transport_id = self.ctx.transport_id,
                         reason = %reason,
-                        "slack socket session ended cleanly — reconnecting"
+                        backoff_ms,
+                        "slack socket session ended — reconnecting after backoff"
                     );
-                    backoff_ms = RECONNECT_INITIAL_MS;
+                    self.sleep_backoff(backoff_ms).await;
+                    backoff_ms = (backoff_ms.saturating_mul(2)).min(RECONNECT_CAP_MS);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -516,31 +562,50 @@ impl SlackAdapter {
             return None;
         }
         let identity = self.identity.lock().await.clone();
+        // Team mismatch reject — independent of whether the event
+        // carries a user (defensive against subtype/system events
+        // that slip past the earlier guard).  Always fires when
+        // the adapter has a cached tenant_id.
+        if let Some(expected) = identity.as_ref().and_then(|i| i.tenant_id.as_ref()) {
+            if expected != &team_id {
+                tracing::warn!(
+                    target: "makakoo_core::transport::slack",
+                    transport_id = self.ctx.transport_id,
+                    inbound_team_id = team_id,
+                    expected_team_id = expected,
+                    "dropping slack event from unexpected team_id"
+                );
+                return None;
+            }
+        }
+        // Self-loop suppression — compare event.user against
+        // cached identity.account_id (which is set to the bot's
+        // USER id `U…` so this comparison actually matches).
         if let (Some(user), Some(id)) = (msg.user.as_ref(), identity.as_ref()) {
             if user == &id.account_id {
                 tracing::debug!(
                     target: "makakoo_core::transport::slack",
                     transport_id = self.ctx.transport_id,
-                    "suppressing slack self-loop event (user matches own bot id)"
+                    "suppressing slack self-loop event (user matches own bot user_id)"
                 );
                 return None;
             }
-            // Also reject if the inbound team_id doesn't match the
-            // adapter's verified tenant.
-            if let Some(expected) = identity.as_ref().and_then(|i| i.tenant_id.as_ref()) {
-                if expected != &team_id {
-                    tracing::warn!(
-                        target: "makakoo_core::transport::slack",
-                        transport_id = self.ctx.transport_id,
-                        inbound_team_id = team_id,
-                        expected_team_id = expected,
-                        "dropping slack event from unexpected team_id"
-                    );
-                    return None;
-                }
-            }
         }
         let user = msg.user.as_ref()?.clone();
+
+        // Per-transport allowlist (Q7 simplified). Empty list =
+        // least-privilege deny-all.
+        if self.allowed_users.is_empty()
+            || !self.allowed_users.iter().any(|u| u == &user)
+        {
+            tracing::debug!(
+                target: "makakoo_core::transport::slack",
+                transport_id = self.ctx.transport_id,
+                sender_id = user,
+                "slack inbound from non-allowlisted sender — dropping"
+            );
+            return None;
+        }
 
         // Allowlist enforcement.
         if !self.config.dm_only {
@@ -664,17 +729,21 @@ mod tests {
     async fn primed_adapter(
         cfg: SlackConfig,
         team_id: &str,
-        bot_id: &str,
+        bot_user_id: &str,
+        allowed: Vec<String>,
     ) -> SlackAdapter {
         let adapter = SlackAdapter::with_api_base(
             ctx(),
             cfg,
             "xoxb".into(),
             "xapp".into(),
+            allowed,
             "http://unused.invalid".into(),
         );
         *adapter.identity.lock().await = Some(VerifiedIdentity {
-            account_id: bot_id.into(),
+            // account_id holds the bot's USER id (`U…`) for
+            // self-loop comparison; bot_id is sibling diagnostic.
+            account_id: bot_user_id.into(),
             tenant_id: Some(team_id.into()),
             display_name: None,
         });
@@ -688,7 +757,7 @@ mod tests {
             .and(path("/auth.test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true, "team_id": "T0123ABCD",
-                "bot_id": "B0123BOT", "team": "Acme"
+                "bot_id": "B0123BOT", "user_id": "U0123BOTUSER", "team": "Acme"
             })))
             .mount(&server)
             .await;
@@ -704,13 +773,58 @@ mod tests {
             config(),
             "xoxb".into(),
             "xapp".into(),
+            vec!["U0123USER".into()],
             server.uri(),
         );
         let id = adapter.verify_credentials().await.unwrap();
-        assert_eq!(id.account_id, "B0123BOT");
+        // account_id is the bot's USER id (`U…`), NOT the bot id
+        // (`B…`). Slack `event.user` carries the user id, so this
+        // is what self-loop suppression compares against.
+        assert_eq!(id.account_id, "U0123BOTUSER");
         assert_eq!(id.tenant_id.as_deref(), Some("T0123ABCD"));
+        // bot_id stashed separately for diagnostic logging.
+        assert_eq!(adapter.bot_id.lock().await.as_deref(), Some("B0123BOT"));
         // Identity cached for inbound use.
         assert!(adapter.identity.lock().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_non_allowlisted_slack_sender() {
+        let adapter = primed_adapter(
+            config(),
+            "T0123ABCD",
+            "U0123BOT",
+            vec!["U_ALLOWED".into()],
+        )
+        .await;
+        let env = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U_NOT_ALLOWED"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("im"),
+        );
+        assert!(adapter.build_inbound_frame(env).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_inbound_frame_drops_when_slack_allowlist_empty() {
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "U0123BOT", vec![]).await;
+        let env = envelope(
+            "T0123ABCD",
+            "D0123ABCD",
+            Some("U_ANY"),
+            "1714123456.000100",
+            None,
+            None,
+            None,
+            Some("im"),
+        );
+        assert!(adapter.build_inbound_frame(env).await.is_none());
     }
 
     #[tokio::test]
@@ -728,6 +842,7 @@ mod tests {
             config(),
             "xoxb".into(),
             "xapp".into(),
+            vec!["U0123USER".into()],
             server.uri(),
         );
         let err = adapter.verify_credentials().await.unwrap_err();
@@ -749,6 +864,7 @@ mod tests {
             config(),
             "xoxb".into(),
             "xapp".into(),
+            vec!["U0123USER".into()],
             server.uri(),
         );
         let err = adapter.verify_credentials().await.unwrap_err();
@@ -777,6 +893,7 @@ mod tests {
             config(),
             "xoxb".into(),
             "xapp".into(),
+            vec!["U0123USER".into()],
             server.uri(),
         );
         let err = adapter.verify_credentials().await.unwrap_err();
@@ -801,6 +918,7 @@ mod tests {
             },
             "xoxb".into(),
             "xapp".into(),
+            vec!["U0123USER".into()],
             server.uri(),
         );
         let frame = MakakooOutboundFrame {
@@ -830,6 +948,7 @@ mod tests {
             config(),
             "xoxb".into(),
             "xapp".into(),
+            vec!["U0123USER".into()],
             server.uri(),
         );
         let frame = MakakooOutboundFrame {
@@ -846,7 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_dm() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -870,7 +989,7 @@ mod tests {
         let mut cfg = config();
         cfg.dm_only = false;
         cfg.channels = vec!["C0123DEFG".into()];
-        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "C0123DEFG",
@@ -887,7 +1006,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_bot_echoes() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -903,7 +1022,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_self_loop() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "U0123BOT").await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "U0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -919,7 +1038,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_subtype() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -935,7 +1054,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_unexpected_team() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T9999OTHER",
             "D0123ABCD",
@@ -953,7 +1072,7 @@ mod tests {
     async fn build_inbound_frame_drops_channel_event_in_dm_only() {
         // dm_only=true; a channel event (channel id starts with C)
         // must be dropped.
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "C0123DEFG",
@@ -969,7 +1088,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_dedups_within_window() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env1 = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -999,7 +1118,7 @@ mod tests {
         let mut cfg = config();
         cfg.dm_only = false;
         cfg.channels = vec!["C_ALLOWED".into()];
-        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "C_OTHER",
@@ -1019,7 +1138,7 @@ mod tests {
         cfg.support_thread = true;
         cfg.dm_only = false;
         cfg.channels = vec!["C0123DEFG".into()];
-        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT").await;
+        let adapter = primed_adapter(cfg, "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "C0123DEFG",
