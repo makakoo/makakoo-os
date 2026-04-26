@@ -486,6 +486,10 @@ fn grant(
         // grants it creates; at revoke time CLI is also on the admin
         // bypass list, so this is mostly a forensic breadcrumb here.
         owner: plugin.to_string(),
+        // Phase 3 — CLI-issued grants are machine-global (no agent
+        // attribution). The MCP path attributes via the AGENT_ID
+        // task-local; CLI invocations bypass that.
+        bound_to_agent: None,
     };
     u.add(new_grant.clone());
     u.save().with_context(|| {

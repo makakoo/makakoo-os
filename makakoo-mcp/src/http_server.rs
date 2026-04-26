@@ -47,7 +47,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use makakoo_core::adapter::peer::{
-    self, PeerError, PEER_HEADER, SIG_HEADER, TS_HEADER,
+    self, PeerError, AGENT_ID_HEADER, PEER_HEADER, SIG_HEADER, TS_HEADER,
 };
 
 use crate::dispatch::{ToolContext, ToolRegistry};
@@ -153,10 +153,30 @@ async fn handle_rpc(
         Err(e) => return bad_request(format!("malformed JSON-RPC body: {e}")),
     };
 
+    // 3b. Read the optional originating-agent header so tool
+    //     handlers can attribute the call to the right slot.
+    //     Phase 3 spec: HTTP path reads X-Makakoo-Agent-Id;
+    //     stdio path reads MAKAKOO_AGENT_SLOT env var.  Either
+    //     way the value lands in the AGENT_ID OnceCell read by
+    //     downstream dispatch code.
+    let agent_id = headers
+        .get(AGENT_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    if let Some(ref id) = agent_id {
+        debug!(peer = %peer_name, agent_id = %id, "agent-attributed mcp call");
+    }
+
     debug!(peer = %peer_name, method = %req.method, id = ?req.id, "rpc");
 
-    // 4. Dispatch through the same server code that handles stdio.
-    match state.server.handle(req).await {
+    // 4. Dispatch through the same server code that handles stdio,
+    //    scoped inside the AGENT_ID task-local so handlers can
+    //    attribute the call to the right subagent (Phase 3).
+    let dispatched =
+        crate::dispatch::AGENT_ID
+            .scope(agent_id.clone(), state.server.handle(req))
+            .await;
+    match dispatched {
         Some(resp) => {
             let body = serde_json::to_vec(&resp).unwrap_or_default();
             (
@@ -388,5 +408,78 @@ mod tests {
         let raw = [1u8; 32];
         let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
         assert_eq!(encoded.len(), 44);
+    }
+
+    /// Phase 3: a tool handler captures the originating agent id
+    /// from the AGENT_ID task-local. Verifies the
+    /// `X-Makakoo-Agent-Id` HTTP header → task-local round trip.
+    struct CaptureAgentId(Arc<tokio::sync::Mutex<Option<String>>>);
+
+    #[async_trait]
+    impl ToolHandler for CaptureAgentId {
+        fn name(&self) -> &str {
+            "capture_agent_id"
+        }
+        fn description(&self) -> &str {
+            "captures agent id from task-local"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn call(&self, _: Value) -> Result<Value, RpcError> {
+            let id = crate::dispatch::current_agent_id();
+            *self.0.lock().await = id.clone();
+            Ok(json!({"captured": id}))
+        }
+    }
+
+    fn capture_state(
+        capture: Arc<tokio::sync::Mutex<Option<String>>>,
+    ) -> (Arc<HttpState>, SigningKey) {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(CaptureAgentId(capture)));
+        let ctx = Arc::new(ToolContext::empty(std::path::PathBuf::from("/tmp")));
+
+        use rand::RngCore;
+        let mut s = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut s);
+        let signing = SigningKey::from_bytes(&s);
+        let verifying = signing.verifying_key();
+        let mut trust = HashMap::new();
+        trust.insert("clienta".to_string(), verifying);
+
+        let state = Arc::new(HttpState::new(
+            Arc::new(registry),
+            ctx,
+            trust,
+            PathBuf::from("/tmp/unused-trust"),
+        ));
+        (state, signing)
+    }
+
+    #[tokio::test]
+    async fn agent_id_header_propagates_to_tool_handler() {
+        let captured = Arc::new(tokio::sync::Mutex::new(None));
+        let (state, signing) = capture_state(captured.clone());
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capture_agent_id","arguments":{}}}"#;
+        let mut headers = signed_headers(&signing, body, "clienta");
+        headers.push((AGENT_ID_HEADER.to_string(), "harveychat".to_string()));
+        let (status, _resp) = post_via_axum(state, headers, body).await;
+        assert_eq!(status, StatusCode::OK);
+        let observed = captured.lock().await.clone();
+        assert_eq!(observed.as_deref(), Some("harveychat"));
+    }
+
+    #[tokio::test]
+    async fn missing_agent_id_header_yields_none_in_handler() {
+        let captured = Arc::new(tokio::sync::Mutex::new(None));
+        let (state, signing) = capture_state(captured.clone());
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capture_agent_id","arguments":{}}}"#;
+        let headers = signed_headers(&signing, body, "clienta");
+        // No AGENT_ID_HEADER in the request.
+        let (status, _resp) = post_via_axum(state, headers, body).await;
+        assert_eq!(status, StatusCode::OK);
+        let observed = captured.lock().await.clone();
+        assert!(observed.is_none(), "expected None, got {observed:?}");
     }
 }

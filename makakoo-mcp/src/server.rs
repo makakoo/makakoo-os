@@ -59,6 +59,14 @@ impl McpServer {
         let mut reader = FrameReader::new(reader);
         let mut writer = FrameWriter::new(writer);
 
+        // Phase 3: stdio MCP path reads MAKAKOO_AGENT_SLOT once at
+        // startup. The HTTP path reads X-Makakoo-Agent-Id per
+        // request — different transport, same task-local sink.
+        let agent_id = std::env::var(makakoo_core::agents::AGENT_SLOT_ENV_VAR).ok();
+        if let Some(ref id) = agent_id {
+            info!(agent_id = %id, "stdio mcp call attributed to subagent");
+        }
+
         while let Some(req) = reader.read_message().await? {
             debug!(method = %req.method, id = ?req.id, "recv");
 
@@ -69,7 +77,9 @@ impl McpServer {
                 continue;
             }
 
-            let resp = self.handle(req).await;
+            let resp = crate::dispatch::AGENT_ID
+                .scope(agent_id.clone(), self.handle(req))
+                .await;
             if let Some(resp) = resp {
                 writer.write_response(&resp).await?;
             }

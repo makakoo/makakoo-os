@@ -426,6 +426,11 @@ impl ToolHandler for GrantWriteAccessHandler {
             // (`RevokeWriteAccessHandler`) refuses unless the revoke
             // caller matches OR is on the admin bypass list.
             owner: plugin.clone(),
+            // Phase 3 (multi-bot subagents) — bind the grant to the
+            // originating subagent slot if the dispatch was attributed
+            // (X-Makakoo-Agent-Id HTTP / MAKAKOO_AGENT_SLOT stdio).
+            // None = machine-global grant (CLI / non-agent caller).
+            bound_to_agent: crate::dispatch::current_agent_id(),
         };
         grants.add(new_grant.clone());
         grants

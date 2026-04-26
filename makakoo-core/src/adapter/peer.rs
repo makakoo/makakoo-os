@@ -44,6 +44,13 @@ pub const DRIFT_WINDOW_MS: i64 = 60_000;
 pub const PEER_HEADER: &str = "X-Makakoo-Peer";
 pub const TS_HEADER: &str = "X-Makakoo-Ts";
 pub const SIG_HEADER: &str = "X-Makakoo-Sig";
+/// Optional header carrying the originating subagent slot id.
+/// Set by the per-slot Python gateway on every outbound MCP call;
+/// the MCP server forwards it to tool handlers via the
+/// `harvey_agent_id` ContextVar so tools (grants, brain writes,
+/// audit logs) can attribute the call to the right agent.
+/// Phase 3 locked.
+pub const AGENT_ID_HEADER: &str = "X-Makakoo-Agent-Id";
 
 /// Prefix marking the signature scheme. Future schemes (ed448, etc.)
 /// would extend the enum.

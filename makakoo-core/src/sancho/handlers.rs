@@ -1323,6 +1323,7 @@ mod tests {
                 plugin: "cli".into(),
                 origin_turn_id: "".into(),
                 owner: "cli".into(),
+                bound_to_agent: None,
             });
         }
         u.save().unwrap();
@@ -1416,6 +1417,7 @@ mod tests {
             plugin: "cli".into(),
             origin_turn_id: "".into(),
             owner: "cli".into(),
+            bound_to_agent: None,
         });
         u.save().unwrap();
 

@@ -79,6 +79,28 @@ use makakoo_core::superbrain::store::SuperbrainStore;
 use makakoo_core::swarm::SwarmState;
 use makakoo_core::telemetry::CostTracker;
 
+tokio::task_local! {
+    /// The originating subagent slot id for the current MCP
+    /// invocation, propagated from `X-Makakoo-Agent-Id` header
+    /// (HTTP path) or `MAKAKOO_AGENT_SLOT` env var (stdio path).
+    ///
+    /// `None` when the call did not originate from a subagent
+    /// (e.g. CLI / human operator). Tool handlers consult this
+    /// when filtering grants by `bound_to_agent`, prefixing brain
+    /// journal lines, or attributing cost-tracker entries.
+    pub static AGENT_ID: Option<String>;
+}
+
+/// Convenience wrapper: read the current agent id, returning
+/// `None` outside an `AGENT_ID::scope` (e.g. unit tests or stdio
+/// without `MAKAKOO_AGENT_SLOT`).
+pub fn current_agent_id() -> Option<String> {
+    AGENT_ID
+        .try_with(|v| v.clone())
+        .ok()
+        .flatten()
+}
+
 /// Shared, read-mostly context handed to every tool handler at
 /// construction time. Wrap in `Arc` once at server boot and clone the Arc
 /// into each handler struct.
