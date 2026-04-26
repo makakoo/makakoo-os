@@ -33,11 +33,44 @@ use crate::context::CliContext;
 use crate::output;
 
 pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
+    use crate::commands::agent_lifecycle;
     match cmd {
-        AgentCmd::Start { name } => hook(ctx, &name, Hook::Start),
-        AgentCmd::Stop { name } => hook(ctx, &name, Hook::Stop),
+        // Slot-aware: if a slot.toml exists for this name, route to the
+        // per-slot supervisor lifecycle (LaunchAgent / systemd-user).
+        // Otherwise fall back to the legacy plugin entrypoint hooks.
+        AgentCmd::Start { name } => {
+            if agent_lifecycle::is_slot(ctx.home(), &name) {
+                agent_lifecycle::start_slot(ctx, &name)
+            } else {
+                hook(ctx, &name, Hook::Start)
+            }
+        }
+        AgentCmd::Stop { name } => {
+            if agent_lifecycle::is_slot(ctx.home(), &name) {
+                agent_lifecycle::stop_slot(ctx, &name)
+            } else {
+                hook(ctx, &name, Hook::Stop)
+            }
+        }
+        AgentCmd::Status { name } => {
+            if agent_lifecycle::is_slot(ctx.home(), &name) {
+                agent_lifecycle::status_slot(ctx, &name)
+            } else {
+                status(ctx, &name)
+            }
+        }
+        AgentCmd::Restart { name } => {
+            if agent_lifecycle::is_slot(ctx.home(), &name) {
+                agent_lifecycle::restart_slot(ctx, &name)
+            } else {
+                let _ = hook(ctx, &name, Hook::Stop)?;
+                hook(ctx, &name, Hook::Start)
+            }
+        }
+        AgentCmd::Supervisor { slot } => {
+            agent_lifecycle::run_supervisor_command(ctx, &slot)
+        }
         AgentCmd::Health { name } => hook(ctx, &name, Hook::Health),
-        AgentCmd::Status { name } => status(ctx, &name),
 
         // Phase 2 multi-bot subagent registry.
         AgentCmd::List { json } => crate::commands::agent_slot::list(ctx, json),

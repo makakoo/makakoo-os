@@ -82,6 +82,33 @@ impl CliContext {
         &self.home
     }
 
+    /// Test-only constructor: build a context rooted at `home` without
+    /// resolving $MAKAKOO_HOME. Used by unit tests that want a tempdir-
+    /// scoped context without touching the real install.
+    #[cfg(test)]
+    pub fn for_home(home: PathBuf) -> Self {
+        let data_dir = home.join("data");
+        Self {
+            home: home.clone(),
+            db_path: data_dir.join("superbrain.db"),
+            bus_path: data_dir.join("events.db"),
+            chat_path: data_dir.join("chat.db"),
+            nursery_path: data_dir.join("nursery.json"),
+            buddy_path: data_dir.join("buddy.json"),
+            data_dir,
+            store: OnceCell::new(),
+            graph: OnceCell::new(),
+            memory: OnceCell::new(),
+            promoter: OnceCell::new(),
+            bus: OnceCell::new(),
+            chat: OnceCell::new(),
+            nursery: OnceCell::new(),
+            buddy: OnceCell::new(),
+            llm: OnceCell::new(),
+            emb: OnceCell::new(),
+        }
+    }
+
     /// Canonical data dir (`{home}/data`).
     pub fn data_dir(&self) -> &PathBuf {
         &self.data_dir

@@ -23,6 +23,14 @@ pub mod scaffold;
 pub mod scope;
 pub mod slot;
 pub mod status;
+pub mod supervisor;
+pub mod supervisor_runtime;
+
+#[cfg(target_os = "macos")]
+pub mod launchd;
+
+#[cfg(target_os = "linux")]
+pub mod systemd;
 
 pub use identity::{
     load_identity, render_identity_block, resolve, slot_from_env, AgentIdentity, IdentityError,

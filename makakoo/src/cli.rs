@@ -13,8 +13,11 @@ use clap::{Parser, Subcommand};
     about = "Makakoo OS — autonomous cognitive extension"
 )]
 pub struct Cli {
+    /// Subcommand. Optional so bare `makakoo` (no args) can land on a
+    /// friendly first-run banner instead of clap's "subcommand required"
+    /// error. The same Tytus v0.6 Phase A pattern.
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -752,6 +755,23 @@ pub enum AgentCmd {
     /// `data/chat/config.json` to a `harveychat` subagent slot.
     /// Idempotent: re-running on an already-migrated slot is a no-op.
     MigrateHarveychat,
+
+    /// Restart a slot's supervisor (= stop then start).
+    Restart {
+        /// Slot id (or legacy plugin name).
+        name: String,
+    },
+
+    // ── Internal: invoked by launchd / systemd, NOT for direct use. ──
+    /// Internal: the long-running per-slot supervisor process. The
+    /// LaunchAgent plist / systemd unit invokes this. Users should
+    /// never run it directly.
+    #[command(name = "_supervisor", hide = true)]
+    Supervisor {
+        /// Slot id to supervise.
+        #[arg(long)]
+        slot: String,
+    },
 }
 
 /// `makakoo plugin <subcommand>`.
@@ -1513,7 +1533,7 @@ mod tests {
     #[test]
     fn parse_search_basic() {
         let cli = Cli::try_parse_from(["makakoo", "search", "harvey"]).unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Search { query, limit } => {
                 assert_eq!(query, "harvey");
                 assert_eq!(limit, 10);
@@ -1526,7 +1546,7 @@ mod tests {
     fn parse_search_with_limit() {
         let cli =
             Cli::try_parse_from(["makakoo", "search", "--limit", "5", "tytus"]).unwrap();
-        if let Commands::Search { query, limit } = cli.command {
+        if let Commands::Search { query, limit } = cli.command.unwrap() {
             assert_eq!(query, "tytus");
             assert_eq!(limit, 5);
         } else {
@@ -1540,7 +1560,7 @@ mod tests {
             "makakoo", "query", "--top-k", "3", "what is lope?",
         ])
         .unwrap();
-        if let Commands::Query { question, top_k, .. } = cli.command {
+        if let Commands::Query { question, top_k, .. } = cli.command.unwrap() {
             assert_eq!(question, "what is lope?");
             assert_eq!(top_k, 3);
         } else {
@@ -1551,13 +1571,13 @@ mod tests {
     #[test]
     fn parse_sancho_tick() {
         let cli = Cli::try_parse_from(["makakoo", "sancho", "tick"]).unwrap();
-        matches!(cli.command, Commands::Sancho { cmd: SanchoCmd::Tick });
+        matches!(cli.command.unwrap(), Commands::Sancho { cmd: SanchoCmd::Tick });
     }
 
     #[test]
     fn parse_sancho_status() {
         let cli = Cli::try_parse_from(["makakoo", "sancho", "status"]).unwrap();
-        if let Commands::Sancho { cmd } = cli.command {
+        if let Commands::Sancho { cmd } = cli.command.unwrap() {
             matches!(cmd, SanchoCmd::Status);
         } else {
             panic!("expected Sancho");
@@ -1567,7 +1587,7 @@ mod tests {
     #[test]
     fn parse_buddy_status() {
         let cli = Cli::try_parse_from(["makakoo", "buddy", "status"]).unwrap();
-        if let Commands::Buddy { cmd } = cli.command {
+        if let Commands::Buddy { cmd } = cli.command.unwrap() {
             matches!(cmd, BuddyCmd::Status);
         } else {
             panic!("expected Buddy");
@@ -1597,7 +1617,7 @@ mod tests {
                     maintainer,
                     job,
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "Olibia");
             assert_eq!(species, "owl");
@@ -1611,7 +1631,7 @@ mod tests {
     #[test]
     fn parse_nursery_list() {
         let cli = Cli::try_parse_from(["makakoo", "nursery", "list"]).unwrap();
-        if let Commands::Nursery { cmd } = cli.command {
+        if let Commands::Nursery { cmd } = cli.command.unwrap() {
             matches!(cmd, NurseryCmd::List);
         } else {
             panic!("expected Nursery");
@@ -1624,7 +1644,7 @@ mod tests {
             "makakoo", "skill", "canary", "run", "opencode", "--workspace", "clean",
         ])
         .unwrap();
-        if let Commands::Skill { name, args } = cli.command {
+        if let Commands::Skill { name, args } = cli.command.unwrap() {
             assert_eq!(name, "canary");
             assert_eq!(args, vec!["run", "opencode", "--workspace", "clean"]);
         } else {
@@ -1635,13 +1655,13 @@ mod tests {
     #[test]
     fn parse_dream() {
         let cli = Cli::try_parse_from(["makakoo", "dream"]).unwrap();
-        matches!(cli.command, Commands::Dream);
+        matches!(cli.command.unwrap(), Commands::Dream);
     }
 
     #[test]
     fn parse_promotions_defaults() {
         let cli = Cli::try_parse_from(["makakoo", "promotions"]).unwrap();
-        if let Commands::Promotions { threshold, limit } = cli.command {
+        if let Commands::Promotions { threshold, limit } = cli.command.unwrap() {
             assert!((threshold - 0.70).abs() < 1e-6);
             assert_eq!(limit, 10);
         } else {
@@ -1652,13 +1672,13 @@ mod tests {
     #[test]
     fn parse_version() {
         let cli = Cli::try_parse_from(["makakoo", "version"]).unwrap();
-        matches!(cli.command, Commands::Version);
+        matches!(cli.command.unwrap(), Commands::Version);
     }
 
     #[test]
     fn parse_mcp_with_passthrough_args() {
         let cli = Cli::try_parse_from(["makakoo", "mcp", "--list-tools"]).unwrap();
-        if let Commands::Mcp { args } = cli.command {
+        if let Commands::Mcp { args } = cli.command.unwrap() {
             assert_eq!(args, vec!["--list-tools"]);
         } else {
             panic!("expected Mcp");
@@ -1668,7 +1688,7 @@ mod tests {
     #[test]
     fn parse_plugin_list() {
         let cli = Cli::try_parse_from(["makakoo", "plugin", "list"]).unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Plugin {
                 cmd: PluginCmd::List { json: false },
             } => {}
@@ -1681,7 +1701,7 @@ mod tests {
         let cli = Cli::try_parse_from(["makakoo", "plugin", "list", "--json"]).unwrap();
         if let Commands::Plugin {
             cmd: PluginCmd::List { json },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(json);
         } else {
@@ -1694,7 +1714,7 @@ mod tests {
         let cli = Cli::try_parse_from(["makakoo", "plugin", "info", "mascot-gym"]).unwrap();
         if let Commands::Plugin {
             cmd: PluginCmd::Info { name },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "mascot-gym");
         } else {
@@ -1716,7 +1736,7 @@ mod tests {
                     blake3,
                     ..
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(source, "mascot-gym");
             assert!(core);
@@ -1737,7 +1757,7 @@ mod tests {
         .unwrap();
         if let Commands::Plugin {
             cmd: PluginCmd::Install { source, core, .. },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(source, "/tmp/my-plugin");
             assert!(!core);
@@ -1762,7 +1782,7 @@ mod tests {
                     allow_unstable_ref,
                     ..
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(source, "git+https://github.com/user/plugin@v0.1.0");
             assert!(!allow_unstable_ref);
@@ -1787,7 +1807,7 @@ mod tests {
                     allow_unstable_ref,
                     ..
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(allow_unstable_ref);
         } else {
@@ -1808,7 +1828,7 @@ mod tests {
         .unwrap();
         if let Commands::Plugin {
             cmd: PluginCmd::Install { source, sha256, .. },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(source.starts_with("https://"));
             assert_eq!(sha256.unwrap().len(), 64);
@@ -1833,7 +1853,7 @@ mod tests {
                 PluginCmd::Internal {
                     cmd: PluginInternalCmd::VenvBootstrap { mode, .. },
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         else {
             panic!("expected Plugin::Internal::VenvBootstrap");
         };
@@ -1863,7 +1883,7 @@ mod tests {
                             mode, url, rev, ..
                         },
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         else {
             panic!("expected Plugin::Internal::VenvBootstrap");
         };
@@ -1880,7 +1900,7 @@ mod tests {
         .unwrap();
         if let Commands::Plugin {
             cmd: PluginCmd::Uninstall { name, purge },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "mascot-gym");
             assert!(purge);
@@ -1893,7 +1913,7 @@ mod tests {
     fn parse_distro_list() {
         let cli = Cli::try_parse_from(["makakoo", "distro", "list"]).unwrap();
         matches!(
-            cli.command,
+            cli.command.unwrap(),
             Commands::Distro {
                 cmd: DistroCmd::List
             }
@@ -1914,7 +1934,7 @@ mod tests {
                     yes,
                     dry_run,
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name.as_deref(), Some("core"));
             assert!(from.is_none());
@@ -1935,7 +1955,7 @@ mod tests {
             skip_daemon,
             skip_infect,
             no_setup,
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(distro, "core");
             assert!(!dry_run);
@@ -1965,7 +1985,7 @@ mod tests {
             skip_daemon,
             skip_infect,
             ..
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(distro, "minimal");
             assert!(dry_run);
@@ -1979,7 +1999,7 @@ mod tests {
     #[test]
     fn parse_session_list_default() {
         let cli = Cli::try_parse_from(["makakoo", "session", "list"]).unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Session {
                 cmd: SessionCmd::List { json: false },
             } => {}
@@ -1996,7 +2016,7 @@ mod tests {
         .unwrap();
         if let Commands::Session {
             cmd: SessionCmd::Fork { source, from, new_id },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(source, "abc");
             assert_eq!(from, "m3");
@@ -2012,7 +2032,7 @@ mod tests {
             Cli::try_parse_from(["makakoo", "session", "label", "abc", "before-tool"]).unwrap();
         if let Commands::Session {
             cmd: SessionCmd::Label { id, name },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(id, "abc");
             assert_eq!(name, "before-tool");
@@ -2027,7 +2047,7 @@ mod tests {
             Cli::try_parse_from(["makakoo", "session", "rewind", "abc", "before-tool"]).unwrap();
         if let Commands::Session {
             cmd: SessionCmd::Rewind { id, label },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(id, "abc");
             assert_eq!(label, "before-tool");
@@ -2051,7 +2071,7 @@ mod tests {
         .unwrap();
         if let Commands::Session {
             cmd: SessionCmd::Export { id, format, out },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(id, "abc");
             assert_eq!(format, "html");
@@ -2080,7 +2100,7 @@ mod tests {
                     yes: _,
                     dry_run,
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(name.is_none());
             assert_eq!(from.as_deref().map(|p| p.to_str().unwrap()), Some("/tmp/custom.toml"));
@@ -2095,7 +2115,7 @@ mod tests {
     #[test]
     fn parse_adapter_list() {
         let cli = Cli::try_parse_from(["makakoo", "adapter", "list"]).unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Adapter {
                 cmd:
                     AdapterCmd::List {
@@ -2123,7 +2143,7 @@ mod tests {
                     json,
                     include_bundled,
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(json);
             assert!(include_bundled);
@@ -2153,7 +2173,7 @@ mod tests {
                     accept_re_trust,
                     skip_health_check,
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(source, "openclaw");
             assert!(bundled);
@@ -2179,7 +2199,7 @@ mod tests {
         .unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Install { pack, .. },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(pack);
         } else {
@@ -2199,7 +2219,7 @@ mod tests {
         .unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Install { allow_unsigned, .. },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(allow_unsigned);
         } else {
@@ -2218,7 +2238,7 @@ mod tests {
                     name,
                     accept_re_trust,
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "openclaw");
             assert!(accept_re_trust);
@@ -2233,7 +2253,7 @@ mod tests {
             Cli::try_parse_from(["makakoo", "adapter", "remove", "openclaw", "--purge"]).unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Remove { name, purge },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "openclaw");
             assert!(purge);
@@ -2246,14 +2266,14 @@ mod tests {
     fn parse_adapter_enable_disable() {
         let e = Cli::try_parse_from(["makakoo", "adapter", "enable", "foo"]).unwrap();
         matches!(
-            e.command,
+            e.command.unwrap(),
             Commands::Adapter {
                 cmd: AdapterCmd::Enable { .. },
             }
         );
         let d = Cli::try_parse_from(["makakoo", "adapter", "disable", "foo"]).unwrap();
         matches!(
-            d.command,
+            d.command.unwrap(),
             Commands::Adapter {
                 cmd: AdapterCmd::Disable { .. },
             }
@@ -2265,7 +2285,7 @@ mod tests {
         let cli = Cli::try_parse_from(["makakoo", "adapter", "status", "--json"]).unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Status { json },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert!(json);
         } else {
@@ -2278,7 +2298,7 @@ mod tests {
         let cli = Cli::try_parse_from(["makakoo", "adapter", "doctor", "openclaw"]).unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Doctor { name, json },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "openclaw");
             assert!(!json);
@@ -2292,7 +2312,7 @@ mod tests {
         let cli = Cli::try_parse_from(["makakoo", "adapter", "search", "claw"]).unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Search { query },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(query, "claw");
         } else {
@@ -2311,7 +2331,7 @@ mod tests {
         .unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::MigrateConfig { path },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(path.to_str().unwrap(), "/home/me/.lope/config.json");
         } else {
@@ -2327,7 +2347,7 @@ mod tests {
         .unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Export { name, out },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "openclaw");
             assert_eq!(out.unwrap().to_str().unwrap(), "/tmp/openclaw.tgz");
@@ -2358,7 +2378,7 @@ mod tests {
                     timeout,
                     bundled,
                 },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "openclaw");
             assert_eq!(prompt.as_deref(), Some("hello"));
@@ -2375,7 +2395,7 @@ mod tests {
             .unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Info { name, json },
-        } = cli.command
+        } = cli.command.unwrap()
         {
             assert_eq!(name, "openclaw");
             assert!(json);
@@ -2388,7 +2408,7 @@ mod tests {
     fn parse_adapter_spec() {
         let cli = Cli::try_parse_from(["makakoo", "adapter", "spec"]).unwrap();
         matches!(
-            cli.command,
+            cli.command.unwrap(),
             Commands::Adapter {
                 cmd: AdapterCmd::Spec,
             }

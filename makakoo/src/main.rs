@@ -43,7 +43,15 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let ctx = context::CliContext::new()?;
-    match commands::dispatch(cli.command, &ctx).await {
+    let Some(command) = cli.command else {
+        // Bare `makakoo` (no subcommand) — print a friendly first-run
+        // banner instead of clap's "subcommand required" error. Adapts
+        // its next-step suggestions based on whether `~/.makakoo/` is
+        // already populated. Tytus v0.6 Phase A pattern.
+        commands::default_banner::run(&ctx);
+        std::process::exit(0);
+    };
+    match commands::dispatch(command, &ctx).await {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             output::print_error(format!("{e:#}"));
