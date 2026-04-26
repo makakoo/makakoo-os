@@ -158,14 +158,70 @@ pub fn validate_and_expand_scope(raw: &str) -> anyhow::Result<PathBuf> {
             .join(&expanded)
     };
 
-    // Final sanity check after expansion.
+    // Final sanity check after expansion. The bare-string check above
+    // only catches literal `~/`, `$HOME`, etc. — but the shell expands
+    // `~/` to `/Users/sebastian/` before our argv ever sees it, so we
+    // need to ALSO compare the canonicalised path against $HOME and
+    // $MAKAKOO_HOME themselves. Reported 2026-04-25 — `perms grant ~/`
+    // silently granted home-wide write access.
     let abs_str = abs.to_string_lossy().to_string();
     if abs_str == "/" || abs_str == "/**" {
         bail!(
             "expanded scope resolves to root — refuse to grant filesystem-wide write"
         );
     }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mk_home = std::env::var("MAKAKOO_HOME").unwrap_or_else(|_| home.clone());
+    let canonical = abs
+        .to_string_lossy()
+        .trim_end_matches("/**")
+        .trim_end_matches('/')
+        .to_string();
+    let home_canon = home.trim_end_matches('/').to_string();
+    let mk_canon = mk_home.trim_end_matches('/').to_string();
+    if !home_canon.is_empty() && canonical == home_canon {
+        bail!(
+            "expanded scope resolves to $HOME ({home_canon}) — too broad, grant a specific subdirectory"
+        );
+    }
+    if !mk_canon.is_empty() && canonical == mk_canon {
+        bail!(
+            "expanded scope resolves to $MAKAKOO_HOME ({mk_canon}) — too broad, grant a specific subdirectory"
+        );
+    }
+    // Single-component absolute paths (`/etc`, `/Users`, `/var`, etc.)
+    // are also refused — those govern entire system trees.
+    let component_count = Path::new(&canonical)
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .count();
+    if component_count <= 1 && !canonical.is_empty() {
+        bail!(
+            "expanded scope {canonical:?} is a single top-level directory — refuse to grant; pick a subdirectory"
+        );
+    }
     Ok(abs)
+}
+
+/// Heuristic — anything that smells like a filesystem path rather than
+/// a grant ID. Grant IDs always start with `g_<8 digits>_`, so this is
+/// just a "does NOT match grant-id shape AND looks pathy" check.
+fn looks_like_path(s: &str) -> bool {
+    if s.starts_with("g_") && s.len() >= 11 {
+        // Grant id shape: `g_YYYYMMDD_*`
+        let after = &s[2..];
+        if after.chars().take(8).all(|c| c.is_ascii_digit())
+            && after.chars().nth(8) == Some('_')
+        {
+            return false;
+        }
+    }
+    s.starts_with('/')
+        || s.starts_with("~/")
+        || s == "~"
+        || s.starts_with("./")
+        || s.starts_with("../")
+        || s.starts_with("$")
 }
 
 fn expand_shell_vars(s: &str) -> String {
@@ -487,6 +543,16 @@ fn revoke(
 ) -> anyhow::Result<i32> {
     let mut u = UserGrants::load(ctx.home());
 
+    // Auto-detect path-vs-id on the positional. Grant IDs all start
+    // with `g_<YYYYMMDD>_<8hex>` — anything else that looks like a
+    // path (`/...`, `~/...`, `./...`, `../...`) is treated as `--path`.
+    // Reported 2026-04-25 — users typing `revoke ~/Desktop/` got a
+    // confusing "no grant with id /Users/sebastian/Desktop/" error.
+    let (id, path) = match (id, path) {
+        (Some(s), None) if looks_like_path(&s) => (None, Some(s)),
+        other => other,
+    };
+
     let target_id: String = if let Some(gid) = id {
         gid
     } else if let Some(p) = path {
@@ -764,5 +830,95 @@ mod tests {
         std::env::set_var("HOME", "/tmp/fake-home");
         let p = validate_and_expand_scope("~/code/").unwrap();
         assert_eq!(p.to_string_lossy(), "/tmp/fake-home/code/");
+    }
+
+    /// Regression 2026-04-25: `perms grant ~/` silently granted writable
+    /// access to the entire home directory because the shell expanded
+    /// `~/` to `/Users/sebastian/` BEFORE our argv saw it, and the
+    /// post-expansion check only refused literal `/`.
+    #[test]
+    fn validate_scope_refuses_resolved_home() {
+        std::env::set_var("HOME", "/tmp/fake-home-xyz");
+        // Shell-expanded form of `~/` — the dangerous path.
+        assert!(
+            validate_and_expand_scope("/tmp/fake-home-xyz").is_err(),
+            "resolved $HOME path must be refused as too broad"
+        );
+        assert!(
+            validate_and_expand_scope("/tmp/fake-home-xyz/").is_err(),
+            "resolved $HOME path with trailing slash must be refused"
+        );
+        assert!(
+            validate_and_expand_scope("/tmp/fake-home-xyz/**").is_err(),
+            "resolved $HOME glob must be refused"
+        );
+    }
+
+    #[test]
+    fn validate_scope_refuses_resolved_makakoo_home() {
+        std::env::set_var("HOME", "/tmp/fake-home-mk");
+        std::env::set_var("MAKAKOO_HOME", "/tmp/fake-mk");
+        assert!(
+            validate_and_expand_scope("/tmp/fake-mk").is_err(),
+            "resolved $MAKAKOO_HOME must be refused"
+        );
+        assert!(
+            validate_and_expand_scope("/tmp/fake-mk/").is_err(),
+            "resolved $MAKAKOO_HOME with trailing slash must be refused"
+        );
+    }
+
+    #[test]
+    fn validate_scope_refuses_single_component_paths() {
+        // `/Users`, `/etc`, `/var` etc. are top-level directories that
+        // govern entire system trees. Refuse outright.
+        std::env::set_var("HOME", "/tmp/fake");
+        for bad in ["/etc", "/var", "/Users", "/opt", "/usr"] {
+            assert!(
+                validate_and_expand_scope(bad).is_err(),
+                "single-component path {bad:?} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_scope_accepts_nested_home_path() {
+        // The whole point — refuse $HOME but allow $HOME/sub.
+        // `set_var` is process-global and other parallel tests may have
+        // changed $HOME — assert by suffix instead of exact equality.
+        let p = validate_and_expand_scope("~/some-subdir/").unwrap();
+        let s = p.to_string_lossy();
+        assert!(
+            s.ends_with("/some-subdir/"),
+            "expected nested-home path to keep the suffix, got {s}"
+        );
+        assert!(
+            !s.ends_with("/some-subdir/some-subdir/"),
+            "should not double-append, got {s}"
+        );
+    }
+
+    /// Regression: `revoke ~/Desktop/` (positional) was treated as a
+    /// grant ID lookup and failed with "no grant with id /Users/...".
+    /// The path-vs-id auto-detect should route it to --path.
+    #[test]
+    fn looks_like_path_distinguishes_id_from_path() {
+        // Real grant ids — must NOT be detected as paths.
+        assert!(!looks_like_path("g_20260421_abcd1234"));
+        assert!(!looks_like_path("g_20260101_aaaaaaaa"));
+
+        // Real paths — MUST be detected.
+        assert!(looks_like_path("/Users/sebastian/Desktop/"));
+        assert!(looks_like_path("~/Desktop"));
+        assert!(looks_like_path("~"));
+        assert!(looks_like_path("./relative/dir"));
+        assert!(looks_like_path("../parent"));
+        assert!(looks_like_path("$MAKAKOO_HOME/foo"));
+
+        // Edge cases — short tokens that aren't grant ids and aren't
+        // paths shouldn't be auto-rerouted (let the id-lookup fail
+        // with a friendly error).
+        assert!(!looks_like_path("garbage"));
+        assert!(!looks_like_path(""));
     }
 }
