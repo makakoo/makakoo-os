@@ -200,6 +200,17 @@ async fn verify_one(
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             Ok((id.account_id, id.tenant_id))
         }
+        TransportConfig::Discord(_)
+        | TransportConfig::WhatsApp(_)
+        | TransportConfig::Web(_)
+        | TransportConfig::VoiceTwilio(_) => {
+            // Phase 7-11 transports verify credentials via their own
+            // adapters; the simplified registry path here doesn't run
+            // a network probe yet (Phase 13 wires per-kind verifiers).
+            // Return the identity placeholder so duplicate-detection
+            // skips them.
+            Ok((format!("v2-pending-{}", entry.id), None))
+        }
     }
 }
 
@@ -449,6 +460,7 @@ fn build_slot_from_flags(args: &CreateArgs) -> anyhow::Result<AgentSlot> {
         tools: args.tools.clone(),
         process_mode: "supervised_pair".into(),
         transports,
+        llm: None,
     };
     slot.validate()?;
     Ok(slot)

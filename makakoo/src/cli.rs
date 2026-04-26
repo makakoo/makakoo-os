@@ -790,6 +790,36 @@ pub enum AgentCmd {
         really_destroy_harveychat: bool,
     },
 
+    /// Tail the per-machine audit log (Phase 12). Surface scope
+    /// violations, secret resolutions, slot lifecycle, webhook
+    /// signature failures, fault tests, etc.
+    Audit {
+        /// Number of most-recent events to show. Default 50.
+        #[arg(long, default_value_t = 50)]
+        last: usize,
+        /// Filter to a single audit kind (e.g. `scope_tool`,
+        /// `webhook_invalid_signature`, `rate_limit`).
+        #[arg(long)]
+        kind: Option<String>,
+        /// Emit JSON lines instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Run the fault-injection scenario suite (Phase 12 / Q11).
+    /// Gated behind `MAKAKOO_DEV_FAULTS=1` so production cannot
+    /// trigger. All scenarios are mock-only — no real transport
+    /// credentials, no network calls.
+    TestFaults {
+        /// Run a single scenario by name (kebab-case, e.g.
+        /// `gateway-sigterm`). Default: run the entire suite.
+        #[arg(long)]
+        scenario: Option<String>,
+        /// Emit JSON lines instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
     // ── Internal: invoked by launchd / systemd, NOT for direct use. ──
     /// Internal: the long-running per-slot supervisor process. The
     /// LaunchAgent plist / systemd unit invokes this. Users should

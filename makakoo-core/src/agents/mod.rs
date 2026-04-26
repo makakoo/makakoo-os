@@ -17,12 +17,14 @@
 
 pub mod audit;
 pub mod destroy;
+pub mod fault_inject;
 pub mod identity;
 pub mod lifecycle;
 pub mod llm_override;
 pub mod rate_limit;
 pub mod migrate;
 pub mod registry;
+pub mod rlimits;
 pub mod scaffold;
 pub mod scope;
 pub mod slot;

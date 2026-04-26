@@ -9,9 +9,11 @@
 pub mod adapter;
 pub mod adapter_gen;
 pub mod agent;
+pub mod agent_audit;
 pub mod agent_destroy;
 pub mod agent_lifecycle;
 pub mod agent_slot;
+pub mod agent_test_faults;
 pub mod default_banner;
 pub mod bucket;
 pub mod buddy;

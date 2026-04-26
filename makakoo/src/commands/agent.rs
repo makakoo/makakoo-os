@@ -130,6 +130,14 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 really_destroy_harveychat,
             },
         ),
+        AgentCmd::Audit { last, kind, json } => {
+            crate::commands::agent_audit::run(ctx, last, kind, json)?;
+            Ok(0)
+        }
+        AgentCmd::TestFaults { scenario, json } => {
+            crate::commands::agent_test_faults::run(scenario, json)?;
+            Ok(0)
+        }
     }
 }
 
