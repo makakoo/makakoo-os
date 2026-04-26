@@ -315,6 +315,38 @@ Evidence: OPENCLAW-REFERENCE.md § Secrets layering uses the same precedence
 ladder. `ChannelSecretsAdapter.secretTargetRegistryEntries`
 (`openclaw/src/channels/plugins/types.adapters.ts`) is the reference interface.
 
+**Per-transport validation rules (Phase 2 enforces during `agent create`):**
+
+| Field | Telegram (req) | Telegram (opt) | Slack (req) | Slack (opt) |
+|---|---|---|---|---|
+| `id` | yes (slot-unique) | — | yes (slot-unique) | — |
+| `kind` | `"telegram"` | — | `"slack"` | — |
+| `enabled` | — | bool, default `true` | — | bool, default `true` |
+| `token` | yes (secret_ref / env / inline) | — | — | — |
+| `app_token` | — | — | yes (secret_ref / env / inline) | — |
+| `bot_token` | — | — | yes (secret_ref / env / inline) | — |
+| `team_id` | — | — | yes | — |
+| `allowed_users` | — | list[string]; intersect rule | — | list[string]; intersect rule |
+| `support_thread` | — | bool, default `false` | — | bool, default `false` |
+| `dm_only` | — | — | — | bool, default `true` |
+| `channels` | — | — | — | list[string], required if `dm_only = false` |
+| `poll_interval_ms` | — | int, default `1000` | — | — (Socket Mode WebSocket) |
+
+`makakoo agent create` MUST run the per-transport credential verifier
+BEFORE writing any files: `getMe` for Telegram, `auth.test` for Slack
+(bot token), Socket Mode probe for Slack (app token). For Slack, the
+`team_id` returned by `auth.test` MUST match the TOML `team_id` (reject
+on mismatch).
+
+**Same-kind multi-transport validation:** two `[[transport]]` blocks of
+the same `kind` are permitted iff their resolved credential identities
+differ. Phase 2 schema validation rejects:
+- duplicate `transport.id` within a slot (any kind);
+- two Telegram transports whose `getMe.id` resolves to the same bot;
+- two Slack transports with the same `bot_token` in the same `team_id`
+  (same `bot_token` in DIFFERENT `team_id` is permitted — it's a
+  different bot identity in a different workspace).
+
 ---
 
 ### Q12 — Adopt OpenClaw SDK or rebuild in Rust?
@@ -382,7 +414,8 @@ concurrently:
 5. Replies are sent back over the IPC socket as `MakakooOutboundFrame`
    objects. The Rust router demultiplexes by `outbound.transport_id`
    (PRIMARY key — must match an inbound frame's `transport_id` from the
-   same slot, else reject as cross-transport per Q1 forbid rule). The
+   same slot, else reject as cross-transport per the Phase 1 IPC spec
+   "Cross-transport reply (locked v1, FORBIDDEN)" rule). The
    selected adapter coerces `reply_to_message_id` to its native type
    (Telegram int / Slack thread_ts) and forwards the payload.
 6. **Python gateway crash recovery:** if the Python gateway process dies,
@@ -475,54 +508,95 @@ Unix-domain socket.
 - **Inbound IPC frame (`MakokooInboundFrame`):**
   ```
   slot_id: String             # resolved by router from (transport_id, account_id)
-  transport_kind: String     # "telegram" | "slack"
-  transport_id: String       # e.g. "telegram-main" — the TOML transport.id
-  account_id: String         # bot token account identifier
-  conversation_id: String    # transport-native conversation identifier
-  thread_id: Option<String>  # transport-native thread/topic ID (None if flattened)
-  sender_id: String          # transport-native sender ID (canonical; numeric string for Telegram)
-  sender_username: Option<String>  # display name; OPTIONAL; derived asynchronously
-                                   # via ChannelDirectoryAdapter.self() after the
-                                   # raw inbound frame is dispatched; NOT in raw frame
+  slot_id: String                 # set by the transport task from spawn ctx
+  transport_id: String             # PRIMARY routing key, e.g. "telegram-main"
+  transport_kind: String           # "telegram" | "slack" — type dispatch
+  account_id: String               # auxiliary diagnostic; resolved bot identity
+                                   #   Telegram: getMe.id; Slack: auth.test.bot_id
+  tenant_id: Option<String>        # Slack: team_id; Telegram: None
+  conversation_id: String          # WHERE to reply
+                                   #   Telegram: chat_id (string-encoded int)
+                                   #   Slack DM: im_id (D…); Slack channel: C…
+  thread_id: Option<String>        # transport-native thread token
+  thread_kind: Option<String>      # discriminator: "telegram_topic" |
+                                   #   "slack_thread_ts" | None (flat / DM)
+  sender_id: String                # canonical sender used for ACL
+                                   #   Telegram: chat_id; Slack: user_id (U…)
+  message_id: String               # transport-native id of THIS message
+                                   #   Telegram: message_id (int as string)
+                                   #   Slack: event_ts / ts (float-string)
   text: String
-  timestamp: DateTime<Utc>   # Makakoo local-receive timestamp (clock at time of
-                              # deserialization in the Rust transport process, not
-                              # the transport server's reported timestamp — this
-                              # ensures consistent ordering across multi-transport slots
-                              # where the same event may be reported by two platforms
-                              # with different server clocks)
-  raw_metadata: Map<String, Value>  # transport-native extras for debugging
+  received_at: DateTime<Utc>       # Makakoo local-receive clock (NOT transport
+                                   # server clock) — ensures consistent ordering
+                                   # across multi-transport slots
+  raw_metadata: Map<String, Value> # transport-native extras for debugging;
+                                   # carries the transport server timestamp if
+                                   # available (e.g. raw_metadata["server_ts"])
   ```
-  Note: `sender_username` is derived asynchronously via the directory adapter.
-  The raw inbound frame does NOT include it. It is added as a derived field
-  after the `ChannelDirectoryAdapter.self()` lookup completes and the Python
-  gateway has access to the resolved display name for the system prompt.
-  Note: `timestamp` uses Makakoo's local-receive clock for multi-transport
-  ordering consistency. If the transport provides a server timestamp, it
-  appears in `raw_metadata` alongside the local timestamp.
-- **Outbound IPC frame (`MakokooOutboundFrame`):**
+  `sender_username` is intentionally NOT in the v1 frame schema. Directory-
+  adapter lookup (`ChannelDirectoryAdapter.self()`) is post-v1 (see Q12
+  deferred adapters). Until then, downstream code uses `sender_id` for both
+  ACL and display.
+- **Outbound IPC frame (`MakakooOutboundFrame`):**
   ```
-  transport_kind: String
-  transport_id: String    # the TOML transport.id (primary routing key)
-  to: String             # recipient identifier (transport-native)
-  thread_id: Option<String>
+  transport_id: String             # MUST match the inbound frame's transport_id
+                                   # for the same slot — cross-transport reply
+                                   # is forbidden in v1 (rejected at router)
+  transport_kind: String           # type dispatch for adapter selection
+  conversation_id: String          # WHERE to send (channel/im id, NOT user id)
+  thread_id: Option<String>        # only honored when support_thread = true
+                                   # for the matching transport
+  thread_kind: Option<String>      # MUST match the inbound thread_kind if both
+                                   # are set; mismatch → adapter logs WARN and
+                                   # drops thread (still sends to conversation)
   text: String
-  reply_to_id: Option<String>
+  reply_to_message_id: Option<String> # transport-native reply target;
+                                      # the demux layer COERCES this to the
+                                      # transport's expected type (Telegram int
+                                      # parsed from numeric string; Slack
+                                      # thread_ts as float-string).
+                                      # Format mismatch → drop reply_to (still
+                                      # send the message, no thread anchor) +
+                                      # WARN log
   ```
-- Secrets precedence: `makakoo secret` store (`token.secret_ref`), then
-  `token.env = "ENV_VAR_NAME"`, then TOML inline `token = "..."` (dev-only,
-  logs WARNING). See Q11 TOML example and Q11 env var naming convention.
-- Router: `(transport_id) → slot_id` resolution using the registry index.
-  Thread-id is NOT part of the primary routing key — it is carried in the
-  frame. Thread-aware delivery uses `thread_id` from the inbound frame to
-  select the correct outbound `thread_id` (see `support_thread` in Q9).
-- IPC: Unix-domain socket (`tokio::net::UnixStream`) for Rust-to-Python frame
-  exchange. Frames are JSON-serialized `MakokooFrame` enum (inbound + outbound
-  variants). The socket path is
-  `~/MAKAKOO/run/agents/<slot_id>/ipc.sock` (created on first use).
-- Multi-transport slot: the Rust router sends all frames for a given `slot_id`
-  to the same Unix socket; Python gateway dispatches sequentially via `asyncio`
-  queue (see concurrency model above).
+- Secrets precedence (locked, identical for every adapter):
+  1. `makakoo secret` store: `<field>.secret_ref = "secret:<ns>/<key>"`
+  2. Environment variable: `<field>.env = "ENV_VAR_NAME"`
+  3. TOML inline (dev-only, adapter logs WARNING): `<field> = "<value>"`
+- **Router: `(slot_id, transport_id) → adapter` is the PRIMARY mapping**
+  used for outbound demux. Inbound resolution: each transport poller knows
+  its own `(slot_id, transport_id)` from the spawn context (no per-message
+  registry lookup). The triple `(transport_kind, account_id, tenant_id)` is
+  used only for cross-checking — e.g., rejecting a Slack event whose
+  `team_id` doesn't match the transport's TOML.
+- **IPC framing protocol (locked):** newline-delimited JSON
+  (`\n`-terminated). Each side reads/writes one complete JSON object per
+  line. Outer envelope: `{ "kind": "inbound" | "outbound", "frame": {…} }`.
+  Length-prefix is rejected as overkill for v1 (frames are bounded by
+  Telegram/Slack message limits). tokio's per-stream write mutex serialises
+  concurrent writers so frames never interleave on the wire.
+- **IPC delivery semantics (locked v1):**
+  - **At-most-once.** No frame ack, no IPC-layer retry.
+  - If the Python gateway socket is unavailable when the Rust transport
+    receives an inbound message, the transport logs a STRUCTURED ERROR
+    (`{"event": "ipc.gateway_unavailable", "transport_id": …, "drop": true}`)
+    and drops the frame, then enters exponential-backoff reconnect
+    (initial 500 ms, cap 30 s, jittered) for the next inbound. No buffering,
+    no replay.
+  - Outbound transport API (Telegram/Slack) failures: Rust adapter logs
+    the failure and returns the error to Python via a synchronous response
+    on the same Unix socket. No transport-side retry.
+- **Cross-transport reply (locked v1, FORBIDDEN):** outbound `transport_id`
+  MUST equal the `transport_id` of an inbound frame for the same `slot_id`.
+  The router rejects mismatches at the demux layer before invoking the
+  adapter. (Cross-transport messaging — e.g. "send results via email
+  instead" — is a follow-on capability.)
+- IPC socket path: `~/MAKAKOO/run/agents/<slot_id>/ipc.sock` (created on
+  first use; world-readable for the local user only — `0700` on the
+  parent dir).
+- Multi-transport slot: all transports for a slot write to the SAME Unix
+  socket. Python gateway reads newline-delimited frames into a SINGLE
+  asyncio queue per slot (see concurrency model section).
 
 **Files:**
 - `makakoo-core/src/transport/mod.rs` — trait hierarchy + frame types
@@ -590,19 +664,34 @@ CLI commands, and harveychat migration.
   not actively tested unless Linux CI is added)
 
 **Tests:**
-- Unit: TOML parse and validation (valid/invalid schema, duplicate slot).
+- Unit: TOML parse and validation (valid/invalid schema, duplicate slot
+  filename).
 - Unit: secret redaction in `agent show` (token absent from output).
 - Unit: harveychat JSON→TOML round-trip (write → read → compare fields).
-- Unit: Slack credential verification with mocked `auth.test` response (mirrors
-  Phase 1 Telegram test for completeness; the Slack adapter ships in Phase 1,
-  Phase 2 ships the test coverage).
-- Unit: `agent create` refuses invalid Telegram token (mocked `getMe` returns
-  error) before writing files.
-- Unit: `agent create` refuses invalid Slack token (mocked `auth.test` returns
-  error) before writing files.
-- Integration: `agent create harveychat` from existing `data/chat/config.json`
-  produces valid `harveychat.toml`; migrated Olibia responds without manual
-  reconfiguration.
+- Unit: Slack credential verification with mocked `auth.test` response
+  (mirrors Phase 1 Telegram test for completeness; the Slack adapter ships
+  in Phase 1, Phase 2 ships the test coverage).
+- Unit: Slack `team_id` mismatch between TOML and `auth.test.team_id` is
+  rejected during `agent create`.
+- Unit: `agent create` refuses invalid Telegram token (mocked `getMe`
+  returns error) before writing files.
+- Unit: `agent create` refuses invalid Slack token (mocked `auth.test`
+  returns error) before writing files.
+- Unit: same-kind multi-transport guard — TOML with two `[[transport]]`
+  blocks of `kind = "telegram"` and DUPLICATE `transport.id` is rejected
+  with "duplicate transport.id" error.
+- Unit: same-kind multi-transport guard — TOML with two `kind = "telegram"`
+  transports having distinct IDs but IDENTICAL bot tokens (resolved
+  `getMe.id` matches) is rejected with "duplicate bot identity" error.
+- Unit: same-kind multi-transport guard — TOML with two `kind = "slack"`
+  transports in the same `team_id` with the same `bot_token` is rejected;
+  same `bot_token` in DIFFERENT `team_id` is permitted.
+- Unit: same-kind multi-transport HAPPY path — two distinct Telegram bots
+  (different tokens, different IDs) on one slot are accepted; both
+  registered in router.
+- Integration: `agent create harveychat` from existing
+  `data/chat/config.json` produces valid `harveychat.toml`; migrated
+  harveychat (display "Olibia") responds without manual reconfiguration.
 - `cargo test --workspace`
 
 ---
@@ -664,7 +753,7 @@ and is restricted to its declared tools and paths.
 - Unit: out-of-scope tool rejection (tool not in whitelist → structured error).
 - Unit: `forbidden_paths` overrides `allowed_paths` (e.g. `~/Shared/` in
   allowed but `~/CV/` in forbidden → reject `~/CV/file`).
-- Unit: `bound_to_agent=career` grant is invisible to `olibia` slot.
+- Unit: `bound_to_agent=career` grant is invisible to `harveychat` slot.
 - Unit: `allowed_users` rejects Slack DM from non-allowlisted user ID.
 - Unit: `allowed_users` rejects Telegram message from non-allowlisted chat_id.
 - Integration: two agents write to today's journal simultaneously without
@@ -680,24 +769,40 @@ and is restricted to its declared tools and paths.
 **Goal:** Prove the system works end-to-end with multiple agents and at least
 one agent attached to two transports.
 
+**Naming convention (locked):** the slot id of the migrated legacy bot is
+`harveychat`; its display name (the TOML `name` field) is `Olibia`.
+Throughout Phase 4 docs, tests, criteria, and live dogfood the slot id is
+`harveychat` — never `olibia`. "Olibia" appears only as the display name
+in user-facing surfaces (Telegram avatar, `makakoo agent list` Name column).
+
 **Criteria:**
-- Three agent slots run simultaneously: `olibia` (Telegram-only, migrated from
-  `data/chat/config.json`), `secretary` (Telegram + Slack, created new),
-  `career` (Telegram-only, created new).
-- `secretary` is reachable via both Telegram and Slack with distinct transport
-  metadata (`transport_kind`, `transport_id`, `conversation_id`) in each frame;
-  replies go back to the originating transport/thread. Cross-reference Decision 6
-  (least privilege) rather than re-stating it.
+- Three agent slots run simultaneously: `harveychat` (Telegram-only, migrated
+  from `data/chat/config.json`; display name "Olibia"), `secretary`
+  (Telegram + Slack, created new), `career` (Telegram-only, created new).
+- `secretary` is reachable via both Telegram and Slack with distinct
+  `transport_id` in each frame; replies go back to the ORIGINATING
+  `transport_id` (cross-transport reply forbidden — see Phase 1 IPC spec).
 - Each agent replies with its configured persona and scoped tool surface.
 - Crash of one agent process pair does not affect other agents.
-- `makakoo agent status <slot>` reports: transport runtimes (per transport
-  adapter status from `ChannelStatusAdapter`), Python gateway alive/dead,
-  last inbound message time (from `timestamp` field in inbound frame), and
-  crash state (pid file stale or exit code non-zero).
-- Existing Olibia bot continues working after migration without manual
-  reconfiguration.
+- `makakoo agent status <slot>` reports PER `transport.id`, not just per
+  kind:
+  ```
+  secretary
+    gateway:   alive   pid=12345  last_frame=2s ago
+    transport telegram-main:  connected  last_inbound=8s ago  errors_1h=0
+    transport slack-main:     connected  last_inbound=3m ago  errors_1h=1
+  ```
+  Status fields per transport: `connected | reconnecting | failed`,
+  `last_inbound` timestamp, `errors_1h` count (frames dropped or send
+  failures in the last hour).
+- `makakoo agent validate <slot>` (NEW): runs the per-transport credential
+  verifier (per Q11 validation rules) WITHOUT starting the agent. Useful
+  before `start` to surface bad credentials early.
+- Existing harveychat (display: "Olibia") bot continues working after
+  migration without manual reconfiguration.
 - `docs/roadmap/adapters.md` documents: Slack Events API production path
-  (webhook + cloudflare tunnel), Discord and WhatsApp follow-on adapters.
+  (webhook + cloudflare tunnel), Discord and WhatsApp follow-on adapters,
+  and the deferred OpenClaw-parity adapters from Q12.
 
 **Files:**
 - `makakoo-core/src/agent/status.rs` — status aggregation across transports
@@ -712,13 +817,24 @@ one agent attached to two transports.
 - `docs/roadmap/adapters.md` — Slack webhook production path, Discord/WhatsApp
 
 **Tests:**
-- Live dogfood: `olibia`, `secretary`, `career` slots running simultaneously.
-- Live dogfood: `secretary` receives Telegram DM and Slack DM, replies to each
-  within 5 seconds, with distinct `transport_kind` and `transport_id` logged.
-- Smoke test: send one message per transport to `secretary`, verify
-  `transport_kind` differs in logs but `slot_id` is identical.
-- Fault test: SIGTERM one agent pair, verify other two continue responding.
-- Regression test: migrated Olibia responds without manual reconfiguration.
+- Live dogfood: `harveychat`, `secretary`, `career` slots running
+  simultaneously.
+- Live dogfood: `secretary` receives Telegram DM and Slack DM, replies to
+  each within 5 seconds, with distinct `transport_id` logged per reply.
+- Smoke test: concurrent Telegram + Slack messages to `secretary` —
+  conversation history shows both turns interleaved in slot order with
+  `[telegram]` / `[slack]` channel prefixes visible to the LLM.
+- Smoke test: `secretary` Slack thread reply with `support_thread = true`
+  goes into the originating `thread_ts`, not into the parent channel.
+- Fault test: SIGTERM one agent pair (e.g. `secretary`), verify the other
+  two (`harveychat`, `career`) continue responding without restart.
+- Fault test: kill the Python gateway for `harveychat` — Rust transports
+  reconnect with backoff; first inbound after gateway restart is delivered.
+- Fault test: `makakoo agent validate secretary` with a corrupted Slack
+  bot token reports the failure WITHOUT touching the running agent.
+- Regression test: migrated `harveychat` responds without manual
+  reconfiguration; `data/chat/config.json` is preserved (not deleted) for
+  rollback safety in v1.
 - `cargo test --workspace`
 
 ---
@@ -732,7 +848,7 @@ The sprint is done when:
 2. Three subagents simultaneously running, each responding on its own bot,
    with isolated personas + tools.
 3. Per-agent grant scoping enforced: `agent-career` cannot exercise a grant
-   bound to `agent-olibia`.
+   bound to `agent-harveychat`.
 4. Each agent's journal lines carry `[agent:<id>]` prefix; CLI-initiated
    entries do not.
 5. `makakoo agent list` shows live status for every slot in the registry.
