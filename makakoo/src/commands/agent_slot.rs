@@ -92,6 +92,15 @@ pub fn show(ctx: &CliContext, slot_id: &str, json: bool) -> anyhow::Result<i32> 
         let toml_text = toml::to_string_pretty(&redacted)
             .map_err(|e| anyhow::anyhow!("agent show: serialise: {}", e))?;
         println!("{}", toml_text);
+        // Phase 4: render the effective LLM config with per-field
+        // source attribution (override vs system default).
+        let defaults = makakoo_core::agents::llm_override::LlmDefaults::builtin_fallback();
+        let over = slot.llm.as_ref().and_then(|s| s.effective_override());
+        let eff = makakoo_core::agents::llm_override::resolve_effective(
+            over.as_ref(),
+            &defaults,
+        );
+        print!("{}", eff.render_human());
     }
     Ok(0)
 }

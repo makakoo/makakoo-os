@@ -321,9 +321,18 @@ pub fn run_supervisor_command(ctx: &CliContext, slot_id: &str) -> anyhow::Result
     let h = handle(slot_id);
     let dir = run_dir(&home, slot_id);
 
-    // Phase 1: gateway is the bundled harveychat default. Phase 3
-    // adds per-slot override via slot.toml [gateway] section.
-    let spec = GatewayLaunchSpec::harveychat_default(&home, slot_id);
+    // Phase 4: load slot config and resolve effective LLM so the
+    // supervisor can propagate MAKAKOO_LLM_* env to the gateway.
+    let slot_path = makakoo_core::agents::slot::slot_path(&home, slot_id);
+    let slot_cfg = makakoo_core::agents::slot::AgentSlot::load_from_file(&slot_path)
+        .map_err(|e| anyhow::anyhow!("slot load: {e}"))?;
+    let defaults = makakoo_core::agents::llm_override::LlmDefaults::builtin_fallback();
+    let over = slot_cfg.llm.as_ref().and_then(|s| s.effective_override());
+    let eff = makakoo_core::agents::llm_override::resolve_effective(
+        over.as_ref(),
+        &defaults,
+    );
+    let spec = GatewayLaunchSpec::harveychat_default(&home, slot_id, Some(&eff));
 
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("tokio runtime: {e}"))?;

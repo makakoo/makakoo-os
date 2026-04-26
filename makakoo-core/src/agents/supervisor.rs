@@ -237,21 +237,33 @@ impl GatewayLaunchSpec {
 
     /// Default gateway spec for the bundled harveychat Python
     /// gateway. The supervisor cd's into the python/ source dir and
-    /// invokes `gateway.py` directly. This sidesteps the
-    /// hyphenated-directory-name problem (`plugins-core/` is not a
-    /// valid Python module path); all sibling modules live in cwd
-    /// so flat `from bridge import ...` works.
-    pub fn harveychat_default(makakoo_home: &Path, slot_id: &str) -> Self {
+    /// invokes `gateway.py` directly.
+    ///
+    /// `effective_llm` lets the caller propagate the slot's resolved
+    /// LLM config (per-call > slot.toml > system defaults). `None`
+    /// means use the gateway's `MAKAKOO_LLM_*` defaults from
+    /// `LlmConfig.from_env({})` (system fallback).
+    pub fn harveychat_default(
+        makakoo_home: &Path,
+        slot_id: &str,
+        effective_llm: Option<&crate::agents::llm_override::EffectiveLlm>,
+    ) -> Self {
         let home_str = makakoo_home.to_string_lossy().into_owned();
         let python_dir = makakoo_home
             .join("plugins-core/agent-harveychat/python");
-        Self::new("python3")
+        let mut spec = Self::new("python3")
             .arg("gateway.py")
             .arg("--slot")
             .arg(slot_id)
             .env("MAKAKOO_AGENT_SLOT", slot_id)
             .env("MAKAKOO_HOME", &home_str)
-            .cwd(python_dir)
+            .cwd(python_dir);
+        if let Some(eff) = effective_llm {
+            for (k, v) in crate::agents::llm_override::effective_to_env(eff) {
+                spec = spec.env(k, v);
+            }
+        }
+        spec
     }
 }
 
@@ -462,7 +474,7 @@ mod tests {
     #[test]
     fn gateway_launch_spec_default_runs_gateway_py_from_python_dir() {
         let home = PathBuf::from("/Users/sebastian/MAKAKOO");
-        let spec = GatewayLaunchSpec::harveychat_default(&home, "secretary");
+        let spec = GatewayLaunchSpec::harveychat_default(&home, "secretary", None);
         assert_eq!(spec.program, "python3");
         assert_eq!(spec.args, vec!["gateway.py", "--slot", "secretary"]);
         assert!(spec
@@ -474,5 +486,25 @@ mod tests {
         // (`from bridge import ...`) resolve at runtime.
         let expected_cwd = home.join("plugins-core/agent-harveychat/python");
         assert_eq!(spec.cwd.as_deref(), Some(expected_cwd.as_path()));
+    }
+
+    #[test]
+    fn gateway_launch_spec_propagates_llm_override_env() {
+        use crate::agents::llm_override::{
+            resolve_effective, LlmDefaults, LlmOverride, ReasoningEffort,
+        };
+        let home = PathBuf::from("/Users/sebastian/MAKAKOO");
+        let over = LlmOverride {
+            model: Some("claude-opus-4-7".into()),
+            max_tokens: Some(8192),
+            temperature: Some(0.3),
+            reasoning_effort: Some(ReasoningEffort::High),
+        };
+        let eff = resolve_effective(Some(&over), &LlmDefaults::builtin_fallback());
+        let spec = GatewayLaunchSpec::harveychat_default(&home, "secretary", Some(&eff));
+        let env: std::collections::HashMap<_, _> = spec.envs.iter().cloned().collect();
+        assert_eq!(env.get("MAKAKOO_LLM_MODEL").unwrap(), "claude-opus-4-7");
+        assert_eq!(env.get("MAKAKOO_LLM_MAX_TOKENS").unwrap(), "8192");
+        assert_eq!(env.get("MAKAKOO_LLM_REASONING_EFFORT").unwrap(), "high");
     }
 }
