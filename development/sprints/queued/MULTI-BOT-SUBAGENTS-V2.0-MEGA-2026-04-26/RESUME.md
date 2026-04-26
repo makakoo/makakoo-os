@@ -8,11 +8,11 @@ before touching code.
 ## TL;DR
 
 - **Sprint dir:** `development/sprints/queued/MULTI-BOT-SUBAGENTS-V2.0-MEGA-2026-04-26/`
-- **HEAD:** `d5cf21e` (tag: `sprint-multi-bot-subagents-v2.0-partial`)
+- **HEAD:** `f3c4ee7` (re-tag pending)
 - **Sprint doc:** `SPRINT.md` (in this dir) — 47KB, locked Q1–Q15
-- **Phases done:** 0, 1, 2, 3, 4, 5, 12 (partial)
-- **Phases pending:** 6, 7, 8, 9, 10, 11, 12 (rest), 13
-- **Test count:** ~196 new tests, all green
+- **Phases done:** 0, 1, 2, 3, 4, 5, 6, 12 (partial)
+- **Phases pending:** 7, 8, 9, 10, 11, 12 (rest), 13
+- **Test count:** ~245 new tests, all green
 - **Workspace:** `/Users/sebastian/makakoo-os/` (Rust + Python plugin)
 - **Memory:** `~/.claude/projects/-Users-sebastian-MAKAKOO/memory/project_multi_bot_subagents_v2_mega.md`
 
@@ -88,27 +88,23 @@ makakoo-os/
 
 ---
 
-## What to build next (Phase 6 onward)
+## What to build next (Phase 7 onward)
 
-### Phase 6 — 4 OpenClaw-parity adapters [recommended next]
+### Phase 6 — DONE 2026-04-26 (commit `f3c4ee7`)
 
-**Why first:** Phases 7-11 (Discord/WhatsApp/Email/Voice/Web) each
-need to expose channel-ops to the LLM. Building the trait shape once
-in Phase 6 means Phase 7-11 each ship a `discord_*.rs` /
-`whatsapp_*.rs` / etc. file with the impl plus tests.
+Shipped:
+- `makakoo-core/src/channel_ops/{mod,directory,approval,messaging,threading,telegram,slack}.rs`
+- `makakoo-mcp/src/handlers/tier_b/channel_ops.rs`
+- `ChannelOpsRegistry` with per-(slot,transport_id) maps for all 4
+  trait families and slot-isolated lookup.
+- 10 MCP tools: `channel_directory_*`, `channel_messaging_*`,
+  `channel_threading_*`, `channel_approval_request`.
+- 49 new tests (41 channel_ops + 8 MCP). All green.
 
-**New code:**
-- `makakoo-core/src/channel_ops/mod.rs` — re-export trait + types
-- `makakoo-core/src/channel_ops/directory.rs` — `ChannelDirectoryAdapter` trait
-- `makakoo-core/src/channel_ops/approval.rs` — `ChannelApprovalAdapter` trait
-- `makakoo-core/src/channel_ops/messaging.rs` — `ChannelMessagingAdapter` trait
-- `makakoo-core/src/channel_ops/threading.rs` — `ChannelThreadingAdapter` trait
-- Per-transport impls for Telegram + Slack (Discord lands in Phase 7)
-- `makakoo-mcp/src/handlers/tier_b/channel_ops.rs` — MCP tool surface
-
-**Tests:** 16 unit + 4 integration + 2 isolation (no cross-slot leak).
-
-**Exit criteria:** see SPRINT.md Phase 6 section verbatim.
+Note for callers: tool names use underscores not dots — the MCP
+naming convention enforced by
+`handler_contract_tests::tool_names_follow_naming_convention`
+rejects dots.
 
 ### Phase 7 — Discord (serenity)
 
