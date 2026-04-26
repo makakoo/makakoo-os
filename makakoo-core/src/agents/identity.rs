@@ -132,7 +132,11 @@ pub fn render_identity_block(identity: &AgentIdentity, transport_kind: Option<&s
         identity.slot.tools.join(", ")
     };
     let paths = if identity.slot.allowed_paths.is_empty() {
-        "(unrestricted)".to_string()
+        // Empty `allowed_paths` is denied by `check_path` per Q6
+        // (least-privilege).  Mirror that wording here so the LLM
+        // doesn't read the prompt as "you can write anywhere"
+        // when the runtime check rejects every path.
+        "(none — least-privilege default)".to_string()
     } else {
         identity.slot.allowed_paths.join(", ")
     };
@@ -290,6 +294,6 @@ mod tests {
         };
         let block = render_identity_block(&id, None);
         assert!(block.contains("Your allowed tools are (baseline)."));
-        assert!(block.contains("Your allowed paths are (unrestricted)."));
+        assert!(block.contains("Your allowed paths are (none — least-privilege default)."));
     }
 }

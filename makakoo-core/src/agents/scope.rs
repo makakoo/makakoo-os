@@ -20,33 +20,83 @@
 //! dispatcher can render a human-friendly response without
 //! crashing the gateway loop.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
-
-use thiserror::Error;
 
 use crate::agents::slot::AgentSlot;
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+/// Structured scope-violation error.
+///
+/// Locked Phase-3 contract: each variant carries the slot id, the
+/// candidate that was rejected, and the slot's allow/forbid
+/// list(s) as raw `Vec<String>` / `Vec<PathBuf>` data.  Display
+/// rendering happens at the formatter boundary so callers
+/// (gateway → LLM, CLI → operator) can re-shape the message
+/// without the lists being baked into a string.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeError {
-    #[error(
-        "tool '{tool}' is not in scope for slot '{slot_id}'; allowed: {allowed_repr}"
-    )]
     ToolNotInScope {
         slot_id: String,
-        tool: String,
-        allowed_repr: String,
+        candidate: String,
+        allowed: Vec<String>,
+        /// `true` when `allowed` is empty AND the slot has
+        /// `inherit_baseline = false` — distinguishes
+        /// least-privilege deny from "tool not in this list".
+        least_privilege: bool,
     },
-
-    #[error(
-        "path '{path}' is not in scope for slot '{slot_id}'; \
-         allowed: {allowed_repr}; forbidden: {forbidden_repr}"
-    )]
     PathNotInScope {
         slot_id: String,
-        path: String,
-        allowed_repr: String,
-        forbidden_repr: String,
+        candidate: PathBuf,
+        allowed: Vec<PathBuf>,
+        forbidden: Vec<PathBuf>,
+        /// `true` when `allowed` is empty (no path is permitted
+        /// regardless of the candidate).
+        least_privilege: bool,
     },
+}
+
+impl std::error::Error for ScopeError {}
+
+impl fmt::Display for ScopeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScopeError::ToolNotInScope {
+                slot_id,
+                candidate,
+                allowed,
+                least_privilege,
+            } => {
+                let allowed_repr = if *least_privilege {
+                    "(none — least-privilege default)".to_string()
+                } else {
+                    allowed.join(", ")
+                };
+                write!(
+                    f,
+                    "tool '{candidate}' is not in scope for slot '{slot_id}'; allowed: {allowed_repr}"
+                )
+            }
+            ScopeError::PathNotInScope {
+                slot_id,
+                candidate,
+                allowed,
+                forbidden,
+                least_privilege,
+            } => {
+                let allowed_repr = if *least_privilege {
+                    "(none — least-privilege default)".to_string()
+                } else {
+                    render_paths(allowed)
+                };
+                let forbidden_repr = render_paths(forbidden);
+                write!(
+                    f,
+                    "path '{}' is not in scope for slot '{slot_id}'; allowed: {allowed_repr}; forbidden: {forbidden_repr}",
+                    candidate.display()
+                )
+            }
+        }
+    }
 }
 
 /// Check whether `tool` is permitted for the given slot.  Locked
@@ -65,8 +115,9 @@ pub fn check_tool(slot: &AgentSlot, tool: &str) -> Result<(), ScopeError> {
         }
         return Err(ScopeError::ToolNotInScope {
             slot_id: slot.slot_id.clone(),
-            tool: tool.to_string(),
-            allowed_repr: "(none — least-privilege default)".into(),
+            candidate: tool.to_string(),
+            allowed: Vec::new(),
+            least_privilege: true,
         });
     }
     if slot.tools.iter().any(|t| t == tool) {
@@ -74,8 +125,9 @@ pub fn check_tool(slot: &AgentSlot, tool: &str) -> Result<(), ScopeError> {
     }
     Err(ScopeError::ToolNotInScope {
         slot_id: slot.slot_id.clone(),
-        tool: tool.to_string(),
-        allowed_repr: slot.tools.join(", "),
+        candidate: tool.to_string(),
+        allowed: slot.tools.clone(),
+        least_privilege: false,
     })
 }
 
@@ -100,9 +152,10 @@ pub fn check_path(slot: &AgentSlot, candidate: &Path) -> Result<(), ScopeError> 
     if allowed_canon.is_empty() {
         return Err(ScopeError::PathNotInScope {
             slot_id: slot.slot_id.clone(),
-            path: candidate.display().to_string(),
-            allowed_repr: "(none — least-privilege default)".into(),
-            forbidden_repr: render_paths(&forbidden_canon),
+            candidate: candidate_canon.clone(),
+            allowed: allowed_canon,
+            forbidden: forbidden_canon,
+            least_privilege: true,
         });
     }
     let allowed = allowed_canon
@@ -111,9 +164,10 @@ pub fn check_path(slot: &AgentSlot, candidate: &Path) -> Result<(), ScopeError> 
     if !allowed {
         return Err(ScopeError::PathNotInScope {
             slot_id: slot.slot_id.clone(),
-            path: candidate.display().to_string(),
-            allowed_repr: render_paths(&allowed_canon),
-            forbidden_repr: render_paths(&forbidden_canon),
+            candidate: candidate_canon.clone(),
+            allowed: allowed_canon,
+            forbidden: forbidden_canon,
+            least_privilege: false,
         });
     }
     // Forbidden override wins over allow.
@@ -123,9 +177,10 @@ pub fn check_path(slot: &AgentSlot, candidate: &Path) -> Result<(), ScopeError> 
     if forbidden {
         return Err(ScopeError::PathNotInScope {
             slot_id: slot.slot_id.clone(),
-            path: candidate.display().to_string(),
-            allowed_repr: render_paths(&allowed_canon),
-            forbidden_repr: render_paths(&forbidden_canon),
+            candidate: candidate_canon.clone(),
+            allowed: allowed_canon,
+            forbidden: forbidden_canon,
+            least_privilege: false,
         });
     }
     Ok(())
@@ -206,15 +261,24 @@ mod tests {
         match err {
             ScopeError::ToolNotInScope {
                 slot_id,
-                tool,
-                allowed_repr,
+                candidate,
+                allowed,
+                least_privilege,
             } => {
                 assert_eq!(slot_id, "test");
-                assert_eq!(tool, "run_command");
-                assert!(allowed_repr.contains("brain_search"));
+                assert_eq!(candidate, "run_command");
+                assert_eq!(allowed, vec!["brain_search".to_string()]);
+                assert!(!least_privilege);
             }
             _ => panic!("wrong variant"),
         }
+        // Display rendering happens at the formatter boundary,
+        // not at construction time — verify the message is still
+        // human-readable.
+        let err = check_tool(&s, "run_command").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("brain_search"));
+        assert!(msg.contains("run_command"));
     }
 
     #[test]
@@ -245,16 +309,24 @@ mod tests {
         match err {
             ScopeError::PathNotInScope {
                 slot_id,
-                path,
-                allowed_repr,
+                candidate,
+                allowed,
+                least_privilege,
                 ..
             } => {
                 assert_eq!(slot_id, "test");
-                assert_eq!(path, "/etc/passwd");
-                assert!(allowed_repr.contains("/tmp/secretary"));
+                assert_eq!(candidate, PathBuf::from("/etc/passwd"));
+                assert_eq!(allowed, vec![PathBuf::from("/tmp/secretary/")]);
+                assert!(!least_privilege);
             }
             _ => panic!("wrong variant"),
         }
+        // Verify the Display rendering still mentions the
+        // allowed-list contents.
+        let err = check_path(&s, Path::new("/etc/passwd")).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/secretary"));
+        assert!(msg.contains("/etc/passwd"));
     }
 
     #[test]
@@ -268,10 +340,8 @@ mod tests {
         // Allowed by /tmp/shared/ but forbidden by /tmp/shared/secrets/
         let err = check_path(&s, Path::new("/tmp/shared/secrets/keys.txt")).unwrap_err();
         match err {
-            ScopeError::PathNotInScope {
-                forbidden_repr, ..
-            } => {
-                assert!(forbidden_repr.contains("/tmp/shared/secrets"));
+            ScopeError::PathNotInScope { forbidden, .. } => {
+                assert_eq!(forbidden, vec![PathBuf::from("/tmp/shared/secrets/")]);
             }
             _ => panic!("wrong variant"),
         }
