@@ -10,6 +10,7 @@ Something went wrong? Pick the entry point that matches your situation:
 | "I observe a **behavior** (something doesn't work, something feels wrong) but I don't have a specific error string." | [`tree.md`](./tree.md) — symptom-rooted decision tree; pick the top-level category and drill down. |
 | "I want to **uninstall** / wipe / reinstall from scratch." | [`uninstall.md`](./uninstall.md). |
 | "I read the full flat guide before the sprint split it up, and I want it back." | [`legacy-full.md`](./legacy-full.md) — the pre-split prose reference. Not actively maintained; use it as a secondary source if the tree / symptoms pages don't have what you need. |
+| "A **subagent / chat transport** is misbehaving (Telegram, Slack, Discord, WhatsApp, Voice, Email, Web — webhook 401, signature mismatch, intent gating, Origin reject, IPC drop, grant invisibility, audit silence)." | [`agents.md`](./agents.md) — per-transport failure-mode index (v2.0). |
 
 ## Fast self-check
 

@@ -12,6 +12,7 @@ for "I want to X" recipes.
 |---|---|
 | [Setup wizard](setup-wizard.md) | The 6 sections (persona, brain, cli-agent, terminal, model-provider, infect) walked through end-to-end. |
 | [Write-access grants (`makakoo perms`)](makakoo-perms.md) | Grant / revoke / audit runtime write permissions. |
+| [Multi-bot subagents (`makakoo agent`)](agent.md) | Create, run, and tear down per-transport subagent slots (Telegram / Slack / Discord / WhatsApp / Voice / Email / Web). |
 
 *(More task-oriented chapters coming — brain sources, adapter
 selection, plugin authoring. Until those land, look up the individual
@@ -44,6 +45,7 @@ makakoo <command> [options] [arguments]
 | [completion](makakoo-completion.md) | Shell completion setup |
 | [adapter](makakoo-adapter.md) | Manage AI adapters |
 | [mcp](makakoo-mcp.md) | MCP server management |
+| [agent](agent.md) | Multi-bot subagents — slot lifecycle + transports (v2.0) |
 
 ## Global Options
 

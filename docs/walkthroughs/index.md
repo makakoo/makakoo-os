@@ -1,8 +1,8 @@
 # Walkthroughs
 
-Thirteen step-by-step guides that take you from a clean install to every major feature Makakoo ships. Each walkthrough is **copy-paste runnable** — every command was executed on a live install before it was documented.
+Step-by-step guides that take you from a clean install to every major feature Makakoo ships. Each walkthrough is **copy-paste runnable** — every command was executed on a live install before it was documented.
 
-**If this is your first time with Makakoo, read them in order.** Each builds on the one before it.
+The first thirteen are a **linear tour** (read 01→13 in order on your first time). The per-transport recipes at the bottom are **standalone**: dip into the one that matches the channel you want to wire up.
 
 ## Order + dependencies
 
@@ -69,6 +69,28 @@ Thirteen step-by-step guides that take you from a clean install to every major f
 | [11](./11-connect-tytus.md) | Connect a Tytus private pod | Route LLM calls through your own WireGuard-tunneled pod. | ~6 min |
 | [12](./12-octopus-federation.md) | **STUB** — Octopus federation | Coming when the `octopus-generalize` sprint Phase 1 merges publicly. | — |
 | [13](./13-shared-storage-garagetytus.md) | Shared S3 storage with garagetytus | Put a file into a bucket and read it back from another machine. Two flavors: laptop daemon or `garagetytus.traylinx.com`. | ~8 min |
+
+## Multi-bot subagents — per-transport recipes (v2.0)
+
+Each subagent ("slot") can be reached over one or more chat transports
+simultaneously. Start with the flagship walkthrough — it builds three
+slots end-to-end with one slot dual-homed on Telegram + Slack.
+
+| Walkthrough | What you'll do | Time |
+|---|---|---|
+| [Multi-transport subagents (flagship)](./multi-transport-subagents.md) | Three slots — `harveychat` (legacy migrate), `secretary` (Telegram + Slack), `career` (Telegram-only). End-to-end live dogfood. | ~25 min |
+| [Discord bot](./discord-bot.md) | Stand up a Discord-bound slot. Per-guild allowlist; MESSAGE_CONTENT intent default OFF. | ~10 min |
+| [WhatsApp Business](./whatsapp-business.md) | Wire a WhatsApp Cloud API number into a slot via the shared webhook router. | ~12 min |
+| [Voice (Twilio quickstart)](./voice-quickstart.md) | Inbound phone calls → push-to-talk slot. Real-time `<Stream>` lands in v2.1. | ~10 min |
+| [Email secretary](./email-secretary.md) | SMTP outbound + parse helpers today; IMAP IDLE listener arrives in v2.1. | ~8 min |
+| [Web chat (static demo client)](./web-chat-demo.html) | Drop-in widget. HMAC-SHA256 visitor cookies + Origin allowlist. | ~5 min |
+
+Reference docs for the surface above:
+[`user-manual/agent.md`](../user-manual/agent.md) (CLI),
+[`troubleshooting/agents.md`](../troubleshooting/agents.md) (failure modes),
+[`specs/http-server-security.md`](../specs/http-server-security.md) (locked
+HTTP-server contract — signature verification, status codes, cookie shape,
+redaction).
 
 ## If you just want to try ONE thing
 
