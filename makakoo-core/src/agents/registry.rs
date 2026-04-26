@@ -128,6 +128,7 @@ mod tests {
             tools: vec![],
             process_mode: "supervised_pair".into(),
             transports: vec![telegram_block("telegram-main")],
+            llm: None,
         }
     }
 

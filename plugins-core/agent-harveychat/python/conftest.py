@@ -49,3 +49,21 @@ def _alias_package(real_dir: Path, alias_name: str) -> ModuleType:
 _alias_package(_REPO_ROOT / "plugins-core", "plugins_core")
 _alias_package(_PLUGIN_ROOT, "plugins_core.agent_harveychat")
 _alias_package(_HERE, "plugins_core.agent_harveychat.python")
+
+# Also expose the python/ directory directly on sys.path so flat
+# `from bridge import ...` works the same way in tests as in
+# production (the supervisor cd's into python/ before launching).
+# Then bind the flat module names to the SAME module object as the
+# package-aliased names so an `OutboundFrame` imported from
+# `bridge` is the same class as one imported from
+# `plugins_core.agent_harveychat.python.bridge`. Without this,
+# isinstance checks across the two import paths fail.
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+import importlib  # noqa: E402
+
+for _flat_name in ("bridge", "tool_dispatcher", "file_enforcement", "brain_sync"):
+    _full = f"plugins_core.agent_harveychat.python.{_flat_name}"
+    _mod = importlib.import_module(_full)
+    sys.modules[_flat_name] = _mod

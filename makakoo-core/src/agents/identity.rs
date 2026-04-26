@@ -190,6 +190,7 @@ mod tests {
             tools: vec!["brain_search".into(), "write_file".into()],
             process_mode: "supervised_pair".into(),
             transports: vec![telegram_block("telegram-main")],
+            llm: None,
         }
     }
 

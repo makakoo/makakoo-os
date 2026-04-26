@@ -1,0 +1,1 @@
+{"kind":"inbound","frame":{"agent_slot_id":"secretary","transport_id":"telegram-main","transport_kind":"telegram","account_id":"12345678","conversation_id":"746496145","sender_id":"746496145","thread_id":null,"thread_kind":null,"message_id":"42","text":"hello","transport_timestamp":"1714123456","received_at":"2026-04-26T12:00:00Z","raw_metadata":{}}}

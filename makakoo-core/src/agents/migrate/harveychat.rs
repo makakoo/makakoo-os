@@ -166,6 +166,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         tools: vec![],
         process_mode: "supervised_pair".into(),
         transports: vec![transport],
+        llm: None,
     };
     AgentRegistry::create(makakoo_home, &slot)?;
 

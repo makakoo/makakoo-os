@@ -243,6 +243,7 @@ mod tests {
                 allowed_users: vec!["1".into()],
                 config: TransportConfig::Telegram(TelegramConfig::default()),
             }],
+            llm: None,
         }
     }
 

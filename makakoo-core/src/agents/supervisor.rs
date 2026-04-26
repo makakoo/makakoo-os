@@ -236,22 +236,22 @@ impl GatewayLaunchSpec {
     }
 
     /// Default gateway spec for the bundled harveychat Python
-    /// gateway. Phase 3 of v2-mega ships the actual gateway as a
-    /// proper Python package; we invoke it as a module
-    /// (`python3 -m plugins_core.agent_harveychat.python.gateway`)
-    /// so relative imports inside the package work without sys.path
-    /// gymnastics.
+    /// gateway. The supervisor cd's into the python/ source dir and
+    /// invokes `gateway.py` directly. This sidesteps the
+    /// hyphenated-directory-name problem (`plugins-core/` is not a
+    /// valid Python module path); all sibling modules live in cwd
+    /// so flat `from bridge import ...` works.
     pub fn harveychat_default(makakoo_home: &Path, slot_id: &str) -> Self {
         let home_str = makakoo_home.to_string_lossy().into_owned();
+        let python_dir = makakoo_home
+            .join("plugins-core/agent-harveychat/python");
         Self::new("python3")
-            .arg("-m")
-            .arg("plugins_core.agent_harveychat.python.gateway")
+            .arg("gateway.py")
             .arg("--slot")
             .arg(slot_id)
             .env("MAKAKOO_AGENT_SLOT", slot_id)
             .env("MAKAKOO_HOME", &home_str)
-            .env("PYTHONPATH", &home_str)
-            .cwd(makakoo_home.to_path_buf())
+            .cwd(python_dir)
     }
 }
 
@@ -460,23 +460,19 @@ mod tests {
     }
 
     #[test]
-    fn gateway_launch_spec_default_has_slot_env_and_python_module() {
+    fn gateway_launch_spec_default_runs_gateway_py_from_python_dir() {
         let home = PathBuf::from("/Users/sebastian/MAKAKOO");
         let spec = GatewayLaunchSpec::harveychat_default(&home, "secretary");
         assert_eq!(spec.program, "python3");
-        // Module-form invocation lets relative imports work.
-        assert_eq!(spec.args[0], "-m");
-        assert_eq!(spec.args[1], "plugins_core.agent_harveychat.python.gateway");
-        assert_eq!(spec.args[2], "--slot");
-        assert_eq!(spec.args[3], "secretary");
-        // Env carries slot id, makakoo home, and PYTHONPATH so the
-        // package is importable from the supervisor's cwd.
+        assert_eq!(spec.args, vec!["gateway.py", "--slot", "secretary"]);
         assert!(spec
             .envs
             .iter()
             .any(|(k, v)| k == "MAKAKOO_AGENT_SLOT" && v == "secretary"));
         assert!(spec.envs.iter().any(|(k, _)| k == "MAKAKOO_HOME"));
-        assert!(spec.envs.iter().any(|(k, _)| k == "PYTHONPATH"));
-        assert_eq!(spec.cwd.as_deref(), Some(home.as_path()));
+        // cwd MUST be the python/ source dir so flat sibling imports
+        // (`from bridge import ...`) resolve at runtime.
+        let expected_cwd = home.join("plugins-core/agent-harveychat/python");
+        assert_eq!(spec.cwd.as_deref(), Some(expected_cwd.as_path()));
     }
 }

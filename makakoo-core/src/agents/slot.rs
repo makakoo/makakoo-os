@@ -66,6 +66,46 @@ pub struct AgentSlot {
     /// Zero-or-more chat transports attached to this slot.
     #[serde(default, rename = "transport")]
     pub transports: Vec<TransportEntry>,
+
+    /// Phase 4 of v2-mega: per-slot LLM override. Locked Q4 schema:
+    ///
+    /// ```toml
+    /// [llm.override]
+    /// model            = "claude-opus-4-7"
+    /// max_tokens       = 8192
+    /// temperature      = 0.7
+    /// reasoning_effort = "medium"
+    /// ```
+    ///
+    /// Resolution: per-call args > slot.toml [llm.override] > makakoo
+    /// system defaults.
+    #[serde(default, rename = "llm")]
+    pub llm: Option<LlmSection>,
+}
+
+/// Container that wraps the `[llm.inherit]` (docs-only) and
+/// `[llm.override]` sections so TOML parsing matches the locked
+/// schema.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LlmSection {
+    #[serde(default)]
+    pub inherit: Option<crate::agents::llm_override::LlmInherit>,
+    #[serde(default, rename = "override")]
+    pub overrides: Option<crate::agents::llm_override::LlmOverride>,
+}
+
+impl LlmSection {
+    /// Convenience accessor: returns the override block if either
+    /// the section itself or the inner override is `Some` and
+    /// non-empty.
+    pub fn effective_override(&self) -> Option<crate::agents::llm_override::LlmOverride> {
+        let over = self.overrides.clone()?;
+        if over.is_empty() {
+            None
+        } else {
+            Some(over)
+        }
+    }
 }
 
 fn default_process_mode() -> String {
@@ -222,6 +262,7 @@ mod tests {
             tools: vec![],
             process_mode: default_process_mode(),
             transports: vec![telegram_block("telegram-main")],
+            llm: None,
         }
     }
 

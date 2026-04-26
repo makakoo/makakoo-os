@@ -18,6 +18,7 @@
 pub mod destroy;
 pub mod identity;
 pub mod lifecycle;
+pub mod llm_override;
 pub mod migrate;
 pub mod registry;
 pub mod scaffold;

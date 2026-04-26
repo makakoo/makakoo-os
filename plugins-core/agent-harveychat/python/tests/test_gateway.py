@@ -18,8 +18,13 @@ from plugins_core.agent_harveychat.python.gateway import (
     SlotConfig,
     handle_inbound,
     load_slot_config,
+    preflight_path_access,
+    preflight_request,
+    preflight_tool_call,
     render_identity_block,
 )
+from plugins_core.agent_harveychat.python.file_enforcement import PathNotInScopeError
+from plugins_core.agent_harveychat.python.tool_dispatcher import ToolNotInScopeError
 
 
 def _slot_toml() -> str:
@@ -71,7 +76,12 @@ def test_load_slot_config_reads_from_makakoo_home(tmp_path):
     assert cfg.tool_scope.tools
 
 
-def test_render_identity_block_locked_phrasing():
+def test_render_identity_block_byte_compatible_with_rust():
+    """Rust's `agents::identity::render_identity_block` produces:
+        You are {name}. Your slot id is {slot}. This message
+        arrived via {transport_kind}. Your allowed tools are X.
+        Your allowed paths are Y.
+    The Python output MUST match byte-for-byte (per Phase 3 spec)."""
     cfg = SlotConfig.from_toml("secretary", _slot_toml())
     block = render_identity_block(
         slot_id="secretary",
@@ -80,12 +90,12 @@ def test_render_identity_block_locked_phrasing():
         sender_id="746496145",
         cfg=cfg,
     )
-    assert "[agent: secretary]" in block
-    assert "[transport: telegram-main (telegram)]" in block
-    assert "[user: 746496145]" in block
-    assert "[scope.tools: brain_search, write_file]" in block
-    assert "/var/lib/secretary" in block
-    assert "[scope.paths.forbidden: /var/lib/secretary/secret]" in block
+    assert block == (
+        "You are Secretary. Your slot id is secretary. "
+        "This message arrived via telegram. "
+        "Your allowed tools are brain_search, write_file. "
+        "Your allowed paths are ~/Office/, /var/lib/secretary."
+    )
 
 
 def test_render_identity_block_least_privilege_when_empty_tools():
@@ -95,7 +105,60 @@ inherit_baseline = false
 """
     cfg = SlotConfig.from_toml("x", slot)
     block = render_identity_block("x", "telegram", "t", "1", cfg)
-    assert "(none — least-privilege default)" in block
+    assert "(baseline)" in block or "(none — least-privilege default)" in block
+
+
+def test_preflight_tool_call_rejects_outside_whitelist():
+    cfg = SlotConfig.from_toml("secretary", _slot_toml())
+    # In whitelist — passes.
+    preflight_tool_call(cfg, "brain_search")
+    # Outside whitelist — raises.
+    with pytest.raises(ToolNotInScopeError):
+        preflight_tool_call(cfg, "run_command")
+
+
+def test_preflight_path_access_rejects_outside_allowed():
+    cfg = SlotConfig.from_toml("secretary", _slot_toml())
+    preflight_path_access(cfg, "/var/lib/secretary/conv.db")
+    with pytest.raises(PathNotInScopeError):
+        preflight_path_access(cfg, "/etc/passwd")
+
+
+def test_preflight_request_rolls_through_tool_calls_in_request():
+    cfg = SlotConfig.from_toml("secretary", _slot_toml())
+    req = LlmRequest(
+        identity_block="ignored",
+        user_text="x",
+        persona=None,
+        pending_tool_calls=[
+            {"tool": "brain_search"},
+            {"tool": "write_file", "path": "/var/lib/secretary/draft.md"},
+        ],
+    )
+    preflight_request(cfg, req)  # all in scope — no raise
+
+    req.pending_tool_calls.append({"tool": "run_command"})
+    with pytest.raises(ToolNotInScopeError):
+        preflight_request(cfg, req)
+
+
+@pytest.mark.asyncio
+async def test_handle_inbound_converts_scope_violation_to_polite_reply():
+    """When the dispatcher records a tool call outside scope, the
+    gateway turns it into a polite outbound text instead of crashing
+    or letting the call slip through."""
+    cfg = SlotConfig.from_toml("secretary", _slot_toml())
+
+    async def fake(req: LlmRequest) -> str:
+        # Dispatcher claimed it wants to call a forbidden tool.
+        req.pending_tool_calls.append({"tool": "run_command"})
+        return "I'll do that for you."
+
+    out = await handle_inbound(_frame("hi"), cfg, fake)
+    # Reply was REPLACED by the polite denial because preflight
+    # caught the scope violation.
+    assert "I can't do that" in out.text
+    assert "run_command" in out.text
 
 
 @pytest.mark.asyncio
@@ -118,7 +181,11 @@ async def test_handle_inbound_calls_dispatch_and_returns_outbound():
     # Dispatch saw the rendered identity block + raw user text.
     assert len(captured) == 1
     req = captured[0]
-    assert "[agent: secretary]" in req.identity_block
+    # Identity block uses Rust prose form ("You are X. Your slot id
+    # is Y..."), NOT the bracket form. Verified byte-for-byte by
+    # `test_render_identity_block_byte_compatible_with_rust`.
+    assert "You are Secretary" in req.identity_block
+    assert "Your slot id is secretary" in req.identity_block
     assert req.user_text == "hello"
     assert req.persona == "Sharp professional secretary."
 

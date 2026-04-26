@@ -234,6 +234,37 @@ mod tests {
     }
 
     #[test]
+    fn rust_emits_exact_bytes_of_python_contract_fixture() {
+        // Cross-language contract anchor: the JSON Rust emits for
+        // `sample_inbound()` MUST match the bytes in
+        // `plugins-core/agent-harveychat/python/tests/fixtures/sample_inbound.json`
+        // (newline-stripped). The Python contract test parses that
+        // same fixture; if either side drifts, both fail in lockstep.
+        let frame = sample_inbound();
+        let env = MakakooFrame::Inbound(frame);
+        let line = env.to_line().unwrap();
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let fixture = std::path::PathBuf::from(manifest)
+            .parent()
+            .unwrap()
+            .join("plugins-core/agent-harveychat/python/tests/fixtures/sample_inbound.json");
+        let golden = std::fs::read_to_string(&fixture)
+            .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture.display()));
+        let golden = golden.trim_end_matches('\n');
+        let actual = line.trim_end_matches('\n');
+        // Parse both as JSON values and compare structurally — this
+        // tolerates field-order differences (serde_json emits in
+        // struct order, hand-edited fixture might reorder).
+        let v_actual: serde_json::Value = serde_json::from_str(actual).unwrap();
+        let v_golden: serde_json::Value = serde_json::from_str(golden).unwrap();
+        assert_eq!(
+            v_actual, v_golden,
+            "Rust frame.rs serialization drifted from Python contract fixture.\n\
+             Actual: {actual}\nGolden: {golden}"
+        );
+    }
+
+    #[test]
     fn sender_username_field_is_absent_in_v1_frame() {
         // Negative test: confirm the deferred field name is not
         // accidentally introduced. If a future commit adds

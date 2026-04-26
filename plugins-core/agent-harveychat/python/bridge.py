@@ -195,14 +195,27 @@ class IpcClient:
 
     async def send(self, frame: OutboundFrame) -> None:
         """Write one outbound frame. Per-writer lock serializes
-        concurrent calls so frames don't interleave."""
+        concurrent calls so frames don't interleave. On a broken
+        pipe / reset, we drop the writer, reconnect once, and retry
+        the send. A second failure raises so the caller can decide
+        how to escalate."""
+        payload = encode_outbound(frame).encode("utf-8")
         async with self._writer_lock:
-            if self._writer is None:
-                await self._connect()
-            assert self._writer is not None
-            payload = encode_outbound(frame).encode("utf-8")
-            self._writer.write(payload)
-            await self._writer.drain()
+            for attempt in range(2):
+                if self._writer is None:
+                    await self._connect()
+                assert self._writer is not None
+                try:
+                    self._writer.write(payload)
+                    await self._writer.drain()
+                    return
+                except (BrokenPipeError, ConnectionResetError):
+                    self._writer = None
+                    self._reader = None
+                    if attempt == 0:
+                        # Reconnect + retry once.
+                        continue
+                    raise
 
 
 def env_makakoo_home() -> Path:
