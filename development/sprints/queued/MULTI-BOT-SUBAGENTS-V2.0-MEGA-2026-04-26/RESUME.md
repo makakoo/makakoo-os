@@ -7,12 +7,13 @@ before touching code.
 
 ## TL;DR
 
+- **STATUS:** ✅ ALL 14 PHASES SHIPPED (2026-04-26)
 - **Sprint dir:** `development/sprints/queued/MULTI-BOT-SUBAGENTS-V2.0-MEGA-2026-04-26/`
-- **HEAD:** `b8d3943` (re-tag pending)
+- **HEAD:** `136b289` (tag `sprint-multi-bot-subagents-v2.0` pending)
 - **Sprint doc:** `SPRINT.md` (in this dir) — 47KB, locked Q1–Q15
-- **Phases done:** 0, 1, 2, 3, 4, 5, 6, 7, 8, 12 (partial)
-- **Phases pending:** 9, 10, 11, 12 (rest), 13
-- **Test count:** ~330 new tests, all green
+- **Phases done:** 0–13 (every phase). Email IMAP IDLE listener
+  deferred to v2.1 — documented inline.
+- **Test count:** ~438 new tests, all green
 - **Workspace:** `/Users/sebastian/makakoo-os/` (Rust + Python plugin)
 - **Memory:** `~/.claude/projects/-Users-sebastian-MAKAKOO/memory/project_multi_bot_subagents_v2_mega.md`
 
