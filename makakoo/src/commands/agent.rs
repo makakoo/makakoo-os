@@ -38,6 +38,40 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
         AgentCmd::Stop { name } => hook(ctx, &name, Hook::Stop),
         AgentCmd::Health { name } => hook(ctx, &name, Hook::Health),
         AgentCmd::Status { name } => status(ctx, &name),
+
+        // Phase 2 multi-bot subagent registry.
+        AgentCmd::List { json } => crate::commands::agent_slot::list(ctx, json),
+        AgentCmd::Show { slot, json } => crate::commands::agent_slot::show(ctx, &slot, json),
+        AgentCmd::Validate { slot } => crate::commands::agent_slot::validate(ctx, &slot),
+        AgentCmd::Inventory { json } => crate::commands::agent_slot::inventory(ctx, json),
+        AgentCmd::Create {
+            slot,
+            name,
+            persona,
+            from_toml,
+            telegram_token,
+            telegram_allowed,
+            slack_bot_token,
+            slack_app_token,
+            slack_team,
+            slack_allowed,
+            skip_credential_check,
+        } => crate::commands::agent_slot::create(
+            ctx,
+            crate::commands::agent_slot::CreateArgs {
+                slot,
+                name,
+                persona,
+                from_toml,
+                telegram_token,
+                telegram_allowed,
+                slack_bot_token,
+                slack_app_token,
+                slack_team,
+                slack_allowed,
+                skip_credential_check,
+            },
+        ),
     }
 }
 

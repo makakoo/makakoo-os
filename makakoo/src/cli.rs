@@ -661,6 +661,81 @@ pub enum AgentCmd {
         /// Plugin name.
         name: String,
     },
+
+    // ── Multi-bot subagent registry (Phase 2) ─────────────────────
+    /// List every configured slot in `~/MAKAKOO/config/agents/*.toml`.
+    List {
+        /// Emit JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the resolved TOML for one slot, with secret fields redacted.
+    Show {
+        /// Slot id (matches the TOML filename stem).
+        slot: String,
+        /// Emit JSON instead of TOML.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run per-transport credential verifiers WITHOUT starting the
+    /// agent process. Useful before `start` to surface bad credentials.
+    Validate {
+        /// Slot id.
+        slot: String,
+    },
+    /// Inventory existing `agent-*` plugins with their migration
+    /// status (active / migrated / pending). Does NOT migrate them.
+    Inventory {
+        /// Emit JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a new slot from flags (single Telegram, single Slack,
+    /// or `--from-toml` for arbitrary multi-transport configs).
+    Create {
+        /// Slot id (also the TOML filename).
+        slot: String,
+        /// Display name shown in `agent list` Name column. Defaults
+        /// to the slot id if unset.
+        #[arg(long)]
+        name: Option<String>,
+        /// Per-agent persona snippet. Use `null` to inherit the
+        /// canonical bootstrap (HARVEY_SYSTEM_PROMPT) — same as
+        /// omitting the flag.
+        #[arg(long)]
+        persona: Option<String>,
+        /// Path to a TOML file pre-built by the operator (multi-
+        /// transport configs). Mutually exclusive with --telegram-token
+        /// and --slack-* flags.
+        #[arg(long, value_name = "PATH")]
+        from_toml: Option<std::path::PathBuf>,
+        /// Telegram bot token. Triggers single-Telegram-transport
+        /// mode. The token is stored as inline_secret_dev — for
+        /// production move it to env or makakoo secret.
+        #[arg(long, value_name = "TOKEN")]
+        telegram_token: Option<String>,
+        /// Telegram allowed_users (comma-separated chat_ids).
+        #[arg(long, value_name = "IDS", value_delimiter = ',')]
+        telegram_allowed: Vec<String>,
+        /// Slack bot token (`xoxb-…`). Triggers single-Slack-
+        /// transport mode. Requires --slack-app-token + --slack-team.
+        #[arg(long, value_name = "TOKEN")]
+        slack_bot_token: Option<String>,
+        /// Slack app token (`xapp-…`).
+        #[arg(long, value_name = "TOKEN")]
+        slack_app_token: Option<String>,
+        /// Slack team_id (`T0123ABCD`).
+        #[arg(long, value_name = "TEAM")]
+        slack_team: Option<String>,
+        /// Slack allowed_users (comma-separated `U…` ids).
+        #[arg(long, value_name = "USERS", value_delimiter = ',')]
+        slack_allowed: Vec<String>,
+        /// Skip the `getMe` / `auth.test` credential probe.  Use
+        /// only for offline scaffold of a slot whose tokens you'll
+        /// fix up afterward.
+        #[arg(long)]
+        skip_credential_check: bool,
+    },
 }
 
 /// `makakoo plugin <subcommand>`.
