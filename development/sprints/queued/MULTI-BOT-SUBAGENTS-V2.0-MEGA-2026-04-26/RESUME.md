@@ -8,11 +8,11 @@ before touching code.
 ## TL;DR
 
 - **Sprint dir:** `development/sprints/queued/MULTI-BOT-SUBAGENTS-V2.0-MEGA-2026-04-26/`
-- **HEAD:** `f3c4ee7` (re-tag pending)
+- **HEAD:** `b8d3943` (re-tag pending)
 - **Sprint doc:** `SPRINT.md` (in this dir) — 47KB, locked Q1–Q15
-- **Phases done:** 0, 1, 2, 3, 4, 5, 6, 12 (partial)
-- **Phases pending:** 7, 8, 9, 10, 11, 12 (rest), 13
-- **Test count:** ~245 new tests, all green
+- **Phases done:** 0, 1, 2, 3, 4, 5, 6, 7, 8, 12 (partial)
+- **Phases pending:** 9, 10, 11, 12 (rest), 13
+- **Test count:** ~330 new tests, all green
 - **Workspace:** `/Users/sebastian/makakoo-os/` (Rust + Python plugin)
 - **Memory:** `~/.claude/projects/-Users-sebastian-MAKAKOO/memory/project_multi_bot_subagents_v2_mega.md`
 
@@ -92,37 +92,34 @@ makakoo-os/
 
 ### Phase 6 — DONE 2026-04-26 (commit `f3c4ee7`)
 
-Shipped:
-- `makakoo-core/src/channel_ops/{mod,directory,approval,messaging,threading,telegram,slack}.rs`
-- `makakoo-mcp/src/handlers/tier_b/channel_ops.rs`
-- `ChannelOpsRegistry` with per-(slot,transport_id) maps for all 4
-  trait families and slot-isolated lookup.
-- 10 MCP tools: `channel_directory_*`, `channel_messaging_*`,
-  `channel_threading_*`, `channel_approval_request`.
-- 49 new tests (41 channel_ops + 8 MCP). All green.
+`channel_ops/` trait family + 10 MCP tools. 49 tests.
+Note: MCP tool names use underscores (the contract test
+`tool_names_follow_naming_convention` rejects dots).
 
-Note for callers: tool names use underscores not dots — the MCP
-naming convention enforced by
-`handler_contract_tests::tool_names_follow_naming_convention`
-rejects dots.
+### Phase 7 — DONE 2026-04-26 (commit `4f8ed95`)
 
-### Phase 7 — Discord (serenity)
+Discord adapter via direct REST + tokio-tungstenite gateway. Q6
+"serenity" was deviated from for compile-time + test-isolation
+reasons — documented in `transport/discord.rs` file header. Behavior
+contract identical: intents (MESSAGE_CONTENT default off), guild_ids
+allowlist, DM-vs-guild distinction, graceful empty-content frame.
+34 tests including a real-WS gateway-handshake integration test.
 
-Add `serenity = "0.12"` to workspace Cargo.toml. Build
-`makakoo-core/src/transport/discord.rs` mirroring the shape of the
-existing `transport/telegram.rs` and `transport/slack.rs`. Implement
-the 4 channel-ops traits from Phase 6 for Discord as well.
+### Phase 8 — DONE 2026-04-26 (commit `b8d3943`)
 
-### Phase 8 — WhatsApp Cloud API
+WhatsApp Cloud API webhook + send. Receive path lives in
+`makakoo-mcp/src/whatsapp_webhook.rs` (GET hub.challenge handshake +
+POST X-Hub-Signature-256 HMAC verify). Outbound + map_inbound +
+no-op Gateway::start in `makakoo-core/src/transport/whatsapp.rs`.
+Inbound media triggers a polite `MEDIA_DROP_REPLY` on a background
+task. 25 tests (10 transport + 5 config + 10 webhook).
 
-Use the WebhookRouter from Phase 5a. Reuse the
-SlackEventsHandler pattern: HMAC verify before parse + url
-verification challenge handshake.
-
-### Phase 9 — Email IMAP IDLE + SMTP
+### Phase 9 — Email IMAP IDLE + SMTP [recommended next]
 
 Add `imap`, `lettre`, `mailparse` to workspace deps. IMAP IDLE
 reconnect cap at 25 min + heartbeat NOOP every 5 min (locked Q8).
+Most complex of the remaining transports — STARTTLS handshake,
+OAuth2 refresh, Message-ID threading, custom quote-line stripper.
 
 ### Phase 10 — Voice Twilio
 
