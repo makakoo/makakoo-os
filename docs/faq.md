@@ -153,6 +153,17 @@ The naming split exists because `~/.makakoo/` follows the Unix hidden-
 dotfile convention for machine-local config (like `~/.aws/` or
 `~/.docker/`), while `~/MAKAKOO/` is your visible content.
 
+### Can Makakoo agents share files with each other?
+
+Yes — via [garagetytus](concepts/shared-storage.md), a self-hosted
+S3-compatible daemon. Two flavors: a local laptop daemon at
+`127.0.0.1:3900` (zero internet exposure, single user) or the
+Tytus shared service at `https://garagetytus.traylinx.com`
+(multi-tenant, per-bucket SigV4 keys, reachable from any machine).
+Both speak the standard S3 wire protocol — boto3, aws-cli, rclone all
+work unchanged. See [Walkthrough 13](walkthroughs/13-shared-storage-garagetytus.md)
+for the copy-paste recipe.
+
 ### Why is it named "Makakoo" (double-o)?
 
 The owned domain is `makakoo.com` — double-o matches. The persona

@@ -21,7 +21,8 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 │   ├── concepts/sancho.md        ✅ Proactive tasks (SANCHO)
 │   ├── concepts/distros.md        ✅ Distribution bundles
 │   ├── concepts/ide-integration.md ✅ IDE integrations
-│   └── concepts/architecture.md    ✅ Deep-dive diagrams
+│   ├── concepts/architecture.md    ✅ Deep-dive diagrams
+│   └── concepts/shared-storage.md  ✅ Shared S3 (garagetytus)
 │
 ├── 🧠💾 Brain
 │   └── brain/index.md            ✅ Memory system guide
@@ -62,6 +63,7 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 | **Concepts** | concepts/distros.md | 350 | ✅ |
 | **Concepts** | concepts/ide-integration.md | 200 | ✅ |
 | **Concepts** | concepts/architecture.md | 600 | ✅ |
+| **Concepts** | concepts/shared-storage.md | 200 | ✅ |
 | **Brain** | brain/index.md | 280 | ✅ |
 | **User Manual** | user-manual/index.md | 140 | ✅ |
 | **Plugins** | plugins/index.md | 200 | ✅ |

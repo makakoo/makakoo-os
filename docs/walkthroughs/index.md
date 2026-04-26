@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twelve step-by-step guides that take you from a clean install to every major feature Makakoo ships. Each walkthrough is **copy-paste runnable** — every command was executed on a live install before it was documented.
+Thirteen step-by-step guides that take you from a clean install to every major feature Makakoo ships. Each walkthrough is **copy-paste runnable** — every command was executed on a live install before it was documented.
 
 **If this is your first time with Makakoo, read them in order.** Each builds on the one before it.
 
@@ -42,6 +42,11 @@ Twelve step-by-step guides that take you from a clean install to every major fea
 │  12 — Octopus federation (stub — pending       │
 │       octopus-generalize sprint merge)         │
 └────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────┐
+│  13 — Shared S3 storage (garagetytus)          │
+│       laptop daemon OR Tytus shared service    │
+└────────────────────────────────────────────────┘
 ```
 
 - **Hard dependencies** (must complete first): every walkthrough except 01 requires 01.
@@ -63,6 +68,7 @@ Twelve step-by-step guides that take you from a clean install to every major fea
 | [10](./10-mascot-mission.md) | Meet the mascots, fire one mission | `nursery list`, `sancho tick`, read the `[[Mascot]] …` journal breadcrumb. | ~4 min |
 | [11](./11-connect-tytus.md) | Connect a Tytus private pod | Route LLM calls through your own WireGuard-tunneled pod. | ~6 min |
 | [12](./12-octopus-federation.md) | **STUB** — Octopus federation | Coming when the `octopus-generalize` sprint Phase 1 merges publicly. | — |
+| [13](./13-shared-storage-garagetytus.md) | Shared S3 storage with garagetytus | Put a file into a bucket and read it back from another machine. Two flavors: laptop daemon or `garagetytus.traylinx.com`. | ~8 min |
 
 ## If you just want to try ONE thing
 
