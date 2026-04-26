@@ -93,6 +93,30 @@ The user wants to grow this to:
 
 Each one a real Makakoo subagent with isolated scope.
 
+## CRITICAL framing — this is core, not a plugin
+
+Sebastian explicitly stated (2026-04-26): "this should be a core
+functionality in makakoo-os." That changes the bar:
+
+- `makakoo agent` is a first-class verb at the same depth as `plugin`,
+  `perms`, `daemon`. Not a sub-feature.
+- The subagent abstraction subsumes the existing 13 `agent-*` plugins
+  (arbitrage, career-manager, browser-harness, harveychat, etc.) under
+  a unified model — they only differ in which transport(s) they attach
+  to (Telegram messenger / SANCHO schedule / tool-only).
+- The schema is transport-agnostic: Telegram is `transport.kind =
+  "telegram"`, but the model must accommodate WhatsApp / Slack / email
+  / voice without rework.
+- Every other subsystem learns about agent-id: grants gain
+  `bound_to_agent`, Brain entries get `agent_id` prefix when written
+  by an agent, MCP carries an originating-agent header.
+- Onboarding promotion: README quickstart + `makakoo setup` wizard
+  section + `docs/getting-started.md` step.
+
+The Genie metaphor (per `harvey_genie` memory) makes this natural:
+each subagent is a specialised Genie. `makakoo agent create` is
+"summon a new Genie".
+
 ## When you're done with Phase 0
 
 Update SPRINT.md with the negotiated answers, commit:

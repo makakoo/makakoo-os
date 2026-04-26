@@ -11,6 +11,27 @@ Make every Telegram bot Sebastian creates an independently-scoped
 Makakoo subagent. `makakoo agent create <name>` deploys a new bot with
 its own persona, tools, and filesystem scope in <30 seconds.
 
+## Scope flag — this is core, not a plugin
+
+Sebastian explicitly framed this (2026-04-26) as **core OS
+functionality**, not a peripheral plugin feature. Bar is raised:
+
+- `makakoo agent` becomes a first-class verb at the same depth as
+  `plugin`, `perms`, `daemon`. Same JSON envelopes, same audit
+  hooks, same getting-started prominence.
+- The agent-id propagates through every subsystem: grants gain
+  `bound_to_agent`, Brain entries gain `agent_id` prefix, MCP calls
+  carry an originating-agent header.
+- The schema is transport-agnostic. Telegram is `transport.kind="telegram"`,
+  but the model must accommodate WhatsApp / Slack / email / voice
+  without rework. Phase 0 negotiation locks the schema general enough
+  to grow.
+- The redesign SUBSUMES the existing `agent-*` plugin pattern. After
+  this sprint, today's `agent-arbitrage`, `agent-career-manager`,
+  `agent-browser-harness`, `agent-harveychat`, etc. are all the same
+  flavor of thing — they only differ in which transport(s) they
+  attach to (Telegram messenger, SANCHO schedule, tool-only, etc.).
+
 (Read [VISION.md](VISION.md) for the full picture and
 [AUDIT.md](AUDIT.md) for what exists today and what's blocking this.)
 
@@ -101,7 +122,7 @@ its own persona, tools, and filesystem scope in <30 seconds.
       `~/.makakoo/archive/agents/<slot>-<timestamp>/`, optionally
       revoke the bot token via Telegram API.
 
-### Phase F — docs + test sweep
+### Phase F — docs + test sweep + core promotion
 
 - [ ] `docs/agents/multi-bot-subagents.md` covers the full end-to-end
       flow with concrete examples (secretary, career-manager, custom).
@@ -112,6 +133,20 @@ its own persona, tools, and filesystem scope in <30 seconds.
 - [ ] Update bootstrap-base.md to document `<slot_id>` injection so
       the LLM knows it's a specific subagent (the audit-discovered
       "Olibia thinks Olibia is third party" bug is fixed).
+- [ ] **Core-promotion items** (because subagents are now first-class):
+  - [ ] README — promote `makakoo agent create` to the Quickstart
+        block alongside `makakoo install`, `makakoo setup`, and
+        `makakoo infect`.
+  - [ ] `docs/getting-started.md` — add "Step 5: Create your first
+        subagent bot" after the existing infect step.
+  - [ ] `docs/user-manual/index.md` — add `makakoo-agent.md` page
+        as a peer to `makakoo-plugin.md`, `makakoo-perms.md`, etc.
+  - [ ] `makakoo setup` wizard — new `agent` section between
+        `model-provider` and `infect`. Optional (skippable for
+        users who don't want any bots), but documented.
+  - [ ] `docs/concepts/architecture.md` (or equivalent) — the
+        agent abstraction is documented as one of the four core
+        primitives (plugin, agent, daemon, perms).
 
 ## Acceptance criteria
 
@@ -129,6 +164,22 @@ negotiation prompt.)
 5. Does `makakoo agent list` enumerate unprovisioned slots?
 6. Per-agent allowed-tools whitelist + forbidden-paths blacklist?
 7. Telegram username vs slot id — must they match?
+8. **NEW (core-elevation question)**: subsume the existing 13
+   `agent-*` plugins under the unified subagent model, or keep two
+   parallel concepts (legacy `agent-*` plugins vs new transport-
+   attached subagents)? Lope ensemble must converge on one.
+9. **NEW (transport-agnostic question)**: schema field for messenger
+   attachment — `[transport]` table with `kind = "telegram" | "whatsapp"
+   | "slack" | "email" | "voice"` + transport-specific subfields, vs
+   per-transport top-level keys (`[telegram]`, `[whatsapp]`, ...).
+   Whichever is locked must keep the schema forward-compatible for
+   transports we haven't added yet.
+10. **NEW (cross-subsystem propagation)**: how agent-id rides through
+    the rest of Makakoo. `bound_to_agent` on grants is clear; less
+    clear: does every Brain journal line get `[agent:<id>]` prefix,
+    or only when written by an agent? Does the MCP server expose an
+    originating-agent header for tool invocations? Lope must lock
+    the propagation contract.
 
 ## Estimated cost
 

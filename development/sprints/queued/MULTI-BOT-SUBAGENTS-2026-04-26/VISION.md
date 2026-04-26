@@ -1,5 +1,45 @@
 # Vision — N Telegram bots = N Makakoo subagents
 
+## This is core Makakoo, not a peripheral feature
+
+Sebastian (2026-04-26): *"This should be a core functionality in
+makakoo-os."* That elevation matters. It changes the sprint's bar
+from "ship a Telegram plugin" to "promote the subagent abstraction
+to a first-class OS primitive, equal in surface area to `makakoo
+plugin`, `makakoo daemon`, and `makakoo perms`."
+
+Concrete consequences of treating agents as core:
+
+1. **CLI parity**: `makakoo agent {create, list, show, start, stop,
+   restart, status, logs, destroy}` gets the same depth + JSON
+   envelopes + audit hooks that `plugin`, `perms`, `daemon` already
+   have. Not a sub-feature buried under one of them.
+2. **Cross-subsystem awareness**: every other subsystem learns to ask
+   "for which agent?". Grants gain `bound_to_agent`. Brain journal
+   entries gain `agent_id` prefix. MCP tool invocations carry an
+   originating-agent header. Audit logs filter by agent.
+3. **Onboarding promotion**: `makakoo setup` gains a first-bot
+   creation section. Getting-started docs, README, install-wizard-flows
+   all surface `makakoo agent` alongside the existing core verbs.
+4. **Transport-agnostic abstraction**: Telegram is the FIRST messenger,
+   not the LAST. The agent model must accommodate WhatsApp, Slack,
+   email, voice, and web chat without rework. The `bot_token` field
+   in the schema is one example of `[transport]` — the schema must
+   generalise.
+5. **Subsumes the existing `agent-*` plugin pattern**: today's
+   `agent-arbitrage`, `agent-career-manager`, `agent-dreams`,
+   `agent-browser-harness`, etc. are all already "agents" in the
+   loose sense. The redesign should unify them under the new model
+   so that *every* long-running thing in Makakoo is registered the
+   same way, regardless of whether it has a Telegram attachment, a
+   schedule attachment (SANCHO), or just a tool surface.
+
+The Genie metaphor (per `harvey_genie` memory: *"THE PRODUCT IS HARVEY.
+Makakoo is the lamp; Harvey is the Genie"*) makes this natural: each
+subagent is a specialised Genie with its own scope. The OS provides
+the lamp; users summon Genies for specific jobs. `makakoo agent
+create` is *"summon a new Genie"*.
+
 ## The user's expressed intent
 
 Sebastian wants to be able to say (paraphrased from chat):
