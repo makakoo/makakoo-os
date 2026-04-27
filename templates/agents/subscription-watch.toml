@@ -1,0 +1,79 @@
+# ──────────────────────────────────────────────────────────────────
+# Subscription watch slot — Email + Telegram
+#
+# Watches Gmail for SaaS receipts, builds a running ledger of
+# recurring charges, flags:
+#   - rate hikes (charge increased vs prior month)
+#   - free trials about to convert (within 3 days of conversion)
+#   - tools not logged into in 60+ days (zombie SaaS)
+# Drafts cancellation emails for explicit approval.
+#
+# Solo-founder-grade money saver. Average solo founder hemorrhages
+# $200-800/mo on zombie SaaS that nobody is auditing.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "subscription-watch"
+name    = "Subscription Watch"
+persona = """
+You scan Gmail for SaaS receipts (vendors like Stripe, Paddle,
+Lemonsqueezy, direct credit-card receipts from known SaaS senders).
+
+Maintain a ledger at ~/MAKAKOO/data/agents/subscription-watch/ledger.md
+with one line per active subscription: vendor, monthly cost,
+renewal date, last login (if known via vendor activity emails).
+
+Push a Telegram alert when ANY of:
+  - a charge is > 10% higher than the same vendor's prior month
+  - a free trial will convert in the next 3 days
+  - a tool you haven't received an "activity" email from in 60 days
+    is about to renew
+
+For each alert, offer 3 actions:
+  - "keep" → log decision and stop alerting on this charge
+  - "cancel" → draft a cancellation email to the vendor, await approval
+  - "review" → don't draft, just note for end-of-month review
+
+NEVER draft a cancellation without an explicit "cancel" reply.
+NEVER assume a tool is unused — check Brain for recent mentions
+before flagging.
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/MAKAKOO/data/agents/subscription-watch/",
+  "~/MAKAKOO/data/Brain/",
+]
+tools = [
+  "brain_search",
+  "brain_write_journal",
+  "write_file",
+  "gmail",
+]
+
+process_mode = "supervised_pair"
+
+# ── Email (read-only — never sends without approval) ──────────────
+[[transport]]
+id         = "email-main"
+kind       = "email"
+secret_ref = "agent/subscription-watch/email-main/oauth2_refresh_token"
+
+[transport.config]
+account_id      = "<YOUR_EMAIL>"
+auth_mode       = "oauth2"
+imap_server     = "imap.gmail.com"
+imap_port       = 993
+smtp_server     = "smtp.gmail.com"
+smtp_port       = 465
+allowed_senders = []          # accept receipts from any vendor
+support_thread  = true
+
+# ── Telegram (alerts + approval channel) ──────────────────────────
+[[transport]]
+id            = "telegram-main"
+kind          = "telegram"
+secret_ref    = "agent/subscription-watch/telegram-main/bot_token"
+allowed_users = ["<YOUR_TELEGRAM_CHAT_ID>"]
+
+[transport.config]
+polling_timeout_seconds = 30

@@ -26,13 +26,41 @@ makakoo agent status secretary
 
 ## The gallery
 
+### Tier 1 — set-up-once, payback-every-week
+
 | Template | Persona | Transports | Reach for it when… |
 |---|---|---|---|
 | [`secretary-freelance.toml`](./secretary-freelance.toml) | Freelance office secretary | Telegram + Slack | You want a chat-driven assistant for client management, contracts, invoices. Pairs with the `skill-freelance-office` plugin. |
+| [`invoice-chaser.toml`](./invoice-chaser.toml) | Polite escalating dunning | Email | You want the day-7 / 14 / 30 follow-up cadence on overdue invoices automated, with approval gate. Pairs with secretary. |
+| [`expense-receipts.toml`](./expense-receipts.toml) | Tax-category receipt filer | Telegram + Email | You want to snap a receipt photo (or forward an e-receipt) and have it filed under the right tax bucket. Pairs with secretary. |
+| [`meeting-prep.toml`](./meeting-prep.toml) | Brain × Calendar briefer | Telegram | You want a one-pager pushed 30min before every calendar event — attendees, last contact, talking points, open commitments. |
+| [`lead-qualifier.toml`](./lead-qualifier.toml) | First-touch sales filter | Email + Web | You want website + sales@ inquiries triaged with 3 qualifying questions before they hit your calendar. Distinct from support-inbox. |
+
+### Tier 2 — situational but high-leverage
+
+| Template | Persona | Transports | Reach for it when… |
+|---|---|---|---|
+| [`client-boundary-bouncer.toml`](./client-boundary-bouncer.toml) | Calm "no / later / paid scope" voice | WhatsApp + Email | You want scope-creep requests filtered against the active contract, with three reply shapes (no / later / paid add-on) drafted for approval. |
+| [`subscription-watch.toml`](./subscription-watch.toml) | Zombie-SaaS detector | Email + Telegram | You suspect you're hemorrhaging $200-800/mo on tools you don't use. Watches Gmail receipts, flags rate hikes / trial conversions / 60-day-idle vendors. |
 | [`career-manager.toml`](./career-manager.toml) | Career / recruiter conversations | Telegram only | You want an inbox for recruiter pings + job-lead tracking, separate from the rest of your work. |
-| [`alerts-bot.toml`](./alerts-bot.toml) | One-way ops/alerts | Slack only | You want infra/build/deploy notifications routed into a Slack channel. Receive-only — replies are ignored. |
 | [`support-inbox.toml`](./support-inbox.toml) | Customer support agent | Email + Web chat | You want a public-facing slot that takes long-form email AND in-page chat. SMTP outbound today, IMAP IDLE in v2.1. |
+
+### Tier 3 — narrow but useful in context
+
+| Template | Persona | Transports | Reach for it when… |
+|---|---|---|---|
+| [`alerts-bot.toml`](./alerts-bot.toml) | One-way ops/alerts | Slack only | You want infra/build/deploy notifications routed into a Slack channel. Receive-only — replies are ignored. |
 | [`community-bot.toml`](./community-bot.toml) | Community / Discord guild | Discord | You want a single-guild Discord presence. MESSAGE_CONTENT off by default. |
+
+### How the tiers were picked
+
+Tier 1 + 2 templates were curated 2026-04-27 via cross-validator
+review (`lope ask` against claude + gemini + opencode + pi). Two
+validators (claude, gemini) independently picked the same five Tier-1
+archetypes from a 10-candidate shortlist; `client-boundary-bouncer`
+was codex's standalone pick; `subscription-watch` was claude's
+write-in. Three candidates were cut as toy/duplicate by both
+validators (`focus-guard`, `on-call-router`, `journal-companion`).
 
 ## Picking a transport
 

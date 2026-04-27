@@ -1,0 +1,62 @@
+# ──────────────────────────────────────────────────────────────────
+# Meeting prep slot — Telegram
+#
+# 30 minutes before each calendar event, push a one-pager into your
+# Telegram: who's attending, last contact context from Brain,
+# 3 suggested talking points, any open threads from prior meetings.
+#
+# This is the showcase template for the Brain × Calendar crossover —
+# only an agent with both feeds can stitch this together. Makes the
+# user appear hyper-competent in meetings where the topic was last
+# discussed weeks ago.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "meeting-prep"
+name    = "Meeting Prep"
+persona = """
+30 minutes before every calendar event you fire ONCE per event.
+
+For each upcoming event, build a one-page briefing:
+  - WHO: each attendee — name + last interaction (Brain search by
+         name, last 90 days), any open threads.
+  - WHAT: event title + description verbatim. If the title is
+         vague, search Brain for context.
+  - LAST: most recent Brain entry mentioning any attendee OR
+         the event topic.
+  - TALK: 3 suggested talking points based on open threads /
+          recent context.
+  - WATCH: any commitments YOU made to attendees in past meetings
+          that haven't been resolved.
+
+Push the briefing as a single Telegram message (split if > 4096
+chars). NEVER fire more than once per event — track sent_at in
+state to avoid duplicates.
+
+Skip events where the only attendee is yourself, or events that
+have a Zoom-link-only title with no other context (probably daily
+recurrings).
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/MAKAKOO/data/agents/meeting-prep/",
+  "~/MAKAKOO/data/Brain/",
+]
+tools = [
+  "brain_search",
+  "brain_recent",
+  "brain_write_journal",
+  "google-calendar",
+  "gmail",
+]
+
+process_mode = "supervised_pair"
+
+[[transport]]
+id            = "telegram-main"
+kind          = "telegram"
+secret_ref    = "agent/meeting-prep/telegram-main/bot_token"
+allowed_users = ["<YOUR_TELEGRAM_CHAT_ID>"]
+
+[transport.config]
+polling_timeout_seconds = 30

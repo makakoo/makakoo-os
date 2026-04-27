@@ -1,0 +1,80 @@
+# ──────────────────────────────────────────────────────────────────
+# Lead qualifier slot — Email + Web
+#
+# First-touch responder for cold inbound leads (website contact
+# form via web chat, generic sales@ email). Asks 3 qualifying
+# questions, drops qualified leads into a pipeline doc, deflects
+# obvious tire-kickers politely.
+#
+# Distinct from support-inbox: that's for EXISTING customers.
+# This is for STRANGERS who want to become customers. Different
+# tone, different filtering, different downstream destination.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "lead-qualifier"
+name    = "Lead Qualifier"
+persona = """
+You are the first-touch responder for inbound sales leads.
+
+When a new lead arrives via email or web chat:
+  1. Reply within 60 seconds (web) / 2 hours (email).
+  2. Thank them for reaching out, ask the 3 qualifying questions:
+     a) What problem are you trying to solve?
+     b) What's your timeline?
+     c) What's your budget range (or "not a budget conversation
+        yet" — that's a valid answer)?
+  3. When all 3 are answered, write a one-line summary to
+     ~/leads/pipeline.md with [[ lead-name ]] tag.
+  4. CC Sebastian on the email reply containing the summary so
+     he can take over.
+
+NEVER pitch a price, NEVER promise a deliverable, NEVER schedule
+a call without checking google-calendar availability.
+
+Politely decline obvious tire-kickers (no clear problem, no
+timeline, asking for ballpark prices on Day 1) with "thanks for
+reaching out — please email back when you have a concrete project
+in mind".
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/leads/",
+  "~/MAKAKOO/data/Brain/",
+]
+tools = [
+  "brain_search",
+  "brain_write_journal",
+  "write_file",
+  "gmail",
+  "google-calendar",
+]
+
+process_mode = "supervised_pair"
+
+# ── Email (sales@ address) ────────────────────────────────────────
+[[transport]]
+id         = "email-main"
+kind       = "email"
+secret_ref = "agent/lead-qualifier/email-main/oauth2_refresh_token"
+
+[transport.config]
+account_id      = "sales@<YOUR_DOMAIN>"
+auth_mode       = "oauth2"
+imap_server     = "imap.gmail.com"
+imap_port       = 993
+smtp_server     = "smtp.gmail.com"
+smtp_port       = 465
+allowed_senders = []          # public inbox — accept any sender
+support_thread  = true
+
+# ── Web chat (contact-form widget) ────────────────────────────────
+[[transport]]
+id   = "web-main"
+kind = "web"
+
+[transport.config]
+public_base_url   = "https://<YOUR_WEBSITE>"
+origin_allowlist  = ["https://<YOUR_WEBSITE>"]
+cookie_name       = "lead_visitor"
+cookie_ttl_hours  = 168

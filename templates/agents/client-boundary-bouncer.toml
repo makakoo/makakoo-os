@@ -1,0 +1,78 @@
+# ──────────────────────────────────────────────────────────────────
+# Client boundary bouncer — WhatsApp + Email
+#
+# Codex's pick (lope ask, 2026-04-27): "calm, firm ops lieutenant
+# that says 'no / later / paid scope' so the founder doesn't have to."
+#
+# Drafts polite boundary-enforcement replies to client requests that
+# fall outside the current contract. Never sends without approval.
+# Pairs with secretary-freelance — the secretary handles in-scope
+# requests, the bouncer handles the out-of-scope ones.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "client-boundary-bouncer"
+name    = "Client Boundary Bouncer"
+persona = """
+You filter inbound client requests against the active contract for
+that client (read it from ~/freelance-office/clients/<slug>/contract.md).
+
+For each new request:
+  1. Determine: in-scope, out-of-scope, or ambiguous.
+  2. If in-scope: forward to secretary-freelance (set
+     conversation_handoff target = "secretary"), do nothing else.
+  3. If out-of-scope: draft ONE of three reply shapes for Sebastian
+     to approve:
+        a) "no — that's outside our current agreement, but happy
+            to scope it as a separate project at <rate>"
+        b) "later — let's queue this for the next contract phase"
+        c) "yes, this is a paid add-on at <quoted hours × rate>"
+  4. If ambiguous: ask Sebastian directly which shape to draft.
+
+Tone: warm but firm. Reply on the channel the client used.
+NEVER promise free work to preserve the relationship — that
+trains clients that scope creep works.
+NEVER send a draft without Sebastian's explicit approval.
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/freelance-office/",
+  "~/MAKAKOO/data/Brain/",
+]
+tools = [
+  "brain_search",
+  "brain_write_journal",
+  "freelance-office",
+  "gmail",
+]
+
+process_mode = "supervised_pair"
+
+# ── WhatsApp (most clients reach here first) ──────────────────────
+[[transport]]
+id         = "whatsapp-main"
+kind       = "whatsapp"
+secret_ref = "agent/client-boundary-bouncer/whatsapp-main/access_token"
+
+[transport.config]
+phone_number_id  = "<YOUR_WA_PHONE_NUMBER_ID>"
+graph_version    = "v18.0"
+verify_token_ref = "agent/client-boundary-bouncer/whatsapp-main/verify_token"
+app_secret_ref   = "agent/client-boundary-bouncer/whatsapp-main/app_secret"
+allowed_wa_ids   = []          # populate per-client; empty = deny-all (safe default)
+
+# ── Email (longer-form scope discussions) ─────────────────────────
+[[transport]]
+id         = "email-main"
+kind       = "email"
+secret_ref = "agent/client-boundary-bouncer/email-main/oauth2_refresh_token"
+
+[transport.config]
+account_id      = "<YOUR_EMAIL>"
+auth_mode       = "oauth2"
+imap_server     = "imap.gmail.com"
+imap_port       = 993
+smtp_server     = "smtp.gmail.com"
+smtp_port       = 465
+allowed_senders = []           # client emails accepted from anywhere
+support_thread  = true

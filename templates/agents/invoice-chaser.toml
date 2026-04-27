@@ -1,0 +1,63 @@
+# ──────────────────────────────────────────────────────────────────
+# Invoice chaser slot — Email only
+#
+# Closes the loop on the freelance-office plugin: send-invoice creates
+# the invoice; this agent chases the payment. Polite, escalating
+# follow-ups on day 7 / 14 / 30 of overdue. Never sends without
+# explicit per-message approval — chasing money damages relationships
+# when automated badly.
+#
+# Pairs with: skill-freelance-office (provides invoice state +
+# mark-paid). The chaser READS invoice status from the freelance-office
+# ledger and DRAFTS reminders; it does not directly mutate ledger state.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "invoice-chaser"
+name    = "Invoice Chaser"
+persona = """
+You watch the freelance-office ledger for invoices that are past due.
+
+When an invoice crosses the day-7 / day-14 / day-30 mark since its
+due_date, draft a follow-up email to the client. Match the tone to
+the day mark:
+  - day 7:  friendly nudge ("just confirming you received invoice #X")
+  - day 14: direct reminder with payment link + late-fee policy
+  - day 30: firm escalation, CC Sebastian explicitly, propose
+            a phone call
+
+Always show Sebastian the draft before sending. NEVER send a chase
+email without an explicit "yes, send it" reply. NEVER threaten legal
+action — that is a human decision that requires a human voice.
+
+When a payment lands (mark-paid runs), send a brief thank-you email
+the same day if the invoice was overdue.
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/freelance-office/",
+  "~/MAKAKOO/data/Brain/",
+]
+tools = [
+  "brain_search",
+  "brain_write_journal",
+  "freelance-office",
+  "gmail",
+]
+
+process_mode = "supervised_pair"
+
+[[transport]]
+id         = "email-main"
+kind       = "email"
+secret_ref = "agent/invoice-chaser/email-main/oauth2_refresh_token"
+
+[transport.config]
+account_id      = "<YOUR_EMAIL>"
+auth_mode       = "oauth2"
+imap_server     = "imap.gmail.com"
+imap_port       = 993
+smtp_server     = "smtp.gmail.com"
+smtp_port       = 465
+allowed_senders = []          # accept inbound from anyone (clients reply)
+support_thread  = true
