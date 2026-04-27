@@ -7,10 +7,12 @@
 //! <slot>` reads the handles back through `SlotStatus::collect`
 //! to render the locked Phase 4 layout:
 //!
-//!     secretary
-//!       gateway:   alive   pid=12345  last_frame=2s ago
-//!       transport telegram-main:  connected  last_inbound=8s ago  errors_1h=0
-//!       transport slack-main:     connected  last_inbound=3m ago  errors_1h=1
+//! ```text
+//! secretary
+//!   gateway:   alive   pid=12345  last_frame=2s ago
+//!   transport telegram-main:  connected  last_inbound=8s ago  errors_1h=0
+//!   transport slack-main:     connected  last_inbound=3m ago  errors_1h=1
+//! ```
 //!
 //! All atomicity is local to each transport handle — no
 //! cross-transport coordination — so adapters never block waiting

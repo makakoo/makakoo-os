@@ -21,14 +21,14 @@ What this exposes:
   - Costs: session and historical cost tracking
 
 Install into Claude Code:
-  claude mcp add harvey -- python3 ~/MAKAKOO/plugins-core/lib-harvey-core/src/core/mcp/harvey_mcp.py
+  claude mcp add harvey -- python3 ~/MAKAKOO/plugins/lib-harvey-core/src/core/mcp/harvey_mcp.py
 
 Install into any MCP client:
   {
     "mcpServers": {
       "harvey": {
         "command": "python3",
-        "args": ["~/MAKAKOO/plugins-core/lib-harvey-core/src/core/mcp/harvey_mcp.py"]
+        "args": ["~/MAKAKOO/plugins/lib-harvey-core/src/core/mcp/harvey_mcp.py"]
       }
     }
   }
@@ -42,9 +42,9 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-HARVEY_HOME = os.environ.get("MAKAKOO_HOME") or os.environ.get(
-    "HARVEY_HOME", os.path.expanduser("~/MAKAKOO")
-)
+# Add harvey-os to path
+HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
+sys.path.insert(0, os.path.join(HARVEY_HOME, "plugins", "lib-harvey-core", "src"))
 
 log = logging.getLogger("harvey.mcp")
 
@@ -320,6 +320,280 @@ def _run_swarm(args: dict) -> str:
     }, indent=2, default=str)
 
 
+def _swarm_fork(args: dict) -> str:
+    """Fork a workflow at a step. Port of pi-mono 0.68.0's /fork primitive.
+
+    Upstream artifacts from the parent are copied into the child's namespace
+    so downstream re-execution reads them through `{child.id}:{step.id}` like
+    any other step.
+    """
+    import asyncio
+    from core.workflow.engine import (
+        ForkOnLiveWorkflowError,
+        StepNotFoundError,
+        StepState,
+    )
+
+    workflow_id = args["workflow_id"]
+    step_id = args["step_id"]
+    position = args.get("position", "at")
+    new_input = args.get("new_input")
+    auto_run = args.get("auto_run", True)
+    timeout_s = float(args.get("timeout_s", 120))
+
+    _audit("mcp_gateway", "harvey_swarm_fork", "started",
+           detail=f"parent={workflow_id} step={step_id} pos={position}")
+
+    state = _swarm_state()
+    engine = state["engine"]
+    executor = state["executor"]
+    store = state["store"]
+
+    try:
+        child = engine.fork(workflow_id, step_id, position=position, new_input=new_input)
+    except (ValueError, StepNotFoundError, ForkOnLiveWorkflowError) as e:
+        _audit("mcp_gateway", "harvey_swarm_fork", "error", error=str(e))
+        return json.dumps({
+            "mode": "error",
+            "error": f"{type(e).__name__}: {e}",
+        }, indent=2)
+
+    # Copy preserved (CHECKPOINTED) steps' artifacts from parent -> child namespace.
+    copied = 0
+    for s in child.steps:
+        if s.state == StepState.CHECKPOINTED:
+            parent_art = store.get(f"{workflow_id}:{s.id}")
+            if parent_art is not None:
+                store.publish(
+                    name=f"{child.id}:{s.id}",
+                    payload=parent_art.payload,
+                    producer=parent_art.producer,
+                )
+                copied += 1
+
+    plan = {
+        "workflow_id": child.id,
+        "parent_workflow_id": child.parent_workflow_id,
+        "session_id": child.session_id,
+        "fork_origin_step_id": child.fork_origin_step_id,
+        "fork_position": child.fork_position,
+        "preserved_artifacts_copied": copied,
+        "step_states_at_fork": {s.id: str(s.state) for s in child.steps},
+    }
+
+    if not auto_run:
+        _audit("mcp_gateway", "harvey_swarm_fork", "ok", detail="queued (auto_run=false)")
+        return json.dumps({"mode": "queued", **plan}, indent=2, default=str)
+
+    async def _run():
+        return await asyncio.wait_for(executor.run_workflow(child), timeout=timeout_s)
+
+    try:
+        asyncio.run(_run())
+    except asyncio.TimeoutError:
+        _audit("mcp_gateway", "harvey_swarm_fork", "error", error=f"timeout after {timeout_s}s")
+        return json.dumps({"mode": "timeout", "timeout_s": timeout_s, **plan}, indent=2, default=str)
+    except Exception as e:
+        _audit("mcp_gateway", "harvey_swarm_fork", "error", error=f"{type(e).__name__}: {e}")
+        return json.dumps({"mode": "error", "error": f"{type(e).__name__}: {e}", **plan}, indent=2, default=str)
+
+    # Collect per-step artifact summaries under the child's namespace.
+    artifacts = {}
+    for step in child.steps:
+        art = store.get(f"{child.id}:{step.id}")
+        if art is None:
+            artifacts[step.id] = None
+        else:
+            payload = art.payload
+            if isinstance(payload, dict):
+                summary = {
+                    k: (str(v)[:200] if not isinstance(v, (int, float, bool, type(None))) else v)
+                    for k, v in payload.items()
+                }
+            else:
+                summary = str(payload)[:400]
+            artifacts[step.id] = summary
+
+    _audit("mcp_gateway", "harvey_swarm_fork", "ok",
+           detail=f"wf={child.id} state={child.state}")
+
+    return json.dumps({
+        "mode": "executed",
+        "workflow_state": str(child.state),
+        "step_states": {s.id: str(s.state) for s in child.steps},
+        "artifacts": artifacts,
+        **plan,
+    }, indent=2, default=str)
+
+
+def _swarm_clone(args: dict) -> str:
+    """Deep-copy a workflow into a new id under the same session.
+
+    Intended use: snapshot a COMPLETED workflow before forking it multiple
+    ways, or A/B-compare synthesizer runs on shared researcher artifacts.
+    Port of pi-mono 0.68.0's /clone primitive (packages/coding-agent).
+    """
+    from core.workflow.engine import CloneOnLiveWorkflowError
+
+    workflow_id = args["workflow_id"]
+    _audit("mcp_gateway", "harvey_swarm_clone", "started", detail=f"parent={workflow_id}")
+
+    state = _swarm_state()
+    engine = state["engine"]
+    store = state["store"]
+
+    try:
+        child = engine.clone(workflow_id)
+    except (ValueError, CloneOnLiveWorkflowError) as e:
+        _audit("mcp_gateway", "harvey_swarm_clone", "error", error=str(e))
+        return json.dumps({
+            "mode": "error",
+            "error": f"{type(e).__name__}: {e}",
+        }, indent=2)
+
+    # Copy every step's artifacts from parent -> child namespace.
+    copied = 0
+    for s in child.steps:
+        parent_art = store.get(f"{workflow_id}:{s.id}")
+        if parent_art is not None:
+            store.publish(
+                name=f"{child.id}:{s.id}",
+                payload=parent_art.payload,
+                producer=parent_art.producer,
+            )
+            copied += 1
+
+    _audit("mcp_gateway", "harvey_swarm_clone", "ok",
+           detail=f"wf={child.id} artifacts={copied}")
+
+    return json.dumps({
+        "mode": "cloned",
+        "workflow_id": child.id,
+        "parent_workflow_id": child.parent_workflow_id,
+        "session_id": child.session_id,
+        "workflow_state": str(child.state),
+        "artifacts_copied": copied,
+        "step_states": {s.id: str(s.state) for s in child.steps},
+    }, indent=2, default=str)
+
+
+def _swarm_session_list(args: dict) -> str:
+    """List swarm sessions with their fork trees. Observability for the
+    whole fork/clone graph shipped by Phases 2-3.
+    """
+    limit = int(args.get("limit", 50))
+    session_id = args.get("session_id")
+
+    _audit("mcp_gateway", "harvey_swarm_session_list", "started",
+           detail=f"limit={limit} sid={session_id}")
+
+    state = _swarm_state()
+    engine = state["engine"]
+
+    sessions = engine.list_sessions(limit=limit, session_id=session_id)
+
+    out = []
+    for s in sessions:
+        out.append({
+            "session_id": s.session_id,
+            "original_workflow_id": s.original_workflow_id,
+            "workflow_count": len(s.workflows),
+            "workflow_ids": s.workflows,
+            "fork_tree": s.fork_tree,
+            "fork_tree_rendered": s.render_tree(),
+            "created_at": s.created_at,
+            "last_touched_at": s.last_touched_at,
+        })
+
+    _audit("mcp_gateway", "harvey_swarm_session_list", "ok",
+           detail=f"count={len(out)}")
+    return json.dumps({"sessions": out, "count": len(out)}, indent=2, default=str)
+
+
+def _swarm_resume(args: dict) -> str:
+    """Resume a PAUSED / FAILED / QUEUED workflow from its last checkpoint.
+
+    COMPLETED workflows are no-ops (returned as-is); CANCELLED raises.
+    Port of pi-mono's /resume semantic applied to our DAG executor.
+    """
+    import asyncio
+    from core.workflow.engine import ResumeCancelledError, WorkflowState
+
+    workflow_id = args["workflow_id"]
+    timeout_s = float(args.get("timeout_s", 120))
+    auto_run = args.get("auto_run", True)
+
+    _audit("mcp_gateway", "harvey_swarm_resume", "started",
+           detail=f"wf={workflow_id} auto_run={auto_run}")
+
+    state = _swarm_state()
+    engine = state["engine"]
+    executor = state["executor"]
+    store = state["store"]
+
+    try:
+        wf = engine.resume(workflow_id)
+    except (ValueError, ResumeCancelledError) as e:
+        _audit("mcp_gateway", "harvey_swarm_resume", "error", error=str(e))
+        return json.dumps({
+            "mode": "error",
+            "error": f"{type(e).__name__}: {e}",
+        }, indent=2)
+
+    plan = {
+        "workflow_id": wf.id,
+        "workflow_state": str(wf.state),
+        "step_states": {s.id: str(s.state) for s in wf.steps},
+    }
+
+    if wf.state == WorkflowState.COMPLETED:
+        _audit("mcp_gateway", "harvey_swarm_resume", "ok", detail="noop-completed")
+        return json.dumps({"mode": "noop", **plan}, indent=2, default=str)
+
+    if not auto_run:
+        _audit("mcp_gateway", "harvey_swarm_resume", "ok", detail="queued")
+        return json.dumps({"mode": "queued", **plan}, indent=2, default=str)
+
+    async def _run():
+        return await asyncio.wait_for(executor.run_workflow(wf), timeout=timeout_s)
+
+    try:
+        asyncio.run(_run())
+    except asyncio.TimeoutError:
+        _audit("mcp_gateway", "harvey_swarm_resume", "error", error=f"timeout after {timeout_s}s")
+        return json.dumps({"mode": "timeout", "timeout_s": timeout_s, **plan}, indent=2, default=str)
+    except Exception as e:
+        _audit("mcp_gateway", "harvey_swarm_resume", "error", error=f"{type(e).__name__}: {e}")
+        return json.dumps({"mode": "error", "error": f"{type(e).__name__}: {e}", **plan}, indent=2, default=str)
+
+    artifacts = {}
+    for step in wf.steps:
+        art = store.get(f"{wf.id}:{step.id}")
+        if art is None:
+            artifacts[step.id] = None
+        else:
+            payload = art.payload
+            if isinstance(payload, dict):
+                summary = {
+                    k: (str(v)[:200] if not isinstance(v, (int, float, bool, type(None))) else v)
+                    for k, v in payload.items()
+                }
+            else:
+                summary = str(payload)[:400]
+            artifacts[step.id] = summary
+
+    _audit("mcp_gateway", "harvey_swarm_resume", "ok",
+           detail=f"wf={wf.id} state={wf.state}")
+
+    return json.dumps({
+        "mode": "executed",
+        "workflow_state": str(wf.state),
+        "step_states": {s.id: str(s.state) for s in wf.steps},
+        "artifacts": artifacts,
+        "workflow_id": wf.id,
+    }, indent=2, default=str)
+
+
 def _swarm_status(workflow_id=None) -> str:
     """Return coordinator + breaker + recent workflows state."""
     state = _swarm_state()
@@ -361,6 +635,114 @@ def _swarm_status(workflow_id=None) -> str:
         out["engine_error"] = str(e)
 
     return json.dumps(out, indent=2, default=str)
+
+
+# ─────────────────────────────────────────────────────────────────
+#  S3 buckets — v0.7 Phase D.1
+# ─────────────────────────────────────────────────────────────────
+#
+# Mac-local path only. Uses the bootstrapped makakoo-s3-service
+# keypair from the macOS Keychain (A₁.5). Pod-side reach (D.3) and
+# per-agent presigned URLs (D.2) are deferred to v0.7.1.
+#
+# All four tools audit through `transfers.log` via the existing
+# `_audit` helper with a `bucket_*` verb prefix.
+
+_BUCKET_S3_CLIENT = None
+
+
+def _s3_client():
+    """Return a memoised boto3 S3 client.
+
+    v0.7.1 D.2 dogfood — delegates to ``core.s3.client()`` so the
+    SDK is the single source of truth for endpoint resolution +
+    credential loading. The MCP server stays sync; CallerContext
+    auto-detection picks Mac-local because the MCP shim has not yet
+    set ``MAKAKOO_PEER_NAME`` (D.3 wiring lands separately).
+    """
+    global _BUCKET_S3_CLIENT
+    if _BUCKET_S3_CLIENT is not None:
+        return _BUCKET_S3_CLIENT
+    from core.s3 import client as _sdk_client  # local import — keeps cold-import cheap
+
+    _BUCKET_S3_CLIENT = _sdk_client()
+    return _BUCKET_S3_CLIENT
+
+
+def _ensure_bucket(client, bucket: str) -> None:
+    """Idempotent bucket create — `head_bucket` then `create_bucket`
+    on 404. Garage rejects re-create with BucketAlreadyOwnedByYou,
+    which we silence."""
+    try:
+        client.head_bucket(Bucket=bucket)
+        return
+    except Exception:
+        pass
+    try:
+        client.create_bucket(Bucket=bucket)
+    except Exception as e:
+        msg = str(e)
+        if "BucketAlreadyOwnedByYou" in msg or "BucketAlreadyExists" in msg:
+            return
+        raise
+
+
+def _bucket_put(bucket: str, key: str, data: str) -> str:
+    client = _s3_client()
+    _ensure_bucket(client, bucket)
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=data.encode("utf-8"))
+        _audit("mcp_gateway", "harvey_bucket_put", "ok",
+               detail=f"{bucket}/{key} {len(data)} bytes")
+        return f"PUT s3://{bucket}/{key} ({len(data)} bytes)"
+    except Exception as e:
+        _audit("mcp_gateway", "harvey_bucket_put", "error",
+               error=f"{type(e).__name__}: {e}")
+        return f"PUT failed: {type(e).__name__}: {e}"
+
+
+def _bucket_get(bucket: str, key: str) -> str:
+    client = _s3_client()
+    try:
+        out = client.get_object(Bucket=bucket, Key=key)
+        body = out["Body"].read().decode("utf-8", errors="replace")
+        _audit("mcp_gateway", "harvey_bucket_get", "ok",
+               detail=f"{bucket}/{key} {len(body)} bytes")
+        return body
+    except Exception as e:
+        _audit("mcp_gateway", "harvey_bucket_get", "error",
+               error=f"{type(e).__name__}: {e}")
+        return f"GET failed: {type(e).__name__}: {e}"
+
+
+def _bucket_list(bucket: str, prefix: str = "", max_keys: int = 1000) -> str:
+    client = _s3_client()
+    try:
+        out = client.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=max_keys)
+        contents = out.get("Contents", []) or []
+        lines = [f"{o['Size']:>10}  {o['Key']}" for o in contents]
+        _audit("mcp_gateway", "harvey_bucket_list", "ok",
+               detail=f"{bucket}/{prefix}* {len(contents)} keys")
+        if not lines:
+            return f"(no objects under s3://{bucket}/{prefix})"
+        return "\n".join(lines)
+    except Exception as e:
+        _audit("mcp_gateway", "harvey_bucket_list", "error",
+               error=f"{type(e).__name__}: {e}")
+        return f"LIST failed: {type(e).__name__}: {e}"
+
+
+def _bucket_delete(bucket: str, key: str) -> str:
+    client = _s3_client()
+    try:
+        client.delete_object(Bucket=bucket, Key=key)
+        _audit("mcp_gateway", "harvey_bucket_delete", "ok",
+               detail=f"{bucket}/{key}")
+        return f"DELETED s3://{bucket}/{key}"
+    except Exception as e:
+        _audit("mcp_gateway", "harvey_bucket_delete", "error",
+               error=f"{type(e).__name__}: {e}")
+        return f"DELETE failed: {type(e).__name__}: {e}"
 
 
 def _omni_describe(kind: str, args: dict) -> str:
@@ -609,6 +991,57 @@ TOOLS = [
         },
     },
     {
+        "name": "harvey_swarm_fork",
+        "description": "Fork a completed or paused swarm workflow at a specific step. Upstream CHECKPOINTED steps (and their artifacts) are preserved; the fork point + its downstream are reset to PENDING and re-executed. Position 'before' also resets the target step; 'at' preserves it unless new_input is supplied (which always implies re-run intent). Child shares the parent's session_id so the fork tree is visible via harvey_swarm_session_list.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workflow_id": {"type": "string", "description": "Parent workflow id to fork from (must not be RUNNING)"},
+                "step_id": {"type": "string", "description": "Step id in the parent to fork at"},
+                "position": {"type": "string", "enum": ["before", "at"], "default": "at", "description": "'before' resets step_id itself; 'at' preserves it unless new_input is given"},
+                "new_input": {"type": "object", "description": "Optional — shallow-merged into step_id's input_context; providing this forces step_id to re-run regardless of position"},
+                "auto_run": {"type": "boolean", "default": True, "description": "If true, execute the forked workflow immediately; if false, return queued plan"},
+                "timeout_s": {"type": "number", "default": 120, "description": "Max wall time before cancelling (auto_run only)"},
+            },
+            "required": ["workflow_id", "step_id"],
+        },
+    },
+    {
+        "name": "harvey_swarm_session_list",
+        "description": "List swarm sessions with their fork/clone trees. A session groups the original workflow + every fork and clone descended from it. Returns most-recently-touched first. Pass session_id to drill into one session; otherwise returns up to `limit` recent sessions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 50, "description": "Max sessions to return"},
+                "session_id": {"type": "string", "description": "Optional — if set, returns just this session (or empty if unknown)"},
+            },
+        },
+    },
+    {
+        "name": "harvey_swarm_resume",
+        "description": "Resume a PAUSED or FAILED swarm workflow from its last checkpoint. Any PAUSED / FAILED steps are reset to PENDING; the executor picks up where depends_on chains allow. COMPLETED workflows no-op. CANCELLED workflows cannot be resumed (terminal-by-intent).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workflow_id": {"type": "string", "description": "Workflow id to resume"},
+                "auto_run": {"type": "boolean", "default": True, "description": "If true, re-submit to the executor; if false, leave in QUEUED state"},
+                "timeout_s": {"type": "number", "default": 120, "description": "Max wall time (auto_run only)"},
+            },
+            "required": ["workflow_id"],
+        },
+    },
+    {
+        "name": "harvey_swarm_clone",
+        "description": "Deep-copy a workflow into a new id under the same session_id. Every step + artifact is preserved. Use this to snapshot a COMPLETED workflow before forking it multiple ways, or to A/B-compare against a baseline. Parent must not be RUNNING.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workflow_id": {"type": "string", "description": "Workflow id to clone (must not be RUNNING)"},
+            },
+            "required": ["workflow_id"],
+        },
+    },
+    {
         "name": "harvey_swarm_status",
         "description": "Return the current swarm runtime status: registered agents, recent workflows, circuit breaker state per agent, and coordinator health.",
         "inputSchema": {
@@ -644,14 +1077,14 @@ TOOLS = [
         },
     },
 
-    # ── Omni multimodal understanding (Xiaomi MiMo via switchAILocal) ────
+    # ── Omni multimodal understanding (via switchAILocal) ────
     # Any agent that needs to look at an image, listen to audio, or
     # watch a video clip can call these three tools. `source` accepts a
     # URL, a data: URI, or a local file path — local paths are
-    # base64-encoded automatically. Routes to xiaomi-tp:mimo-v2-omni.
+    # base64-encoded automatically. Routes to OMNI_MODEL (kimi:kimi-k2.6).
     {
         "name": "harvey_describe_image",
-        "description": "Look at an image and return a text description or answer. Source accepts a URL, a data: URI, or a local file path (auto base64-encoded). Routes through switchAILocal to xiaomi-tp:mimo-v2-omni. Use this when a user message contains a photo, screenshot, chart, or diagram.",
+        "description": "Look at an image and return a text description or answer. Source accepts a URL, a data: URI, or a local file path (auto base64-encoded). Routes through switchAILocal to kimi:kimi-k2.6 (configured via OMNI_MODEL). Use this when a user message contains a photo, screenshot, chart, or diagram.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -664,7 +1097,7 @@ TOOLS = [
     },
     {
         "name": "harvey_describe_audio",
-        "description": "Listen to an audio clip and return a text answer — transcribe speech, analyze tone, or answer questions about what was said. Source accepts a URL, a data: URI, or a local file path (auto base64-encoded). Routes through switchAILocal to xiaomi-tp:mimo-v2-omni. Use this for voice messages, meeting recordings, or any audio a user drops on Harvey.",
+        "description": "Listen to an audio clip and return a text answer — transcribe speech, analyze tone, or answer questions about what was said. Source accepts a URL, a data: URI, or a local file path (auto base64-encoded). Routes through switchAILocal to kimi:kimi-k2.6 (configured via OMNI_MODEL). Use this for voice messages, meeting recordings, or any audio a user drops on Harvey.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -677,7 +1110,7 @@ TOOLS = [
     },
     {
         "name": "harvey_describe_video",
-        "description": "Watch a video clip and return a text description or answer. Source accepts a URL, a data: URI, or a local file path (auto base64-encoded). Supports optional fps (default Xiaomi 2, max 10) and media_resolution (default|max). Routes through switchAILocal to xiaomi-tp:mimo-v2-omni. Use this for short clips, screen recordings, or any video a user wants Harvey to understand.",
+        "description": "Watch a video clip and return a text description or answer. Source accepts a URL, a data: URI, or a local file path (auto base64-encoded). Supports optional fps (default 2, max 10) and media_resolution (default|max). Routes through switchAILocal to kimi:kimi-k2.6 (configured via OMNI_MODEL). Use this for short clips, screen recordings, or any video a user wants Harvey to understand.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -976,6 +1409,61 @@ TOOLS = [
             },
         },
     },
+
+    # ── S3 buckets (v0.7 Phase D.1) ───────────────────────
+    # Mac-local path only in v0.7 first-light. Pod-side reach + per-agent
+    # presigned-URL flow (D.2/D.3) deferred to v0.7.1. Agents share the
+    # bootstrapped makakoo-s3-service identity from keychain.
+    {
+        "name": "harvey_bucket_put",
+        "description": "Store a UTF-8 string at <bucket>/<key> on the local Garage S3. Use for small payloads (<1 MB). For binary or larger objects, use harvey_bucket_get_url with mode=put (v0.7.1).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bucket": {"type": "string", "description": "Bucket name. Auto-created if missing."},
+                "key": {"type": "string", "description": "Object key (path within bucket)."},
+                "data": {"type": "string", "description": "UTF-8 payload to store."},
+            },
+            "required": ["bucket", "key", "data"],
+        },
+    },
+    {
+        "name": "harvey_bucket_get",
+        "description": "Read <bucket>/<key> from the local Garage S3 and return the body as UTF-8 text.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bucket": {"type": "string"},
+                "key": {"type": "string"},
+            },
+            "required": ["bucket", "key"],
+        },
+    },
+    {
+        "name": "harvey_bucket_list",
+        "description": "Enumerate object keys under <bucket>[/<prefix>] on the local Garage S3.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bucket": {"type": "string"},
+                "prefix": {"type": "string", "description": "Optional key prefix.", "default": ""},
+                "max_keys": {"type": "integer", "default": 1000},
+            },
+            "required": ["bucket"],
+        },
+    },
+    {
+        "name": "harvey_bucket_delete",
+        "description": "Remove <bucket>/<key> from the local Garage S3.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bucket": {"type": "string"},
+                "key": {"type": "string"},
+            },
+            "required": ["bucket", "key"],
+        },
+    },
 ]
 
 
@@ -1109,6 +1597,18 @@ def handle_tool(name: str, args: dict) -> str:
     elif name == "harvey_swarm_run":
         return _run_swarm(args)
 
+    elif name == "harvey_swarm_fork":
+        return _swarm_fork(args)
+
+    elif name == "harvey_swarm_clone":
+        return _swarm_clone(args)
+
+    elif name == "harvey_swarm_resume":
+        return _swarm_resume(args)
+
+    elif name == "harvey_swarm_session_list":
+        return _swarm_session_list(args)
+
     elif name == "harvey_swarm_status":
         return _swarm_status(args.get("workflow_id"))
 
@@ -1131,6 +1631,23 @@ def handle_tool(name: str, args: dict) -> str:
 
     elif name == "harvey_describe_video":
         return _omni_describe("video", args)
+
+    # ── S3 buckets (v0.7 Phase D.1) ───────────────────────
+    elif name == "harvey_bucket_put":
+        return _bucket_put(args["bucket"], args["key"], args["data"])
+
+    elif name == "harvey_bucket_get":
+        return _bucket_get(args["bucket"], args["key"])
+
+    elif name == "harvey_bucket_list":
+        return _bucket_list(
+            args["bucket"],
+            prefix=args.get("prefix", ""),
+            max_keys=int(args.get("max_keys", 1000)),
+        )
+
+    elif name == "harvey_bucket_delete":
+        return _bucket_delete(args["bucket"], args["key"])
 
     # ── Brain tools ───────────────────────────────────────
     if name == "brain_search":
@@ -1378,7 +1895,7 @@ def handle_tool(name: str, args: dict) -> str:
         result = subprocess.run(
             [sys.executable, "-m", "core.chat", "status"],
             capture_output=True, text=True,
-            cwd=HARVEY_HOME,
+            cwd=os.path.join(HARVEY_HOME, "plugins", "lib-harvey-core", "src"),
         )
         return result.stdout or result.stderr or "Could not get status"
 

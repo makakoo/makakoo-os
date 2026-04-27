@@ -446,6 +446,50 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: BucketCmd,
     },
+
+    /// Docs MCP server — Makakoo OS documentation over MCP/stdio.
+    ///
+    /// Run with `--stdio` to serve `makakoo_docs_search / read / list / topic`
+    /// tools over JSON-RPC on stdin/stdout. Wire into your AI CLI's MCP
+    /// config — see docs/docs-mcp-setup.md.
+    ///
+    ///   makakoo docs-mcp --stdio
+    DocsMcp {
+        /// Run as a stdio JSON-RPC MCP server. Required.
+        #[arg(long)]
+        stdio: bool,
+    },
+
+    /// Docs corpus management.
+    ///
+    /// Subcommands:
+    ///   makakoo docs update [--from-github] [--from-branch <branch>]
+    ///
+    /// `update` fetches the latest `docs/` + `spec/` from GitHub,
+    /// rebuilds the FTS5 index, and writes it to
+    /// `~/.makakoo/docs-cache/index.db`. The MCP server prefers this
+    /// cache over the baked-in corpus on next start.
+    Docs {
+        #[command(subcommand)]
+        cmd: DocsCmd,
+    },
+}
+
+/// `makakoo docs <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum DocsCmd {
+    /// Fetch the latest docs from GitHub and rebuild the local FTS5
+    /// cache at `~/.makakoo/docs-cache/index.db`.
+    Update {
+        /// Fetch from `github.com/makakoo/makakoo-os` (default behaviour;
+        /// currently the only supported source).
+        #[arg(long, default_value_t = true)]
+        from_github: bool,
+
+        /// Override the branch to fetch (default: `main`).
+        #[arg(long, value_name = "BRANCH")]
+        from_branch: Option<String>,
+    },
 }
 
 /// `makakoo s3 <subcommand>`.

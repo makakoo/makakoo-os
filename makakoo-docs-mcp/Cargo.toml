@@ -1,0 +1,34 @@
+[package]
+name = "makakoo-docs-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "makakoo-docs-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "makakoo_docs_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+rmcp = { version = "1.5", features = ["server", "macros", "transport-io"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+anyhow = "1"
+# Must match rmcp 1.5's transitive schemars (1.x). The #[derive(JsonSchema)]
+# macro requires `schemars` to be a named crate in scope; `use rmcp::schemars`
+# alone isn't enough because the derive expansion references `::schemars`.
+schemars = "1"
+
+[build-dependencies]
+rusqlite = { workspace = true }
+walkdir = "2.5"
+anyhow = "1"

@@ -9,7 +9,9 @@ path = "src/main.rs"
 
 [dependencies]
 makakoo-core = { path = "../makakoo-core" }
+makakoo-docs-mcp = { path = "../makakoo-docs-mcp" }
 makakoo-platform = { path = "../makakoo-platform" }
+rusqlite.workspace = true
 tokio.workspace = true
 clap.workspace = true
 clap_complete.workspace = true

@@ -54,6 +54,9 @@ const ALLOWLIST: &[&str] = &[
     "plugins-core/lib-harvey-core/src/core/gym/approval.py",
     "plugins-core/lib-harvey-core/src/core/gym/cli.py",
     "plugins-core/lib-harvey-core/src/core/gym/flag.py", // SAFE_WIKILINKS taxonomy
+    "plugins-core/lib-harvey-core/src/core/gym/classifier.py", // detection regex covers retired-tree paths
+    "plugins-core/lib-harvey-core/src/core/gym/hypothesis.py", // retirement comment + detection regex
+    "plugins-core/lib-harvey-core/src/core/mcp/harvey_mcp.py", // legacy path-injection comment
     "plugins-core/lib-harvey-core/src/core/orchestration/infect_global.py",
     "plugins-core/skill-dev-skill-manager/src/skill_manager.py",
     "plugins-core/agent-harveychat/src/agent.py",

@@ -855,7 +855,8 @@ mod tests {
         // v12 pointer pattern — slot content references the canonical
         // bootstrap path instead of inlining the full body.
         assert!(content.contains("Makakoo OS bootstrap"));
-        assert!(content.contains("bootstrap/global.md"));
+        // Path separator is platform-specific. Check the components individually.
+        assert!(content.contains("bootstrap") && content.contains("global.md"));
         assert!(content.contains(&format!("v{}", super::slots::BLOCK_VERSION)));
         assert!(!content.contains("old body"));
 

@@ -48,6 +48,11 @@ impl Drop for PathGuard {
 ///
 /// Used to stub `npm`, `brew`, `which`, `pi`, etc. without needing any
 /// mocking framework.
+///
+/// Unix-only: the shim is a `#!/bin/sh` script that needs the executable
+/// bit. Windows runners can't execute it, and `Permissions::from_mode`
+/// does not exist there.
+#[cfg(unix)]
 pub fn shim(
     dir: &std::path::Path,
     name: &str,

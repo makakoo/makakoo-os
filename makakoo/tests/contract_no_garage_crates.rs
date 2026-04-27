@@ -84,26 +84,46 @@ fn cargo_lock_has_no_garage_crate() {
 }
 
 #[test]
-fn agpl_pin_documented_in_garage_store_install_sh() {
-    // Defensive: if someone bumps Garage but forgets to re-pin the
-    // formula tarball SHA in install.sh, we want a loud failure.
-    // The pin is the gate — without it, the brew formula floats and
-    // we can't audit what AGPL source is actually being executed.
+fn garage_store_install_sh_defers_to_garagetytus() {
+    // Pre-GARAGETYTUS-V0.1, this file embedded a pinned brew-formula
+    // SHA so the AGPL audit could verify which Garage source was being
+    // pulled. As of Phase D the install hook is a deferral shim — the
+    // daemon lifecycle and Garage acquisition both moved to the
+    // standalone `garagetytus` binary, where the AGPL pinning lives now.
+    //
+    // This test now enforces the deferral pattern: install.sh must NOT
+    // download the brew formula directly. If you find yourself wanting
+    // to add the SHA pin back here, the lifecycle is regressing —
+    // re-read garage-store's Phase D adapter shim comments first.
     let install_sh = workspace_root()
         .join("plugins-core/garage-store/bin/install.sh");
     let body = fs::read_to_string(&install_sh)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", install_sh.display()));
-    let pin = "b83a981677676b35400bbbaf20974c396f32da31c7c7630ce55fc3e62c0e2e01";
+
+    // Either the file defers to `garagetytus` on PATH, or it tells the
+    // operator how to install garagetytus. Both shapes are valid for
+    // the deferral contract.
+    let defers = body.contains("garagetytus") && body.contains("install");
     assert!(
-        body.contains(pin),
-        "\nAGPL gate: garage-store install.sh missing the pinned formula SHA.\n\
+        defers,
+        "\nGarage AGPL gate (post-Phase-D): garage-store install.sh must defer\n\
+         to the standalone garagetytus binary, not embed Garage acquisition.\n\
          \n\
-         Expected to find: {pin}\n\
+         Expected substring: \"garagetytus\" + \"install\"\n\
          in: {}\n\
          \n\
-         When bumping Garage, refresh both:\n\
-           - the brew formula commit SHA (tracks formula evolution)\n\
-           - the upstream tarball sha256 (tracks the actual AGPL source)\n",
+         If you're re-adding a brew SHA pin here, audit ownership has\n\
+         regressed. Pin SHAs live in the garagetytus repo now.\n",
         install_sh.display()
+    );
+
+    // Belt-and-braces: the bare `brew install` of a SHA-tarball pattern
+    // (the regressed shape) must not appear here.
+    let regressed = body.contains("--build-from-source") || body.contains("sha256:");
+    assert!(
+        !regressed,
+        "\ngarage-store install.sh appears to embed brew-source-build flags\n\
+         again. Move the AGPL pin into garagetytus and keep this file as\n\
+         a thin deferral shim.\n"
     );
 }

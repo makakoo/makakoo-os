@@ -2,7 +2,7 @@
 name = "skill-tytus-files"
 version = "0.1.0"
 kind = "skill"
-language = "none"
+language = "shell"
 summary = "File + folder sharing between the user's Mac and any Tytus pod via the `tytus` CLI. Declares triggers so every infected CLI can translate human language (EN + ES) into `tytus push / pull / ls / rm`."
 authors = ["Makakoo OS contributors"]
 license = "MIT"
@@ -17,6 +17,13 @@ skill = "^1.0"
 # No runtime dependency. The skill routes to the `tytus` binary on PATH.
 # If `tytus` isn't installed the skill returns the install command.
 python = ">=3.9"
+
+# skill-tytus-files emits shell commands; there is no standalone runtime to
+# invoke. The no-op echo below satisfies the kind="skill" entrypoint
+# contract so direct invocation fails loudly + correctly instead of
+# erroring with "module not found" (matches the skill-browser-qa-* pattern).
+[entrypoint]
+run = "echo 'skill-tytus-files emits commands for tytus push / pull / ls / rm. Invoke via your infected CLI in natural language; see src/SKILL.md for trigger phrasings.'"
 
 [capabilities]
 # The skill never writes files itself; it emits shell commands for the

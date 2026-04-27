@@ -8,7 +8,8 @@ pub fn run(ctx: &CliContext, reason: &str, skill: Option<String>) -> anyhow::Res
     let cap = ErrorCapture::new(ctx.home());
     let mut entry = ErrorEntry::new(ErrorSource::ManualFlag)
         .cmd("makakoo flag")
-        .stderr(reason);
+        .stderr(reason)
+        .error_class("skill");
     if let Some(s) = skill {
         entry = entry.skill_in_scope(s);
     }

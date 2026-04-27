@@ -781,6 +781,14 @@ fn emit_perms_audit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Several tests below mutate `$HOME` / `$MAKAKOO_HOME`, which are
+    /// process-global. Without serialization, parallel test execution
+    /// races (test A sees the HOME that test B just set). Hold this
+    /// mutex for the duration of any test that calls `set_var("HOME"…)`
+    /// or `set_var("MAKAKOO_HOME"…)`.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_duration_accepts_strict_grammar() {
@@ -829,8 +837,15 @@ mod tests {
         assert!(validate_and_expand_scope("   ").is_err());
     }
 
+    // The validate_scope_* tests below assert on hard-coded `/tmp/...`
+    // paths and tilde expansion — both unix-shape semantics. On Windows
+    // current-drive prepending changes `/tmp/fake-home` into
+    // `D:/tmp/fake-home`, breaking the equality and refusal assertions.
+    // Gate the unix-path-shaped tests to unix only.
+    #[cfg(unix)]
     #[test]
     fn validate_scope_expands_tilde() {
+        let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("HOME", "/tmp/fake-home");
         let p = validate_and_expand_scope("~/code/").unwrap();
         assert_eq!(p.to_string_lossy(), "/tmp/fake-home/code/");
@@ -840,8 +855,10 @@ mod tests {
     /// access to the entire home directory because the shell expanded
     /// `~/` to `/Users/sebastian/` BEFORE our argv saw it, and the
     /// post-expansion check only refused literal `/`.
+    #[cfg(unix)]
     #[test]
     fn validate_scope_refuses_resolved_home() {
+        let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("HOME", "/tmp/fake-home-xyz");
         // Shell-expanded form of `~/` — the dangerous path.
         assert!(
@@ -858,8 +875,10 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn validate_scope_refuses_resolved_makakoo_home() {
+        let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("HOME", "/tmp/fake-home-mk");
         std::env::set_var("MAKAKOO_HOME", "/tmp/fake-mk");
         assert!(
@@ -874,6 +893,7 @@ mod tests {
 
     #[test]
     fn validate_scope_refuses_single_component_paths() {
+        let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // `/Users`, `/etc`, `/var` etc. are top-level directories that
         // govern entire system trees. Refuse outright.
         std::env::set_var("HOME", "/tmp/fake");
@@ -885,6 +905,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn validate_scope_accepts_nested_home_path() {
         // The whole point — refuse $HOME but allow $HOME/sub.

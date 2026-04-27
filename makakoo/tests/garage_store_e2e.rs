@@ -43,6 +43,12 @@ fn cmd_exists(name: &str) -> bool {
 }
 
 #[test]
+#[ignore = "Pre-Phase-D contract. install.sh is now a deferral shim and \
+            no longer seeds config/garage.toml or the launchd plist — \
+            both are owned by the standalone garagetytus binary. Test \
+            needs a rewrite for the post-Phase-D deferral path. Run \
+            with `cargo test -- --ignored` once garagetytus install/start \
+            steps are wired in."]
 fn install_start_bootstrap_aws_ls_stop_cycle() {
     if !cmd_exists("garage") {
         eprintln!("garage-store E2E skipped: `garage` not on PATH (brew install garage)");
