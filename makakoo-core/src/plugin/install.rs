@@ -1256,6 +1256,11 @@ tasks = [{ name = "dream", interval = "3600s" }]
     /// `sh -c "install.sh"` would otherwise fail with "command not found"
     /// even when install.sh sits right next to plugin.toml. Caught live
     /// 2026-04-21 installing agent-browser-harness.
+    // Unix-only: this test seeds an executable `install.sh` and shells out
+    // through `sh -c`, which Windows CI runners don't have natively. The
+    // bare-filename resolver itself is platform-agnostic; the executable
+    // bit + sh execution are what we're verifying here.
+    #[cfg(unix)]
     #[test]
     fn install_script_bare_filename_resolves_against_plugin_dir() {
         use std::process::Command;
