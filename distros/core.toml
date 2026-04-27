@@ -9,7 +9,7 @@
 name = "core"
 display_name = "Makakoo Core"
 version = "0.1.0"
-description = "Essential plugins for a usable Harvey. The default install."
+description = "Essential plugins for a usable Harvey, including shared S3 storage (garage-store, soft-fails when garagetytus binary absent). The default install."
 license = "MIT"
 
 include = ["minimal.toml"]
@@ -46,6 +46,13 @@ version = "^0.1"
 
 # Memory consolidation — nightly dream pass strengthens the Brain graph.
 "agent-dreams" = { version = "*" }
+
+# Shared S3 storage — garage-store adapter (soft-fails when the
+# garagetytus binary is missing, so install completes cleanly).
+# Sprint 2026-04-27-garagetytus-default-bundle: lope-ask consensus
+# (codex+opencode+pi+kimi 4/4) said default-bundle this in core +
+# sebastian, leave minimal/creator/trader unchanged.
+"garage-store" = { version = "*" }
 
 [defaults]
 voice = "caveman"

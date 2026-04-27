@@ -49,6 +49,11 @@ version = "^0.1"
 "sancho-task-cli-switchailocal"              = { version = "*" }
 "agent-switchailocal"                        = { version = "*" }
 
+# Shared S3 storage — garage-store adapter (inherited via core.toml,
+# listed explicitly per sprint 2026-04-27-garagetytus-default-bundle
+# AC2 so the bundling intent is obvious from sebastian.toml standalone).
+"garage-store"                               = { version = "*" }
+
 [defaults]
 voice = "caveman"
 persona_name = "Harvey"
