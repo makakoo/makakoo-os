@@ -29,8 +29,22 @@ use anyhow::Result;
 use crate::cli::BucketCmd;
 use crate::context::CliContext;
 
-const NOT_FOUND_MSG: &str =
-    "garagetytus not found — install at https://garagetytus.dev";
+// AC4 install-hint exit (sprint `2026-04-27-garagetytus-default-bundle.md`):
+// shell-convention 127 = "command not found." Distinct from a
+// successful spawn that returns exit 1 from garagetytus itself.
+const NOT_FOUND_EXIT: i32 = 127;
+
+const NOT_FOUND_MSG: &str = "\
+garagetytus not found — `makakoo bucket` requires the standalone binary.
+
+  macOS: brew install traylinx/tap/garagetytus
+  Linux: curl -fsSL garagetytus.dev/install | sh
+
+After install:
+
+  garagetytus install
+  garagetytus start
+  garagetytus bootstrap";
 
 pub async fn run(_ctx: &CliContext, cmd: BucketCmd) -> Result<i32> {
     let args = render_args(&cmd);
@@ -49,7 +63,7 @@ fn spawn_garagetytus(args: &[&str]) -> i32 {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!("{}", NOT_FOUND_MSG);
-            1
+            NOT_FOUND_EXIT
         }
         Err(e) => {
             eprintln!("makakoo bucket: failed to spawn garagetytus: {e}");
@@ -251,10 +265,10 @@ mod tests {
 
     #[test]
     fn spawn_garagetytus_emits_install_hint_when_missing() {
-        // This test cannot capture stderr without re-running ourselves
-        // as a subprocess, so we just exercise the not-found path
-        // returns the documented exit code. PATH is mutated to a
-        // garagetytus-free directory so the spawn fails with NotFound.
+        // PATH is mutated to a garagetytus-free directory so the spawn
+        // fails with NotFound. AC4 (sprint 2026-04-27): the lazy-resolve
+        // path returns exit 127 (POSIX "command not found"), distinct
+        // from a successful spawn that returns 1 from garagetytus itself.
         let path_backup = std::env::var_os("PATH");
         std::env::set_var("PATH", "/nonexistent");
         let code = spawn_garagetytus(&["bucket", "list"]);
@@ -263,6 +277,15 @@ mod tests {
         } else {
             std::env::remove_var("PATH");
         }
-        assert_eq!(code, 1);
+        assert_eq!(code, NOT_FOUND_EXIT);
+    }
+
+    #[test]
+    fn not_found_message_contains_install_one_liners() {
+        // AC4: the install hint must give the user a concrete command,
+        // not just a URL — codex flagged generic-URL hints in v1 review.
+        assert!(NOT_FOUND_MSG.contains("brew install traylinx/tap/garagetytus"));
+        assert!(NOT_FOUND_MSG.contains("curl -fsSL garagetytus.dev/install | sh"));
+        assert!(NOT_FOUND_MSG.contains("garagetytus bootstrap"));
     }
 }

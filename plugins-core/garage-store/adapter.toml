@@ -32,11 +32,18 @@ linux = "curl -fsSL garagetytus.dev/install | sh"
 windows = "v0.2 — see https://garagetytus.dev"
 
 [fallback]
-# Phase D.3 contract: when the adapter probe times out / errors,
-# Makakoo prints `garagetytus not found — install at
-# https://garagetytus.dev` and exits non-zero. **No silent fallback
-# to an embedded-Garage path** — Makakoo does NOT bundle its own
-# Garage in this universe; the standalone product is the single
-# source.
+# Phase D.3 contract + 2026-04-27 soft-fail (sprint
+# `2026-04-27-garagetytus-default-bundle.md`):
+#
+#   * No silent fallback to an embedded-Garage path. Makakoo does NOT
+#     bundle its own Garage; the standalone product is the single source.
+#   * Plugin install completes even when the binary is absent — see
+#     `bin/install.sh` exit 0 + warning. Distros (`core`, `sebastian`)
+#     can include garage-store without breaking `makakoo install` on
+#     hosts that haven't run `brew install traylinx/tap/garagetytus` yet.
+#   * Runtime invocations of `makakoo bucket *` print the install hint
+#     and exit 127 (see `makakoo/src/commands/bucket.rs`). No silent
+#     crash, no preflight death of the parent CLI.
 embedded = false
+behavior = "warn-and-disable"
 message = "garagetytus not found — install at https://garagetytus.dev"

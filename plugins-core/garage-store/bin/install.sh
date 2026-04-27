@@ -15,19 +15,27 @@ if command -v garagetytus >/dev/null 2>&1; then
 fi
 
 cat >&2 <<'EOF'
-garage-store: garagetytus is the new install path.
+garage-store: plugin installed in degraded state — `garagetytus`
+binary is missing. Shared-storage commands will print the install
+hint when invoked; everything else in Makakoo continues to work.
+
+To enable the storage commands, install garagetytus:
 
   macOS: brew install traylinx/tap/garagetytus
   Linux: curl -fsSL garagetytus.dev/install | sh
   Windows: targets v0.2
 
-After installing garagetytus, run:
+Then:
 
   garagetytus install
   garagetytus start
   garagetytus bootstrap
 
-`makakoo bucket *` commands then forward to it transparently
+`makakoo bucket *` will forward to it transparently after that
 (per Q2 verdict — Makakoo wraps, garagetytus owns the lifecycle).
 EOF
-exit 1
+# Soft-fail: plugin install completes so the manifest is registered
+# in `core` / `sebastian` distros without breaking install. Runtime
+# invocations of `makakoo bucket *` still error cleanly with the
+# install hint until the binary is present.
+exit 0
