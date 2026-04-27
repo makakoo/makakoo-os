@@ -15,6 +15,7 @@ If nothing on this page matches, the flat reference is at [`index.md`](./index.m
 5. [Harvey / MCP not responding](#harvey--mcp-not-responding)
 6. [Plugin install failed](#plugin-install-failed)
 7. [Octopus peer unreachable](#octopus-peer-unreachable)
+8. [Docs MCP not working](#docs-mcp-not-working)
 
 ---
 
@@ -342,3 +343,53 @@ Clock drift > 60s, or peer's pubkey changed. Sync clocks (`sntp`), verify pubkey
 - Flat prose: [`index.md`](./index.md).
 - Uninstall / clean reinstall: [`uninstall.md`](./uninstall.md).
 - File an issue with: `makakoo version` output + the exact command + the exact error + one line of what you expected.
+
+---
+
+## Docs MCP not working
+
+The bundled `makakoo docs-mcp --stdio` MCP server lets AI CLIs query Makakoo's public docs in real time. Setup guide: [`../docs-mcp-setup.md`](../docs-mcp-setup.md). If something's off:
+
+### MCP server not appearing in your AI CLI
+
+Most common cause: `makakoo` isn't on the `PATH` *of the process that spawns the MCP server*. Some CLIs (Claude Code, Cursor) launch from GUI shells with a different `PATH` than your terminal.
+
+- Verify from a terminal: `which makakoo` returns a path.
+- If your CLI was launched from the GUI: use the absolute path in the MCP config — `"command": "/Users/you/.local/bin/makakoo"` instead of `"command": "makakoo"`.
+- Restart the CLI fully (not just reload window) after editing its MCP config.
+
+### Search returns nothing
+
+The docs corpus is baked into the binary at compile time. If your binary is old, the corpus is old. Two fixes:
+
+- **Refresh the cache:** `makakoo docs update --from-github` pulls the latest from `main` and writes to `~/.makakoo/docs-cache/index.db`. The MCP server prefers the cache over the baked corpus on next start.
+- **Upgrade the binary:** `brew upgrade makakoo` (or re-run the install script). Each release bakes a fresh corpus.
+
+### `initialize failed` in the CLI's MCP logs
+
+Almost always means `--stdio` is missing from `args`. The server exits with usage help if it sees no `--stdio` flag. Check the config:
+
+```json
+{ "makakoo-docs": { "command": "makakoo", "args": ["docs-mcp", "--stdio"] } }
+```
+
+The `["docs-mcp", "--stdio"]` array order matters — `--stdio` must be present.
+
+### Citation `path` field looks wrong
+
+The `path` field returned by `makakoo_docs_search` / `read` / `list` / `topic` is **repo-relative**, e.g. `docs/concepts/architecture.md`. To open it:
+
+- In the browser: `https://github.com/makakoo/makakoo-os/blob/main/<path>`
+- Locally: `git clone https://github.com/makakoo/makakoo-os && less <path>` from the repo root.
+
+If your CLI doesn't render the citation as a link, that's an MCP-host UI issue, not a docs-MCP bug — the data is correct.
+
+### `version too old` or schema mismatch on cache load
+
+The cache file at `~/.makakoo/docs-cache/index.db` is version-gated by `meta.built_for_version`. After a `makakoo` upgrade where the FTS5 schema or tokenizer changed, the cache silently falls back to baked corpus until you re-run:
+
+```sh
+makakoo docs update --from-github
+```
+
+To force-clear the cache: `rm -rf ~/.makakoo/docs-cache/`. Next MCP server start will use baked corpus until you refresh.
