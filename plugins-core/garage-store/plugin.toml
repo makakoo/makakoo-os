@@ -1,7 +1,7 @@
 [plugin]
 name = "garage-store"
 version = "0.2.0"
-kind = "adapter"
+kind = "service"
 language = "shell"
 summary = "Adapter shim — daemon lifecycle now owned by standalone `garagetytus` binary (GARAGETYTUS-V0.1 Phase D)"
 authors = ["Makakoo OS contributors"]

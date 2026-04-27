@@ -19,7 +19,7 @@ python = ">=3.8"
 # Documentation-only skill — see DOGFOOD-FINDINGS F-002 in the grandma-docs
 # sprint. No standalone Python runtime; echo a pointer instead of crashing.
 [entrypoint]
-run = "echo 'skill-browser-qa-benchmark is a documentation-only skill. Invoke the underlying capability via the browse / harvey_browse MCP tool from an infected CLI, or see plugins-core/skill-browser-qa-benchmark/src/SKILL.md for trigger phrasings.'"
+run = "echo 'skill-browser-qa-benchmark is a documentation-only skill. Invoke the underlying capability via the browse / harvey_browse MCP tool from an infected CLI, or see src/SKILL.md for trigger phrasings.'"
 
 [capabilities]
 # Capability grants default empty — conservative for batch migration.
