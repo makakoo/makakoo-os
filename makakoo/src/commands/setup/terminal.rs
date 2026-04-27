@@ -139,7 +139,10 @@ fn ghostty_installed() -> bool {
     out.status.success()
 }
 
-#[cfg(test)]
+// Tests rely on `test_support::shim` which is unix-only (writes a
+// `#!/bin/sh` script and chmods it executable via PermissionsExt).
+// On Windows the test module is excluded entirely.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use super::super::test_support::{shim, shim_args, PathGuard};
