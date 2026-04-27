@@ -2,6 +2,8 @@
 
 > Shared S3-compatible object storage for humans and agents. Self-hosted, two reach paths, zero AWS lock-in.
 
+> **Default-bundled in `core` + `sebastian` distros (since 2026-04-27).** The `garage-store` plugin is part of the standard install; `minimal`, `creator`, and `trader` distros opt in via `makakoo plugin install garage-store`. The plugin **soft-fails** when the `garagetytus` binary is absent — your CLI starts cleanly, and `makakoo bucket *` commands print the install hint with exit 127 if you invoke them without the binary. See sprint `2026-04-27-garagetytus-default-bundle.md` for the consensus + ACs.
+
 Makakoo is memory-first — your Brain, journals, plugins, agents all live on your machine. Sometimes you also need to **move bytes between machines**: a file from your Mac to a Tytus pod, an agent's output to a teammate's laptop, a dataset shared between two of your own devices. That's what `garagetytus` is for.
 
 ## Why not just SCP / Dropbox / S3?

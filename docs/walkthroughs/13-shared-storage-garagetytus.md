@@ -26,6 +26,8 @@ Path-style addressing is mandatory: `http://endpoint/<bucket>/<key>`, never `<bu
 
 ## Flavor A — local laptop daemon
 
+> **You may already be set up.** If you ran `makakoo install` with the `core` or `sebastian` distro (the default), the `garage-store` plugin is already registered — but the `garagetytus` binary itself is a separate one-line install. The plugin **soft-fails** without the binary (since 2026-04-27), so `makakoo` runs fine; you just can't use `makakoo bucket *` until step 1 below. If you're on `minimal`, `creator`, or `trader`, run `makakoo plugin install garage-store` first.
+
 ### 1. Install garagetytus
 
 ```sh
