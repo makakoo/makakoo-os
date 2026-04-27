@@ -1,16 +1,16 @@
-"""Xiaomi MiMo omni-modal client for image / audio / video understanding.
+"""Omni-modal client for image / audio / video understanding.
 
-Routes through switchAILocal to `xiaomi-tp:mimo-v2-omni` using the
-OpenAI-compatible `/v1/chat/completions` endpoint. Xiaomi extends the
-OpenAI spec with two custom content-block types:
+Routes through switchAILocal using `OMNI_MODEL` (default: `kimi:kimi-k2.6`).
+Uses the OpenAI-compatible `/v1/chat/completions` endpoint.
 
-- `input_audio` — pass `{"data": "<url_or_data_uri>"}` alongside a text
-  prompt to transcribe, analyze tone, or answer questions about speech.
-- `video_url` — pass `{"url": "<url_or_data_uri>"}` with optional `fps`
-  (default 2, max 10) and `media_resolution` (`default` or `max`).
+Content-block types:
+- `image_url` — standard OpenAI image block via data URI or URL.
+- `input_audio` — Xiaomi-specific audio block (legacy; will be migrated).
+- `video_url` — Xiaomi-specific video block (legacy; will be migrated).
 
-Image understanding uses the standard OpenAI `image_url` block — no
-Xiaomi-specific extension needed.
+Image understanding uses the standard OpenAI `image_url` block.
+Audio/video blocks use Xiaomi extensions that are being phased out —
+migrating to standard multimodal audio/video as provider support matures.
 
 Media sources can be either public URLs (HTTP/HTTPS) or local file
 paths. Local files are read and base64-encoded with a MIME-prefixed
@@ -33,7 +33,7 @@ Python 3.9 compatible — no PEP 604 unions, no `match` statements.
     client = OmniClient()
     result = client.chat(
         messages=[{"role": "user", "content": [ ...raw blocks... ]}],
-        model="xiaomi-tp:mimo-v2-omni",
+        model="kimi:kimi-k2.6",
     )
 
 Agents that already build multi-block messages can use `OmniClient.chat`
@@ -56,9 +56,12 @@ import httpx
 
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:18080/v1").rstrip("/")
 
-# Canonical omni model per Xiaomi usage guide, overridable for tests
-# or future version bumps.
-OMNI_MODEL = os.environ.get("OMNI_MODEL", "xiaomi-tp:mimo-v2-omni")
+# Canonical omni model, overridable via OMNI_MODEL env var.
+# kimi:kimi-k2.6 replaced xiaomi-tp:mimo-v2-omni on 2026-04-27
+# after the MiniMax outage exposed xiaomi-tp as a single point of failure.
+# Kimi K2.6 supports image input natively; audio/video blocks use
+# legacy Xiaomi extensions pending migration.
+OMNI_MODEL = os.environ.get("OMNI_MODEL", "kimi:kimi-k2.6")
 
 # Same API-key precedence as anchor_extractor — AIL_API_KEY is the
 # canonical name, SWITCHAI_KEY and LLM_API_KEY are legacy aliases.
