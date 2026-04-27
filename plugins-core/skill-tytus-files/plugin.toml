@@ -1,0 +1,28 @@
+[plugin]
+name = "skill-tytus-files"
+version = "0.1.0"
+kind = "skill"
+language = "none"
+summary = "File + folder sharing between the user's Mac and any Tytus pod via the `tytus` CLI. Declares triggers so every infected CLI can translate human language (EN + ES) into `tytus push / pull / ls / rm`."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-tytus-files"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+# No runtime dependency. The skill routes to the `tytus` binary on PATH.
+# If `tytus` isn't installed the skill returns the install command.
+python = ">=3.9"
+
+[capabilities]
+# The skill never writes files itself; it emits shell commands for the
+# host CLI to execute. So no baseline write grants are requested.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-tytus-files"
+retention = "keep"

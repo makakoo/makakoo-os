@@ -1,0 +1,33 @@
+[plugin]
+name = "watchdog-switchailocal"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+summary = "Restart switchAILocal if the LLM gateway stops answering"
+license = "MIT"
+
+[source]
+path = "plugins-core/watchdog-switchailocal"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.11"
+
+[entrypoint]
+run = "python3 -u src/switchailocal_watchdog.py"
+
+[capabilities]
+grants = [
+  "brain/write",
+  "net/http:http://127.0.0.1:18080/*",
+  "exec/binary:python3",
+]
+
+[sancho]
+tasks = [{ name = "switchailocal_watchdog", interval = "300s" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/watchdog-switchailocal"
+retention = "purge_on_uninstall"

@@ -1,0 +1,56 @@
+# OpenClaw reference adapter — talks to OpenClaw's OpenAI-compatible
+# gateway exposed by `openclaw daemon --port 3000`. The NemoClaw sandboxing
+# blueprint is orthogonal to this adapter and remains the adapter author's
+# responsibility.
+
+[adapter]
+name            = "openclaw"
+version         = "1.4.2"
+manifest_schema = 1
+description     = "OpenClaw agent, OpenAI-compatible gateway mode"
+homepage        = "https://github.com/traylinx/openclaw"
+license         = "MIT"
+authors         = ["Traylinx <ops@traylinx.com>"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "http://127.0.0.1:3000/v1"
+model    = "ail-compound"
+
+[auth]
+scheme  = "bearer"
+key_env = "OPENCLAW_API_KEY"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+models         = ["ail-compound", "ail-image"]
+features       = ["tool_use", "streaming", "vision"]
+max_context    = 200000
+rate_limit_rpm = 600
+supports_roles = ["validator", "delegate", "swarm_member"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/traylinx/openclaw-adapter.git"
+ref         = "v1.4.2"
+entry_point = "./bin/openclaw"
+
+[security]
+requires_network    = true
+allowed_hosts       = ["127.0.0.1", "api.openrouter.ai"]
+requires_filesystem = ["read:cwd", "write:$MAKAKOO_HOME/state/adapters/openclaw"]
+requires_env        = ["OPENCLAW_API_KEY"]
+sandbox_profile     = "network-io"
+signed_by           = "traylinx"
+
+[health]
+check_url      = "http://127.0.0.1:3000/v1/models"
+timeout_ms     = 5000
+expected_field = "data.0.id"

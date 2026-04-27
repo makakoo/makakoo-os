@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-research-multimodal-knowledge"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Use when asked to index, embed, ingest, or search video, audio, PDF, image, or text content. Trigger phrases: 'index this video', 'embed this audio', 'add this PDF to knowledge', 'search my knowledge base', 'what did that video say about...', 'do i have anything about...', 'ingest this file', 'store in knowledge base'. Embeds content using Gemini Embedding 2 (3072-dim), stores in PostgreSQL 16 pgvector, reasons with MiniMax-M2.7."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-research-multimodal-knowledge"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u src/multimodal_knowledge.py"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-research-multimodal-knowledge"
+retention = "keep"

@@ -1,0 +1,40 @@
+[plugin]
+name = "sancho-task-cli-ghostty"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Auto-update Ghostty (Homebrew cask) every 24h."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-cli-ghostty"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+binaries = ["brew"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+run = "python3 -u src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:$MAKAKOO_HOME/data/Brain",
+    "fs/write:$MAKAKOO_HOME/data/Brain",
+    "fs/read:$MAKAKOO_HOME/state/sancho-task-cli-ghostty",
+    "fs/write:$MAKAKOO_HOME/state/sancho-task-cli-ghostty",
+    "exec/binary:brew",
+]
+
+[sancho]
+tasks = [{ name = "cli_ghostty_update", interval = "24h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-cli-ghostty"
+retention = "keep"

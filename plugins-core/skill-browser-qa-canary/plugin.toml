@@ -1,0 +1,35 @@
+[plugin]
+name = "skill-browser-qa-canary"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "|"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-browser-qa-canary"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+# skill-browser-qa-canary ships a SKILL.md documenting the `canary` trigger
+# phrasings for agents; there is no standalone Python runtime to invoke.
+# The real capability is exposed via the `browse` / `harvey_browse` MCP tool
+# (see skill-browser-qa-browse + agent-browser-harness). The no-op echo
+# below exists so `makakoo skill canary` fails loudly and correctly instead
+# of erroring with `No module named src.__main__` (DOGFOOD-FINDINGS F-002).
+[entrypoint]
+run = "echo 'skill-browser-qa-canary is a documentation-only skill. Invoke the underlying capability via the browse / harvey_browse MCP tool from an infected CLI, or see plugins-core/skill-browser-qa-canary/src/SKILL.md for trigger phrasings.'"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-browser-qa-canary"
+retention = "keep"

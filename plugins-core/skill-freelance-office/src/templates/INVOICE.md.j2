@@ -1,0 +1,63 @@
+# RECHNUNG {{ invoice_number }}
+
+**VON**
+{{ from_name }}{% if from_dba %} ({{ from_dba }}){% endif %}
+{{ from_email }}{% if from_phone is defined and from_phone %}
+Tel.: {{ from_phone }}{% endif %}{% if from_ust_id %}
+USt-IdNr.: {{ from_ust_id }}{% elif kleinunternehmer %}
+Kleinunternehmer gem. § 19 UStG — kein Umsatzsteuerausweis{% endif %}
+
+**AN**
+{{ to_name }}
+{{ to_email }}{% if to_ust_id %}
+USt-IdNr.: {{ to_ust_id }}{% endif %}
+
+---
+
+| Feld | Wert |
+|------|------|
+| Rechnungsnummer | **{{ invoice_number }}** |
+| Rechnungsdatum | {{ issued }} |
+| Leistungszeitraum | {{ leistungszeitraum }} |
+| Fällig bis | {{ due }} |
+| Projekt | {{ project_slug }} |
+
+## Leistungsbeschreibung
+
+| Pos. | Beschreibung | Menge | Einzelpreis | Gesamt |
+|------|-------------|------:|------------:|-------:|
+| 1 | {{ description }} |{% if days_billed %} {{ days_billed }} Tage | €{{ "%.2f"|format(day_rate) }} |{% else %} 1 | €{{ "%.2f"|format(net) }} |{% endif %} **€{{ "%.2f"|format(net) }}** |
+
+---
+
+|  |  |
+|--|--|
+| Netto | €{{ "%.2f"|format(net) }} |
+{% if reverse_charge %}| USt (Reverse Charge)* | — |
+| **Gesamt** | **€{{ "%.2f"|format(net) }}** |
+
+\* **Reverse Charge** gem. Art. 196 MwSt-SystRL — Steuerschuldnerschaft des Leistungsempfängers.
+{% elif kleinunternehmer %}| USt | entfällt (§ 19 UStG) |
+| **Gesamt** | **€{{ "%.2f"|format(net) }}** |
+
+_Rechnung ohne Umsatzsteuerausweis nach § 19 UStG (Kleinunternehmerregelung)._
+{% else %}| USt 19% | €{{ "%.2f"|format(ust) }} |
+| **Gesamt (brutto)** | **€{{ "%.2f"|format(brutto) }}** |
+{% endif %}
+
+## Zahlungsbedingungen
+
+Zahlbar innerhalb von {{ payment_terms_days }} Tagen ohne Abzug per Überweisung auf:
+
+```
+{{ from_name }}
+IBAN: {{ bank_iban }}
+BIC:  {{ bank_bic }}
+Bank: {{ bank_name }}
+```
+
+Verwendungszweck: **{{ invoice_number }}**
+
+---
+
+_Vielen Dank für die Zusammenarbeit._

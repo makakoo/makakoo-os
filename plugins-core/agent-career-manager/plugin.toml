@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-career-manager"
+version = "1.0.0"
+kind = "agent"
+language = "python"
+summary = "Automates job search, active outreach, and career operations"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-career-manager"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "python3 -u src/active_search.py"
+stop = "pkill -f active_search.py"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-career-manager"
+retention = "keep"

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  HarveyChat LaunchAgent — Telegram gateway, auto-starts on login.
+
+  This is the PLUGIN-SHIPPED template. The live LaunchAgent installed by
+  `makakoo plugin install agent-harveychat` lives at
+  ~/Library/LaunchAgents/com.makakoo.harveychat.plist and substitutes
+  absolute paths for $MAKAKOO_HOME at install time.
+
+  Manual install (without the plugin installer):
+    cp plugins-core/agent-harveychat/src/com.harvey.harveychat.plist \
+        ~/Library/LaunchAgents/com.makakoo.harveychat.plist
+    # Then hand-edit $MAKAKOO_HOME → absolute path before loading
+    launchctl load ~/Library/LaunchAgents/com.makakoo.harveychat.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.makakoo.harveychat.plist
+    rm ~/Library/LaunchAgents/com.makakoo.harveychat.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.makakoo.harveychat</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3.11</string>
+        <string>$MAKAKOO_HOME/plugins/agent-harveychat/src/agent.py</string>
+        <string>start</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$MAKAKOO_HOME</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MAKAKOO_HOME</key>
+        <string>$MAKAKOO_HOME</string>
+        <key>HARVEY_HOME</key>
+        <string>$MAKAKOO_HOME</string>
+        <key>PYTHONPATH</key>
+        <string>$MAKAKOO_HOME/plugins/lib-harvey-core/src:$MAKAKOO_HOME/plugins/lib-hte/src</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>$MAKAKOO_HOME/data/chat/harveychat.log</string>
+    <key>StandardErrorPath</key>
+    <string>$MAKAKOO_HOME/data/chat/harveychat.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

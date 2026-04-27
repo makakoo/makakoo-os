@@ -1,0 +1,29 @@
+name: arbitrage-agent
+version: "1.0"
+description: Monitors Polymarket CLOB for negative-risk arbitrage opportunities
+type: daemon
+status: active
+
+runtime:
+  command: python3
+  entrypoint: agent.py
+  workdir: agents/arbitrage-agent
+  args: []
+
+tools:
+  - name: check_arbitrage
+    description: Return current arbitrage opportunities the agent has detected
+  - name: fitness_snapshot
+    description: Return the agent's latest fitness/evolution metrics
+
+comm:
+  type: mailbox
+  channel: agents.arbitrage
+
+state:
+  dir: data/arbitrage-agent
+  schema: files
+
+requires:
+  - switchAILocal
+  - polymarket-clob

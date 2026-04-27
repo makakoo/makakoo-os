@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-ai-ml-huggingface-tokenizers"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Fast tokenizers optimized for research and production. Rust-based implementation tokenizes 1GB in <20 seconds. Supports BPE, WordPiece, and Unigram algorithms. Train custom vocabularies, track alignments, handle padding/truncation. Integrates seamlessly with transformers. Use when you need high-performance tokenization or custom tokenizer training."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-ai-ml-huggingface-tokenizers"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-ai-ml-huggingface-tokenizers"
+retention = "keep"

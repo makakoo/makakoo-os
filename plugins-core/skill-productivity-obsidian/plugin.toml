@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-productivity-obsidian"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Read, search, and create notes in any Obsidian vault."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-productivity-obsidian"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+grants = [
+  "state/plugin",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-productivity-obsidian"
+retention = "keep"

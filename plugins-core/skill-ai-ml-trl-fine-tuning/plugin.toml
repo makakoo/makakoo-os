@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-ai-ml-trl-fine-tuning"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Fine-tune LLMs using reinforcement learning with TRL - SFT for instruction tuning, DPO for preference alignment, PPO/GRPO for reward optimization, and reward model training. Use when need RLHF, align model with preferences, or train from human feedback. Works with HuggingFace Transformers."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-ai-ml-trl-fine-tuning"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-ai-ml-trl-fine-tuning"
+retention = "keep"

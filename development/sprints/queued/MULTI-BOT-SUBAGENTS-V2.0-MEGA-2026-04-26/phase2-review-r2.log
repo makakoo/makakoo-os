@@ -1,0 +1,32 @@
+
+Lope review: /tmp/phase2-r2-diff.txt  (13348 chars)
+Validators: pi, codex, opencode
+Focus: Phase 2 round-2 of v2-mega: close codex round-1 issues. Verify each fix: (1) har...
+Timeout: 600s per validator
+
+
+━━━ codex ━━━
+PASS
+
+Verified against the diff and current files:
+
+1. **harveychat refusal before stop + prompt** — fixed. CLI checks `slot == PROTECTED_SLOT && !really_destroy_harveychat` immediately after arg unpacking/home lookup, before confirmation prompt, lifecycle stop, archive creation, or secret handling. No side effects.
+
+2. **interactive secret-revoke prompt** — fixed. If secrets are detected and neither `--revoke-secrets` nor `--yes` is set, CLI prompts: `Revoke these N detected secrets too? [y/N]`. `--yes` alone still preserves secrets.
+
+3. **restore one-liner conditional on `archived_data_dir`** — fixed. `render_restore_one_liner` includes `&& mv <archive>/data <target>` only when `outcome.archived_data_dir.is_some()`.
+
+4. **empty data dir always archived** — fixed. `destroy_slot` now always creates `<archive>/data`; if source data dir is absent, archive still contains empty `data/`, while `archived_data_dir` remains `None` to preserve restore semantics.
+
+5. **stop failures emit `print_warn`** — fixed. Nonzero stop rc and stop errors both call `output::print_warn(...)` and continue.
+
+6. **weak collision test replaced with deterministic core coverage** — acceptable. The flaky CLI wall-clock collision test is removed; deterministic core test `destroy_refuses_overwriting_existing_archive` controls `unix_ts` directly and covers overwrite refusal.
+
+No blocking issues found.
+
+━━━ pi ━━━
+[ERROR] pi timed out after 300s
+
+━━━ opencode ━━━
+[ERROR] opencode run timed out after 600s
+

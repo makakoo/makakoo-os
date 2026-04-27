@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+*.log
+state/
+logs/
+data/
+venv/
+*.tsv
+tmux_*.log

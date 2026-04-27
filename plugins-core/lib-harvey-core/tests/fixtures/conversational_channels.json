@@ -1,0 +1,23 @@
+{
+  "description": "v0.3.2 — canonical CONVERSATIONAL_CHANNELS list. Both Python (core.capability.CONVERSATIONAL_CHANNELS in perms_core.py) and Rust (makakoo_core::capability::CONVERSATIONAL_CHANNELS in capability/mod.rs) load this fixture in tests and assert their own set equals this list. Adding a plugin slug on one side without the other fails both suites in lockstep.",
+  "schema_version": 1,
+  "channels": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini-cli",
+    "harveychat",
+    "harveychat-telegram",
+    "harveychat-web",
+    "opencode",
+    "pi",
+    "qwen",
+    "vibe"
+  ],
+  "non_conversational_examples": [
+    "cli",
+    "sancho-native",
+    "harvey-agent",
+    "mcp"
+  ]
+}

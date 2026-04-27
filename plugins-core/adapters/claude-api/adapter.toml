@@ -1,0 +1,56 @@
+# Anthropic Claude API via their OpenAI-compatible endpoint.
+# The adapter proves OpenRouter isn't the only cloud gateway you can
+# point Makakoo at; Anthropic's Messages API also speaks OpenAI-chat
+# shapes behind /v1/messages. For the chat-completions shape used
+# here, route through Anthropic's compat proxy or a direct provider
+# that mirrors it. See docs/adapter-publishing.md.
+
+[adapter]
+name            = "claude-api"
+version         = "0.1.0"
+manifest_schema = 1
+description     = "Anthropic Claude API via OpenAI-compatible endpoint"
+homepage        = "https://docs.anthropic.com"
+license         = "MIT"
+authors         = ["Makakoo adapters-core maintainers"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "https://api.anthropic.com/v1"
+model    = "claude-sonnet-4.6"
+
+[auth]
+scheme  = "bearer"
+key_env = "ANTHROPIC_API_KEY"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+models         = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"]
+features       = ["tool_use", "streaming", "vision", "prompt_caching"]
+max_context    = 1000000
+rate_limit_rpm = 4000
+supports_roles = ["validator", "delegate", "swarm_member"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.1.0"
+
+[security]
+requires_network = true
+allowed_hosts    = ["api.anthropic.com"]
+requires_env     = ["ANTHROPIC_API_KEY"]
+sandbox_profile  = "network-io"
+signed_by        = "makakoo"
+
+[health]
+check_url      = "https://api.anthropic.com/v1/models"
+timeout_ms     = 8000
+expected_field = "data.0.id"

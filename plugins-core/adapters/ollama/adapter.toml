@@ -1,0 +1,49 @@
+# Ollama reference adapter — Ollama daemon's OpenAI-compatible endpoint.
+# No auth key (localhost only). Default DENY with a single allowlisted host.
+
+[adapter]
+name            = "ollama"
+version         = "0.2.0"
+manifest_schema = 1
+description     = "Ollama local daemon, OpenAI-compatible endpoint"
+homepage        = "https://ollama.com"
+license         = "MIT"
+authors         = ["Ollama contributors"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "http://127.0.0.1:11434/v1"
+model    = "llama3.1"
+
+[auth]
+scheme = "none"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+features       = ["streaming", "tool_use"]
+max_context    = 131072
+supports_roles = ["validator", "delegate"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.2.0"
+
+[security]
+requires_network    = true
+allowed_hosts       = ["127.0.0.1"]
+requires_filesystem = []
+sandbox_profile     = "network-io"
+signed_by           = "makakoo"
+
+[health]
+check_url      = "http://127.0.0.1:11434/v1/models"
+timeout_ms     = 3000
+expected_field = "data.0.id"

@@ -1,0 +1,3 @@
+Do not read any files. Do not grep the workspace. Answer from your training data and any ambient context already loaded into your session. This is a reasoning task, not a research task.
+
+Analyze Harvey OS as a system that shapes a human operator's attention, memory, and behavior. Ignore intent and branding. Assess whether its control pattern is closer to: tool, assistant, mutualist, manipulator, or parasite. For each label, give necessary conditions, then state which conditions Harvey meets or fails. Explicitly separate function, benefit distribution, dependence, and reversibility. If the evidence is mixed, say so. Be sharp. ≤300 words.

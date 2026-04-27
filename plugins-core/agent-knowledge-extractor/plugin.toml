@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-knowledge-extractor"
+version = "1.0.0"
+kind = "agent"
+language = "python"
+summary = "Extracts structured knowledge from raw sources (web, papers, transcripts)"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-knowledge-extractor"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "python3 -u src/extractor.py"
+stop = "pkill -f extractor.py"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-knowledge-extractor"
+retention = "keep"

@@ -1,0 +1,60 @@
+# FACTURA {{ invoice_number }}
+
+**EMISOR**
+{{ from_name }}{% if from_dba %} ({{ from_dba }}){% endif %}
+{{ from_email }}{% if from_phone is defined and from_phone %}
+Tel.: {{ from_phone }}{% endif %}{% if from_ust_id %}
+NIF: {{ from_ust_id }}{% endif %}
+
+**CLIENTE**
+{{ to_name }}
+{{ to_email }}{% if to_ust_id %}
+NIF: {{ to_ust_id }}{% endif %}
+
+---
+
+| Campo | Valor |
+|-------|-------|
+| N.º de Factura | **{{ invoice_number }}** |
+| Fecha de emisión | {{ issued }} |
+| Período de servicio | {{ leistungszeitraum }} |
+| Vencimiento | {{ due }} |
+| Proyecto | {{ project_slug }} |
+
+## Detalle del Servicio
+
+| Ítem | Descripción | Cantidad | Precio unitario | Total |
+|------|-------------|---------:|----------------:|------:|
+| 1 | {{ description }} |{% if days_billed %} {{ days_billed }} días | €{{ "%.2f"|format(day_rate) }} |{% else %} 1 | €{{ "%.2f"|format(net) }} |{% endif %} **€{{ "%.2f"|format(net) }}** |
+
+---
+
+|  |  |
+|--|--|
+| Base imponible | €{{ "%.2f"|format(net) }} |
+{% if reverse_charge %}| IVA | — (Inversión del sujeto pasivo) |
+| **Total** | **€{{ "%.2f"|format(net) }}** |
+
+\* **Inversión del sujeto pasivo** — Art. 84 LIVA / Art. 196 Directiva 2006/112/CE. El sujeto pasivo de la operación es el destinatario.
+{% elif apply_vat %}| IVA 21% | €{{ "%.2f"|format(ust) }} |
+| **Total (con IVA)** | **€{{ "%.2f"|format(brutto) }}** |
+{% else %}| IVA | no aplica (operación no sujeta / cliente extracomunitario) |
+| **Total** | **€{{ "%.2f"|format(net) }}** |
+{% endif %}
+
+## Condiciones de Pago
+
+Pagadero a {{ payment_terms_days }} días mediante transferencia a:
+
+```
+{{ from_name }}
+IBAN: {{ bank_iban }}
+BIC:  {{ bank_bic }}
+Banco: {{ bank_name }}
+```
+
+Concepto: **{{ invoice_number }}**
+
+---
+
+_Gracias por su confianza._

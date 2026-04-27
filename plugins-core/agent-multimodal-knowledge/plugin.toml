@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-multimodal-knowledge"
+version = "1.0.0"
+kind = "agent"
+language = "python"
+summary = "Multimodal RAG — Gemini Embedding 2 for images, video, audio, PDFs → Qdrant"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-multimodal-knowledge"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "python3 -u src/query.py"
+stop = "pkill -f query.py"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat", "llm/embed"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-multimodal-knowledge"
+retention = "keep"

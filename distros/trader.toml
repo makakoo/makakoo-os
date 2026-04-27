@@ -1,0 +1,65 @@
+# distros/trader.toml
+#
+# Trader Edition — Makakoo for people who run market-facing agents:
+# arbitrage, prediction markets, event-driven trading. The kernel +
+# the operational hygiene needed to keep a long-running autonomous
+# trading loop healthy.
+#
+# v0.1 scope: kernel + watchdogs + observability + the openclaw
+# bridge. Trading-native plugins (arbitrage-agent, polymarket bridge,
+# signal generators) queue behind Phase H.4 ports from
+# harvey-os/agents/arbitrage-agent + harvey-os/agents/career-manager.
+# When those land, this distro grows.
+
+[distro]
+name = "trader"
+display_name = "Makakoo Trader Edition"
+version = "0.1.0"
+description = "Makakoo for market-facing autonomous agents — arbitrage, prediction markets, event-driven trading. Kernel + the operational hygiene a 24/7 loop needs."
+license = "MIT"
+
+include = ["core.toml"]
+
+[kernel]
+version = "^0.1"
+
+[plugins]
+# Loops — any long-running trading loop needs the session summary +
+# watchdog layer to catch silent failures before they eat the P&L.
+"skill-meta-loops" = { version = "*" }
+
+# Canary — when two CLIs disagree on a trading question, that's
+# diagnostically valuable. Ship the probe by default.
+"skill-meta-canary" = { version = "*" }
+
+# Brain search — arb opportunities leave a trail in journal/pages.
+# FTS5 makes that trail searchable from the keyboard in <50ms.
+"skill-productivity-fts5-search" = { version = "*" }
+
+# OpenClaw bridge — traders delegate research + long-horizon thinking
+# to OpenClaw; bridge manages the handoff.
+"skill-infrastructure-openclaw-bridge" = { version = "*" }
+
+# TODO (Phase H.4): add trader-specific plugins as they land —
+# agent-arbitrage, agent-polymarket, skill-blockchain-* for the
+# on-chain primitives.
+
+[defaults]
+voice = "caveman"
+
+[post_install]
+message = """
+Makakoo Trader Edition installed. You now have Core plus:
+  - skill-meta-loops                       (session + watchdog layer)
+  - skill-meta-canary                      (cross-CLI consistency probe)
+  - skill-productivity-fts5-search         (Brain FTS5 — searches journal for past signals)
+  - skill-infrastructure-openclaw-bridge   (delegate to OpenClaw for deep research)
+
+Operational checklist:
+  1. makakoo daemon install          — keep the tick loop alive 24/7
+  2. makakoo secret set AIL_API_KEY  — so the LLM gateway can answer signal Qs
+  3. makakoo sancho status           — verify watchdogs are ticking
+  4. (Phase H.4 will add agent-arbitrage + agent-polymarket on top)
+
+The Brain is your trading log. Write to it aggressively.
+"""

@@ -1,0 +1,48 @@
+# llama.cpp server — the reference local inference daemon. Binds on
+# 127.0.0.1:8080 by default. Isolated sandbox since the server runs
+# fully offline.
+
+[adapter]
+name            = "llama-cpp-server"
+version         = "0.1.0"
+manifest_schema = 1
+description     = "Local llama.cpp server (OpenAI-compatible)"
+homepage        = "https://github.com/ggerganov/llama.cpp"
+license         = "MIT"
+authors         = ["llama.cpp contributors"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "http://127.0.0.1:8080/v1"
+
+[auth]
+scheme = "none"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+features       = ["streaming"]
+max_context    = 8192
+supports_roles = ["validator", "delegate"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.1.0"
+
+[security]
+requires_network = true
+allowed_hosts    = ["127.0.0.1"]
+sandbox_profile  = "network-io"
+signed_by        = "makakoo"
+
+[health]
+check_url      = "http://127.0.0.1:8080/v1/models"
+timeout_ms     = 3000
+expected_field = "data.0.id"

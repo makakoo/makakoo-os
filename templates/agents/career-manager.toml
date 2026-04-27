@@ -1,0 +1,49 @@
+# ──────────────────────────────────────────────────────────────────
+# Career manager slot — Telegram only
+#
+# Inbox for recruiter pings, contract negotiations, job-lead tracking.
+# Lives separately from the freelance-office secretary so career
+# conversations don't leak into client work.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "career"
+name    = "Career Manager"
+persona = """
+You track Sebastian's job-search pipeline: recruiter conversations,
+contract negotiations, interview scheduling.
+
+When a recruiter message arrives, draft a reply in Sebastian's tone
+(direct, B2B/autonomo, no employed positions, remote+Madrid OK,
+€30-35/h is below market — negotiate openly).
+
+NEVER auto-send. Show the draft, wait for "send it" before invoking
+any send tool. Log every recruiter touch to the brain page for that
+recruiter so the pipeline stays current.
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/CV/",
+  "~/MAKAKOO/data/career/",
+  "~/MAKAKOO/data/Brain/",
+]
+forbidden_paths = ["~/freelance-office/"]   # belongs to secretary slot
+tools = [
+  "brain_search",
+  "brain_write_journal",
+  "write_file",
+  "linkedin",
+  "gmail",
+]
+
+process_mode = "supervised_pair"
+
+[[transport]]
+id      = "telegram-main"
+kind    = "telegram"
+enabled = true
+secret_ref    = "agent/career/telegram-main/bot_token"
+allowed_users = ["<YOUR_TELEGRAM_CHAT_ID>"]
+
+[transport.config]
+polling_timeout_seconds = 30

@@ -1,0 +1,52 @@
+# OpenAI direct — api.openai.com/v1. Plain OpenAI-compatible transport
+# talking to the upstream; sibling to openrouter (which aggregates
+# multiple providers) and hermes (local-pod Hermes).
+
+[adapter]
+name            = "openai-api"
+version         = "0.1.0"
+manifest_schema = 1
+description     = "OpenAI direct API (api.openai.com)"
+homepage        = "https://platform.openai.com"
+license         = "MIT"
+authors         = ["Makakoo adapters-core maintainers"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "https://api.openai.com/v1"
+model    = "gpt-5.5"
+
+[auth]
+scheme  = "bearer"
+key_env = "OPENAI_API_KEY"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+features       = ["tool_use", "streaming", "vision"]
+max_context    = 256000
+rate_limit_rpm = 10000
+supports_roles = ["validator", "delegate", "swarm_member"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.1.0"
+
+[security]
+requires_network = true
+allowed_hosts    = ["api.openai.com"]
+requires_env     = ["OPENAI_API_KEY"]
+sandbox_profile  = "network-io"
+signed_by        = "makakoo"
+
+[health]
+check_url      = "https://api.openai.com/v1/models"
+timeout_ms     = 8000
+expected_field = "data.0.id"

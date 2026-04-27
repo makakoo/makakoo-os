@@ -1,0 +1,60 @@
+# SwitchAILocal reference adapter — Sebastian's unified local LLM
+# gateway (github.com/traylinx/switchailocal). Proxies to whatever
+# upstream is currently the "default" model in the gateway registry
+# (MiniMax M2.7, Gemini, Claude, local llama.cpp, etc).
+#
+# Differs from `llama-cpp-server` (:8080 — one model server) and
+# `ollama` (:11434 — Ollama daemon): SwitchAILocal at :18080 is the
+# route-to-any-upstream layer that fans out to 400+ models across
+# providers based on per-user model selection. Zero API cost when the
+# upstream is a local server; still free for Sebastian on upstream API
+# providers he already has keys for.
+
+[adapter]
+name            = "switchailocal"
+version         = "0.1.0"
+manifest_schema = 1
+description     = "SwitchAILocal unified model gateway on 127.0.0.1:18080"
+homepage        = "https://github.com/traylinx/switchailocal"
+license         = "MIT"
+authors         = ["Traylinx"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "http://127.0.0.1:18080/v1"
+model    = "minimax:MiniMax-M2.7"
+
+[auth]
+scheme  = "bearer"
+key_env = "AIL_API_KEY"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+features       = ["tool_use", "streaming", "vision"]
+max_context    = 200000
+supports_roles = ["validator", "delegate", "swarm_member"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.1.0"
+
+[security]
+requires_network    = true
+allowed_hosts       = ["127.0.0.1"]
+requires_filesystem = []
+requires_env        = []
+sandbox_profile     = "network-io"
+signed_by           = "makakoo"
+
+[health]
+check_url      = "http://127.0.0.1:18080/v1/models"
+timeout_ms     = 3000
+expected_field = "data.0.id"

@@ -1,0 +1,28 @@
+[plugin]
+name = "skill-productivity-logseq"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Connect Makakoo Brain to Logseq app for graph view and app integration."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-productivity-logseq"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+# Optional: grants for brain access if needed
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-productivity-logseq"
+retention = "keep"

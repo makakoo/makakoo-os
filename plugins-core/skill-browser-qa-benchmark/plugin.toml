@@ -1,0 +1,31 @@
+[plugin]
+name = "skill-browser-qa-benchmark"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "|"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-browser-qa-benchmark"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+# Documentation-only skill — see DOGFOOD-FINDINGS F-002 in the grandma-docs
+# sprint. No standalone Python runtime; echo a pointer instead of crashing.
+[entrypoint]
+run = "echo 'skill-browser-qa-benchmark is a documentation-only skill. Invoke the underlying capability via the browse / harvey_browse MCP tool from an infected CLI, or see plugins-core/skill-browser-qa-benchmark/src/SKILL.md for trigger phrasings.'"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-browser-qa-benchmark"
+retention = "keep"

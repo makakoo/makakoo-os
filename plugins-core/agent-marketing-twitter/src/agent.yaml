@@ -1,0 +1,44 @@
+name: marketing-twitter
+version: "1.0"
+description: Twitter/X launch thread generator — 10-14 tweets under 280 chars each, structured hook → demo → why → features → CTA
+type: on-demand
+status: active
+
+runtime:
+  command: bash
+  entrypoint: run.sh
+  workdir: agents/marketing-twitter
+  args: []
+
+tools:
+  - name: generate_thread
+    description: Generate a full launch thread from a brief
+  - name: count_chars
+    description: Verify every tweet in a thread is under 280 chars
+
+comm:
+  type: cli
+  channel: agents.marketing-twitter
+
+state:
+  dir: data/marketing-twitter
+  schema: files
+
+requires:
+  - switchAILocal
+
+inputs:
+  brief_path:
+    type: path
+    required: true
+  product:
+    type: string
+    required: true
+  tweet_count:
+    type: integer
+    description: Target number of tweets (10-14)
+    default: 12
+  style:
+    type: string
+    description: hook style — fact, question, provocation
+    default: fact

@@ -1,0 +1,40 @@
+[plugin]
+name = "agent-pi"
+version = "0.1.0"
+kind = "agent"
+language = "python"
+summary = "Pi (badlogic/pi-mono) as a first-class Makakoo worker — subagent for code tasks + session tools"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-pi"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+# pi binary must be available on PATH — we don't install it for the user;
+# `agent-pi health` is the doctor that reports red if pi isn't present.
+binaries = ["pi"]
+
+[entrypoint]
+# Long-lived process is not required — pi is driven per-request via
+# `pi --rpc`. The start/stop/health triple exists so AgentRunner treats
+# this plugin like any other agent, even though the daemon is a no-op.
+start = "python3 -u src/agent.py start"
+stop = "true"
+health = "python3 src/doctor.py"
+
+[capabilities]
+grants = [
+    "exec/binary:pi",
+    "fs/read:~/.pi",
+    "fs/write:~/.pi/agent/sessions",
+    "brain/write",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-pi"
+retention = "keep"

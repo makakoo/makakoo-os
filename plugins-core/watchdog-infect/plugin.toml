@@ -1,0 +1,33 @@
+[plugin]
+name = "watchdog-infect"
+version = "1.0.0"
+kind = "sancho-task"
+language = "python"
+summary = "Catch + heal infect drift across the 7 CLI global slots"
+license = "MIT"
+
+[source]
+path = "plugins-core/watchdog-infect"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.11"
+binaries = ["makakoo"]
+
+[entrypoint]
+run = "python3 -u watchdog.py"
+
+[capabilities]
+grants = [
+  "brain/write",
+  "exec/binary:makakoo",
+]
+
+[sancho]
+tasks = [{ name = "watchdog_infect", interval = "21600s" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/watchdog-infect"
+retention = "purge_on_uninstall"

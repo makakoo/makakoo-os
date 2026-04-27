@@ -1,0 +1,30 @@
+[plugin]
+name = "skill-brain-multi-source"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Multi-source brain adapter: Logseq + Obsidian + plain markdown. Pluggable knowledge substrates with a single unified search layer."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-brain-multi-source"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+run = "python3 -u src/sancho_ingest.py"
+
+[capabilities]
+grants = ["brain/write"]
+
+[sancho]
+tasks = [{ name = "brain_multi_source_ingest", interval = "1800s" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-brain-multi-source"
+retention = "keep"

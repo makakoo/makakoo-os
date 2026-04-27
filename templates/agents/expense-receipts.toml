@@ -1,0 +1,73 @@
+# ──────────────────────────────────────────────────────────────────
+# Expense receipts slot — Telegram + Email
+#
+# Snap a photo of a receipt in Telegram OR forward a receipt email
+# from your inbox; the agent extracts vendor / amount / currency /
+# tax category and files it under the correct freelance-office tax
+# bucket. End of quarter, the office plugin's tax export already
+# has every receipt categorized.
+#
+# This is the single highest-friction-savings template in the
+# gallery — receipt admin is universally hated, the OCR step is
+# the only manual bit, and the tax-categorization is rule-based
+# off the freelance-office country config.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "expense-receipts"
+name    = "Expense Receipts"
+persona = """
+You receive receipts via two channels:
+  - Telegram: a photo of a paper receipt (use harvey_describe_image
+              to extract vendor / date / amount / currency / VAT).
+  - Email:    a forwarded e-receipt from a vendor (parse the body).
+
+For each receipt:
+  1. Extract: vendor, date (ISO), amount, currency, VAT amount,
+     suggested tax category (per the freelance-office country config).
+  2. Reply on the SAME channel with a one-line summary +
+     "filed under <category>?" confirmation.
+  3. On "yes" / "ok" / 👍, call freelance-office expense-add to
+     write the entry. On "no", ask what category to use.
+
+NEVER file a receipt without confirmation — wrong tax category at
+year-end is worse than spending 5 seconds confirming.
+NEVER store receipt images outside ~/freelance-office/receipts/.
+"""
+inherit_baseline = false
+
+allowed_paths = [
+  "~/freelance-office/",
+  "~/MAKAKOO/data/Brain/",
+]
+tools = [
+  "harvey_describe_image",
+  "brain_search",
+  "freelance-office",
+]
+
+process_mode = "supervised_pair"
+
+# ── Telegram (receipt photos) ─────────────────────────────────────
+[[transport]]
+id            = "telegram-main"
+kind          = "telegram"
+secret_ref    = "agent/expense-receipts/telegram-main/bot_token"
+allowed_users = ["<YOUR_TELEGRAM_CHAT_ID>"]
+
+[transport.config]
+polling_timeout_seconds = 30
+
+# ── Email (forwarded e-receipts) ─────────────────────────────────
+[[transport]]
+id         = "email-main"
+kind       = "email"
+secret_ref = "agent/expense-receipts/email-main/oauth2_refresh_token"
+
+[transport.config]
+account_id      = "<YOUR_EMAIL>"
+auth_mode       = "oauth2"
+imap_server     = "imap.gmail.com"
+imap_port       = 993
+smtp_server     = "smtp.gmail.com"
+smtp_port       = 465
+allowed_senders = ["<YOUR_EMAIL>"]   # only YOUR forwards count as receipts

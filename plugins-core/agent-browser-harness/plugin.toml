@@ -1,0 +1,69 @@
+[plugin]
+name = "agent-browser-harness"
+version = "0.1.0"
+kind = "agent"
+language = "python"
+summary = "Browser Use CDP harness — drive local Chrome from any MCP-capable CLI via harvey_browse"
+authors = ["Browser Use (upstream)", "Makakoo OS contributors (integration)"]
+license = "MIT"
+homepage = "https://github.com/browser-use/browser-harness"
+
+# Source is the local wrapper dir — install.sh clones the upstream
+# browser-harness repo at runtime into `<plugin_dir>/upstream/` and
+# pip-installs it editable. The wrapper itself stays tiny (plugin.toml
+# + install.sh + daemon_admin.py, <50 lines combined) and carries zero
+# vendored upstream source. Upstream updates flow through re-running
+# install.sh with a new BROWSER_HARNESS_REF.
+[source]
+path = "plugins-core/agent-browser-harness"
+
+[abi]
+agent = "^1.0"
+"mcp-tool" = "^1.0"
+
+[depends]
+python = ">=3.9"
+system = ["git", "curl"]
+# The plugin doctor checks for Chrome with CDP enabled — installing
+# Chrome is out of scope for this plugin (user's responsibility).
+
+[install]
+unix = "install.sh"
+
+[entrypoint]
+start = ".venv/bin/python daemon_admin.py start"
+stop = ".venv/bin/python daemon_admin.py stop"
+health = ".venv/bin/python daemon_admin.py health"
+
+[capabilities]
+# Grants resolve to v0.1 capability verbs. The harness needs local
+# HTTP to talk to Chrome's CDP port (9222), filesystem write for the
+# self-healing loop (agents edit `<upstream>/helpers.py` at runtime),
+# and exec/shell because the daemon spawns `python` subprocesses.
+grants = [
+    "net/http:127.0.0.1",
+    "net/http:api.browser-use.com",
+    "fs/read:$MAKAKOO_HOME/plugins/agent-browser-harness",
+    "fs/write:$MAKAKOO_HOME/plugins/agent-browser-harness",
+    "exec/shell",
+]
+
+[state]
+# Daemon socket + pid + log live under /tmp/bu-<BU_NAME>* per upstream
+# convention. The plugin-state dir here holds runtime artefacts the
+# harness can rebuild (learned selectors, cached CDP session metadata).
+# v0.1 capability §6 rule 4: plugins with `exec/shell` MUST declare
+# retention = "purge_on_uninstall" — the user's persistent Chrome
+# profile lives outside this dir (in their own browser data dir), so
+# wiping plugin state on uninstall is non-lossy.
+dir = "$MAKAKOO_HOME/state/agent-browser-harness"
+retention = "purge_on_uninstall"
+
+[mcp]
+# This plugin exposes one MCP tool via harvey-mcp; the tool handler
+# lives in makakoo-mcp/src/handlers/tier_b/browse.rs and is registered
+# unconditionally (falls back to a clear error if the agent isn't
+# installed + started).
+tools = [
+    { name = "harvey_browse", handler = "makakoo_mcp::handlers::tier_b::browse::HarveyBrowseHandler" },
+]

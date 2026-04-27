@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SANCHO LaunchAgent — Makakoo's proactive engine.
+  Ticks every hour, runs eligible tasks (dreams, wiki lint, LLM-backed
+  anchor extraction, etc.).
+
+  Env: wrapped in `sh -c` that sources ~/.env before exec'ing Python.
+  launchd does NOT inherit ~/.zshrc or ~/.env, so without this wrapper
+  the daemon starts with no SWITCHAI_KEY / LLM_API_KEY and every
+  switchAILocal call returns 401. Pixel's mascot patrol caught 225 of
+  these errors on 2026-04-14 and that's when this wrapper was added.
+
+  Install:
+    sed "s|__HARVEY_HOME__|$HOME/MAKAKOO|g" sancho.plist > ~/Library/LaunchAgents/com.makakoo.sancho.plist
+    launchctl load ~/Library/LaunchAgents/com.makakoo.sancho.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.makakoo.sancho</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>set -a; [ -f "$HOME/.env" ] &amp;&amp; . "$HOME/.env"; set +a; exec python3 __HARVEY_HOME__/plugins-core/lib-harvey-core/src/core/sancho/engine.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__HARVEY_HOME__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HARVEY_HOME</key>
+        <string>__HARVEY_HOME__</string>
+        <key>MAKAKOO_HOME</key>
+        <string>__HARVEY_HOME__</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <!-- PYTHONPATH is load-bearing: engine.py uses `from core.sancho...`
+             imports. Post-harvey-os retirement (2026-04-20), core.* lives
+             inside the lib-harvey-core plugin src/ dir. -->
+        <key>PYTHONPATH</key>
+        <string>__HARVEY_HOME__/plugins/lib-harvey-core/src:__HARVEY_HOME__/plugins/lib-hte/src</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__HARVEY_HOME__/tmp/sancho.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HARVEY_HOME__/tmp/sancho.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

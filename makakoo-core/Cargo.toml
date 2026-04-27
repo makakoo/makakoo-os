@@ -1,0 +1,60 @@
+[package]
+name = "makakoo-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true }
+fs2.workspace = true
+dirs.workspace = true
+blake3.workspace = true
+sha2.workspace = true
+regex.workspace = true
+serde_yml.workspace = true
+crossbeam-channel.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+once_cell.workspace = true
+async-trait.workspace = true
+rand.workspace = true
+teloxide.workspace = true
+keyring.workspace = true
+tokio-tungstenite.workspace = true
+futures-util = "0.3"
+base64 = "0.22"
+hex = "0.4"
+hmac = "0.12"
+petgraph = "0.6"
+sha1 = "0.10"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+mailparse = "0.16"
+toml.workspace = true
+semver.workspace = true
+ed25519-dalek.workspace = true
+tar.workspace = true
+flate2.workspace = true
+tempfile.workspace = true
+
+# Backward-compat re-export — actual user_grants implementation lives
+# in the standalone garagetytus repo as of GARAGETYTUS-V0.1 Phase A.5
+# (2026-04-25). makakoo-core::capability::user_grants is now a thin
+# pub-use shim. Pinned by rev until garagetytus-grants is published
+# to crates.io; flips to a version pin once on crates.io.
+garagetytus-grants = { git = "https://github.com/traylinx/garagetytus", rev = "3b199e94ac2bcf86e1e91eca07237edc367d2153" }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+wiremock = "0.6"

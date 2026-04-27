@@ -1,0 +1,163 @@
+name: Release
+
+# Tag-driven release pipeline. Builds `makakoo` + `makakoo-mcp` for 5 targets
+# (macOS arm64/x86_64, Linux arm64/x86_64, Windows x86_64) and publishes the
+# tarballs/zip to a GitHub Release. Signing (Apple notarization + Windows
+# Authenticode) is DEFERRED — see docs/RELEASE_SIGNING.md for the runbook
+# that flips this workflow to the signed path once certs are in hand.
+#
+# Trigger: push a tag that starts with `v` (e.g. `v0.1.0`).
+#
+#     git tag v0.1.0
+#     git push origin v0.1.0
+#
+# Manual trigger is also allowed via workflow_dispatch — useful for
+# dry-running the build chain against a hand-picked ref before cutting
+# a real tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag or ref to build (for manual dry runs)"
+        required: true
+        default: "v0.0.0-dev"
+
+permissions:
+  contents: write
+
+jobs:
+  # ─── Build one binary artifact per target ──────────────────────────
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            # Linux cross — gcc-aarch64-linux-gnu is in ubuntu-latest apt.
+            cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross toolchain (aarch64-linux only)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Build release binaries
+        run: cargo build --release --locked --bins --target ${{ matrix.target }}
+
+      - name: Package tarball (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="makakoo-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/makakoo" "$stage/"
+          cp "target/${{ matrix.target }}/release/makakoo-mcp" "$stage/"
+          cp README.md LICENSE* "$stage/" 2>/dev/null || true
+          # Bundle the runtime data the binary needs after curl-pipe install.
+          # install.sh extracts these to $PREFIX/share/makakoo/ and the
+          # binary's resolve_distros_dir() / plugins_core_root() fall back
+          # to <exe>/../share/makakoo/{distros,plugins-core}.
+          cp -r distros      "$stage/"
+          cp -r plugins-core "$stage/"
+          tar -czf "$stage.tar.gz" "$stage"
+          shasum -a 256 "$stage.tar.gz" | tee "$stage.tar.gz.sha256"
+
+      - name: Package zip (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "makakoo-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/makakoo.exe"     "$stage/"
+          Copy-Item "target/${{ matrix.target }}/release/makakoo-mcp.exe" "$stage/"
+          if (Test-Path README.md) { Copy-Item README.md $stage/ }
+          # Bundle distros/ + plugins-core/ — install.ps1 extracts them
+          # next to the binary so resolve_distros_dir() / plugins_core_root()
+          # find them via the <exe>/../share/makakoo fallback.
+          Copy-Item -Recurse distros      "$stage/distros"
+          Copy-Item -Recurse plugins-core "$stage/plugins-core"
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
+          (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash | Out-File -FilePath "$stage.zip.sha256" -Encoding ASCII
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: makakoo-${{ matrix.target }}
+          path: |
+            makakoo-${{ matrix.target }}.tar.gz
+            makakoo-${{ matrix.target }}.tar.gz.sha256
+            makakoo-${{ matrix.target }}.zip
+            makakoo-${{ matrix.target }}.zip.sha256
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ─── Collect artifacts + publish the Release ───────────────────────
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Gather release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} release-files/ \;
+          ls -la release-files/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

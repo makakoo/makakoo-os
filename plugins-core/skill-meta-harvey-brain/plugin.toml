@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-meta-harvey-brain"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Use when the user asks about their own past notes, decisions, history, or anything that should already be in their persistent memory. Trigger phrases include 'do I have notes on X', 'what did I decide about Y', 'check my brain for Z', 'remember when I worked on W', 'what do I know about V', 'what did I write last week about U'. Routes the question through Harvey's Brain (Logseq journals + pages) via mcp__harvey__harvey_brain_search for raw hits or mcp__harvey__harvey_superbrain_query for synthesized answers with sources. Also use this skill to LOG something the user explicitly asks to remember (mcp__harvey__harvey_journal_entry)."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-meta-harvey-brain"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-meta-harvey-brain"
+retention = "keep"

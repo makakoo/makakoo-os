@@ -1,0 +1,80 @@
+[workspace]
+resolver = "2"
+members = ["makakoo-core", "makakoo-client", "makakoo-mcp", "makakoo-platform", "makakoo", "makakoo-docs-mcp"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled-full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+fs2 = "0.4"
+dirs = "5"
+crossterm = "0.28"
+comfy-table = "7.1"
+blake3 = "1.5"
+sha2 = "0.10"
+regex = "1.11"
+serde_yml = "0.0.12"
+crossbeam-channel = "0.5"
+keyring = "2.3"
+auto-launch = "0.5"
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1"
+async-trait = "0.1"
+rand = "0.8"
+teloxide = { version = "0.17", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots", "url"] }
+toml = "0.8"
+toml_edit = "0.22"
+semver = { version = "1", features = ["serde"] }
+libc = "0.2"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Pipes"] }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "pkcs8"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "ws"] }
+tar = "0.4"
+flate2 = "1"
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"
+codegen-units = 1
+panic = "abort"
+
+[workspace.metadata.dist]
+# cargo-dist packaging config. Phase G (sprint-013) flipped ci = ["github"]
+# and expanded the target set so tag-driven releases cover every supported
+# OS. Re-run `cargo dist init` after editing this block to regenerate the
+# release workflow if its hand-written form at .github/workflows/release.yml
+# needs to be replaced by cargo-dist's richer version (notarization,
+# signing, etc.) — that migration is scheduled alongside signing-cert
+# acquisition (human-gated, docs/RELEASE_SIGNING.md has the runbook).
+cargo-dist-version = "0.25.1"
+ci = ["github"]
+installers = ["shell", "powershell", "homebrew", "msi"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+pr-run-mode = "skip"
+tap = "makakoo/homebrew-makakoo"
+publish-jobs = []
+install-path = "$HOME/.local/bin"
+install-updater = false

@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-meta-autoimprover"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Harvey OS self-improvement system — background review, memory/skill nudges, budget enforcement, session compaction, activity logging, goal hierarchy"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-meta-autoimprover"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u src/nudge_triggers.py"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-meta-autoimprover"
+retention = "keep"

@@ -1,0 +1,42 @@
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python byproducts
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# Secrets — never commit any of these
+.env
+.env.*
+*.pem
+*.key
+*_rsa
+*_rsa.pub
+credentials
+credentials.*
+secrets.json
+secrets.yaml
+secrets.yml
+
+# harvey:infect-local START v1
+# Derivatives regenerated from .harvey/context.md by `makakoo infect --local`.
+# Re-run `makakoo infect --local` after clone to rebuild these files.
+/CLAUDE.md
+/GEMINI.md
+/AGENTS.md
+/QWEN.md
+/.cursor/rules/makakoo.mdc
+/.vibe/context.md
+# harvey:infect-local END

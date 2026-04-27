@@ -1,0 +1,40 @@
+# docs_manifest.toml — the list of Markdown files whose fenced code blocks
+# must be executed by the CI harness (ci/verify-docs.sh → ci/block_runner.py).
+#
+# Every new doc added to the list must ALSO pass block-level review:
+# any block that can't be executed verbatim in a clean container must carry
+# a trailing `<!-- verify: skip reason="..." -->` comment with a real reason.
+#
+# Start small — grow as we gain confidence.
+
+files = [
+    # ───── Walkthroughs (Phase 1 of the grandma-docs sprint) ─────
+    "docs/walkthroughs/01-fresh-install-mac.md",
+    "docs/walkthroughs/02-first-brain-entry.md",
+    "docs/walkthroughs/03-install-plugin.md",
+    "docs/walkthroughs/04-write-brain-journal.md",
+    "docs/walkthroughs/05-ask-harvey.md",
+    "docs/walkthroughs/06-grant-write-access.md",
+    "docs/walkthroughs/07-browse-website.md",
+    "docs/walkthroughs/08-use-agent.md",
+    "docs/walkthroughs/09-ingest-document.md",
+    "docs/walkthroughs/10-mascot-mission.md",
+    "docs/walkthroughs/11-connect-tytus.md",
+    "docs/walkthroughs/12-octopus-federation.md",
+
+    # ───── Landing + install companion pages ─────
+    "docs/getting-started.md",
+    "docs/quickstart.md",
+
+    # ───── Agent + mascot manuals ─────
+    # These pages cite commands but most blocks are `makakoo plugin info`
+    # and similar read-only checks — safe to verify.
+    "docs/agents/agent-browser-harness.md",
+    "docs/agents/agent-knowledge-extractor.md",
+    "docs/agents/agent-multimodal-knowledge.md",
+    "docs/mascots/pixel.md",
+    "docs/mascots/cinder.md",
+    "docs/mascots/ziggy.md",
+    "docs/mascots/glimmer.md",
+    "docs/mascots/olibia.md",
+]

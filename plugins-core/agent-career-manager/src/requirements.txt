@@ -1,0 +1,7 @@
+requests
+python-dotenv
+playwright
+beautifulsoup4
+markdownify
+python-docx
+pyyaml

@@ -1,0 +1,52 @@
+# OpenRouter reference adapter — cloud gateway aggregating Anthropic, OpenAI,
+# Mistral, Google, and open-weights models behind one OpenAI-compatible API.
+# Net egress allowlist is exactly one host.
+
+[adapter]
+name            = "openrouter"
+version         = "0.3.0"
+manifest_schema = 1
+description     = "OpenRouter multi-provider gateway (OpenAI-compatible)"
+homepage        = "https://openrouter.ai"
+license         = "MIT"
+authors         = ["OpenRouter Inc."]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "https://openrouter.ai/api/v1"
+model    = "anthropic/claude-sonnet-4.6"
+
+[auth]
+scheme  = "bearer"
+key_env = "OPENROUTER_API_KEY"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+features       = ["tool_use", "streaming", "vision", "fs_write"]
+max_context    = 1000000
+rate_limit_rpm = 600
+supports_roles = ["validator", "delegate", "swarm_member"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.3.0"
+
+[security]
+requires_network = true
+allowed_hosts    = ["openrouter.ai"]
+requires_env     = ["OPENROUTER_API_KEY"]
+sandbox_profile  = "network-io"
+signed_by        = "makakoo"
+
+[health]
+check_url      = "https://openrouter.ai/api/v1/models"
+timeout_ms     = 8000
+expected_field = "data.0.id"

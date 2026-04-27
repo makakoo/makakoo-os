@@ -1,0 +1,89 @@
+name: verify-docs
+
+# Executes every fenced code block in the files listed in
+# ci/docs_manifest.toml against a clean Makakoo install. Fails the build
+# if any block deviates from its declared `output` / `text` expected-output
+# block (loose line-subset match — extra lines in actual are tolerated).
+#
+# Runs on every PR that touches:
+#   - docs/
+#   - README.md
+#   - ci/docs_manifest.toml
+#   - ci/block_runner.py / ci/verify-docs.sh / ci/run_on_clean.sh
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'ci/docs_manifest.toml'
+      - 'ci/block_runner.py'
+      - 'ci/verify-docs.sh'
+      - 'ci/run_on_clean.sh'
+      - 'ci/test_harness.sh'
+      - '.github/workflows/verify-docs.yml'
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  # ───── 1. Harness self-test (fast, no cargo build) ─────
+  harness-selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: run ci/test_harness.sh
+        run: bash ci/test_harness.sh
+
+  # ───── 2. Build makakoo from source ─────
+  build:
+    needs: harness-selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo install --path makakoo
+        run: cargo install --path makakoo --locked
+      - name: cargo install --path makakoo-mcp
+        run: cargo install --path makakoo-mcp --locked
+      - name: upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: makakoo-bin
+          path: |
+            ~/.cargo/bin/makakoo
+            ~/.cargo/bin/makakoo-mcp
+          if-no-files-found: error
+          retention-days: 1
+
+  # ───── 3. Run the docs verifier on the fresh binary ─────
+  verify-docs:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: makakoo-bin
+          path: ~/.cargo/bin/
+      - name: chmod binaries
+        run: chmod +x ~/.cargo/bin/makakoo ~/.cargo/bin/makakoo-mcp
+      - name: ensure ~/.cargo/bin is on PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: run ci/run_on_clean.sh
+        run: bash ci/run_on_clean.sh --skip-install
+      - name: verify agent/mascot doc coverage
+        run: python3 scripts/verify_agent_manual_coverage.py
+      - name: verify troubleshooting error-string coverage
+        run: python3 scripts/verify_troubleshooting_coverage.py

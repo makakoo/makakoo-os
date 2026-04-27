@@ -1,0 +1,334 @@
+"""freelance-office generate-invoice — atomic INV-YYYY-NNN allocation + render.
+
+Rate resolution precedence (pi recommendation 5):
+  1. ``--amount-net <N>``  → use as-is, no rate lookup.
+  2. ``--days <D>``        → ``amount_net = D * client.meta.day_rate_agreed``.
+                             Error if ``day_rate_agreed`` is missing.
+  3. Neither passed       → error ``"provide --amount-net or --days"``.
+
+VAT regime:
+  - SETTINGS.tax.kleinunternehmer = true  → §19 UStG block, no VAT.
+  - client.b2b && client.client_country != "DE" && client.ust_id → Reverse Charge, no VAT.
+  - else → +19% USt.
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from ..core import brain, client_meta, earnings, invoice_counter, paths, render, settings, tracker
+from ..core.errors import FreelanceError, NotInitialisedError
+from ..core.tax import get_regime
+
+
+def _post_generate_summary(year: int, home: Path, country: str, s) -> str:
+    """One-line summary: open invoices + threshold percentage.
+
+    Pi scope-undershoot: every ``generate-invoice`` envelope gets a
+    grep-friendly line ("3 open invoices totalling €X at Y% of
+    threshold") so Sebastian doesn't have to open ``dashboard`` to
+    see where things stand.
+    """
+    open_count = 0
+    open_amount = 0.0
+    for rec in earnings.iter_rows(year, home):
+        status = (rec.get("status") or "").lower()
+        if "bezahlt" in status and "teilweise" not in status:
+            continue
+        if "pagad" in status and "parcial" not in status and "parcialmente" not in status:
+            continue
+        open_count += 1
+        open_amount += float(rec.get("net") or 0)
+
+    ytd = earnings.ytd_total(year, root=home)
+    pct_used = None
+    try:
+        regime = get_regime(country)
+        status_obj = regime.check_threshold(s, ytd)
+        pct_used = status_obj.pct_used
+    except Exception:
+        pct_used = None
+
+    pct_txt = f"{pct_used}% of threshold" if pct_used is not None else "no applicable threshold"
+    return (
+        f"{open_count} open invoices totalling "
+        f"€{open_amount:,.2f} at {pct_txt}"
+    )
+
+
+def add_arguments(parser):
+    parser.add_argument("--client", required=True)
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--amount-net", type=float, default=None)
+    parser.add_argument("--days", type=float, default=None)
+    parser.add_argument("--description", required=True)
+    parser.add_argument("--leistungszeitraum", default="", help="YYYY-MM-DD bis YYYY-MM-DD")
+    parser.add_argument("--invoice-number", default=None, help="manual INV-YYYY-NNN override")
+    parser.add_argument("--issued", default=None, help="YYYY-MM-DD, default today")
+    parser.add_argument("--pdf", action="store_true", help="also render a PDF next to the invoice .md")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="regenerate even if the invoice is marked paid (pi corruption-risk #1)",
+    )
+
+
+def _status_for_invoice(year: int, inv_no: str, home: Path) -> str:
+    """Peek the Einnahmen-Übersicht row status for ``inv_no``. Empty
+    string when the row / file does not exist — callers treat that
+    as "not paid"."""
+    path = earnings.earnings_path(year, home)
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    for rec in earnings._iter_rows(text, source=path):
+        if rec["inv_no"] == inv_no:
+            return rec["status"]
+    return ""
+
+
+def _is_paid_status(status: str) -> bool:
+    s = status.lower()
+    return "bezahlt" in s or "pagad" in s or "paid" in s
+
+
+def _resolve_amount(args, meta_flat: Dict[str, Any]):
+    if args.amount_net is not None:
+        return float(args.amount_net), None
+    if args.days is not None:
+        rate = meta_flat.get("day_rate_agreed")
+        if rate is None:
+            raise FreelanceError(
+                f"--days given but client.meta.day_rate_agreed is not set; "
+                "onboard-client should populate this field or pass --amount-net"
+            )
+        return float(args.days) * float(rate), float(args.days)
+    raise FreelanceError("provide --amount-net or --days")
+
+
+def _vat_regime(s, meta_flat: Dict[str, Any]):
+    """v0.1-compatible envelope. Delegates to the per-country tax module
+    via ``get_regime(s.office.country)``. DE regime matches v0.1 byte-
+    for-byte; other countries return their country-specific shape."""
+    regime = get_regime(s.office.country)
+    vr = regime.vat_regime(s, meta_flat)
+    return {
+        "kleinunternehmer": bool(getattr(s.tax, "kleinunternehmer", False))
+            and s.office.country.upper() == "DE",
+        "reverse_charge": vr.reverse_charge,
+        "apply_vat": vr.apply_vat,
+        "vat_rate": vr.vat_rate,
+        "label": vr.label,
+    }
+
+
+def run(args) -> Dict[str, Any]:
+    home = paths.resolve_office_root(args)
+    paths.require_initialised_at(home)
+    s = settings.load_settings_at(home)
+
+    client_dir = home / "clients" / args.client
+    if not client_dir.is_dir():
+        raise NotInitialisedError(f"client '{args.client}' not found under clients/")
+    meta_path = client_dir / "meta.yaml"
+    meta = client_meta.ClientMeta.load(meta_path).flat()
+
+    project_dir = client_dir / "projects" / args.project
+    if not project_dir.is_dir():
+        raise NotInitialisedError(
+            f"project '{args.project}' missing — run `freelance-office generate-contract` first"
+        )
+
+    amount_net, days_billed = _resolve_amount(args, meta)
+    amount_net = round(float(amount_net), 2)
+    day_rate = float(meta.get("day_rate_agreed") or 0)
+    regime = _vat_regime(s, meta)
+
+    issued_str = args.issued or str(date.today())
+    try:
+        issued_d = datetime.strptime(issued_str, "%Y-%m-%d").date()
+    except ValueError as e:
+        raise FreelanceError(f"--issued must be YYYY-MM-DD: {e}") from e
+    payment_terms = int(meta.get("payment_terms_days") or s.finance.payment_terms_days)
+    due_d = issued_d + timedelta(days=payment_terms)
+    year = issued_d.year
+
+    dry = bool(getattr(args, "dry_run", False))
+    want_pdf = bool(getattr(args, "pdf", False))
+    force = bool(getattr(args, "force", False))
+
+    # Allocate number (unless user-forced)
+    seeded = False
+    if args.invoice_number:
+        inv_no = args.invoice_number
+        numeric_n = None
+    else:
+        if dry:
+            # Dry-run preview: just peek — do not bump
+            next_n = invoice_counter.peek(year, home) + 1
+            inv_no = f"INV-{year}-{next_n:03d}"
+            numeric_n = next_n
+        else:
+            inv_no, numeric_n, seeded = invoice_counter.allocate(year, home)
+
+    # VAT numbers — route through the country regime's vat_rate.
+    rate = float(regime.get("vat_rate", 0.19)) if regime["apply_vat"] else 0.0
+    ust = round(amount_net * rate, 2) if regime["apply_vat"] else 0.0
+    brutto = round(amount_net + ust, 2)
+
+    warnings = []
+    floor = settings.load_rates_at(home).floor_day_rate
+    if floor is not None and day_rate and day_rate < floor:
+        warnings.append(f"client.day_rate_agreed={day_rate} < RATES.yaml floor {floor}")
+
+    ctx: Dict[str, Any] = {
+        "invoice_number": inv_no,
+        "issued": str(issued_d),
+        "due": str(due_d),
+        "leistungszeitraum": args.leistungszeitraum or str(issued_d),
+        "project_slug": args.project,
+        "description": args.description,
+        "days_billed": days_billed,
+        "day_rate": day_rate,
+        "net": amount_net,
+        "ust": ust,
+        "brutto": brutto,
+        "payment_terms_days": payment_terms,
+        "kleinunternehmer": regime["kleinunternehmer"],
+        "reverse_charge": regime["reverse_charge"],
+        "apply_vat": regime["apply_vat"],
+        "vat_rate": regime.get("vat_rate", 0.0),
+        "regime_label": regime.get("label", ""),
+        "from_name": s.identity.name,
+        "from_dba": s.identity.dba,
+        "from_email": s.identity.email,
+        "from_phone": s.identity.phone,
+        "from_ust_id": s.tax.ust_id,
+        "to_name": str(meta.get("name") or args.client),
+        "to_email": str(meta.get("contact_email") or ""),
+        "to_ust_id": str(meta.get("ust_id") or ""),
+        "bank_iban": s.finance.bank.iban,
+        "bank_bic": s.finance.bank.bic,
+        "bank_name": s.finance.bank.name,
+    }
+
+    # Pick the per-country invoice template (falls back to base if missing).
+    try:
+        regime_mod = get_regime(s.office.country)
+        invoice_template = getattr(regime_mod, "INVOICE_TEMPLATE", "INVOICE.md.j2")
+    except Exception:
+        invoice_template = "INVOICE.md.j2"
+    rendered = render.render_invoice(ctx, template_name=invoice_template, office_root=home)
+
+    # Paid-guard: re-rendering (md + pdf) of a paid invoice requires
+    # --force. Applies regardless of --dry-run so the preview also
+    # refuses, matching user expectations.
+    status_existing = _status_for_invoice(year, inv_no, home) if args.invoice_number else ""
+    if _is_paid_status(status_existing) and not force:
+        raise FreelanceError(
+            f"Invoice [[{inv_no}]] already paid. Use --force to regenerate."
+        )
+
+    invoices_dir = project_dir / "invoices"
+    out_path = invoices_dir / f"{inv_no}.md"
+    pdf_path = out_path.with_suffix(".pdf") if want_pdf else None
+
+    if dry:
+        envelope = {
+            "status": "preview",
+            "exit_code": 0,
+            "dry_run": True,
+            "invoice_number": inv_no,
+            "net": amount_net,
+            "ust": ust,
+            "brutto": brutto,
+            "regime": regime,
+            "due": str(due_d),
+            "preview_bytes": len(rendered),
+            "warnings": warnings,
+            "message": f"dry-run: would write {inv_no} (€{amount_net} net, due {due_d})",
+        }
+        if want_pdf:
+            envelope["pdf_path"] = str(pdf_path)
+        envelope["summary"] = _post_generate_summary(year, home, s.office.country, s)
+        return envelope
+
+    invoices_dir.mkdir(parents=True, exist_ok=True)
+
+    # Regen path: when --force targets an existing .md, treat this as
+    # a pure re-render (PDF refresh after a typo fix). The row is
+    # already booked in EARNINGS/tracker, and the Brain journal has
+    # the original entry — skip all three so we don't duplicate.
+    is_regen = bool(args.invoice_number) and force and out_path.exists()
+
+    if not is_regen and out_path.exists() and not force:
+        raise FreelanceError(f"invoice file already exists: {out_path}")
+    out_path.write_text(rendered, encoding="utf-8")
+
+    ytd = 0.0
+    journaled = None
+    if not is_regen:
+        # Book to EARNINGS.md
+        try:
+            rec = earnings.EarningRecord(
+                inv_no=inv_no,
+                client=args.client,
+                project=args.project,
+                issued=str(issued_d),
+                net=amount_net,
+                ust=ust,
+                status="⏳ offen",
+            )
+            _, ytd = earnings.append_earning(year, rec, home)
+        except FreelanceError as e:
+            warnings.append(f"EARNINGS.md update failed: {e}")
+
+        # Add to tracker's Rechnungen table
+        tracker_path = project_dir / "_project-tracker.md"
+        if tracker_path.is_file():
+            try:
+                t = tracker.Tracker.load(tracker_path)
+                t.append_invoice(inv_no, amount_net, str(issued_d), str(due_d))
+                t.write()
+            except FreelanceError as e:
+                warnings.append(f"tracker invoice-row update failed: {e}")
+
+        journal_line = (
+            f"Generated [[{inv_no}]] for [[{args.client}]] — €{amount_net:.2f} net, "
+            f"due {due_d}. [[freelance-office]]"
+        )
+        try:
+            journaled = brain.append_journal_line(journal_line)
+        except FreelanceError as e:
+            warnings.append(f"brain journal failed: {e}")
+
+    if want_pdf:
+        from ..core.pdf import render_markdown_to_pdf
+        try:
+            pdf_path = render_markdown_to_pdf(out_path, pdf_path)
+        except FreelanceError as e:
+            warnings.append(f"PDF render failed: {e}")
+            pdf_path = None
+
+    envelope = {
+        "status": "ok",
+        "exit_code": 0,
+        "invoice_number": inv_no,
+        "path": str(out_path),
+        "counter_seeded_from_disk": seeded,
+        "net": amount_net,
+        "ust": ust,
+        "brutto": brutto,
+        "regime": regime,
+        "due": str(due_d),
+        "earnings_ytd": ytd,
+        "journal": journaled,
+        "warnings": warnings,
+        "message": f"{inv_no}: €{amount_net:.2f} net → {out_path}. Due {due_d}.",
+    }
+    if want_pdf:
+        envelope["pdf_path"] = str(pdf_path) if pdf_path else None
+    # Pi scope-undershoot: post-generate summary line.
+    envelope["summary"] = _post_generate_summary(year, home, s.office.country, s)
+    return envelope

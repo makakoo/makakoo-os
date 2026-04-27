@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Makakoo Web Chat Demo</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+  #log { border: 1px solid #ccc; height: 300px; overflow: auto; padding: 0.5rem; background: #fafafa; }
+  .msg { margin: 4px 0; }
+  .msg.you { color: #1a5fb4; }
+  .msg.bot { color: #2ec27e; }
+  .msg.sys { color: #888; font-style: italic; }
+  form { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  input[type=text] { flex: 1; padding: 6px; }
+  button { padding: 6px 12px; }
+</style>
+</head>
+<body>
+<h1>Makakoo web chat (demo)</h1>
+<p>Drop-in static client for the Phase 11 WS endpoint at
+<code>/transport/&lt;slot_uuid&gt;/&lt;transport_uuid&gt;/ws</code>.</p>
+
+<label>WS URL <input id="url" type="text" size="60"
+  value="ws://localhost:7773/transport/00000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002/ws"></label>
+<button id="connect">Connect</button>
+
+<div id="log" aria-live="polite"></div>
+
+<form id="send">
+  <input id="input" type="text" placeholder="Type a message..." autocomplete="off" disabled>
+  <button type="submit" disabled>Send</button>
+</form>
+
+<script>
+let ws = null;
+const log = document.getElementById('log');
+const input = document.getElementById('input');
+const sendForm = document.getElementById('send');
+const sendBtn = sendForm.querySelector('button');
+
+function append(kind, text) {
+  const div = document.createElement('div');
+  div.className = `msg ${kind}`;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+document.getElementById('connect').onclick = () => {
+  const url = document.getElementById('url').value.trim();
+  append('sys', `Connecting to ${url}...`);
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    append('sys', 'Connected.');
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.focus();
+  };
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'msg') append('bot', `${msg.text} [${msg.ts}]`);
+      else append('sys', `<${msg.type}>`);
+    } catch {
+      append('sys', `(raw) ${ev.data}`);
+    }
+  };
+  ws.onclose = () => {
+    append('sys', 'Disconnected.');
+    input.disabled = true;
+    sendBtn.disabled = true;
+  };
+  ws.onerror = (e) => append('sys', `Error: ${e.type}`);
+};
+
+sendForm.onsubmit = (ev) => {
+  ev.preventDefault();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const text = input.value.trim();
+  if (!text) return;
+  ws.send(JSON.stringify({ type: 'msg', text }));
+  append('you', text);
+  input.value = '';
+};
+</script>
+</body>
+</html>

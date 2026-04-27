@@ -1,0 +1,44 @@
+# [[{{ project_slug }}]] — {{ project_title }}
+
+{% if description %}
+{{ description }}
+{% endif %}
+
+> **Client:** [[{{ client_slug }}]]
+> **Started:** {{ started }}
+> **Rate:** €{{ day_rate }}/day ({{ total_days }} days = €{{ total_contract_value }})
+
+---
+
+## Status
+
+| | |
+|---|---|
+| Phase | {{ phase }} |
+| Contract | v{{ contract_version }} |
+| Milestones | {{ milestones_count }} |
+
+---
+
+## Milestones
+
+{% for m in milestones %}
+- [ ] **{{ m.name }}** — {{ m.description }} (due: {{ m.due_date }})
+{% endfor %}
+
+---
+
+## Freelance-Office
+
+| Document | Path |
+|----------|------|
+| Contract | `~/freelance-office/clients/{{ client_slug }}/projects/{{ project_slug }}/contracts/{{ project_slug }}-v{{ contract_version }}.md` |
+| Tracker | `~/freelance-office/clients/{{ client_slug }}/projects/{{ project_slug }}/_project-tracker.md` |
+| Client | `~/freelance-office/clients/{{ client_slug }}/meta.yaml` |
+| Brain | `~/MAKAKOO/data/Brain/pages/{{ client_slug }}/{{ project_slug }}.md` ← this page |
+
+---
+
+## Keywords
+
+`#project` `#{{ client_slug }}` `#{{ project_slug }}`

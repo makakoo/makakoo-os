@@ -1,0 +1,45 @@
+[plugin]
+name = "garage-store"
+version = "0.2.0"
+kind = "adapter"
+language = "shell"
+summary = "Adapter shim — daemon lifecycle now owned by standalone `garagetytus` binary (GARAGETYTUS-V0.1 Phase D)"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+keywords = ["s3", "storage", "garage", "adapter", "garagetytus"]
+
+[source]
+path = "plugins-core/garage-store"
+
+[depends]
+binaries = ["garagetytus"]
+
+[install]
+unix = "bin/install.sh"
+
+[entrypoint]
+start = "bin/garage-wrapper.sh start"
+stop = "bin/garage-wrapper.sh stop"
+health = "bin/garage-wrapper.sh health"
+
+[service]
+# garagetytus owns process lifecycle on its end. The plugin runner
+# now just defers (start/stop/health all exec into the standalone
+# binary). restart_policy stays "never" — no double-actor situation
+# because Makakoo no longer manages the daemon process directly.
+restart_policy = "never"
+health_endpoint = "http://127.0.0.1:3903/health"
+health_interval_sec = 60
+
+[capabilities]
+grants = [
+  "exec/binary:/usr/local/bin/garagetytus",
+  "exec/binary:/opt/homebrew/bin/garagetytus",
+  "exec/binary:$HOME/.local/bin/garagetytus",
+  "net/http:http://127.0.0.1:3900/*",
+  "net/http:http://127.0.0.1:3903/*",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/garage-store"
+retention = "keep"

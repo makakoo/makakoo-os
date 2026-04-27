@@ -1,0 +1,82 @@
+# distros/core.toml
+#
+# The default install for most users. Layers on top of minimal with the
+# four in-tree plugins-core manifests: three watchdogs and the Mascot GYM.
+# When makakoo-arbitrage, harveychat, brain, and friends ship as external
+# plugins we grow this list.
+
+[distro]
+name = "core"
+display_name = "Makakoo Core"
+version = "0.1.0"
+description = "Essential plugins for a usable Harvey, including shared S3 storage (garage-store, soft-fails when garagetytus binary absent). The default install."
+license = "MIT"
+
+include = ["minimal.toml"]
+
+[kernel]
+version = "^0.1"
+
+[plugins]
+# Libraries — importable Python packages that skills depend on.
+"lib-hte" = { version = "*" }
+"lib-agent-loop" = { version = "*" }
+
+# Browser — Chrome CDP harness for harvey_browse in every infected CLI.
+"agent-browser-harness" = { version = "*" }
+"bootstrap-fragment-browser-harness" = { version = "*" }
+
+# CLI auto-update — default CLIs on fresh Makakoo OS.
+"sancho-task-plugin-update-check" = { version = "*" }
+"sancho-task-cli-pi" = { version = "*" }
+"sancho-task-cli-ghostty" = { version = "*" }  # macOS only; no-op on Linux/Windows
+"sancho-task-cli-switchailocal" = { version = "*" }
+
+# LLM gateway — switchAILocal unified local API proxy on port 18080.
+"agent-switchailocal" = { version = "*" }
+
+# Watchdogs — wake up the services Harvey depends on.
+"watchdog-switchailocal" = { version = "*" }
+"agent-pg-watchdog" = { version = "*" }
+"watchdog-infect" = { version = "*" }
+"monitor-hackernews" = { version = "*" }
+
+# Mascot GYM — the 5-layer self-improvement flywheel.
+"mascot-gym" = { version = "*" }
+
+# Memory consolidation — nightly dream pass strengthens the Brain graph.
+"agent-dreams" = { version = "*" }
+
+# Shared S3 storage — garage-store adapter (soft-fails when the
+# garagetytus binary is missing, so install completes cleanly).
+# Sprint 2026-04-27-garagetytus-default-bundle: lope-ask consensus
+# (codex+opencode+pi+kimi 4/4) said default-bundle this in core +
+# sebastian, leave minimal/creator/trader unchanged.
+"garage-store" = { version = "*" }
+
+[defaults]
+voice = "caveman"
+
+[post_install]
+message = """
+Makakoo Core installed. Plugins registered:
+  - agent-browser-harness     — harvey_browse for every CLI (needs Chrome with CDP)
+  - agent-switchailocal       — LLM gateway on :18080 (all platforms)
+  - watchdog-switchailocal   (300s interval)
+  - watchdog-postgres        (900s interval)
+  - watchdog-infect          (21600s interval — catches + heals infect drift)
+  - monitor-hackernews       (3600s interval)
+  - mascot-gym               (5 SANCHO tasks)
+  - plugin_update_check     (24h — auto-updates browser-harness via GitHub releases)
+  - cli_pi_update           (24h — auto-updates pi via npm, all platforms)
+  - cli_ghostty_update      (24h — auto-updates Ghostty via Homebrew, macOS only)
+  - cli_switchailocal_update (24h — auto-updates switchAILocal via npm)
+
+Next:
+  1. Start Chrome: open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-cdp
+  2. makakoo agent start agent-browser-harness
+  3. makakoo agent start agent-switchailocal
+  4. makakoo daemon install     — launchd/systemd agent for the tick loop
+  5. makakoo secret set AIL_API_KEY — so the LLM gateway can answer
+  6. makakoo sancho status      — verify all tasks are registered
+"""

@@ -1,0 +1,91 @@
+# distros/sebastian.toml
+#
+# Sebastian Edition — Harvey's daily-driver distro. Layers on top of `core`
+# with the first two pilot-migrated skills from harvey-os: the internal
+# caveman-voice bootstrap fragment and the network diagnostic wizard.
+# Declares persona = Harvey (default voice is caveman, not factory).
+#
+# This is the dogfood distro. Every skill/agent Sebastian migrates from
+# the legacy Python tree into plugins-core gets added here FIRST, and
+# shaken out on the live install before being promoted to `creator` or
+# another downstream distro.
+
+[distro]
+name = "sebastian"
+display_name = "Sebastian Edition (Harvey, the full rig)"
+version = "0.1.0"
+description = "Harvey's daily-driver install — core + migrated harvey-os skills. Pilot distro for Phase H skill migrations."
+license = "MIT"
+
+include = ["core.toml"]
+
+[kernel]
+version = "^0.1"
+
+[plugins]
+# Phase H/2 pilot migrations from harvey-os/skills/.
+"skill-meta-caveman-voice" = { version = "*" }
+"skill-system-network"     = { version = "*" }
+
+# Phase H/3 batch 1 — remaining HTE system wizards.
+"skill-system-files"       = { version = "*" }
+"skill-system-health"      = { version = "*" }
+"skill-system-security"    = { version = "*" }
+
+# Phase H/3 batch 2 — first non-system wizards (cross-CLI probe + OpenClaw bridge).
+"skill-meta-canary"                       = { version = "*" }
+"skill-infrastructure-openclaw-bridge"    = { version = "*" }
+
+# Sprint 002 batch 3 — dev orchestrator, loops, FTS5 search.
+"skill-dev-dev-orchestrator"              = { version = "*" }
+"skill-meta-loops"                        = { version = "*" }
+"skill-productivity-fts5-search"          = { version = "*" }
+
+# Auto-update + browser bootstrap (inherited via core.toml, listed explicitly).
+"sancho-task-plugin-update-check"          = { version = "*" }
+"bootstrap-fragment-browser-harness"        = { version = "*" }
+"sancho-task-cli-pi"                        = { version = "*" }
+"sancho-task-cli-ghostty"                   = { version = "*" }  # macOS only
+"sancho-task-cli-switchailocal"              = { version = "*" }
+"agent-switchailocal"                        = { version = "*" }
+
+# Shared S3 storage — garage-store adapter (inherited via core.toml,
+# listed explicitly per sprint 2026-04-27-garagetytus-default-bundle
+# AC2 so the bundling intent is obvious from sebastian.toml standalone).
+"garage-store"                               = { version = "*" }
+
+[defaults]
+voice = "caveman"
+persona_name = "Harvey"
+pronoun = "he/him"
+
+[post_install]
+message = """
+Sebastian Edition installed. You now have Makakoo Core + the migrated
+harvey-os skills shipped so far:
+  - skill-meta-caveman-voice                (bootstrap-fragment, ~63% output-token savings)
+  - skill-system-network                    (interactive wizard, 'makakoo skill network')
+  - skill-system-files                      (file-manager wizard, 'makakoo skill files')
+  - skill-system-health                     (services + machine resources, 'makakoo skill health')
+  - skill-system-security                   ('Is this command safe?', 'makakoo skill security')
+  - skill-meta-canary                       (cross-CLI honesty probe, 'makakoo skill canary')
+  - skill-infrastructure-openclaw-bridge    (Harvey↔OpenClaw delegation, 'makakoo skill openclaw-bridge')
+  - skill-dev-dev-orchestrator              (parallel dev tasks, 'makakoo skill dev-orchestrator')
+  - skill-meta-loops                        (session summary + watchdog, 'makakoo skill loops')
+  - skill-productivity-fts5-search          (Brain FTS5 search, 'makakoo skill fts5-search')
+
+Persona locked to: Harvey (voice=caveman, pronoun=he/him).
+
+Sprint 002 batch 3. Library plugin lib-hte ships with core.
+19 plugins total in this distro.
+
+Browser + CLI setup:
+  1. open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-cdp
+  2. makakoo agent start agent-browser-harness
+  3. makakoo agent start agent-switchailocal
+  4. Auto-update tasks (24h):
+     - plugin_update_check — browser-harness via GitHub releases
+     - cli_pi_update — pi-coding-agent via npm (all platforms)
+     - cli_ghostty_update — Ghostty via Homebrew (macOS only)
+     - cli_switchailocal_update — switchAILocal via npm
+"""

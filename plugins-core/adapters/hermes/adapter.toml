@@ -1,0 +1,54 @@
+# Nous Research Hermes — reference adapter calling the Hermes HTTP gateway
+# running inside a Tytus pod (or externally). The existing PTY-mode skill at
+# plugins-core/skill-dev-hermes-agent stays standalone; this adapter lets the
+# universal bridge treat Hermes as a first-class lope/swarm participant.
+
+[adapter]
+name            = "hermes"
+version         = "2.1.0"
+manifest_schema = 1
+description     = "Nous Research Hermes gateway via OpenAI-compatible HTTP"
+homepage        = "https://nousresearch.com"
+license         = "Apache-2.0"
+authors         = ["Nous Research"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["openai-chat-v1"]
+
+[transport]
+kind     = "openai-compatible"
+base_url = "http://127.0.0.1:8642/v1"
+model    = "hermes-3-llama-3.1-70b"
+
+[auth]
+scheme  = "bearer"
+key_env = "HERMES_API_KEY"
+
+[output]
+format        = "openai-chat"
+verdict_field = "choices.0.message.content"
+
+[capabilities]
+models         = ["hermes-3-llama-3.1-70b", "hermes-3-llama-3.1-8b"]
+features       = ["tool_use", "streaming"]
+max_context    = 131072
+rate_limit_rpm = 200
+supports_roles = ["validator", "delegate"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/NousResearch/hermes-adapter.git"
+ref         = "v2.1.0"
+
+[security]
+requires_network    = true
+allowed_hosts       = ["127.0.0.1"]
+requires_env        = ["HERMES_API_KEY"]
+sandbox_profile     = "network-io"
+signed_by           = "nous-research"
+
+[health]
+check_url      = "http://127.0.0.1:8642/v1/models"
+timeout_ms     = 5000
+expected_field = "data.0.id"

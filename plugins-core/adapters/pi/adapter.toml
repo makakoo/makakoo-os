@@ -1,0 +1,60 @@
+# Pi reference adapter — drives the `pi` CLI (github.com/badlogic/pi-mono)
+# as a subprocess worker. Uses `-p`/`--print` non-interactive mode with
+# the prompt fed on stdin. Each call is ephemeral: `--no-session` forbids
+# session persistence, `--no-tools` disables pi's built-in tool registry
+# so the response is a clean text answer Harvey can pipe into lope/swarm.
+#
+# Prerequisites: pi must be on PATH. Install: `npm i -g @mariozechner/pi-ai`.
+# See plugins-core/agent-pi/SKILL.md for the deeper multi-turn surface
+# (MCP tools: pi_run/pi_session_fork/...). This adapter surfaces only
+# the one-turn delegate shape — pi as a stateless LLM worker.
+
+[adapter]
+name            = "pi"
+version         = "0.1.0"
+manifest_schema = 1
+description     = "pi-mono coding assistant as a stateless subprocess worker"
+homepage        = "https://github.com/badlogic/pi-mono"
+license         = "MIT"
+authors         = ["Makakoo OS contributors"]
+
+[compatibility]
+bridge_version = "^2.0"
+protocols      = ["custom"]
+
+[transport]
+kind    = "subprocess"
+command = ["pi", "-p", "--no-session", "--no-tools"]
+stdin   = true
+
+[auth]
+scheme = "none"
+
+[output]
+format = "plain"
+
+[capabilities]
+features       = []
+max_context    = 131072
+supports_roles = ["delegate", "swarm_member"]
+
+[install]
+source_type = "git"
+source      = "https://github.com/makakoo/adapters-core.git"
+ref         = "v0.1.0"
+
+[security]
+# pi's network surface is whatever its provider alias points at. On
+# Sebastian's machine that's switchAILocal @ 127.0.0.1:18080 which
+# fans out to remote providers server-side — so the pi process itself
+# only touches localhost. Users who swap `--provider` without going
+# through switchAI should extend this allowlist per their setup.
+requires_network    = true
+allowed_hosts       = ["127.0.0.1"]
+requires_filesystem = ["read:cwd", "read:~/.pi", "write:~/.pi/agent/sessions"]
+requires_env        = []
+sandbox_profile     = "network-io"
+signed_by           = "makakoo"
+
+[health]
+timeout_ms = 5000

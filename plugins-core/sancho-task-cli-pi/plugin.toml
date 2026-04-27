@@ -1,0 +1,40 @@
+[plugin]
+name = "sancho-task-cli-pi"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Auto-update the pi-coding-agent npm global package every 24h."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-cli-pi"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+binaries = ["npm"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+run = "python3 -u src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:$MAKAKOO_HOME/data/Brain",
+    "fs/write:$MAKAKOO_HOME/data/Brain",
+    "fs/read:$MAKAKOO_HOME/state/sancho-task-cli-pi",
+    "fs/write:$MAKAKOO_HOME/state/sancho-task-cli-pi",
+    "exec/binary:npm",
+]
+
+[sancho]
+tasks = [{ name = "cli_pi_update", interval = "24h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-cli-pi"
+retention = "keep"

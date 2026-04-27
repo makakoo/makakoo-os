@@ -1,0 +1,41 @@
+# ──────────────────────────────────────────────────────────────────
+# Alerts bot — Slack only, one-way
+#
+# Pipes infra/build/deploy notifications into a Slack channel.
+# Receive-side replies are ignored — this slot does NOT have a
+# conversational LLM loop wired up. Use it as a write-only sink.
+#
+# To send: any tool that resolves to this slot's `agent_id` can call
+# `chat_send` with kind="slack" and the inbound message will land in
+# the configured channel.
+# ──────────────────────────────────────────────────────────────────
+
+slot_id = "alerts"
+name    = "Alerts"
+persona = """
+You receive structured alert messages from CI / monitoring / deploy
+hooks and forward them verbatim to the configured Slack channel.
+
+Do not summarize, do not editorialize, do not respond to threads.
+Your job is delivery, not conversation.
+"""
+inherit_baseline = false
+
+allowed_paths = ["~/MAKAKOO/data/agents/alerts/"]
+tools         = ["chat_send"]
+
+process_mode = "supervised_pair"
+
+[[transport]]
+id      = "slack-main"
+kind    = "slack"
+enabled = true
+secret_ref    = "agent/alerts/slack-main/bot_token"
+app_token_ref = "agent/alerts/slack-main/app_token"
+allowed_users = []   # one-way — nobody replies to alerts
+
+[transport.config]
+team_id  = "<YOUR_SLACK_TEAM_ID>"
+mode     = "socket"
+dm_only  = false
+channels = ["<YOUR_ALERTS_CHANNEL_ID>"]   # C…

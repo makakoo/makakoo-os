@@ -1,0 +1,44 @@
+[plugin]
+name = "skill-freelance-office"
+version = "0.3.3"
+kind = "skill"
+language = "python"
+summary = "Multi-country freelance accounting plugin. DE + AR + ES + US tax regimes in-tree (drop a core/tax/<cc>.py to add more). Per-office registry + --office selector. One install hosts many offices, each with own tax rules, locale, currency, and ledger. v0.3.3: Makakoo Brain integration — onboard-client and generate-contract auto-create bidirectional brain pages (Office ↔ Brain) with full file cross-links."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-freelance-office"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+grants = [
+    "fs/read:~/freelance-office",
+    "fs/write:~/freelance-office",
+    "fs/write:~/MAKAKOO/data/Brain",
+    "brain/write",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-freelance-office"
+retention = "keep"
+
+# SANCHO watchdogs — v0.3 invoice lifecycle. Each entry is a named
+# ``tick(ctx)`` callable under ``src.sancho_handlers.<task>:tick``;
+# the kernel scheduler binds the name to the module by convention.
+# The daily digest uses ``active_hours = [9, 10]`` in lieu of a cron
+# expression — same net effect, "fire within the 09:00 local hour".
+[sancho]
+tasks = [
+  { name = "freelance_invoice_overdue_tick", interval = "24h" },
+  { name = "freelance_threshold_tick",       interval = "24h" },
+  { name = "freelance_daily_digest_tick",    interval = "24h", active_hours = [9, 10] },
+]

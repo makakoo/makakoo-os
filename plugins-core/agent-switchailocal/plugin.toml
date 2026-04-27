@@ -1,0 +1,42 @@
+[plugin]
+name = "agent-switchailocal"
+version = "0.1.0"
+kind = "agent"
+language = "shell"
+summary = "switchAILocal — unified local LLM gateway on port 18080. Installs @traylinx/switchailocal npm package + launchd/systemd service."
+authors = ["Makakoo OS contributors", "Traylinx"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-switchailocal"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+binaries = ["npm"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+start = "install.sh start"
+stop = "install.sh stop"
+health = "install.sh health"
+
+[capabilities]
+grants = [
+    "net/http:127.0.0.1:18080",
+    "net/http:github.com",
+    "net/http:api.github.com",
+    "fs/read:$MAKAKOO_HOME/state/agent-switchailocal",
+    "fs/write:$MAKAKOO_HOME/state/agent-switchailocal",
+    "exec/binary:npm",
+    "exec/binary:launchctl",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-switchailocal"
+retention = "keep"

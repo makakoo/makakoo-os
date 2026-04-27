@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-infrastructure-openclaw-bridge"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Harvey OS delegation bridge to OpenClaw. Routes tasks to OpenClaw as a sub-agent, manages sessions, synthesizes results, and maintains an audit log. OpenClaw is invoked via CLI subprocess (primary) or MCP (if OpenClaw exposes an MCP server). Part of Harvey's multi-agent orchestration system."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-infrastructure-openclaw-bridge"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u src/bridge.py"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-infrastructure-openclaw-bridge"
+retention = "keep"

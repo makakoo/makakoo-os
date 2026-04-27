@@ -1,0 +1,95 @@
+
+Lope review: /tmp/phase1-r3-diff.txt  (29814 chars)
+Validators: pi, codex, opencode
+Focus: Phase 1 round-3 incremental fixes for codex round-2: (a) Notify replaced with wa...
+Timeout: 600s per validator
+
+
+━━━ opencode ━━━
+## Phase 1 round-3 review
+
+**(a) watch::channel ShutdownTrigger/Signal** — `Notify` fully evicted. `ShutdownSignal::wait()` uses `rx.wait_for(|v| *v)` which returns immediately if `true` already held. Durability tested explicitly in `shutdown_signal_durability_post_fire_subscribers_observe`. ✅
+
+**(b) run_supervisor fires shutdown after watcher returns** — `trigger.fire()` placed immediately after `run_gateway_watcher(...).await`, before `writer_handle.await`. Regression test `run_supervisor_shuts_writer_when_watcher_errors` verifies 5s timeout doesn't fire. ✅
+
+**(c) MockGateway** — `pub mod mock` with `sleep_forever()`, `crash_immediately()`, `exit_clean()`, `spawn_failure()`. All 6 tests migrated from raw `GatewayLaunchSpec::new(...)`. ✅
+
+**(d) Circuit-breaker test strengthened** — `tripped` no longer OR'd with `count >= 4`. Now asserts `tripped` alone, plus `state == Crashed`. Loop waits 20s (200×100ms) to cover the full backoff schedule. ✅
+
+**(e) ExecStart quoted form** — assertion changed from `ExecStart=/usr/local/bin/makakoo agent...` to `ExecStart="/usr/local/bin/makakoo" agent...`. `StandardOutput=append:` also quoted. ✅
+
+No issues found. The diff is clean, internally consistent, and each fix closes its requirement.
+
+**PASS**
+
+━━━ pi ━━━
+
+
+Now reviewing the diff for the five fixes.
+
+---
+
+**(a) Notify → watch::channel ShutdownTrigger/Signal**
+
+`ShutdownSignal` wraps `watch::Receiver<bool>` and `ShutdownTrigger` wraps `watch::Sender<bool>`. `signal.wait()` uses `rx.wait_for(|v| *v)` which returns immediately if already fired — that's the key durability property. `is_fired()` reads the current value. `trigger.fire()` sends `true`. Cloning a `ShutdownSignal` (via `signal.clone()`) gives a new receiver on the same channel — a late subscriber still gets the `true` because `watch` holds the value.
+
+The regression test `shutdown_signal_durability_post_fire_subscribers_observe` explicitly fires the trigger, clones the signal, then calls `wait()` on the late subscriber with a 50ms timeout — it must return immediately or the test fails. ✓
+
+**(b) run_supervisor explicitly fires shutdown after watcher returns**
+
+`run_supervisor` now does:
+```rust
+let watcher_result = run_gateway_watcher(spec, handle, signal).await;
+trigger.fire();
+let _ = writer_handle.await;
+```
+Whether the watcher returns `Ok` or `Err`, `trigger.fire()` is called before awaiting the writer. The new test `run_supervisor_shuts_writer_when_watcher_errors` spawns a gateway with `spawn_failure()` and asserts `run_supervisor` completes within 5s (it was previously wedging). ✓
+
+**(c) MockGateway helper with named scenarios**
+
+`mock::MockGateway` is a `pub struct` in `#[cfg(test)]` with four constructors:
+- `sleep_forever()` → `sleep 60` (graceful shutdown tests)
+- `crash_immediately()` → `false` exit code 1 (restart budget + circuit breaker)
+- `exit_clean()` → `true` exit 0 (respawn-on-exit tests)
+- `spawn_failure()` → nonexistent binary (spawn-error path)
+
+All four tests use these helpers instead of raw `GatewayLaunchSpec::new(...).arg(...)`. ✓
+
+**(d) Circuit-breaker test strengthened to require `tripped=true`**
+
+Old test had a fallback: `assert!(tripped || count >= 4)`. New test is strict:
+```rust
+assert!(tripped, "expected breaker to trip within 20s");
+assert_eq!(h.lock().unwrap().state, SupervisorState::Crashed);
+```
+No fallback, no lenient `count >= 4`. Either the breaker trips within 20s (200 × 100ms polls) or the test fails. The loop now breaks on `is_tripped()` and both assertions fire together. ✓
+
+**(e) Linux ExecStart test updated for quoted form**
+
+The systemd test now checks:
+```rust
+.contains(r#"ExecStart="/usr/local/bin/makakoo" agent _supervisor --slot secretary"#)
+```
+Plus the quoted `StandardOutput`:
+```rust
+.contains(r#"StandardOutput=append:""#)
+```
+The comment explains: *"Paths are always double-quoted per systemd.unit(5) — even when no spaces — so a future path with embedded whitespace doesn't break parsing."* ✓
+
+---
+
+All five fixes are closed. **PASS**.
+
+━━━ codex ━━━
+Static review of `/tmp/phase1-r3-diff.txt` and touched files.
+
+- (a) `Notify` → durable `watch::channel` shutdown: closed. `ShutdownSignal::wait()` observes already-fired state, and regression test covers late subscriber behavior.
+- (b) `run_supervisor` fires shutdown after watcher returns: closed. Initial spawn-error path now propagates `Err` and unblocks writer; regression test covers no wedge.
+- (c) `MockGateway` helper: closed. Tests now use named scenarios instead of raw `sleep`/`true`/`false`.
+- (d) circuit-breaker test strengthened: closed. Test now requires `restart.is_tripped()` and `SupervisorState::Crashed`. Runtime is ~15.5s minimum due backoff, 20s timeout is acceptable but mildly CI-sensitive.
+- (e) Linux `ExecStart` quoted form: closed. Test now matches `"makakoo"` quoted path and `StandardOutput=append:"..."`.
+
+One caveat: I could not run `cargo check` because sandbox is read-only and Cargo failed opening `target/debug/.cargo-lock`. Static review found no blocker.
+
+PASS
+

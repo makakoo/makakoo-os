@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Phase B Gate 1 + Phase F Gate 5 — `cargo test --workspace` green on
+  # macOS + Linux + Windows. Windows added in sprint-013 alongside the
+  # `makakoo uninfect` + Windows platform adapter deliverables.
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Linux system deps (dbus + gnome-keyring for Secret Service)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config gnome-keyring dbus-x11
+
+      - name: Build workspace
+        run: cargo build --workspace --locked
+
+      # On Linux, the `keyring` crate routes through Secret Service which
+      # requires both a DBus session and an unlocked gnome-keyring-daemon.
+      # `dbus-run-session` provides the session; we unlock with an empty
+      # password and start the daemon before handing off to cargo test.
+      # macOS uses the real Keychain and needs no setup.
+      # Windows uses Credential Manager natively — the `keyring` crate
+      # talks to it without any process-session plumbing.
+      - name: Test workspace (macOS + Windows)
+        if: matrix.os != 'ubuntu-latest'
+        run: cargo test --workspace --locked
+
+      - name: Test workspace (Ubuntu with keyring session)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n "" | gnome-keyring-daemon --unlock > /dev/null 2>&1
+            eval $(echo -n "" | gnome-keyring-daemon --start --components=secrets 2>/dev/null)
+            export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+            cargo test --workspace --locked
+          '
+
+      # Platform adapter daemon round-trip — Phase B Gate 1 hard requirement.
+      # Runs on launchd (macOS), systemd (Linux), and auto-launch registry
+      # (Windows). No keyring involvement so no session wrapper needed.
+      - name: Integration test — daemon round-trip
+        run: cargo test -p makakoo-platform --test daemon_roundtrip --locked
+
+  # Phase B Gate 1 also requires `cargo check --target x86_64-unknown-redox
+  # -p makakoo-core` green (compile-only). If this fails the spec says fall
+  # back to limbo/libsql per ARCHITECTURE.md §9 point 5 — don't surprise us
+  # in Phase H.
+  redox-check:
+    name: redox cross-compile (makakoo-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with Redox target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-redox
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-latest-cargo-redox-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-latest-cargo-redox-
+
+      - name: cargo check (redox target, compile-only)
+        # Expected to potentially fail today on rusqlite's bundled C build —
+        # per spec, that failure is informative (triggers the limbo/libsql
+        # fallback decision), NOT a CI hard-fail. We run with
+        # continue-on-error and surface the output for manual inspection.
+        continue-on-error: true
+        run: cargo check --target x86_64-unknown-redox -p makakoo-core
+
+  # Clippy — warnings surfaced for review but non-fatal. The workspace
+  # has pre-Phase-B clippy debt; a dedicated cleanup sprint will flip
+  # this to -D warnings later. Phase B's hard gate is `cargo test
+  # --workspace` green, not zero clippy warnings. Scoped-strict clippy
+  # runs only on the Phase B deliverable (makakoo-platform).
+  clippy:
+    name: clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Linux system deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+            ${{ runner.os }}-cargo-
+
+      - name: cargo clippy (workspace, informational)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --locked
+
+      # Strict lint gate for the Phase B deliverable. New code must be
+      # clippy-clean even while older crates carry debt.
+      - name: cargo clippy (makakoo-platform, strict)
+        run: cargo clippy -p makakoo-platform --all-targets --locked -- -D warnings

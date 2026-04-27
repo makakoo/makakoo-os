@@ -1,0 +1,18 @@
+[plugin]
+name = "lib-agent-loop"
+version = "0.1.0"
+kind = "library"
+language = "python"
+summary = "Python agentic loop library — exports HarveyAgent, the v2 tool-calling runtime"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/lib-agent-loop/src"
+
+[depends]
+python = ">=3.11"
+plugins = ["lib-hte"]
+
+[capabilities]
+grants = []

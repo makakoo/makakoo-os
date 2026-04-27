@@ -1,0 +1,55 @@
+# winget manifest draft — Makakoo OS
+#
+# This file is the DRAFT that will eventually be split into the three
+# files winget-pkgs requires (installer, defaultLocale, version) and
+# submitted as a PR to `microsoft/winget-pkgs` under
+#   manifests/m/makakoo/makakoo/<version>/
+#
+# Submission runbook: docs/RELEASE_SIGNING.md §winget.
+#
+# SHA placeholders below are filled in at release time — the zip that
+# the GitHub Actions release workflow uploads is the source of truth
+# for the hash.
+
+PackageIdentifier: makakoo.makakoo
+PackageVersion: 0.1.0
+Publisher: Makakoo OS
+PublisherUrl: https://makakoo.com
+PublisherSupportUrl: https://github.com/makakoo/makakoo-os/issues
+
+PackageName: Makakoo OS
+PackageUrl: https://github.com/makakoo/makakoo-os
+License: MIT
+LicenseUrl: https://github.com/makakoo/makakoo-os/blob/main/LICENSE
+Copyright: "(c) Makakoo OS contributors"
+
+ShortDescription: Autonomous cognitive extension for any AI CLI
+Description: |
+  Makakoo OS infects the global instructions slot of every AI CLI
+  (Claude Code, Gemini CLI, Codex, OpenCode, Cursor, Vibe, Qwen) with
+  a shared bootstrap block, plus a daemon that runs proactive SANCHO
+  maintenance tasks (memory consolidation, daily briefings, watchdogs).
+
+Tags:
+  - ai
+  - cli
+  - productivity
+  - assistant
+  - agent
+
+Moniker: makakoo
+ManifestType: singleton
+ManifestVersion: 1.6.0
+
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/makakoo/makakoo-os/releases/download/v0.1.0/makakoo-x86_64-pc-windows-msvc.zip
+    InstallerSha256: PLACEHOLDER_SHA256_WINDOWS_X64
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: makakoo-x86_64-pc-windows-msvc\makakoo.exe
+        PortableCommandAlias: makakoo
+      - RelativeFilePath: makakoo-x86_64-pc-windows-msvc\makakoo-mcp.exe
+        PortableCommandAlias: makakoo-mcp
+    ReleaseDate: 2026-04-20

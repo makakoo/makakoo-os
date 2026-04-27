@@ -1,0 +1,17 @@
+[plugin]
+name = "lib-hte"
+version = "0.1.0"
+kind = "library"
+language = "python"
+summary = "Harvey Terminal Engine — cross-CLI rendering, widgets, wizards, and animations"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/lib-hte/src"
+
+[depends]
+python = ">=3.9"
+
+[capabilities]
+grants = []

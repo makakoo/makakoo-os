@@ -1,0 +1,43 @@
+[plugin]
+name = "sancho-task-plugin-update-check"
+version = "0.2.0"
+kind = "sancho-task"
+language = "python"
+summary = "Plugin update checker + optional auto-updater. Reads plugins-to-update.json for per-plugin auto-update + post-update hooks."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-plugin-update-check"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+binaries = ["makakoo"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+run = "python3 -u src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:$MAKAKOO_HOME/data/Brain",
+    "fs/write:$MAKAKOO_HOME/data/Brain",
+    "fs/read:$MAKAKOO_HOME/state/sancho-task-plugin-update-check",
+    "fs/write:$MAKAKOO_HOME/state/sancho-task-plugin-update-check",
+    "exec/binary:makakoo",
+    "net/http:github.com",
+    "net/http:api.github.com",
+]
+
+[sancho]
+tasks = [{ name = "plugin_update_check", interval = "24h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-plugin-update-check"
+retention = "keep"

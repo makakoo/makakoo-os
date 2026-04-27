@@ -1,0 +1,19 @@
+# distros/minimal.toml
+#
+# The bare-bones kernel install. Only what's required to boot the daemon
+# and run the native Rust SANCHO tasks. No Python. No Python plugins.
+#
+# This distro is mostly useful as an include base for every other distro.
+
+[distro]
+name = "minimal"
+display_name = "Makakoo Minimal"
+version = "0.1.0"
+description = "Kernel-only install. Runs the native Rust tasks. Zero Python."
+license = "MIT"
+
+[kernel]
+version = "^0.1"
+
+# No plugins — just the kernel's native handlers.
+[plugins]

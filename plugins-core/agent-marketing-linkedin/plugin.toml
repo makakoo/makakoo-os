@@ -1,0 +1,29 @@
+[plugin]
+name = "agent-marketing-linkedin"
+version = "1.0.0"
+kind = "agent"
+language = "shell"
+summary = "LinkedIn post generator — 10-post wheel covering launch, insight, feature, personality, use-case, lore, origin, proof, CTA, community"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/agent-marketing-linkedin"
+
+[abi]
+agent = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+start = "bash src/run.sh"
+stop = "pkill -f run.sh"
+health = "true"
+
+[capabilities]
+grants = ["llm/chat"]
+
+[state]
+dir = "$MAKAKOO_HOME/state/agent-marketing-linkedin"
+retention = "keep"

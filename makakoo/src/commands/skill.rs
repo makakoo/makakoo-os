@@ -1,0 +1,246 @@
+//! `makakoo skill <name> [args...]` — plugin-first, capability-enforced dispatch.
+//!
+//! Dispatch order:
+//!   1. Look up `<name>` in the PluginRegistry (installed plugins).
+//!      If found, start a per-plugin CapabilityServer on a Unix socket,
+//!      spawn the plugin process with the socket path in env, and enforce
+//!      grants at runtime.
+//!   2. Fall back to legacy `SkillRunner` (walks `harvey-os/skills/`).
+//!
+//! Both paths use `build_skill_env` for unified PYTHONPATH handling.
+
+use std::process::Command;
+use std::sync::Arc;
+
+use makakoo_core::capability::{
+    build_plugin_handler, socket_path, AuditLog, CapabilityServer,
+};
+use makakoo_core::gym::{ErrorCapture, ErrorEntry, ErrorSource};
+use makakoo_core::platform::makakoo_home;
+use makakoo_core::plugin::PluginRegistry;
+
+use crate::context::CliContext;
+use crate::output;
+use crate::skill_runner::{build_skill_env, SkillRunner};
+
+/// Canonical env var name for the per-plugin capability socket path.
+/// Read by `makakoo-client` (Rust) and `makakoo-client-py` (Python),
+/// documented in `spec/ABI_SKILL.md`, `spec/ABI_MCP_TOOL.md`, and
+/// `spec/CAPABILITIES.md`. Renaming this silently breaks every plugin
+/// that tries to dial the kernel — locked by
+/// `plugin_socket_env_var_matches_client_contract`.
+pub const PLUGIN_SOCKET_ENV: &str = "MAKAKOO_SOCKET_PATH";
+
+pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Result<i32> {
+    // `makakoo skill list` and `makakoo skill info` are common mistakes —
+    // GYM captured 5+2 occurrences 2026-04-23. These look like subcommands
+    // but the CLI only has `makakoo skill <name>` for *running* a skill.
+    // Redirect with a helpful message so the caller can self-correct.
+    if name == "list" {
+        eprintln!("hint: `makakoo skill list` is not a valid subcommand.");
+        eprintln!("      To list installed skills, run:");
+        eprintln!("        makakoo plugin list");
+        eprintln!("      To list Python skill registry:");
+        eprintln!("        python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --list");
+        return Ok(1);
+    }
+    if name == "info" {
+        let skill_name = args.first().map(|s| s.as_str()).unwrap_or("<skill>");
+        eprintln!("hint: `makakoo skill info` is not a valid subcommand.");
+        eprintln!("      To run a skill, use:  makakoo skill {skill_name}");
+        eprintln!("      To see skill details: python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --match {skill_name}");
+        return Ok(1);
+    }
+
+    let home = makakoo_home();
+    let registry = PluginRegistry::load_default(&home).unwrap_or_default();
+
+    // Try plugin dispatch first — match by exact name or by stripping
+    // the common "skill-" prefix and category segments.
+    if let Some(plugin) = find_plugin(&registry, name) {
+        if let Some(run_cmd) = &plugin.manifest.entrypoint.run {
+            let library_paths = registry.get_library_paths();
+            let mut env = build_skill_env(&home, &library_paths);
+
+            // Build capability handler + grant table for this plugin.
+            let store = ctx.store()?;
+            let llm = ctx.llm();
+            let emb = ctx.embeddings();
+            let (handler, grants) =
+                build_plugin_handler(&plugin.manifest, &home, store, llm, emb)?;
+
+            // Create per-invocation socket (PID suffix prevents parallel collisions).
+            let sock = socket_path(&home, &format!(
+                "{}-{}",
+                plugin.manifest.plugin.name,
+                std::process::id()
+            ));
+            if let Some(parent) = sock.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+
+            let audit = Arc::new(AuditLog::open_default(&home)?);
+            let server = CapabilityServer::new(
+                sock.clone(),
+                grants,
+                audit,
+                handler,
+            );
+            let handle = server.serve().await?;
+
+            // Tell the plugin where to connect — read by every
+            // makakoo-client build (Rust, Python) and documented in
+            // spec/ABI_*.md. See the `PLUGIN_SOCKET_ENV` const + test.
+            env.insert(
+                PLUGIN_SOCKET_ENV.into(),
+                sock.to_string_lossy().into_owned(),
+            );
+
+            // Split command into parts, expand $MAKAKOO_HOME.
+            let parts: Vec<String> = run_cmd
+                .split_whitespace()
+                .map(|p| p.replace("$MAKAKOO_HOME", &home.to_string_lossy()))
+                .collect();
+
+            if parts.is_empty() {
+                output::print_error(format!(
+                    "plugin '{}' has empty [entrypoint].run",
+                    plugin.manifest.plugin.name
+                ));
+                return Ok(1);
+            }
+
+            let mut cmd = Command::new(&parts[0]);
+            cmd.args(&parts[1..]);
+            cmd.args(args);
+            // CWD = plugin install root so manifests can use
+            // `run = "python3 -u src/run.py"` and resolve to their own
+            // bundled source. $MAKAKOO_HOME is still exported in env
+            // so plugins can reach shared state (Brain, config, etc.)
+            // via the absolute `$MAKAKOO_HOME/...` path.
+            cmd.current_dir(&plugin.root);
+            for (k, v) in &env {
+                cmd.env(k, v);
+            }
+            // Expose the plugin's install root explicitly so ad-hoc
+            // shell one-liners inside a plugin can still reach their
+            // own files even from a child process that cd'd elsewhere.
+            cmd.env("MAKAKOO_PLUGIN_ROOT", &plugin.root);
+
+            let status = cmd.status().map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to spawn plugin '{}': {e}",
+                    plugin.manifest.plugin.name
+                )
+            })?;
+
+            // Plugin exited — shut down the socket server and clean up.
+            handle.shutdown().await;
+            // Socket file removed by shutdown, but ensure cleanup on any path.
+            let _ = std::fs::remove_file(&sock);
+
+            let exit = status.code().unwrap_or(1);
+            if exit != 0 {
+                let _ = ErrorCapture::new(&home).record(
+                    ErrorEntry::new(ErrorSource::Tool)
+                        .cmd(format!("makakoo skill {name}"))
+                        .stderr(format!(
+                            "plugin '{}' exited {exit}",
+                            plugin.manifest.plugin.name
+                        ))
+                        .exit_code(exit)
+                        .skill_in_scope(name),
+                );
+            }
+            return Ok(exit);
+        }
+    }
+
+    // Fallback to legacy SkillRunner.
+    let library_paths = registry.get_library_paths();
+    let runner = SkillRunner::with_library_paths(&library_paths)?;
+    match runner.run(name, args) {
+        Ok(status) => {
+            let exit = status.code().unwrap_or(1);
+            if exit != 0 {
+                let _ = ErrorCapture::new(&home).record(
+                    ErrorEntry::new(ErrorSource::Tool)
+                        .cmd(format!("makakoo skill {name}"))
+                        .stderr(format!("legacy skill exited {exit}"))
+                        .exit_code(exit)
+                        .skill_in_scope(name),
+                );
+            }
+            Ok(exit)
+        }
+        Err(e) => {
+            let msg = format!("skill '{name}': {e}");
+            let _ = ErrorCapture::new(&home).record(
+                ErrorEntry::new(ErrorSource::Tool)
+                    .cmd(format!("makakoo skill {name}"))
+                    .stderr(&msg)
+                    .skill_in_scope(name),
+            );
+            output::print_error(msg);
+            Ok(1)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gate-4 regression. Every plugin process spawned by
+    /// `makakoo skill <name>` discovers its capability socket by
+    /// reading `$MAKAKOO_SOCKET_PATH`. The Rust client
+    /// (`makakoo-client` → `Client::connect_from_env`), the Python
+    /// client (`makakoo-client-py` → `Client.connect_from_env`), and
+    /// the ABI docs under `spec/ABI_SKILL.md` + `spec/ABI_MCP_TOOL.md`
+    /// + `spec/CAPABILITIES.md` all hardcode that exact name.
+    ///
+    /// Renaming `PLUGIN_SOCKET_ENV` in a future refactor silently
+    /// breaks every plugin's ability to dial the kernel — the kernel
+    /// keeps exporting a variable with the wrong name, the client
+    /// keeps checking the wrong slot, and no test failure points at
+    /// the rename. Live-caught 2026-04-20 when the earlier draft used
+    /// `MAKAKOO_PLUGIN_SOCKET`. This test locks the contract.
+    #[test]
+    fn plugin_socket_env_var_matches_client_contract() {
+        assert_eq!(
+            PLUGIN_SOCKET_ENV, "MAKAKOO_SOCKET_PATH",
+            "renaming breaks every makakoo-client{{,-py}} build + every ABI doc"
+        );
+    }
+}
+
+/// Find a plugin matching the given skill name.
+fn find_plugin<'a>(
+    registry: &'a PluginRegistry,
+    name: &str,
+) -> Option<&'a makakoo_core::plugin::LoadedPlugin> {
+    use makakoo_core::plugin::manifest::PluginKind;
+
+    // Exact match.
+    if let Some(p) = registry.get(name) {
+        return Some(p);
+    }
+
+    // Try matching by segment-suffix (e.g. "canary" matches "skill-meta-canary").
+    for plugin in registry.plugins() {
+        if plugin.manifest.plugin.kind != PluginKind::Skill {
+            continue;
+        }
+        let pname = &plugin.manifest.plugin.name;
+        let segments: Vec<&str> = pname.split('-').collect();
+        let name_segments: Vec<&str> = name.split('-').collect();
+
+        if segments.len() > name_segments.len() {
+            let suffix = &segments[segments.len() - name_segments.len()..];
+            if suffix == name_segments {
+                return Some(plugin);
+            }
+        }
+    }
+    None
+}

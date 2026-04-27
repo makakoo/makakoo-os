@@ -1,0 +1,41 @@
+# Freelance Office — Personal Settings
+# Fülle diese Datei einmal aus und halte sie aktuell.
+
+office:
+  id: "{{ office_id }}"
+  country: "{{ office_country }}"
+  locale: "{{ office_locale }}"
+  currency: "{{ office_currency }}"
+  invoice_language: "{{ office_invoice_language }}"
+
+identity:
+  name: "{{ identity_name }}"
+  dba: "{{ identity_dba }}"
+  website: ""
+  email: "{{ identity_email }}"
+  phone: ""
+  github: ""
+  location: ""
+
+tax:
+  # Kleinunternehmerregelung §19 UStG: Umsatz ≤ 22.000 €/Jahr (netto)
+  kleinunternehmer: false
+  tax_number: ""
+  ust_id: ""
+  vat_reversed: false
+
+finance:
+  bank:
+    name: ""
+    iban: ""
+    bic: ""
+  invoice_currency: "EUR"
+  payment_terms_days: 30
+  invoice_language: "de"
+
+business:
+  freelance_since: "{{ freelance_since }}"
+  tax_consultant: ""
+  insurance: ""
+  bookeeping_tool: ""
+  invoicing_tool: ""

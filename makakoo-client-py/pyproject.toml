@@ -1,0 +1,16 @@
+[project]
+name = "makakoo-client"
+version = "0.1.0"
+description = "Python client for the Makakoo kernel capability socket"
+authors = [{ name = "Makakoo OS contributors" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

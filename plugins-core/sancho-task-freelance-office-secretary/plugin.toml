@@ -1,0 +1,40 @@
+[plugin]
+name = "sancho-task-freelance-office-secretary"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "SANCHO heartbeat for freelance-office email secretary. Every 1h: polls Gmail via gws for every active client in ~/freelance-office, captures new messages to communications/, analyzes via switchAILocal, pings Telegram on new activity. Replaces the LaunchAgent approach."
+authors = ["Sebastian Schkudlara"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-freelance-office-secretary"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+run = "python3 -u src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:~/freelance-office",
+    "fs/write:~/freelance-office",
+    "fs/read:~/MAKAKOO/data/office-secretary",
+    "fs/write:~/MAKAKOO/data/office-secretary",
+    "fs/read:~/MAKAKOO/data/Brain",
+    "fs/write:~/MAKAKOO/data/Brain",
+    "brain/write",
+]
+
+[sancho]
+tasks = [
+  { name = "freelance_office_secretary", interval = "1h" },
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-freelance-office-secretary"
+retention = "keep"

@@ -1,0 +1,83 @@
+
+Lope review: /tmp/phase1-diff.txt  (72068 chars)
+Validators: pi, codex, opencode
+Focus: Phase 1 of v2-mega: per-slot supervisor + lifecycle. Verify Phase 1 exit criteri...
+Timeout: 900s per validator
+
+
+━━━ opencode ━━━
+## Phase 1 Review — PASS
+
+All exit criteria are covered:
+
+**Supervisor data structures + restart budget + status writer**: `SupervisorState` enum, `RestartBudget` with sliding 60s `VecDeque`, exponential backoff 500ms→30s, circuit break on crash #6, atomic status.json writes via tmp+rename. 12 unit tests vs 8 target. ✅
+
+**Launchd plist + Files & Folders consent**: Plist at `~/Library/LaunchAgents/com.makakoo.agent.<slot>.plist`, `launchctl bootstrap gui/<uid>`, exit code 5 + "Service is disabled" both map to structured error with remediation copy. 9 tests vs 2 target. ✅
+
+**Systemd user unit**: Unit at `~/.config/systemd/user/makakoo-agent-<slot>.service`, daemon-reload → start, `Restart=on-failure` + `RestartSec=10`. 4 tests vs 2 target. ✅
+
+**CLI start/stop/status/restart**: Slot-aware routing via `is_slot()` TOML existence check. `AgentCmd::Restart` + hidden `AgentCmd::Supervisor` variants. `_supervisor` spawns tokio runtime with gateway watcher + status writer + SIGTERM listener. 6 CLI integration tests. ✅
+
+**Test coverage**: 12 (supervisor) + 5 (runtime) + 9 (launchd) + 4 (systemd) + 6 (CLI) = 36 total tests vs 16 target (8+4+2+2). ✅
+
+**One naming note**: SPRINT listed `makakoo-core/src/agents/lifecycle.rs` — the implementation lives in `supervisor_runtime.rs` (async engine) + `agent_lifecycle.rs` (CLI commands). Split is cleaner, but the discrepancy exists. Not a blocker.
+
+**PASS** — all 5 exit criteria gates met, counts exceed every target, the shutdown SIGTERM→grace→SIGKILL chain is wired, and the foreground mode is reachable via the `_supervisor` subcommand directly.
+
+━━━ codex ━━━
+Reviewed `SPRINT.md` Phase 1 criteria against `/tmp/phase1-diff.txt`.
+
+Main result: implementation is substantial, but Phase 1 exit criteria are not met yet.
+
+Findings:
+
+1. Supervisor structures / restart budget / status writer: mostly present.
+   - `SupervisorState`, `SupervisorStatusFile`, `RestartBudget`, atomic `status.json`, gateway watcher, and status writer exist.
+   - Restart budget implements 5 crashes/minute then circuit-break on 6th crash.
+   - Status writer flushes every 5s and uses atomic tmp+rename.
+   - Issue: `makakoo agent status` does not render the locked Phase 4 v1 layout. Existing `SlotStatus::render_human()` layout is:
+     - first line just slot id
+     - gateway line includes `last_frame`
+     - transport line includes `last_inbound`
+     New code prints `secretary (Running)`, omits `last_frame`, and formats transports differently.
+
+2. launchd plist + Files & Folders consent detection: partial.
+   - Plist generation exists.
+   - `launchctl bootstrap gui/<uid>` exists.
+   - exit code 5 maps to Files & Folders remediation text.
+   - Major bug: plist path uses `ctx.home()` / Makakoo home as if it were OS home. That writes to `$MAKAKOO_HOME/Library/LaunchAgents/...`, not `~/Library/LaunchAgents/...` as required.
+   - Same confusion affects log paths: `$MAKAKOO_HOME/.makakoo/log/...` instead of user-home paths implied by the code comments.
+   - Minor hardening gap: plist XML does not escape `makakoo_bin` / path strings.
+
+3. systemd user unit: partial.
+   - Unit generation exists.
+   - `daemon-reload` + `start` exists.
+   - Major bug: unit path also uses Makakoo home, producing `$MAKAKOO_HOME/.config/systemd/user/...`, not `~/.config/systemd/user/...`.
+   - `ExecStart={bin} ...` is not escaped/quoted, so paths with spaces break.
+
+4. CLI start/stop/status/restart routing + hidden `_supervisor`: partial.
+   - Slot-aware routing exists for start/stop/status/restart.
+   - Hidden `agent _supervisor --slot <slot>` exists.
+   - Missing required foreground mode: `MAKAKOO_AGENT_SUPERVISOR=foreground` is mentioned only in unsupported-platform error text. `agent start <slot>` does not honor it on macOS/Linux.
+   - Exit criterion says `agent start secretary` returns within 2s. Implementation waits up to 10s for `Running`/`Crashed`.
+   - Start can falsely report success: Phase 1 default gateway path points to `MAKAKOO_HOME/plugins-core/agent-harveychat/python/gateway.py`; if missing, Python can spawn then exit immediately, while status may briefly show `Running`.
+
+5. Test coverage: insufficient.
+   - There are unit tests for restart budget/status/plist/systemd.
+   - But required “4 integration tests with `MockChild` exercising start/stop/crash” are not present. Runtime tests use real `sleep`/`true`, not a mock child abstraction.
+   - No apparent tests for foreground mode.
+   - No CLI-level tests proving slot-aware routing hits launchd/systemd paths with fake executors.
+   - No test catches OS-home vs Makakoo-home path bug.
+
+Fix before passing:
+- Separate OS user home from `$MAKAKOO_HOME` for launchd/systemd install paths.
+- Implement `MAKAKOO_AGENT_SUPERVISOR=foreground` in `agent start`.
+- Make `start` meet the 2s return criterion while still allowing gateway PID to populate within 10s.
+- Render status through the locked Phase 4 v1 layout, ideally by reusing `SlotStatus::render_human()`.
+- Add MockChild-based integration tests and CLI routing/fake-launchctl/systemctl tests.
+
+NEEDS_FIX
+
+━━━ pi ━━━
+[ERROR] pi timed out after 300s
+

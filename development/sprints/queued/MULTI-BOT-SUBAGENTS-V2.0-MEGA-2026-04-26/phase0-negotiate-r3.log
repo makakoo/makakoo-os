@@ -1,0 +1,119 @@
+
+Lope review: development/sprints/queued/MULTI-BOT-SUBAGENTS-V2.0-MEGA-2026-04-26/SPRINT.md  (46347 chars)
+Validators: pi, codex, opencode
+Focus: Round-3 architecture lock. Round-2 surfaced: Q12 BLOCKER (rlimits inconsistency)...
+Timeout: 900s per validator
+
+
+━━━ codex ━━━
+Round-3 review: most Round-2 items are locked, but Q15 still has a compile-shape blocker.
+
+Q12 rlimits inconsistency: locked. RSS monitor is always-on observation; hard `setrlimit` is opt-in via `[agents] enforce_rlimits = true`; supervisor self-limit separately opt-in. Clean split.
+
+Q5 UUID space: locked. Both slot and transport paths use UUID v4, stored in TOML, router maps `(slot_uuid, transport_uuid)` to handlers. Collision concern resolved.
+
+Q9 Twilio signature: locked. All Twilio webhooks verify `X-Twilio-Signature` before processing, with 401 + audit on failure.
+
+Q10 Origin allowlist: locked. Production requires explicit `allowed_origins`; empty means localhost-only; missing/non-allowlisted Origin gets 403 + audit.
+
+Q11 OOM budget: locked. Handles both `137` and Python `MemoryError`; retry-budget exhaustion explicitly simulates 6 crashes in 60s, not one OOM.
+
+Q14 PII clarity: locked. Secret/token/body redaction is clear; actor/target identifiers are intentionally logged as sensitive identifiers, not redacted. `alerts.log` has its own cap.
+
+Q15 trait shape + graceful shutdown: **not locked yet**. Graceful shutdown text is good. But the trait shape as written is not object-safe:
+
+```rust
+pub trait WebhookHandler: Send + Sync {
+    fn verify(&self, req: &WebhookRequest) -> Result<(), VerifyError>;
+    async fn handle(&self, req: WebhookRequest) -> Response;
+}
+```
+
+and then:
+
+```rust
+Box<dyn WebhookHandler>
+```
+
+`async fn` in a trait is not dyn-compatible/object-safe in this form. Same issue for `WsUpgradeHandler`. This will fail or force an implementation detail not stated.
+
+Fix by locking one of these:
+
+```rust
+use futures::future::BoxFuture;
+
+pub trait WebhookHandler: Send + Sync {
+    fn verify(&self, req: &WebhookRequest) -> Result<(), VerifyError>;
+
+    fn handle(&self, req: WebhookRequest) -> BoxFuture<'static, Response>;
+}
+```
+
+or explicitly require `async_trait`:
+
+```rust
+#[async_trait::async_trait]
+pub trait WebhookHandler: Send + Sync {
+    fn verify(&self, req: &WebhookRequest) -> Result<(), VerifyError>;
+    async fn handle(&self, req: WebhookRequest) -> Response;
+}
+```
+
+Transport count wording: locked. The doc consistently clarifies 7 adapter families, with Slack having Socket + Events modes.
+
+Phase 13 path: locked. Wizard lives under `plugins-core/skill-agent-wizard/SKILL.md`; legacy path avoided.
+
+Overall: **NEEDS_FIX**. Only blocker is Q15 Rust trait object shape.
+
+━━━ opencode ━━━
+All 7 round-2 issues verified as resolved:
+
+- **Q12 BLOCKER (rlimits inconsistency):** Now two cleanly separated mechanisms — RSS monitoring (always-on, observation-only, never kills) vs hard `setrlimit` (opt-in via `enforce_rlimits`, default false). Supervisor self-limit is separately gated. No contradiction. **LOCKED** ✓
+
+- **Q5 UUID space:** SHA-256-64-bit rejected. UUID v4 (122-bit entropy) for both `slot_uuid` and `transport_uuid` in webhook paths. Stored in TOML at creation time. **LOCKED** ✓
+
+- **Q9 Twilio signature verification:** Added `X-Twilio-Signature` HMAC-SHA1 verification over URL + sorted POST params, with 401 + `webhook.invalid_signature` audit entry on failure. **LOCKED** ✓
+
+- **Q10 Origin allowlist:** CSRF defense now explicit — `allowed_origins` required in production, WS upgrade checks `Origin` header, HMAC cookies alone acknowledged as insufficient. Localhost dev exception documented. **LOCKED** ✓
+
+- **Q11 OOM budget:** Both subcases specified (code 137 from SIGKILL, code 1 + `MemoryError` from RLIMIT_AS). Single OOM does not exhaust budget — 6 consecutive crashes in 60s required for retry-budget exhaustion assertion. **LOCKED** ✓
+
+- **Q14 PII clarity:** Explicit inventory of what is never logged (secrets, tokens, message bodies, HMAC keys) vs what is logged as identifiers (email, phone, Slack/Discord/WhatsApp IDs). `secret.resolve` logs only ref name + outcome. Default CLI output redacts `detail` beyond 200 chars; `--full` shows raw. **LOCKED** ✓
+
+- **Q15 trait shape + graceful shutdown:** Concrete Rust trait definitions for `WebhookHandler`, `WsUpgradeHandler`, `WebhookRequest` with `raw_body` pre-buffering. Graceful shutdown: 30s drain, explicit warn-log for dropped in-flight WS/Twilio sessions. **LOCKED** ✓
+
+- **Transport count:** Self-consistent — "7 transport adapters" across "5 high-value transports" (beyond v1's Telegram+Slack). Slack counted once (Socket+Events = one adapter family). **LOCKED** ✓
+
+- **Phase 13 path:** Wizard lives in-repo at `plugins-core/` + `makakoo/src/commands/`. No cross-repo touch. All walkthroughs, specs, and docs use repo-relative paths. **LOCKED** ✓
+
+**Overall: PASS.** All 9 items from round-2 closed. Architecture ready for Phase 1 implementation.
+
+━━━ pi ━━━
+
+
+Here's my Round-3 verification against the Round-2 issues:
+
+---
+
+**Q12 BLOCKER (rlimits inconsistency) — LOCKED.** The two-mechanism split is now unambiguous. RSS monitoring is always-on, observation-only, never kills anything. Hard `setrlimit` calls happen only when `enforce_rlimits = true` (opt-in, default false). Supervisor self-limit is also opt-in via `enforce_supervisor_rlimit = true`. No overlap, no contradiction.
+
+**Q5 (UUID space) — LOCKED.** Explicitly states SHA-256 truncation is rejected ("only 64-bit collision space") and commits to UUID v4 at 122-bit entropy. Router stores the mapping `(slot_uuid, transport_uuid) → handler`; adapters never need to know the path shape.
+
+**Q9 (Twilio sig) — LOCKED.** The word "HMAC-SHA1 over the URL + sorted POST params (per Twilio spec)" now appears verbatim in the locked text. "Missing/invalid signature → 401 + audit log entry (`webhook.invalid_signature`)." Without this, voice webhooks are spoofable — the "without this" rationale is present.
+
+**Q10 (Origin allowlist) — LOCKED.** "REQUIRED in production. WS upgrade requests with missing or non-allowlisted `Origin` header are rejected with 403 + audit log entry." The rationale is explicit: HMAC cookies alone do not defend against cross-site WebSocket abuse. Empty allowlist = localhost-only dev mode.
+
+**Q11 (OOM budget) — LOCKED.** Both subcases documented: (a) code 137 (SIGKILL from OOM killer), (b) code 1 + stderr "MemoryError" (RLIMIT_AS hit, Python catches). The retry-budget-exhaustion assertion is handled by simulating 6 consecutive crashes within 60s — a single OOM event does not exhaust the 5-per-minute budget. This is internally consistent with the Q12 rlimits design.
+
+**Q14 (PII clarity) — LOCKED.** The three-tier redaction policy is now explicit in the doc. Never logged vs. Logged as identifiers (treated as sensitive but not redacted, required for forensics) vs. `secret.resolve` records only ref name + outcome. The `detail` field treatment is covered: 200-char preview at most for message bodies; full detail only with `--full` flag.
+
+**Q15 (trait shape + graceful shutdown) — LOCKED.** `WebhookHandler` trait has `verify` called before `handle` — the trait shape forces verify-first. Graceful shutdown: SIGTERM → stop accepting new requests → drain in-flight HTTP with 30s timeout → drop in-flight WS/Twilio sessions with explicit warn log (explicitly notes that waiting for live calls would block shutdown indefinitely). Documented in `http-server-security.md`.
+
+**Transport count wording — NEEDS_FIX.** Acceptance criteria item 2 says "7 transport adapters" then enumerates eight comma-separated items: Telegram, Slack Socket, Slack Events, Discord, WhatsApp, Email, Voice, Web. The parenthetical correctly explains Slack ships in two modes as one adapter family, but the leading number 7 is wrong. Goals section gets this right ("5 high-value transports beyond Telegram/Slack = 7 total"). The mismatch is only in AC item 2.
+
+**Phase 13 path — CONFIRMED CLEAN.** Phase 13 new code section says "Updated `docs/walkthroughs/multi-transport-subagents.md` covering all 7 transport adapters (Telegram, Slack, Discord, WhatsApp, Email, Voice, Web — Slack ships in two modes Socket+Events but is one adapter family)" — that's correct. Phase 5b says "This unblocks Phases 7 (WhatsApp), 9 (Voice), 10 (Web)" — matches the path.
+
+---
+
+**OVERALL: NEEDS_FIX.** One remaining inconsistency: acceptance criteria item 2 says "7 transport adapters" in the lead but lists 8 in the enumeration. The fix is one word: change "7" to "8" in that item. All other round-2 issues are locked. Once that number is corrected, the doc is clean for round-3 PASS.
+

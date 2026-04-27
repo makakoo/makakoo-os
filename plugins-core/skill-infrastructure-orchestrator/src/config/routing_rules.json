@@ -1,0 +1,44 @@
+{
+  "rules": [
+    {
+      "match": {
+        "complexity": "low"
+      },
+      "model": "auto",
+      "endpoint": "http://localhost:18080"
+    },
+    {
+      "match": {
+        "complexity": "high"
+      },
+      "model": "claude-sonnet-4-20250514",
+      "endpoint": "anthropic"
+    },
+    {
+      "match": {
+        "agent_type": "code-review"
+      },
+      "model": "claude-sonnet-4-20250514",
+      "endpoint": "anthropic"
+    },
+    {
+      "match": {
+        "agent_type": "codex"
+      },
+      "model": "claude-sonnet-4-20250514",
+      "endpoint": "anthropic"
+    },
+    {
+      "match": {
+        "agent_type": "gsd-executor",
+        "complexity": "low"
+      },
+      "model": "auto",
+      "endpoint": "http://localhost:18080"
+    }
+  ],
+  "default": {
+    "model": "auto",
+    "endpoint": "http://localhost:18080"
+  }
+}

@@ -1,0 +1,34 @@
+[plugin]
+name = "sancho-task-inbox-pipeline"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Inbox triage tick — scan new mail, surface action-required + auto-archive noise"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-inbox-pipeline"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+
+[entrypoint]
+run = "python3 -u src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:~/MAKAKOO/data/inbox-triage",
+    "fs/write:~/MAKAKOO/data/inbox-triage",
+    "brain/write",
+]
+
+[sancho]
+tasks = [{ name = "inbox_pipeline", interval = "4h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-inbox-pipeline"
+retention = "keep"

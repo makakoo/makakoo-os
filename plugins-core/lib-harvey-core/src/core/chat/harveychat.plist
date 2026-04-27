@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  HarveyChat LaunchAgent template.
+  Env: wrapped in `sh -c` that sources ~/.env before exec'ing Python.
+  launchd does not inherit shell env, so any daemon that needs
+  SWITCHAI_KEY, LLM_API_KEY, POSTGRES_*, or TELEGRAM_BOT_TOKEN must
+  source .env before exec. Pixel's mascot patrol caught this regression
+  on 2026-04-14 and that's when the wrapper was added.
+
+  Before loading, replace __HARVEY_HOME__ with your actual path:
+    sed "s|__HARVEY_HOME__|$HOME/MAKAKOO|g" harveychat.plist > ~/Library/LaunchAgents/com.makakoo.chat.plist
+    launchctl load ~/Library/LaunchAgents/com.makakoo.chat.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.makakoo.chat</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>set -a; [ -f "$HOME/.env" ] &amp;&amp; . "$HOME/.env"; set +a; exec python3.11 -m core.chat start</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__HARVEY_HOME__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HARVEY_HOME</key>
+        <string>__HARVEY_HOME__</string>
+        <key>MAKAKOO_HOME</key>
+        <string>__HARVEY_HOME__</string>
+        <key>PYTHONPATH</key>
+        <string>__HARVEY_HOME__/plugins/lib-harvey-core/src:__HARVEY_HOME__/plugins/lib-hte/src</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__HARVEY_HOME__/data/chat/harveychat.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HARVEY_HOME__/data/chat/harveychat.log</string>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>

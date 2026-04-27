@@ -1,0 +1,29 @@
+[plugin]
+name = "skill-orchestration-harvey-swarm"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "Use when the user asks to research, investigate, compare, find sources, dig deeper, or otherwise needs more than one perspective on a topic. Routes the request through Harvey's IntelligentRouter, which classifies the intent (research / creative / archive / minimal), composes a team of specialized subagents (researcher × N → synthesizer → storage), and runs the DAG in parallel via mcp__harvey__harvey_swarm_run. Use this instead of doing the research yourself when the user wants depth or multiple sources."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-orchestration-harvey-swarm"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+# Capability grants default empty — conservative for batch migration.
+# Add brain/llm/net/state grants manually per skill's real needs.
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-orchestration-harvey-swarm"
+retention = "keep"
