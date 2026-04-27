@@ -248,8 +248,20 @@ fn escape_fts(s: &str) -> String {
 }
 
 fn tempfile_path(name: &str) -> Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // PID alone collides under parallel test execution (multiple threads
+    // call open_baked() concurrently and overwrite each other's temp DB
+    // mid-read). Add a per-call nonce: nanosecond timestamp + atomic
+    // counter so the path is unique even within the same nanosecond.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+        .wrapping_add(COUNTER.fetch_add(1, Ordering::Relaxed));
     let mut p = std::env::temp_dir();
-    p.push(format!("{}-{}", std::process::id(), name));
+    p.push(format!("{}-{nonce:x}-{}", std::process::id(), name));
     Ok(p)
 }
 
