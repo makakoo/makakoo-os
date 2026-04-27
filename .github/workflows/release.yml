@@ -28,6 +28,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   # ─── Build one binary artifact per target ──────────────────────────
@@ -153,6 +155,15 @@ jobs:
           mkdir -p release-files
           find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} release-files/ \;
           ls -la release-files/
+
+      # Generate cryptographic build provenance via Sigstore.
+      # Verifiable by users with: gh attestation verify <file> --repo makakoo/makakoo-os
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-files/*.tar.gz
+            release-files/*.zip
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
