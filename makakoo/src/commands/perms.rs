@@ -837,6 +837,12 @@ mod tests {
         assert!(validate_and_expand_scope("   ").is_err());
     }
 
+    // The validate_scope_* tests below assert on hard-coded `/tmp/...`
+    // paths and tilde expansion — both unix-shape semantics. On Windows
+    // current-drive prepending changes `/tmp/fake-home` into
+    // `D:/tmp/fake-home`, breaking the equality and refusal assertions.
+    // Gate the unix-path-shaped tests to unix only.
+    #[cfg(unix)]
     #[test]
     fn validate_scope_expands_tilde() {
         let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -849,6 +855,7 @@ mod tests {
     /// access to the entire home directory because the shell expanded
     /// `~/` to `/Users/sebastian/` BEFORE our argv saw it, and the
     /// post-expansion check only refused literal `/`.
+    #[cfg(unix)]
     #[test]
     fn validate_scope_refuses_resolved_home() {
         let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -868,6 +875,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn validate_scope_refuses_resolved_makakoo_home() {
         let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -897,6 +905,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn validate_scope_accepts_nested_home_path() {
         // The whole point — refuse $HOME but allow $HOME/sub.
