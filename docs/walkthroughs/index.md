@@ -86,10 +86,14 @@ slots end-to-end with one slot dual-homed on Telegram + Slack.
 | [Web chat (static demo client)](./web-chat-demo.html) | Drop-in widget. HMAC-SHA256 visitor cookies + Origin allowlist. | ~5 min |
 
 **Don't want to write the TOML from scratch?** The
-[agent slot template gallery](../../templates/agents/) has copy-paste
-starters for the five most common archetypes (freelance secretary,
-career manager, alerts bot, support inbox, community bot) — pick one,
-fill in the `<PLACEHOLDER>` fields, run `makakoo agent create`.
+[agent slot template gallery](../../templates/agents/) has 11
+copy-paste starters organized into 3 tiers. Tier 1 ("set-up-once,
+payback-every-week") covers the highest-impact archetypes:
+freelance secretary, invoice chaser, expense receipts (snap a
+photo of a receipt → tax-categorized), meeting prep (Brain ×
+Calendar briefing 30min before each event), and lead qualifier
+(first-touch sales filter). Pick one, fill in the `<PLACEHOLDER>`
+fields, run `makakoo agent create`.
 
 Reference docs for the surface above:
 [`user-manual/agent.md`](../user-manual/agent.md) (CLI),

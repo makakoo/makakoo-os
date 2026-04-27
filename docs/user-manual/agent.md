@@ -77,10 +77,17 @@ transport credential check) before copying it into the registry.
 **Starter templates** for the most common archetypes live at
 [`templates/agents/`](../../templates/agents/) — copy one,
 replace the `<PLACEHOLDER>` fields, then run
-`makakoo agent create <slot> --from-toml <copy>.toml`. Five
-archetypes ship: freelance secretary (Telegram + Slack), career
-manager (Telegram), alerts bot (Slack), support inbox (Email + Web),
-community bot (Discord).
+`makakoo agent create <slot> --from-toml <copy>.toml`. The gallery
+ships 11 archetypes in 3 tiers:
+
+- **Tier 1 (highest payback):** secretary-freelance, invoice-chaser,
+  expense-receipts, meeting-prep, lead-qualifier
+- **Tier 2 (situational):** client-boundary-bouncer, subscription-watch,
+  career-manager, support-inbox
+- **Tier 3 (narrow):** alerts-bot, community-bot
+
+Tiering and curation methodology are documented in
+[`templates/agents/README.md`](../../templates/agents/README.md).
 
 `--from-toml` is mutually exclusive with `--telegram-token` and
 `--slack-bot-token`. The CLI's `--allowed-paths`, `--forbidden-paths`,
