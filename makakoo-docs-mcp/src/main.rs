@@ -1,15 +1,14 @@
-// Entry point for the Makakoo OS docs MCP server.
+// Entry point for the standalone `makakoo-docs-mcp` binary.
 //
 // Usage: `makakoo-docs-mcp --stdio`
 // (Phase D: also reachable as `makakoo docs-mcp --stdio` once bundled.)
+//
+// The server loop lives in the library crate (`lib.rs` → `run_stdio()`).
+// This file is a thin wrapper that handles the flag check, tracing init,
+// and tokio runtime — nothing else.
 
 use anyhow::Result;
-use rmcp::{transport::stdio, ServiceExt};
 use tracing_subscriber::EnvFilter;
-
-mod index;
-mod server;
-mod tools;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,12 +29,5 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .init();
 
-    tracing::info!("makakoo-docs-mcp starting (stdio transport)");
-
-    let docs = server::DocsServer::new()?;
-    let service = docs.serve(stdio()).await.inspect_err(|e| {
-        tracing::error!("serving error: {:?}", e);
-    })?;
-    service.waiting().await?;
-    Ok(())
+    makakoo_docs_mcp::run_stdio().await
 }

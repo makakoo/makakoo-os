@@ -9,6 +9,8 @@
 pub mod adapter;
 pub mod adapter_gen;
 pub mod agent;
+pub mod docs;
+pub mod docs_mcp;
 pub mod agent_audit;
 pub mod agent_destroy;
 pub mod agent_lifecycle;
@@ -49,6 +51,8 @@ use crate::context::CliContext;
 pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
     match cmd {
         Commands::Mcp { args } => mcp::run(args),
+        Commands::DocsMcp { stdio } => docs_mcp::run(stdio).await,
+        Commands::Docs { cmd } => docs::run(cmd).await,
         Commands::Search { query, limit } => search::run(ctx, &query, limit).await,
         Commands::Query {
             question,
