@@ -40,3 +40,6 @@ secrets.yml
 /.cursor/rules/makakoo.mdc
 /.vibe/context.md
 # harvey:infect-local END
+# Sprint/review runner logs (ephemeral; keep sprint docs, not raw validator logs)
+development/sprints/**/*.log
+

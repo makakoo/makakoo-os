@@ -75,12 +75,12 @@ fn render_managed(doc: &DocumentMut) -> Option<String> {
     let harvey = render_harvey(doc).unwrap_or_default();
     let mif = doc
         .get("model_instructions_file")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if harvey.is_empty() && mif.is_empty() {
         None
     } else {
-        Some(format!("{harvey}|{mif}"))
+        Some(format!("{harvey}|mif={mif}"))
     }
 }
 
@@ -105,11 +105,46 @@ fn read_doc(path: &Path) -> std::io::Result<DocumentMut> {
 
 /// Render the current `[mcp_servers.harvey]` subtree as a normalised
 /// string for "did anything change?" comparison.
+///
+/// Uses a content-hash approach — extract canonical spec fields and
+/// compare them structurally — instead of relying on `toml_edit`'s
+/// `Item::to_string()` which can produce different inline vs section
+/// representations depending on internal table state.  This fixes
+/// false-positive `mcp-stale-command` drift reports on large configs
+/// where a round-trip through `upsert_harvey` changes the internal
+/// representation without changing the logical content.
 fn render_harvey(doc: &DocumentMut) -> Option<String> {
     let servers = doc.get("mcp_servers")?;
     let table = servers.as_table()?;
     let harvey = table.get(SERVER_KEY)?;
-    Some(harvey.to_string())
+    let h = harvey.as_table()?;
+
+    // Normalise: extract only the fields the spec cares about.
+    let command = h.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    let args = h
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let description = h.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let mut env_pairs: Vec<String> = Vec::new();
+    if let Some(env) = h.get("env").and_then(|v| v.as_table()) {
+        for (k, v) in env.iter() {
+            if let Some(val) = v.as_str() {
+                env_pairs.push(format!("{k}={val}"));
+            }
+        }
+    }
+    env_pairs.sort();
+    let env_str = env_pairs.join(";");
+    Some(format!(
+        "cmd={command}|args={args}|desc={description}|env={env_str}"
+    ))
 }
 
 /// Insert/replace `[mcp_servers.harvey]` and `[mcp_servers.harvey.env]`.
@@ -233,6 +268,39 @@ mod tests {
     }
 
     #[test]
+    fn logically_equivalent_existing_block_is_unchanged() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"model_instructions_file = "/bootstrap/global.md"
+
+[mcp_servers.harvey]
+command = "/opt/cargo/bin/makakoo-mcp"
+args = []
+description = "desc"
+
+[mcp_servers.harvey.env]
+HARVEY_HOME = "/h"
+MAKAKOO_HOME = "/h"
+PYTHONPATH = "/h/harvey-os"
+
+[mcp_servers.harvey.tools.nursery_status]
+approval_mode = "approve"
+"#,
+        )
+        .unwrap();
+
+        let outcome = sync(
+            &path,
+            &spec(),
+            false,
+            Some(Path::new("/bootstrap/global.md")),
+        );
+        assert_eq!(outcome, SyncOutcome::Unchanged);
+    }
+
+    #[test]
     fn stale_command_path_triggers_update() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -299,7 +367,12 @@ approval_mode = "approve"
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let outcome = sync(&path, &spec(), true, None);
-        assert_eq!(outcome, SyncOutcome::WouldChange { kind: ChangeKind::Add });
+        assert_eq!(
+            outcome,
+            SyncOutcome::WouldChange {
+                kind: ChangeKind::Add
+            }
+        );
         assert!(!path.exists());
     }
 
