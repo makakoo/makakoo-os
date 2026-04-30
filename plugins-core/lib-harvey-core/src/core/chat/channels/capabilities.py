@@ -72,6 +72,10 @@ class ChannelCapability(Flag):
     # WABA Cloud: no typing indicator, no edit, only media sending
     WHATSAPP_CLOUD = SEND_DOCUMENT | SEND_PHOTO | SEND_VIDEO | SEND_AUDIO
 
+    # Discord: can send docs, photos; supports typing via trigger_typing()
+    # (send_text is universal — not a capability flag)
+    DISCORD_STANDARD = SEND_DOCUMENT | SEND_PHOTO | TYPING_INDICATOR | EDIT_MESSAGE | DELETE_MESSAGE
+
 
 def has(capabilities: ChannelCapability, cap: ChannelCapability) -> bool:
     """Convenience: `has(ch.capabilities, ChannelCapability.EDIT_MESSAGE)`."""

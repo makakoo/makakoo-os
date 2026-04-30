@@ -115,6 +115,12 @@ httpx>=0.27.0
 ffmpeg tesseract poppler
 ```
 
+## Cortex Memory
+
+HarveyChat supports native Cortex Memory in `core/cortex/`. When `cortex.enabled` is true, the gateway extracts PII-scrubbed durable memories into local SQLite, retrieves relevant memories before each LLM turn, and injects them as bounded context. `/status` reports `Cortex Memory: enabled|disabled`.
+
+Config lives in `~/MAKAKOO/data/chat/config.json` under the `cortex` key. Full manual: `docs/agents/harveychat-cortex-memory.md`.
+
 ## Security
 
 - `allowed_user_ids` restricts who can talk to Harvey (recommended)

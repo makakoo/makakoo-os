@@ -32,12 +32,19 @@ from pathlib import Path
 import requests
 
 HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
-
 from core.chat.config import ChatConfig, load_config
 from core.chat.store import ChatStore
 from core.chat.bridge import HarveyBridge
 from core.chat.brain_sync import log_to_journal, log_session_summary
+from core.chat.channels.base import ChannelPlugin
 from core.chat.channels.telegram import TelegramChannel
+try:
+    from core.chat.channels.discord import DiscordChannel
+except Exception as e:  # discord.py is optional unless Discord is configured
+    DiscordChannel = None
+    _DISCORD_IMPORT_ERROR = e
+else:
+    _DISCORD_IMPORT_ERROR = None
 from core.chat.task_queue import TaskQueue, TaskState
 from core.chat.conversation import ConversationManager
 
@@ -70,6 +77,17 @@ class HarveyChat:
     def __init__(self, config: ChatConfig = None):
         self.config = config or load_config()
         self.store = ChatStore(self.config.db_path)
+        self.cortex = None
+        try:
+            from core.cortex import get_cortex_memory
+            self.cortex = get_cortex_memory(self.store.db_path, self.config.cortex)
+            if self.cortex:
+                log.info("[gateway] Cortex memory enabled")
+            else:
+                log.info("[gateway] Cortex memory disabled")
+        except Exception as e:
+            log.warning(f"[gateway] Cortex memory unavailable: {e}")
+            self.cortex = None
         self.bridge = HarveyBridge(self.config.bridge)
         self.task_queue = TaskQueue()
         self.conv_manager = ConversationManager(self.task_queue)
@@ -152,6 +170,11 @@ class HarveyChat:
         # Initialize configured channels
         if self.config.telegram.bot_token:
             self.channels.append(TelegramChannel(self.config.telegram))
+        if self.config.discord.bot_token and self.config.discord.is_configured():
+            if DiscordChannel is None:
+                log.warning(f"[gateway] Discord configured but channel unavailable: {_DISCORD_IMPORT_ERROR}")
+            else:
+                self.channels.append(DiscordChannel(self.config.discord))
 
     def _publish_event(self, topic: str, **data) -> None:
         """Best-effort event publish. Never raises."""
@@ -187,6 +210,11 @@ class HarveyChat:
             if task:
                 self.task_queue.set_failed(task, "User cleared context")
                 log.info(f"Cleared active task {task.id}")
+            if self.cortex:
+                try:
+                    self.cortex.end_session(channel, user_id)
+                except Exception as e:
+                    log.warning(f"[cortex] clear/end-session failed for {channel}:{user_id}: {e}")
             return "Context cleared. Starting fresh."
 
         if text == "/cancel":
@@ -202,7 +230,16 @@ class HarveyChat:
             return f"Unknown command: {text.split()[0]}. Just talk to me normally."
 
         # Store user message
-        self.store.add_message(channel, user_id, "user", text, {"username": username})
+        user_message_id = self.store.add_message(channel, user_id, "user", text, {"username": username})
+
+        cortex_session_id = None
+        if self.cortex:
+            try:
+                cortex_session_id = self.cortex.get_or_create_session(channel, user_id, username=username)
+                self.cortex.increment_session_count(cortex_session_id, by=1)
+            except Exception as e:
+                log.warning(f"[cortex] session tracking failed for {channel}:{user_id}: {e}")
+                cortex_session_id = None
 
         # Get or create conversation state
         conv = self.conv_manager.get_or_create(channel, user_id)
@@ -215,16 +252,34 @@ class HarveyChat:
             self.task_queue.add_message(active_task, "user", text)
 
             # Resume task with new input
-            response = await self._resume_task(active_task, text, channel, user_id, username)
+            response = await self._resume_task(active_task, text, channel, user_id, username, cortex_session_id)
         else:
             # New conversation/task
-            response = await self._handle_new_message(text, channel, user_id, username)
+            response = await self._handle_new_message(text, channel, user_id, username, cortex_session_id)
 
         # Sanitize — strip any XML tool-call fragments MiniMax might leak into content
         response = self._sanitize_response(response)
 
-        # Store assistant response
-        self.store.add_message(channel, user_id, "assistant", response)
+        # Store assistant response (preserve reasoning_content for DeepSeek-style models)
+        self.store.add_message(
+            channel, user_id, "assistant", response,
+            reasoning_content=getattr(self.bridge, "_last_reasoning_content", None),
+        )
+
+        if self.cortex and cortex_session_id:
+            try:
+                self.cortex.increment_session_count(cortex_session_id, by=1)
+                self.cortex.record_turn(
+                    channel=channel,
+                    channel_user_id=user_id,
+                    username=username,
+                    session_id=cortex_session_id,
+                    user_text=text,
+                    assistant_text=response,
+                    source_message_id=user_message_id,
+                )
+            except Exception as e:
+                log.warning(f"[cortex] memory write failed for {channel}:{user_id}: {e}")
 
         # Log to Brain if configured
         if self.config.log_to_brain and _is_significant(text, response):
@@ -233,7 +288,7 @@ class HarveyChat:
         return response
 
     async def _handle_new_message(
-        self, text: str, channel: str, user_id: str, username: str
+        self, text: str, channel: str, user_id: str, username: str, cortex_session_id: str = None
     ) -> str:
         """Handle a fresh message (not responding to pending task).
 
@@ -331,33 +386,35 @@ class HarveyChat:
                 )
                 cognitive_task_id = None
 
+        memories = []
+        if self.cortex and cortex_session_id:
+            try:
+                memories = self.cortex.search(
+                    text,
+                    channel=channel,
+                    channel_user_id=user_id,
+                    limit=self.config.cortex.memory_limit,
+                )
+            except Exception as e:
+                log.warning(f"[cortex] memory search failed for {channel}:{user_id}: {e}")
+
         # Route to Harvey's brain with progress feedback for slow responses.
         # If the bridge takes >5s, send a "Thinking..." nudge so the user
         # knows Olibia is alive. At 30s, send a second nudge.
         bridge_future = asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._bridge_send_with_file_hints(
-                text, history, channel, task_id=cognitive_task_id
+                text, history, channel, task_id=cognitive_task_id, memories=memories
             ),
         )
 
         async def _send_thinking_feedback():
             await asyncio.sleep(5)
             if not bridge_future.done():
-                for ch in self.channels:
-                    if ch.name == channel:
-                        try:
-                            await ch.send(user_id, "Thinking...")
-                        except Exception:
-                            pass
+                await self._send_text(channel, user_id, "Thinking...")
             await asyncio.sleep(25)  # 30s total
             if not bridge_future.done():
-                for ch in self.channels:
-                    if ch.name == channel:
-                        try:
-                            await ch.send(user_id, "Still working on it...")
-                        except Exception:
-                            pass
+                await self._send_text(channel, user_id, "Still working on it...")
 
         feedback_task = asyncio.ensure_future(_send_thinking_feedback())
 
@@ -427,7 +484,7 @@ class HarveyChat:
         return response
 
     async def _resume_task(
-        self, task, user_input: str, channel: str, user_id: str, username: str
+        self, task, user_input: str, channel: str, user_id: str, username: str, cortex_session_id: str = None
     ) -> str:
         """Resume a task that was awaiting user input."""
         # Get full task history
@@ -470,12 +527,7 @@ class HarveyChat:
         team_roster = self._router.route(text)
 
         async def send_to_user(msg: str):
-            for ch in self.channels:
-                if ch.name == channel:
-                    try:
-                        await ch.send(user_id, msg)
-                    except Exception as e:
-                        log.warning(f"[workflow] send failed: {e}")
+            await self._send_text(channel, user_id, msg)
 
         async def send_typing():
             for ch in self.channels:
@@ -512,7 +564,7 @@ class HarveyChat:
         return f"Working on it — {classification.intent} workflow started."
 
     def _bridge_send_with_file_hints(
-        self, text: str, history: list, channel: str, task_id: str = None
+        self, text: str, history: list, channel: str, task_id: str = None, memories: list = None
     ) -> tuple[str, list]:
         """
         Call bridge.send() and check for file markers.
@@ -531,6 +583,7 @@ class HarveyChat:
             channel,
             task_id=task_id,
             store=self.task_store,
+            memories=memories,
         )
 
         # Check for file markers
@@ -568,17 +621,47 @@ class HarveyChat:
             return "(processed)"
         return cleaned
 
+    async def _send_text(self, channel: str, user_id: str, text: str) -> None:
+        """Send a text message via the appropriate channel."""
+        for ch in self.channels:
+            if ch.name == channel:
+                if isinstance(ch, ChannelPlugin):
+                    await ch.send_text(user_id, text)
+                else:
+                    await ch.send(user_id, text)
+                return
+        log.warning(f"[gateway] _send_text: no channel named {channel!r}")
+
+    async def _send_document(self, channel: str, user_id: str, file_path: str) -> None:
+        """Send a document via the appropriate channel."""
+        for ch in self.channels:
+            if ch.name == channel:
+                if isinstance(ch, ChannelPlugin):
+                    await ch.send_document(user_id, file_path)
+                else:
+                    log.warning(f"[gateway] {channel} does not support documents")
+                return
+        log.warning(f"[gateway] _send_document: no channel named {channel!r}")
+
+    async def _send_photo(self, channel: str, user_id: str, file_path: str) -> None:
+        """Send a photo via the appropriate channel."""
+        for ch in self.channels:
+            if ch.name == channel:
+                if isinstance(ch, ChannelPlugin):
+                    await ch.send_photo(user_id, file_path)
+                else:
+                    log.warning(f"[gateway] {channel} does not support photos")
+                return
+        log.warning(f"[gateway] _send_photo: no channel named {channel!r}")
+
     async def _send_file(
         self, channel: str, user_id: str, file_type: str, file_path: str
     ):
         """Send a file via the appropriate channel."""
-        for ch in self.channels:
-            if ch.name == channel:
-                if file_type == "file":
-                    await ch.send_document(user_id, file_path)
-                elif file_type == "photo":
-                    await ch.send_photo(user_id, file_path)
-                return
+        if file_type == "file":
+            await self._send_document(channel, user_id, file_path)
+        elif file_type == "photo":
+            await self._send_photo(channel, user_id, file_path)
 
     def _get_status(self, channel: str, user_id: str) -> str:
         """Build status response."""
@@ -588,6 +671,7 @@ class HarveyChat:
         minutes = int((uptime % 3600) / 60)
 
         channels_active = [ch.name for ch in self.channels if ch.is_configured()]
+        cortex_state = "enabled" if self.cortex else "disabled"
 
         return (
             f"Harvey Chat Gateway\n"
@@ -595,6 +679,7 @@ class HarveyChat:
             f"Messages: {stats['total_messages']}\n"
             f"Sessions: {stats['total_sessions']}\n"
             f"Channels: {', '.join(channels_active)}\n"
+            f"Cortex Memory: {cortex_state}\n"
             f"switchAILocal: {'online' if self._switchai_healthy else 'OFFLINE'}"
             f"{'' if self._switchai_healthy else f' (fails: {self._switchai_fail_count})'}\n"
             f"Brain sync: {'on' if self.config.log_to_brain else 'off'}"

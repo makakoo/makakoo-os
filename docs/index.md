@@ -86,6 +86,7 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 ### Using Daily?
 1. [CLI Reference](user-manual/index.md) → All commands
 2. [Brain Guide](brain/index.md) → Memory system
+3. [HarveyChat Cortex Memory](agents/harveychat-cortex-memory.md) → Chat long-term recall
 3. [SANCHO Guide](concepts/sancho.md) → Proactive tasks
 
 ### Extending?

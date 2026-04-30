@@ -15,6 +15,7 @@ class ChatStore:
     """SQLite-backed conversation store."""
 
     def __init__(self, db_path: str):
+        self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -54,13 +55,17 @@ class ChatStore:
         self.db.commit()
 
     def add_message(self, channel: str, channel_user_id: str, role: str,
-                    content: str, metadata: Optional[Dict] = None) -> int:
+                    content: str, metadata: Optional[Dict] = None,
+                    reasoning_content: Optional[str] = None) -> int:
         """Store a message and return its ID."""
         now = time.time()
+        meta = metadata or {}
+        if reasoning_content:
+            meta["reasoning_content"] = reasoning_content
         cur = self.db.execute(
             "INSERT INTO messages (channel, channel_user_id, role, content, metadata, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (channel, channel_user_id, role, content, json.dumps(metadata or {}), now)
+            (channel, channel_user_id, role, content, json.dumps(meta), now)
         )
         # Update or create session
         session = self.db.execute(
@@ -92,13 +97,20 @@ class ChatStore:
                     limit: int = 20) -> List[Dict]:
         """Get recent conversation history as OpenAI-format messages."""
         rows = self.db.execute(
-            "SELECT role, content, created_at FROM messages "
+            "SELECT role, content, metadata, created_at FROM messages "
             "WHERE channel = ? AND channel_user_id = ? "
             "ORDER BY created_at DESC LIMIT ?",
             (channel, channel_user_id, limit)
         ).fetchall()
 
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        result = []
+        for r in reversed(rows):
+            msg = {"role": r["role"], "content": r["content"]}
+            meta = json.loads(r["metadata"] or "{}")
+            if meta.get("reasoning_content"):
+                msg["reasoning_content"] = meta["reasoning_content"]
+            result.append(msg)
+        return result
 
     def get_stats(self) -> Dict:
         """Get store statistics."""

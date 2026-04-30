@@ -38,6 +38,12 @@ python3.11 -u src/agent.py start --daemon
 python3.11 -u src/agent.py stop
 ```
 
+## Cortex Memory
+
+HarveyChat can run with native Cortex Memory enabled. Cortex stores durable, PII-scrubbed chat memories in the local HarveyChat SQLite database and retrieves relevant memories before each assistant turn. It also supports explicit Telegram/Discord aliases for cross-channel recall.
+
+See [HarveyChat Cortex Memory](./harveychat-cortex-memory.md) for setup, alias commands, inspection, and rollback.
+
 ## Where it writes
 
 - **State:** `~/MAKAKOO/state/agent-harveychat/` — last-seen message offsets, per-chat seen-set.

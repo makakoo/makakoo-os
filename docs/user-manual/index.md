@@ -13,6 +13,7 @@ for "I want to X" recipes.
 | [Setup wizard](setup-wizard.md) | The 6 sections (persona, brain, cli-agent, terminal, model-provider, infect) walked through end-to-end. |
 | [Write-access grants (`makakoo perms`)](makakoo-perms.md) | Grant / revoke / audit runtime write permissions. |
 | [Multi-bot subagents (`makakoo agent`)](agent.md) | Create, run, and tear down per-transport subagent slots (Telegram / Slack / Discord / WhatsApp / Voice / Email / Web). |
+| [HarveyChat Cortex Memory](../agents/harveychat-cortex-memory.md) | Configure long-term memory and cross-channel aliases for HarveyChat. |
 
 *(More task-oriented chapters coming — brain sources, adapter
 selection, plugin authoring. Until those land, look up the individual

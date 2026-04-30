@@ -7,6 +7,9 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List
+
+from core.cortex.config import CortexConfig
 
 log = logging.getLogger("harveychat.config")
 
@@ -22,6 +25,20 @@ class TelegramConfig:
     allowed_chat_ids: list = field(default_factory=list)   # groups + channels (-100…)
     polling_timeout: int = 30
     ignore_bots: bool = True  # silently drop messages from other bots
+
+
+@dataclass
+class DiscordConfig:
+    """Discord bot credentials and channel filters."""
+    bot_token: str = ""
+    guild_id: int = 0   # 0 = not set
+    channel_id: int = 0  # 0 = not set
+    allowed_user_ids: List[int] = field(default_factory=list)
+    polling_timeout: int = 30
+    ignore_bots: bool = True
+
+    def is_configured(self) -> bool:
+        return bool(self.bot_token and self.guild_id and self.channel_id)
 
 
 @dataclass
@@ -43,7 +60,9 @@ class BridgeConfig:
 @dataclass
 class ChatConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    discord: DiscordConfig = field(default_factory=DiscordConfig)
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
+    cortex: CortexConfig = field(default_factory=CortexConfig)
     db_path: str = ""
     log_to_brain: bool = True
     pid_file: str = ""
@@ -67,10 +86,22 @@ def load_config() -> ChatConfig:
                 for k, v in raw["telegram"].items():
                     if hasattr(cfg.telegram, k):
                         setattr(cfg.telegram, k, v)
+            if "discord" in raw:
+                for k, v in raw["discord"].items():
+                    if k == "allowed_user_ids":
+                        cfg.discord.allowed_user_ids = [int(x) for x in v if str(x).isdigit()]
+                    elif k == "guild_id" and isinstance(v, (int, str)):
+                        cfg.discord.guild_id = int(v)
+                    elif k == "channel_id" and isinstance(v, (int, str)):
+                        cfg.discord.channel_id = int(v)
+                    elif hasattr(cfg.discord, k):
+                        setattr(cfg.discord, k, v)
             if "bridge" in raw:
                 for k, v in raw["bridge"].items():
                     if hasattr(cfg.bridge, k):
                         setattr(cfg.bridge, k, v)
+            if "cortex" in raw:
+                cfg.cortex = CortexConfig.from_mapping(raw["cortex"])
             if "log_to_brain" in raw:
                 cfg.log_to_brain = raw["log_to_brain"]
         except Exception as e:
@@ -97,6 +128,26 @@ def load_config() -> ChatConfig:
         cfg.bridge.anthropic_api_key = os.environ["ANTHROPIC_API_KEY"]
     if os.environ.get("SWITCHAI_MODEL"):
         cfg.bridge.switchai_model = os.environ["SWITCHAI_MODEL"]
+    # Discord env overrides
+    if os.environ.get("DISCORD_BOT_TOKEN"):
+        cfg.discord.bot_token = os.environ["DISCORD_BOT_TOKEN"]
+    if os.environ.get("DISCORD_GUILD_ID"):
+        try:
+            cfg.discord.guild_id = int(os.environ["DISCORD_GUILD_ID"])
+        except ValueError:
+            pass
+    if os.environ.get("DISCORD_CHANNEL_ID"):
+        try:
+            cfg.discord.channel_id = int(os.environ["DISCORD_CHANNEL_ID"])
+        except ValueError:
+            pass
+    if os.environ.get("DISCORD_ALLOWED_USERS"):
+        cfg.discord.allowed_user_ids = [
+            int(x.strip()) for x in os.environ["DISCORD_ALLOWED_USERS"].split(",")
+            if x.strip().isdigit()
+        ]
+
+    cfg.cortex.apply_env()
 
     return cfg
 
@@ -112,6 +163,14 @@ def save_config(cfg: ChatConfig):
             "polling_timeout": cfg.telegram.polling_timeout,
             "ignore_bots": cfg.telegram.ignore_bots,
         },
+        "discord": {
+            "bot_token": cfg.discord.bot_token,
+            "guild_id": cfg.discord.guild_id,
+            "channel_id": cfg.discord.channel_id,
+            "allowed_user_ids": cfg.discord.allowed_user_ids,
+            "polling_timeout": cfg.discord.polling_timeout,
+            "ignore_bots": cfg.discord.ignore_bots,
+        },
         "bridge": {
             "switchai_url": cfg.bridge.switchai_url,
             "switchai_model": cfg.bridge.switchai_model,
@@ -119,6 +178,17 @@ def save_config(cfg: ChatConfig):
             "anthropic_model": cfg.bridge.anthropic_model,
             "max_history_messages": cfg.bridge.max_history_messages,
             "max_tokens": cfg.bridge.max_tokens,
+        },
+        "cortex": {
+            "enabled": cfg.cortex.enabled,
+            "memory_limit": cfg.cortex.memory_limit,
+            "min_confidence": cfg.cortex.min_confidence,
+            "min_importance": cfg.cortex.min_importance,
+            "pii_scrubbing": cfg.cortex.pii_scrubbing,
+            "max_memory_chars": cfg.cortex.max_memory_chars,
+            "max_prompt_memory_chars": cfg.cortex.max_prompt_memory_chars,
+            "max_memory_age_days": cfg.cortex.max_memory_age_days,
+            "app_id": cfg.cortex.app_id,
         },
         "log_to_brain": cfg.log_to_brain,
     }

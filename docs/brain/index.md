@@ -398,3 +398,12 @@ makakoo sancho run memory_consolidation
 - [Concepts Overview](../concepts/index.md) — Brain in context
 - [Superbrain Search](../concepts/superbrain.md) — Technical details
 - [Query Reference](../user-manual/makakoo-query.md) — CLI options
+
+
+## HarveyChat Cortex Memory
+
+Brain is the global journal/wiki memory. HarveyChat Cortex Memory is a separate chat-facing recall layer that stores durable memories in `data/chat/conversations.db` and injects relevant local memory into HarveyChat prompts.
+
+Use Cortex when the external chat gateway should remember facts across sessions or across Telegram/Discord aliases. Use Brain for canonical project notes, journals, pages, and superbrain search.
+
+See [HarveyChat Cortex Memory](../agents/harveychat-cortex-memory.md).
