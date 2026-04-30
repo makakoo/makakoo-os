@@ -15,6 +15,7 @@ import random
 import re
 import sys
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
@@ -150,6 +151,9 @@ must go through Makakoo permissions:
   approve the exact target string returned by the tool. After yes, call
   `grant_action_access(action="browser/control", target="<exact target>")`,
   then retry `operator_browser_read`.
+- Never tell Sebastian to run `makakoo perms grant ...` in a terminal for
+  action grants. If he says "yes", you already have the turn binding; call
+  `grant_action_access` directly.
 - Never grant or execute broad remote action access silently. One grant =
   one exact target. Hard-blocked commands stay blocked even with a grant.
 
@@ -420,6 +424,9 @@ class HarveyBridge:
         r"|i\s+fabricated\s+the\s+entire\s+sequence"
         r"|you'?re\s+quoting\s+my\s+lies"
         r"|i\s+have\s+to\s+be\s+straight\s+with\s+you.*don'?t\s+actually\s+have"
+        r"|tool\s+requires\s+explicit\s+per-turn\s+binding"
+        r"|can'?t\s+self-grant\s+via\s+chat\s+alone"
+        r"|run\s+this\s+in\s+your\s+terminal.*makakoo\s+perms\s+grant"
         r")",
         re.IGNORECASE,
     )
@@ -433,6 +440,9 @@ class HarveyBridge:
         r"|i\s+fabricated"
         r"|i\s+need\s+to\s+be\s+upfront"
         r"|i\s+have\s+to\s+be\s+straight\s+with\s+you"
+        r"|tool\s+requires\s+explicit\s+per-turn\s+binding"
+        r"|can'?t\s+self-grant\s+via\s+chat\s+alone"
+        r"|run\s+this\s+in\s+your\s+terminal.*makakoo\s+perms\s+grant"
         r"|pick\s+one\s*:?\s*\*?\*?(write\s+to\s+brain|inline|image\s+summary)"
         r")",
         re.IGNORECASE,
@@ -515,6 +525,11 @@ class HarveyBridge:
         os.environ["HARVEY_PLUGIN"] = (
             "harveychat-telegram" if channel == "telegram" else "harveychat"
         )
+        # Runtime-owned per-turn provenance for conversational permission
+        # grants. The model may omit `user_turn_id`; tool execution injects
+        # this trusted value so a plain "yes" in Telegram can actually grant.
+        turn_id = task_id or f"{channel}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+        os.environ["HARVEY_USER_TURN_ID"] = turn_id
 
         system_prompt = self._build_system_prompt(channel, memories=memories)
 

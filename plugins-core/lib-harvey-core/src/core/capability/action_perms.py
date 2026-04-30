@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -99,6 +100,8 @@ def _normalize_target(action: str, target: str) -> str:
         reason = shell_command_block_reason(t)
         if reason:
             raise PermsError(f"shell command refused even with grant: {reason}")
+    if action == "browser/control":
+        t = normalize_browser_control_target(t)
     return t
 
 
@@ -258,6 +261,52 @@ def browser_read_target(url: str, query: str = "summary", browser: str = "defaul
     return f"browser/read url={u} query={q} browser={b}"
 
 
+def browser_domain_target(url_or_host: str, browser: str = "default") -> str:
+    """Normalize a domain-level browser grant target.
+
+    This is still exact to one host, but it lets mobile approval flows use
+    natural targets like `iberia.com flights dusseldorf madrid` instead of
+    forcing Sebastian to paste the internal `browser/read ...` string.
+    """
+    raw = " ".join((url_or_host or "").strip().split())
+    if not raw:
+        raise PermsError("browser domain target is required")
+    candidate = raw
+    if candidate.startswith("browser:"):
+        candidate = candidate[len("browser:") :].strip()
+    if candidate.startswith("browser/domain "):
+        return candidate
+    if candidate.startswith("browser/read "):
+        return candidate
+    # Natural-language target fallback: pull first plausible domain before
+    # urlparse, because `urlparse("https://iberia.com flights ...")`
+    # treats the whole phrase as netloc.
+    m = re.search(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})", raw)
+    if m and " " in candidate:
+        host = m.group(1)
+    else:
+        parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
+        host = parsed.netloc or parsed.path.split("/", 1)[0]
+        if not host or "." not in host:
+            host = m.group(1) if m else ""
+    host = host.lower().strip().strip("/")
+    if not host or "." not in host:
+        raise PermsError(
+            "browser/control target must be an exact browser/read target, URL, or domain"
+        )
+    b = " ".join((browser or "default").strip().split()) or "default"
+    return f"browser/domain host={host} browser={b}"
+
+
+def normalize_browser_control_target(target: str) -> str:
+    t = " ".join((target or "").strip().split())
+    if t.startswith("browser/read "):
+        return t
+    if t.startswith("browser/domain "):
+        return t
+    return browser_domain_target(t)
+
+
 def _browser_harness_paths() -> tuple[str, str]:
     home = (
         os.environ.get("MAKAKOO_HOME")
@@ -302,6 +351,13 @@ def run_granted_browser_read(
         return f"operator_browser_read rejected: {e.message}"
 
     grant = _active_action_grant("browser/control", target)
+    if grant is None:
+        try:
+            grant = _active_action_grant(
+                "browser/control", browser_domain_target(url, browser)
+            )
+        except PermsError:
+            grant = None
     if grant is None:
         scope = action_scope("browser/control", target)
         log_audit(

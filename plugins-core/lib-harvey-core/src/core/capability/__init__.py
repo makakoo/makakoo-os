@@ -48,6 +48,7 @@ from core.capability.perms_core import (
 )
 from core.capability.action_perms import (
     ActionGrantArgs,
+    browser_domain_target,
     action_scope,
     browser_read_target,
     grant_action,
@@ -62,6 +63,7 @@ __all__ = [
     "CONVERSATIONAL_CHANNELS",
     "Grant",
     "ActionGrantArgs",
+    "browser_domain_target",
     "GrantArgs",
     "ListArgs",
     "PermsError",

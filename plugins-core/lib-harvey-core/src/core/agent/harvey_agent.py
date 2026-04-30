@@ -1965,6 +1965,7 @@ def tool_grant_write_access(
         return gate
 
     plugin = os.environ.get("HARVEY_PLUGIN") or "harveychat"
+    turn_id = user_turn_id or os.environ.get("HARVEY_USER_TURN_ID", "")
     try:
         return do_grant(
             GrantArgs(
@@ -1972,7 +1973,7 @@ def tool_grant_write_access(
                 duration=duration or "1h",
                 label=label or "",
                 plugin=plugin,
-                origin_turn_id=user_turn_id or "",
+                origin_turn_id=turn_id,
                 confirm=confirm or None,
             )
         )
@@ -2032,6 +2033,7 @@ def tool_grant_action_access(
         return gate
 
     plugin = os.environ.get("HARVEY_PLUGIN") or "harveychat"
+    turn_id = user_turn_id or os.environ.get("HARVEY_USER_TURN_ID", "")
     try:
         return grant_action(
             ActionGrantArgs(
@@ -2040,7 +2042,7 @@ def tool_grant_action_access(
                 duration=duration or "1h",
                 label=label or "",
                 plugin=plugin,
-                origin_turn_id=user_turn_id or "",
+                origin_turn_id=turn_id,
                 confirm=confirm or None,
             )
         )
@@ -2392,14 +2394,15 @@ class HarveyAgent:
                     tool_name in {"grant_write_access", "grant_action_access"}
                     and isinstance(args, dict)
                     and not args.get("user_turn_id")
-                    and task_id
                 ):
                     # Conversational permission grants must be bound to
                     # the human turn. The LLM often omits this internal
                     # field; the runtime owns the trustworthy task id, so
                     # inject it here instead of asking the model to invent
                     # provenance.
-                    args["user_turn_id"] = task_id
+                    turn_id = task_id or os.environ.get("HARVEY_USER_TURN_ID", "")
+                    if turn_id:
+                        args["user_turn_id"] = turn_id
 
                 # Tool loop detection: abort if repeating same call
                 call_sig = f"{tool_name}:{json.dumps(args, sort_keys=True, default=str)[:200]}"

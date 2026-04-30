@@ -9,6 +9,7 @@ from core.agent.harvey_agent import execute_tool
 from core.capability.action_perms import (
     ActionGrantArgs,
     action_scope,
+    browser_domain_target,
     browser_read_target,
     grant_action,
 )
@@ -105,6 +106,43 @@ def test_list_action_grants(monkeypatch):
     assert "Action grants:" in out
     assert "action:shell/run:" in out
     assert "printf listed" in out
+
+
+def test_grant_action_access_uses_runtime_turn_env(monkeypatch):
+    monkeypatch.setenv("HARVEY_PLUGIN", "harveychat")
+    monkeypatch.setenv("HARVEY_USER_TURN_ID", "runtime-turn-1")
+    out = execute_tool(
+        "grant_action_access",
+        {
+            "action": "browser/control",
+            "target": "iberia.com flights dusseldorf madrid",
+            "duration": "1h",
+        },
+    )
+    assert "Granted." in out
+    assert "browser/domain host=iberia.com browser=default" in out
+
+
+def test_browser_domain_grant_matches_page_read(monkeypatch):
+    monkeypatch.setenv("HARVEY_PLUGIN", "harveychat")
+    target = browser_domain_target("https://example.com/flights", "default")
+    grant_action(
+        ActionGrantArgs(
+            action="browser/control",
+            target=target,
+            plugin="harveychat",
+            origin_turn_id="turn-domain",
+            duration="1h",
+        )
+    )
+    # In the isolated test env the harness does not exist. Reaching that
+    # error proves the domain grant matched; without it, the tool would
+    # reject for missing browser/control grant.
+    out = execute_tool(
+        "operator_browser_read",
+        {"url": "https://example.com", "query": "summary"},
+    )
+    assert "agent-browser-harness venv python missing" in out
 
 
 def test_operator_browser_read_requires_exact_action_grant(monkeypatch):
