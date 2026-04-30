@@ -1,6 +1,6 @@
 # `makakoo perms` — Runtime write-access grants
 
-**Since:** v0.3 (baseline); hardened in v0.3.1 (rate-limit decrement, denial audits, `origin_turn_id` enforcement), v0.3.2 (Rust MCP handler parity), and v0.3.3 (grant ownership check on revoke, SANCHO idempotency, `--json` envelope).
+**Since:** v0.3 (baseline); hardened in v0.3.1 (rate-limit decrement, denial audits, `origin_turn_id` enforcement), v0.3.2 (Rust MCP handler parity), v0.3.3 (grant ownership check on revoke, SANCHO idempotency, `--json` envelope), and v1.4 schema extension for HarveyChat remote-operator action grants.
 
 By default, Makakoo agents can only write inside a small hardcoded *baseline*:
 
@@ -15,16 +15,19 @@ Everything else is refused by the handler. `makakoo perms` is the way to
 extend that surface — at runtime, without editing code or restarting
 anything.
 
-Three equivalent surfaces share one backend (`$MAKAKOO_HOME/config/user_grants.json`):
+Write grants and remote action grants share one backend
+(`$MAKAKOO_HOME/config/user_grants.json`):
 
 | Surface | When to use |
 |---|---|
 | `makakoo perms` (this page) | scripted / CI workflows, manual admin |
 | `grant_write_access` / `revoke_write_access` / `list_write_grants` MCP tools | conversational flow from any infected CLI |
+| `grant_action_access` / `operator_run_command` / `list_action_grants` HarveyChat tools | Olibia remote-operator actions from Telegram/Discord |
 | `perms_purge_tick` SANCHO task (every 900s) | automatic expiry cleanup; not user-facing |
 
-All three write the same store, emit the same audit entries, and honor the
-same guardrails.
+All surfaces write the same store, emit audit entries, and honor expiry,
+owner, origin-turn, and rate-limit guardrails. The Rust CLI creates
+write grants; it can list and revoke action grants by id.
 
 ---
 
@@ -331,6 +334,35 @@ allowed baseline roots and active grants
 The canonical agent response to this rejection is to ask you whether
 to call `grant_write_access(path, "1h")`. Never fabricate a grant
 call — always quote the rejection verbatim and wait for a clear yes.
+
+## Remote action grants (`action:*`)
+
+HarveyChat/Olibia uses the same grant store for remote-operator actions.
+These grants are intentionally exact-target, not broad sessions.
+
+Example chat flow:
+
+```
+Sebastian: run `brew services list` on my Mac
+Olibia: operator_run_command rejected: no active action grant for this exact command...
+Sebastian: yes run it
+Olibia: [calls grant_action_access(action="shell/run", target="brew services list", duration="1h")]
+Olibia: [calls operator_run_command("brew services list")]
+```
+
+Stored scope shape:
+
+```
+action:shell/run:<sha256-prefix-16>
+```
+
+Rules:
+
+- One grant authorizes one exact normalized command.
+- Permanent action grants require `confirm="yes-really"`.
+- Destructive or credential-exfiltration shaped commands remain hard-blocked.
+- `makakoo perms list --json` shows action grants in the same `active` array.
+- Revoke with `makakoo perms revoke <grant-id>`.
 
 Full model: `spec/CAPABILITIES.md §1.11`. Threat model: `spec/USER_GRANTS_THREAT_MODEL.md`.
 

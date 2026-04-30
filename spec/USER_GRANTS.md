@@ -1,6 +1,7 @@
 # User Grants — File Format, Lock Protocol, and API
 
-**Version:** 1.3 (Security Lockdown 2026-04-21 at
+**Version:** 1.4 (Remote Action Grants 2026-04-30 at
+`SPRINT-OLIBIA-REMOTE-OPERATOR-V2-2026-04-30`; v1.3 Security Lockdown 2026-04-21 at
 `MAKAKOO-OS-V0.3.3-SECURITY-LOCKDOWN`; v1.2 Rust MCP parity at
 `MAKAKOO-OS-V0.3.2-MCP-PARITY`; v1.1 hardening at
 `MAKAKOO-OS-V0.3.1-PERMS-HARDENING`; base locked at v1.0 Gate G.2 of
@@ -30,6 +31,23 @@
   (`{schema_version, baseline, active, expired_today_count, all}`)
   matching the MCP `list_write_grants` response shape. One parser,
   two surfaces.
+
+**v1.4 remote-operator extension:**
+
+- The schema remains version `1`; `scope` is still one string. The accepted
+  scope vocabulary is extended from `fs/write:<glob>` to also include
+  exact action grants: `action:<kind>:<target-hash>`.
+- v1 action grants are exact-target only. There are no action wildcards.
+  `shell/run` grants one exact normalized command string, identified by
+  SHA-256 prefix. A grant for `brew services list` does not authorize
+  `brew services restart foo`.
+- Conversational origin, expiry, owner, rate limits, sidecar lock, and audit
+  semantics are identical to write grants.
+- Permanent action grants require `confirm="yes-really"` even inside
+  `$MAKAKOO_HOME`.
+- Rust CLI/MCP write-grant surfaces remain write-oriented. They tolerate and
+  list `action:*` scopes, and can revoke them by id. Creation/execution of
+  action grants is currently Python HarveyChat remote-operator territory.
 
 This document is the authoritative schema contract for
 `$MAKAKOO_HOME/config/user_grants.json`. Python (`lib-harvey-core`)
@@ -95,7 +113,7 @@ counter. Lock file created on-demand, `0o600`.
 | `version` | int | yes | schema version; currently `1` |
 | `grants` | array | yes | zero or more grant objects; order is insertion-order |
 | `grants[].id` | string | yes | `g_<yyyymmdd>_<8hex>` — human-greppable + case-sensitive |
-| `grants[].scope` | string | yes | `fs/write:<glob>` — §4 glob grammar; `~` and `$MAKAKOO_HOME` expanded at grant-time |
+| `grants[].scope` | string | yes | `fs/write:<glob>` (§4) or `action:<kind>:<target-hash>` (§4.1); `~` and `$MAKAKOO_HOME` expand at grant-time for filesystem scopes |
 | `grants[].created_at` | ISO-8601 UTC | yes | grant creation instant; immutable after creation |
 | `grants[].expires_at` | ISO-8601 UTC or `null` | yes | expiry instant; `null` = permanent |
 | `grants[].label` | string | yes | free text; escaped + truncated to 80 chars before audit emit (LD#16) |
@@ -155,6 +173,33 @@ Examples:
 | `fs/write:/Users/sebastian/*` | `/Users/sebastian/sub/file.txt` | ❌ (single-star stops at `/`) |
 | `fs/write:/tmp/*.md` | `/tmp/foo.md` | ✅ |
 | `fs/write:/tmp/*.md` | `/tmp/foo.txt` | ❌ |
+
+### 4.1 Action scopes
+
+Remote-operator permissions use exact action scopes:
+
+```
+action:shell/run:<sha256-prefix-16>
+action:browser/control:<sha256-prefix-16>
+action:process/control:<sha256-prefix-16>
+action:app/control:<sha256-prefix-16>
+```
+
+The `<sha256-prefix-16>` is computed over the normalized target string.
+For `shell/run`, the target is the exact command after whitespace
+normalization. The original target preview is stored in `label` for human
+inspection; the hash is the enforcement key.
+
+Rules:
+
+- No action wildcards in v1.
+- No prefix matching in v1.
+- `origin_turn_id` is required for conversational action grants exactly like
+  write grants.
+- Hard-blocked destructive / credential-exfiltration shell patterns remain
+  blocked even if a matching action grant exists.
+- `makakoo perms revoke <grant-id>` is the canonical CLI escape hatch for
+  revoking action grants created remotely.
 
 ## 5. Lock protocol (LD#9 — non-negotiable)
 

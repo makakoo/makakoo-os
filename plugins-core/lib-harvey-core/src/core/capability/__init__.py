@@ -46,10 +46,20 @@ from core.capability.perms_core import (
     list_summary_msg,
     revoke_success_msg,
 )
+from core.capability.action_perms import (
+    ActionGrantArgs,
+    action_scope,
+    grant_action,
+    has_action_grant,
+    list_action_grants,
+    run_granted_shell_command,
+    shell_command_block_reason,
+)
 
 __all__ = [
     "CONVERSATIONAL_CHANNELS",
     "Grant",
+    "ActionGrantArgs",
     "GrantArgs",
     "ListArgs",
     "PermsError",
@@ -64,11 +74,17 @@ __all__ = [
     "do_list_grants",
     "do_revoke",
     "escape_audit_field",
+    "action_scope",
     "grant_success_msg",
+    "grant_action",
+    "has_action_grant",
+    "list_action_grants",
     "list_summary_msg",
     "log_audit",
     "log_fs_write",
     "new_grant_id",
     "rate_limit_decrement",
     "revoke_success_msg",
+    "run_granted_shell_command",
+    "shell_command_block_reason",
 ]

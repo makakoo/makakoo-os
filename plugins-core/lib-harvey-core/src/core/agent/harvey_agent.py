@@ -477,6 +477,85 @@ HARVEY_TOOLS = [
             },
         },
     },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "grant_action_access",
+            "description": (
+                "Grant one exact remote-operator action using Makakoo's existing "
+                "user_grants.json permission layer. Use only after explicit "
+                "Sebastian confirmation for the exact target. Supported actions: "
+                "shell/run, browser/control, process/control, app/control. Default "
+                "duration is 1h. Never grant broad permanent remote action access "
+                "unless Sebastian explicitly says permanent and confirm is yes-really. "
+                "Quote the tool result verbatim."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["shell/run", "browser/control", "process/control", "app/control"],
+                        "description": "Exact action family to grant. shell/run grants one exact command only.",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Exact target to grant. For shell/run this is the exact command string.",
+                    },
+                    "duration": {
+                        "type": "string",
+                        "enum": ["30m", "1h", "24h", "7d", "permanent"],
+                        "description": "Grant lifetime. Default 1h.",
+                    },
+                    "label": {"type": "string", "description": "Short context label."},
+                    "confirm": {
+                        "type": "string",
+                        "description": "Pass yes-really only for permanent action grants after explicit confirmation.",
+                    },
+                    "user_turn_id": {
+                        "type": "string",
+                        "description": "Host turn id. The runtime auto-fills this when available.",
+                    },
+                },
+                "required": ["action", "target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_action_grants",
+            "description": "List active remote-operator action grants from user_grants.json.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_expired": {"type": "boolean", "description": "Include expired action grants."}
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "operator_run_command",
+            "description": (
+                "Run a non-whitelisted local command only when an active exact "
+                "shell/run action grant exists for that command. If no grant exists, "
+                "this returns the exact grant_action_access call to ask Sebastian to approve. "
+                "Hard-blocked destructive/exfiltration commands still refuse even with a grant."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Exact command to execute."},
+                    "timeout_seconds": {"type": "integer", "description": "Timeout 1-120 seconds. Default 30."},
+                },
+                "required": ["command"],
+            },
+        },
+    },
 ]
 
 
@@ -1799,29 +1878,37 @@ def _check_telegram_allowlist() -> Optional[str]:
     if os.environ.get("HARVEY_PLUGIN") != "harveychat-telegram":
         return None
     chat_id_raw = os.environ.get("HARVEY_TELEGRAM_CHAT_ID", "").strip()
-    if not chat_id_raw:
+    user_id_raw = os.environ.get("HARVEY_TELEGRAM_USER_ID", "").strip()
+    if not chat_id_raw and not user_id_raw:
         # No chat_id → can't enforce; fail-closed.
         return (
-            "authz: no chat_id in context — refuse to grant. "
+            "authz: no Telegram user/chat id in context — refuse to grant. "
             "Ask Sebastian to re-send from an allowlisted chat."
         )
     try:
-        chat_id = int(chat_id_raw)
+        chat_id = int(chat_id_raw) if chat_id_raw else None
+        user_id = int(user_id_raw) if user_id_raw else None
     except ValueError:
-        return f"authz: malformed HARVEY_TELEGRAM_CHAT_ID={chat_id_raw!r}"
+        return (
+            f"authz: malformed Telegram ids "
+            f"chat={chat_id_raw!r} user={user_id_raw!r}"
+        )
 
     try:
         from core.chat.config import load_config
         cfg = load_config()
         allowed = cfg.telegram.allowed_chat_ids or []
-        if chat_id in allowed:
+        allowed_users = cfg.telegram.allowed_user_ids or []
+        if chat_id is not None and chat_id in allowed:
             return None
-        if not allowed and not cfg.telegram.allowed_user_ids:
+        if user_id is not None and user_id in allowed_users:
+            return None
+        if not allowed and not allowed_users:
             # Fully permissive configuration — same semantics as
             # TelegramChannel._is_allowed.
             return None
         return (
-            f"authz: chat_id {chat_id} not in Telegram allowlist; "
+            f"authz: Telegram user/chat {user_id or '?'}:{chat_id or '?'} not in allowlist; "
             "use 'telegram:access approve' first"
         )
     except Exception as e:
@@ -1907,6 +1994,52 @@ def tool_list_write_grants(include_expired: bool = False) -> str:
         return e.message
 
 
+def tool_grant_action_access(
+    action: str,
+    target: str,
+    duration: str = "1h",
+    label: str = "",
+    confirm: str = "",
+    user_turn_id: str = "",
+) -> str:
+    """Grant one exact remote-operator action through user_grants.json."""
+    from core.capability import ActionGrantArgs, PermsError, grant_action
+
+    gate = _check_telegram_allowlist()
+    if gate is not None:
+        return gate
+
+    plugin = os.environ.get("HARVEY_PLUGIN") or "harveychat"
+    try:
+        return grant_action(
+            ActionGrantArgs(
+                action=action or "",
+                target=target or "",
+                duration=duration or "1h",
+                label=label or "",
+                plugin=plugin,
+                origin_turn_id=user_turn_id or "",
+                confirm=confirm or None,
+            )
+        )
+    except PermsError as e:
+        return e.message
+
+
+def tool_list_action_grants(include_expired: bool = False) -> str:
+    """List remote-operator action grants."""
+    from core.capability import list_action_grants
+
+    return list_action_grants(include_expired=bool(include_expired))
+
+
+def tool_operator_run_command(command: str, timeout_seconds: int = 30) -> str:
+    """Run an exact command only when covered by an action grant."""
+    from core.capability import run_granted_shell_command
+
+    return run_granted_shell_command(command or "", timeout_seconds=timeout_seconds)
+
+
 TOOL_DISPATCH = {
     "brain_search": lambda args: tool_brain_search(args.get("query", "")),
     "brain_write": lambda args: tool_brain_write(args.get("content", "")),
@@ -1954,6 +2087,21 @@ TOOL_DISPATCH = {
     ),
     "list_write_grants": lambda args: tool_list_write_grants(
         args.get("include_expired", False),
+    ),
+    "grant_action_access": lambda args: tool_grant_action_access(
+        args.get("action", ""),
+        args.get("target", ""),
+        args.get("duration", "1h"),
+        args.get("label", ""),
+        args.get("confirm", ""),
+        args.get("user_turn_id", ""),
+    ),
+    "list_action_grants": lambda args: tool_list_action_grants(
+        args.get("include_expired", False),
+    ),
+    "operator_run_command": lambda args: tool_operator_run_command(
+        args.get("command", ""),
+        args.get("timeout_seconds", 30),
     ),
 }
 
@@ -2195,6 +2343,18 @@ class HarveyAgent:
                     )
                 except json.JSONDecodeError:
                     args = {}
+                if (
+                    tool_name in {"grant_write_access", "grant_action_access"}
+                    and isinstance(args, dict)
+                    and not args.get("user_turn_id")
+                    and task_id
+                ):
+                    # Conversational permission grants must be bound to
+                    # the human turn. The LLM often omits this internal
+                    # field; the runtime owns the trustworthy task id, so
+                    # inject it here instead of asking the model to invent
+                    # provenance.
+                    args["user_turn_id"] = task_id
 
                 # Tool loop detection: abort if repeating same call
                 call_sig = f"{tool_name}:{json.dumps(args, sort_keys=True, default=str)[:200]}"

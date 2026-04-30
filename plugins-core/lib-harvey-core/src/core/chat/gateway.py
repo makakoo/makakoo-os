@@ -404,7 +404,12 @@ class HarveyChat:
         bridge_future = asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._bridge_send_with_file_hints(
-                text, history, channel, task_id=cognitive_task_id, memories=memories
+                text,
+                history,
+                channel,
+                user_id=user_id,
+                task_id=cognitive_task_id,
+                memories=memories,
             ),
         )
 
@@ -498,7 +503,7 @@ class HarveyChat:
         # Send to bridge with task context
         response, files_to_send = await asyncio.get_event_loop().run_in_executor(
             None, lambda: self._bridge_send_with_file_hints(
-                user_input, history, channel
+                user_input, history, channel, user_id=user_id
             )
         )
 
@@ -564,7 +569,13 @@ class HarveyChat:
         return f"Working on it — {classification.intent} workflow started."
 
     def _bridge_send_with_file_hints(
-        self, text: str, history: list, channel: str, task_id: str = None, memories: list = None
+        self,
+        text: str,
+        history: list,
+        channel: str,
+        user_id: str = "",
+        task_id: str = None,
+        memories: list = None,
     ) -> tuple[str, list]:
         """
         Call bridge.send() and check for file markers.
@@ -576,6 +587,16 @@ class HarveyChat:
         the TaskStore for the given task.
         """
         import re
+        import os
+
+        if channel == "telegram" and user_id:
+            # Permission-grant tools fail closed unless the Telegram
+            # allowlist can be checked in the agent thread. In private
+            # chats Telegram chat_id == user_id; group chat ids are
+            # recorded by the transport for replies, but user allowlist
+            # is still enough to authorize Sebastian.
+            os.environ["HARVEY_TELEGRAM_USER_ID"] = str(user_id)
+            os.environ.setdefault("HARVEY_TELEGRAM_CHAT_ID", str(user_id))
 
         response = self.bridge.send(
             text,
