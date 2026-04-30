@@ -25,7 +25,15 @@ HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 
 def transcribe_audio(audio_path: str) -> str:
     """
-    Transcribe an audio file using faster-whisper (local, no API needed).
+    Transcribe an audio file.
+
+    Primary: faster-whisper local CPU transcription.
+    Fallback: Makakoo omni audio through switchAILocal.
+
+    The old implementation forced language="en" and returned empty when
+    faster-whisper was missing from the daemon Python. That made Telegram
+    voice notes look "silent". Keep this fail-open: if local whisper is
+    unavailable, ask the omni model to transcribe instead.
     """
     if not os.path.exists(audio_path):
         return ""
@@ -33,14 +41,33 @@ def transcribe_audio(audio_path: str) -> str:
     try:
         from faster_whisper import WhisperModel
 
-        model = WhisperModel("base", device="cpu", compute_type="int8")
-        segments, _ = model.transcribe(audio_path, language="en", beam_size=5)
+        model_name = os.environ.get("HARVEY_WHISPER_MODEL", "base")
+        model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        # No forced language: Sebastian sends English/German/Spanish mixed notes.
+        segments, _ = model.transcribe(audio_path, beam_size=5)
         text = " ".join(seg.text for seg in segments).strip()
-        log.info(f"Whisper transcription: {len(text)} chars from {audio_path}")
-        return text
+        if text:
+            log.info(f"Whisper transcription: {len(text)} chars from {audio_path}")
+            return text
+        log.warning("Whisper returned empty transcript; trying omni fallback")
     except Exception as e:
-        log.error(f"Whisper transcription failed: {e}")
-        return ""
+        log.warning(f"Whisper transcription unavailable/failed: {e}; trying omni fallback")
+
+    try:
+        from core.llm.omni import describe_audio
+
+        text = describe_audio(
+            audio_path,
+            "Transcribe this Telegram voice note exactly. Preserve the spoken language. Return only the transcript.",
+            max_completion_tokens=800,
+        ).strip()
+        if text:
+            log.info(f"Omni audio transcription: {len(text)} chars from {audio_path}")
+            return text
+    except Exception as e:
+        log.error(f"Omni audio transcription failed: {e}")
+
+    return ""
 
 
 async def speak_text(text: str, user_id: str) -> Optional[str]:

@@ -65,11 +65,24 @@ async def download_telegram_file(file_id: str, bot_token: str) -> Optional[str]:
 
 def describe_image(image_path: str) -> str:
     """
-    Describe an image using MiniMax's image-01 model via switchAILocal.
-    Falls back to a Qwen VL model if that fails.
+    Describe an image using Makakoo omni first, then legacy VL fallbacks.
     """
     if not os.path.exists(image_path):
         return ""
+
+    try:
+        from core.llm.omni import describe_image as omni_describe_image
+
+        content = omni_describe_image(
+            image_path,
+            "Describe this image in detail. Extract visible text and explain what the user likely wants me to notice.",
+            max_completion_tokens=700,
+        ).strip()
+        if content:
+            log.info(f"Omni image described: {len(content)} chars")
+            return content
+    except Exception as e:
+        log.warning(f"Omni image description failed: {e}; trying legacy VL fallback")
 
     switchai_url, switchai_key = _get_switchai_config()
 
@@ -342,3 +355,25 @@ def _guess_mime_type(file_path: str) -> str:
         ".txt": "text/plain",
     }
     return types.get(ext, "application/octet-stream")
+
+
+def describe_video(video_path: str) -> str:
+    """Describe a video using Makakoo omni. Returns empty string on failure."""
+    if not os.path.exists(video_path):
+        return ""
+    try:
+        from core.llm.omni import describe_video as omni_describe_video
+
+        content = omni_describe_video(
+            video_path,
+            "Watch this Telegram video. Summarize the visible action and extract any readable text.",
+            fps=2,
+            media_resolution="default",
+            max_completion_tokens=900,
+        ).strip()
+        if content:
+            log.info(f"Omni video described: {len(content)} chars")
+            return content
+    except Exception as e:
+        log.error(f"Video description failed: {e}")
+    return ""

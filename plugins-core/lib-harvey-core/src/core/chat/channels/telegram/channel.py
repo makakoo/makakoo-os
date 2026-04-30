@@ -675,7 +675,7 @@ class TelegramChannel(BaseChannel):
             )
 
     async def _handle_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle video messages — download first frame and describe it."""
+        """Handle video messages — download and summarize with omni video."""
         if not update.message or not update.message.video:
             return
 
@@ -694,9 +694,61 @@ class TelegramChannel(BaseChannel):
         video = update.message.video
         log.info(f"Video from @{username} ({user_id}), duration={video.duration}s")
 
-        await update.message.reply_text(
-            "Video support coming soon. For now, send me a screenshot or describe what's in the video."
-        )
+        typing_active = True
+        typing_kwargs = {"action": "typing"}
+        if thread_id is not None:
+            typing_kwargs["message_thread_id"] = thread_id
+
+        async def keep_typing():
+            while typing_active:
+                try:
+                    await self._app.bot.send_chat_action(chat_id=chat_id, **typing_kwargs)
+                except RetryAfter as e:
+                    await asyncio.sleep(min(e.retry_after, 30))
+                except Exception:
+                    await asyncio.sleep(5)
+                await asyncio.sleep(4)
+
+        typing_task = asyncio.create_task(keep_typing())
+        try:
+            from core.chat.media import download_telegram_file, describe_video
+
+            file_path = await download_telegram_file(video.file_id, self.config.bot_token)
+            if not file_path:
+                await update.message.reply_text("Couldn't download your video. Try again.")
+                return
+
+            description = await asyncio.get_event_loop().run_in_executor(
+                None, describe_video, file_path
+            )
+            try:
+                os.unlink(file_path)
+            except Exception:
+                pass
+
+            typing_active = False
+            self._safe_cancel(typing_task)
+
+            if not description:
+                description = "(I couldn't understand the video content.)"
+
+            response = await self._on_message(
+                channel="telegram",
+                user_id=user_id,
+                username=username,
+                text=f"[User sent a video]\nVideo description: {description}\n\nWhat is this about?",
+            )
+            chunks = _split_message(response, 4000)
+            for chunk in chunks:
+                try:
+                    await update.message.reply_text(chunk, parse_mode="HTML")
+                except Exception:
+                    await update.message.reply_text(chunk)
+        except Exception as e:
+            typing_active = False
+            self._safe_cancel(typing_task)
+            log.error(f"Video processing error: {e}", exc_info=True)
+            await update.message.reply_text("Video processing failed. Send a screenshot or try again.")
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command."""
