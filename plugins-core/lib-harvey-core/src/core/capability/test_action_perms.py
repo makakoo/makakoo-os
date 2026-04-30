@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from core.agent.harvey_agent import execute_tool
-from core.capability.action_perms import ActionGrantArgs, action_scope, grant_action
+from core.capability.action_perms import (
+    ActionGrantArgs,
+    action_scope,
+    browser_read_target,
+    grant_action,
+)
 from core.capability.perms_core import PermsError
 
 
@@ -100,3 +105,42 @@ def test_list_action_grants(monkeypatch):
     assert "Action grants:" in out
     assert "action:shell/run:" in out
     assert "printf listed" in out
+
+
+def test_operator_browser_read_requires_exact_action_grant(monkeypatch):
+    monkeypatch.setenv("HARVEY_PLUGIN", "harveychat")
+    out = execute_tool(
+        "operator_browser_read",
+        {"url": "https://example.com", "query": "summary"},
+    )
+    assert "no active browser/control grant" in out
+    target = browser_read_target("https://example.com", "summary", "default")
+    assert target in out
+
+
+def test_operator_browser_read_rejects_non_http_url(monkeypatch):
+    monkeypatch.setenv("HARVEY_PLUGIN", "harveychat")
+    out = execute_tool(
+        "operator_browser_read",
+        {"url": "file:///etc/passwd", "query": "summary"},
+    )
+    assert "browser URL must be http(s)" in out
+
+
+def test_operator_browser_read_reports_missing_harness_after_grant(monkeypatch):
+    monkeypatch.setenv("HARVEY_PLUGIN", "harveychat")
+    target = browser_read_target("https://example.com", "summary", "default")
+    grant_action(
+        ActionGrantArgs(
+            action="browser/control",
+            target=target,
+            plugin="harveychat",
+            origin_turn_id="turn-browser",
+            duration="1h",
+        )
+    )
+    out = execute_tool(
+        "operator_browser_read",
+        {"url": "https://example.com", "query": "summary"},
+    )
+    assert "agent-browser-harness venv python missing" in out

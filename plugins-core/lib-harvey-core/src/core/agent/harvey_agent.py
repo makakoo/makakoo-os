@@ -556,6 +556,28 @@ HARVEY_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "operator_browser_read",
+            "description": (
+                "Use the real Chrome browser-harness to open and read a URL, including "
+                "logged-in / JavaScript pages, only when an exact browser/control action "
+                "grant exists for this URL+query+browser target. If no grant exists, ask "
+                "Sebastian to approve the exact target, then call grant_action_access."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "http(s) URL to open in Chrome."},
+                    "query": {"type": "string", "description": "What to extract. Default summary."},
+                    "browser": {"type": "string", "description": "Browser harness name. Default default."},
+                    "timeout_seconds": {"type": "integer", "description": "Timeout 5-180 seconds. Default 60."},
+                },
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 
@@ -2040,6 +2062,23 @@ def tool_operator_run_command(command: str, timeout_seconds: int = 30) -> str:
     return run_granted_shell_command(command or "", timeout_seconds=timeout_seconds)
 
 
+def tool_operator_browser_read(
+    url: str,
+    query: str = "summary",
+    browser: str = "default",
+    timeout_seconds: int = 60,
+) -> str:
+    """Read a URL through Chrome only when covered by an action grant."""
+    from core.capability import run_granted_browser_read
+
+    return run_granted_browser_read(
+        url or "",
+        query=query or "summary",
+        browser=browser or "default",
+        timeout_seconds=timeout_seconds,
+    )
+
+
 TOOL_DISPATCH = {
     "brain_search": lambda args: tool_brain_search(args.get("query", "")),
     "brain_write": lambda args: tool_brain_write(args.get("content", "")),
@@ -2102,6 +2141,12 @@ TOOL_DISPATCH = {
     "operator_run_command": lambda args: tool_operator_run_command(
         args.get("command", ""),
         args.get("timeout_seconds", 30),
+    ),
+    "operator_browser_read": lambda args: tool_operator_browser_read(
+        args.get("url", ""),
+        args.get("query", "summary"),
+        args.get("browser", "default"),
+        args.get("timeout_seconds", 60),
     ),
 }
 

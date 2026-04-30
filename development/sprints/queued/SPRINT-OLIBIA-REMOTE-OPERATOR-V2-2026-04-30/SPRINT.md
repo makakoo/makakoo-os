@@ -82,6 +82,10 @@ Updated:
 - `docs/user-manual/makakoo-perms.md`
 - `spec/USER_GRANTS.md`
 
+### Phase 3.5 — Browser read gate
+
+Added `operator_browser_read(url, query, browser)` for real Chrome reads through `agent-browser-harness`. No grant means refusal with the exact `grant_action_access(action="browser/control", target=...)` call. Harness/CDP failure returns explicit setup errors; no unauthenticated HTTP fallback.
+
 ### Phase 4 — Tests
 
 Added:
@@ -95,10 +99,13 @@ Coverage:
 - command mismatch is denied
 - hard-blocked command denied even before grant
 - action grant listing works
+- browser read requires exact browser/control grant
+- browser read rejects non-http URLs
+- browser read reports missing harness after grant in isolated test env
 
 ## Non-goals for this sprint
 
-- Full browser-harness control from Telegram. Permission scope exists; execution tool is deferred until Chrome CDP setup is reliable.
+- Full arbitrary browser control/click/fill from Telegram. Read-only browser extraction is shipped; click/fill workflows need separate approvals and UX.
 - GUI automation / AppleScript omnipotence. Needs separate risk review.
 - `makakoo perms grant-action` Rust CLI creation command. Rust CLI can list/revoke action grants by id; creation remains HarveyChat Python for v1.
 
@@ -106,7 +113,7 @@ Coverage:
 
 ```bash
 cd /Users/sebastian/makakoo-os
-PYTHONPATH=plugins-core/lib-harvey-core/src python3 -m pytest -q plugins-core/lib-harvey-core/src/core/capability/test_action_perms.py
+PYTHONPATH=plugins-core/lib-harvey-core/src python3.11 -m pytest -q plugins-core/lib-harvey-core/src/core/capability/test_action_perms.py
 PYTHONPATH=plugins-core/lib-harvey-core/src python3 -m pytest -q plugins-core/lib-harvey-core/src/core/cortex/tests
 (cd plugins-core/agent-harveychat/python && python3 -m pytest -q)
 ```

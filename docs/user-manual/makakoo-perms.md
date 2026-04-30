@@ -354,13 +354,19 @@ Stored scope shape:
 
 ```
 action:shell/run:<sha256-prefix-16>
+action:browser/control:<sha256-prefix-16>
 ```
 
 Rules:
 
 - One grant authorizes one exact normalized command.
+- For browser reads, one grant authorizes one exact normalized
+  `browser/read url=<url> query=<query> browser=<name>` target.
 - Permanent action grants require `confirm="yes-really"`.
 - Destructive or credential-exfiltration shaped commands remain hard-blocked.
+- Browser reads use the real Chrome `agent-browser-harness`; if the harness
+  or Chrome CDP is down, the grant still exists but the action returns a
+  setup error instead of falling back to unauthenticated HTTP.
 - `makakoo perms list --json` shows action grants in the same `active` array.
 - Revoke with `makakoo perms revoke <grant-id>`.
 

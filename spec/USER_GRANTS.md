@@ -41,6 +41,10 @@
   `shell/run` grants one exact normalized command string, identified by
   SHA-256 prefix. A grant for `brew services list` does not authorize
   `brew services restart foo`.
+- `browser/control` grants one exact browser target such as
+  `browser/read url=https://… query=summary browser=default`. Browser reads
+  run through `agent-browser-harness`; there is no HTTP fallback for logged-in
+  pages.
 - Conversational origin, expiry, owner, rate limits, sidecar lock, and audit
   semantics are identical to write grants.
 - Permanent action grants require `confirm="yes-really"` even inside
@@ -187,8 +191,10 @@ action:app/control:<sha256-prefix-16>
 
 The `<sha256-prefix-16>` is computed over the normalized target string.
 For `shell/run`, the target is the exact command after whitespace
-normalization. The original target preview is stored in `label` for human
-inspection; the hash is the enforcement key.
+normalization. For `browser/control`, current v1 execution uses exact targets
+of the form `browser/read url=<url> query=<query> browser=<name>`. The
+original target preview is stored in `label` for human inspection; the hash is
+the enforcement key.
 
 Rules:
 

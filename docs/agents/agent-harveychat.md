@@ -55,6 +55,9 @@ same Makakoo permission system used by the CLI:
 - Non-whitelisted shell commands require an exact action grant:
   `grant_action_access(action="shell/run", target="<exact command>")`, then
   `operator_run_command("<exact command>")`.
+- Logged-in / JavaScript browser reads require an exact action grant:
+  `grant_action_access(action="browser/control", target="<exact browser/read target>")`,
+  then `operator_browser_read(url, query)`.
 - One action grant authorizes one exact normalized target only. It does not
   create a broad shell session.
 - Hard-blocked destructive or credential-exfiltration patterns stay blocked
@@ -85,6 +88,7 @@ and can be revoked from the CLI with `makakoo perms revoke <grant-id>`.
 | Bot silently stops responding after a reboot | `agent-harveychat` didn't auto-restart | Check `makakoo daemon status`; re-infect if needed via `makakoo daemon restart`. |
 | Message flood loop (bot replies to its own messages) | Bot-ignore patch not applied | Update to the latest version of the plugin; the fix landed 2026-04-10. |
 | Non-whitelisted command rejected | No exact `shell/run` action grant | Approve the exact command in chat, or revoke/inspect grants with `makakoo perms list --json`. |
+| Logged-in page read rejected | No exact `browser/control` action grant | Approve the exact browser target in chat; if Chrome CDP is down, start Chrome with `--remote-debugging-port=9222`. |
 
 ## Capability surface
 
@@ -94,6 +98,8 @@ and can be revoked from the CLI with `makakoo perms revoke <grant-id>`.
 - `fs/write:$MAKAKOO_HOME/data/harveychat`
 - `llm/chat` — answer synthesis.
 - `action:shell/run:<hash>` — optional exact remote-operator shell actions,
+  only after explicit user grant.
+- `action:browser/control:<hash>` — optional exact real-browser reads,
   only after explicit user grant.
 
 ## Remove permanently

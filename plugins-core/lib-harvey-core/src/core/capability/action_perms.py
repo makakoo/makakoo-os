@@ -13,13 +13,16 @@ shell command does not authorize a different command.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shlex
 import subprocess
 import time
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
 from core.capability import (
     CONVERSATIONAL_CHANNELS,
@@ -238,6 +241,151 @@ def shell_command_block_reason(command: str) -> str:
     except ValueError as e:
         return f"invalid shell syntax: {e}"
     return ""
+
+
+def browser_read_target(url: str, query: str = "summary", browser: str = "default") -> str:
+    """Normalize browser-read intent into the exact action-grant target."""
+    u = (url or "").strip()
+    parsed = urlparse(u)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise PermsError("browser URL must be http(s) with a host")
+    q = " ".join((query or "summary").strip().split()) or "summary"
+    b = " ".join((browser or "default").strip().split()) or "default"
+    if len(q) > 300:
+        q = q[:300]
+    if len(b) > 40:
+        raise PermsError("browser name too long")
+    return f"browser/read url={u} query={q} browser={b}"
+
+
+def _browser_harness_paths() -> tuple[str, str]:
+    home = (
+        os.environ.get("MAKAKOO_HOME")
+        or os.environ.get("HARVEY_HOME")
+        or os.path.expanduser("~/MAKAKOO")
+    )
+    plugin = os.path.join(home, "plugins", "agent-browser-harness")
+    return (
+        os.path.join(plugin, ".venv", "bin", "python"),
+        os.path.join(plugin, "upstream", "run.py"),
+    )
+
+
+def _discover_cdp_ws() -> str:
+    url = os.environ.get("BU_CDP_URL", "http://127.0.0.1:9222/json/version")
+    try:
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        return str(payload.get("webSocketDebuggerUrl") or "")
+    except Exception:
+        return ""
+
+
+def _browser_rejection(target: str) -> str:
+    return (
+        "operator_browser_read rejected: no active browser/control grant for this exact target. "
+        "Ask Sebastian for explicit permission, then call "
+        f"grant_action_access(action='browser/control', target={target!r}, duration='1h')."
+    )
+
+
+def run_granted_browser_read(
+    url: str,
+    query: str = "summary",
+    browser: str = "default",
+    timeout_seconds: int = 60,
+) -> str:
+    """Read a page through real Chrome only with an exact browser/control grant."""
+    try:
+        target = browser_read_target(url, query, browser)
+    except PermsError as e:
+        return f"operator_browser_read rejected: {e.message}"
+
+    grant = _active_action_grant("browser/control", target)
+    if grant is None:
+        scope = action_scope("browser/control", target)
+        log_audit(
+            verb="action/browser_read",
+            scope_requested=scope,
+            scope_granted=None,
+            result="denied",
+            correlation_id="reason:no_action_grant",
+        )
+        return _browser_rejection(target)
+
+    py, run_py = _browser_harness_paths()
+    if not os.path.exists(py):
+        return (
+            f"operator_browser_read error: agent-browser-harness venv python missing at {py}. "
+            "Run `makakoo plugin install --core agent-browser-harness`."
+        )
+    if not os.path.exists(run_py):
+        return (
+            f"operator_browser_read error: browser-harness run.py missing at {run_py}. "
+            "Run `makakoo plugin install --core agent-browser-harness`."
+        )
+
+    u_json = json.dumps(url)
+    code = f"""
+goto({u_json})
+wait_for_load(15)
+info = page_info()
+print("PAGE_INFO", info)
+content = js("(()=>{{const title=document.title||''; const text=(document.body&&document.body.innerText)||''; const links=[...document.querySelectorAll('a[href]')].slice(0,30).map(a=>`${{a.innerText.trim()}} -> ${{a.href}}`).join('\\\\n'); return `TITLE: ${{title}}\\\\n\\\\nTEXT:\\\\n${{text}}\\\\n\\\\nLINKS:\\\\n${{links}}`;}})()")
+print("PAGE_CONTENT_START")
+print(content)
+print("PAGE_CONTENT_END")
+"""
+    timeout = max(5, min(int(timeout_seconds or 60), 180))
+    start = time.monotonic()
+    env = os.environ.copy()
+    env["BU_NAME"] = browser or "default"
+    if "BU_CDP_WS" not in env:
+        cdp_ws = _discover_cdp_ws()
+        if cdp_ws:
+            env["BU_CDP_WS"] = cdp_ws
+    try:
+        result = subprocess.run(
+            [py, run_py],
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        elapsed = int((time.monotonic() - start) * 1000)
+        output = (result.stdout.strip() or result.stderr.strip() or "(browser produced no output)")
+        if len(output) > 8000:
+            output = output[:8000] + "\n... (truncated)"
+        log_audit(
+            verb="action/browser_read",
+            scope_requested=target,
+            scope_granted=grant.id,
+            result="allowed" if result.returncode == 0 else "error",
+            duration_ms=elapsed,
+            bytes_out=len(output.encode("utf-8", errors="ignore")),
+        )
+        if result.returncode != 0:
+            return f"operator_browser_read failed exit={result.returncode}\n{output}"
+        return output
+    except subprocess.TimeoutExpired:
+        log_audit(
+            verb="action/browser_read",
+            scope_requested=target,
+            scope_granted=grant.id,
+            result="error",
+            correlation_id="reason:timeout",
+        )
+        return f"operator_browser_read timeout after {timeout}s"
+    except Exception as e:
+        log_audit(
+            verb="action/browser_read",
+            scope_requested=target,
+            scope_granted=grant.id,
+            result="error",
+            correlation_id=f"reason:{type(e).__name__}",
+        )
+        return f"operator_browser_read error: {e}"
 
 
 def run_granted_shell_command(command: str, timeout_seconds: int = 30) -> str:
