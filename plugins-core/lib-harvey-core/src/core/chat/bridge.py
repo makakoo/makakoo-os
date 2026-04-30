@@ -427,6 +427,9 @@ class HarveyBridge:
         r"|tool\s+requires\s+explicit\s+per-turn\s+binding"
         r"|can'?t\s+self-grant\s+via\s+chat\s+alone"
         r"|run\s+this\s+in\s+your\s+terminal.*makakoo\s+perms\s+grant"
+        r"|need\s+the\s+full\s+url\s+as\s+the\s+target"
+        r"|one\s+more\s+step\s+[-—]\s+grant\s+the\s+exact\s+url"
+        r"|aggregators\s+are\s+js-rendered"
         r")",
         re.IGNORECASE,
     )
@@ -443,6 +446,8 @@ class HarveyBridge:
         r"|tool\s+requires\s+explicit\s+per-turn\s+binding"
         r"|can'?t\s+self-grant\s+via\s+chat\s+alone"
         r"|run\s+this\s+in\s+your\s+terminal.*makakoo\s+perms\s+grant"
+        r"|need\s+the\s+full\s+url\s+as\s+the\s+target"
+        r"|one\s+more\s+step\s+[-—]\s+grant\s+the\s+exact\s+url"
         r"|pick\s+one\s*:?\s*\*?\*?(write\s+to\s+brain|inline|image\s+summary)"
         r")",
         re.IGNORECASE,
@@ -490,6 +495,96 @@ class HarveyBridge:
         if dropped:
             log.info(f"[history-sanitizer] dropped {dropped} contaminated assistant message(s)")
         return cleaned
+
+    _APPROVAL_RE = re.compile(
+        r"^\s*(yes|yes browser|approved|approve|ok|okay|do it|run it|go|try again)\s*[!.]?\s*$",
+        re.IGNORECASE,
+    )
+    _DOMAIN_RE = re.compile(r"\b([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
+
+    def _maybe_handle_browser_approval(self, message: str, history: List[Dict]) -> Optional[str]:
+        """Deterministic hot path for mobile 'yes' after a browser grant prompt.
+
+        The LLM repeatedly failed this flow by asking for "one more step".
+        If recent context clearly asked for browser access and Sebastian now
+        says yes/try again, bypass the model: grant the browser action and
+        run the browser read directly.
+        """
+        if not self._APPROVAL_RE.match(message or ""):
+            return None
+
+        recent = history[-12:]
+        joined = "\n".join(str(m.get("content") or "") for m in recent)
+        if not re.search(r"(browser access|browser/control|real browser|grant.*browser|Chrome access)", joined, re.I):
+            return None
+
+        # Prefer explicit grant target from previous assistant, else fall
+        # back to a domain mentioned in the browser prompt / original ask.
+        target = ""
+        for pat in (
+            r'grant_action_access\(action=["\']browser/control["\'],\s*target=["\']([^"\']+)["\']',
+            r'target=["\']([^"\']+)["\']',
+            r"grant\s+`([^`]+)`",
+        ):
+            matches = re.findall(pat, joined, flags=re.I)
+            if matches:
+                target = matches[-1]
+                break
+        if not target:
+            domains = [d.lower() for d in self._DOMAIN_RE.findall(joined)]
+            # Avoid picking docs/formatting domains if a travel domain exists.
+            for preferred in ("iberia.com", "flights.google.com", "kiwi.com", "expedia.com", "rome2rio.com"):
+                if preferred in domains:
+                    target = preferred
+                    break
+            if not target and domains:
+                target = domains[-1]
+        if not target:
+            return None
+
+        # Original user intent = latest non-approval user message.
+        query = "summary"
+        for m in reversed(recent):
+            if m.get("role") == "user":
+                content = str(m.get("content") or "").strip()
+                if content and not self._APPROVAL_RE.match(content):
+                    query = content
+                    break
+
+        # Browser URL. Domain-level grants are fine; reads still need a URL.
+        domain_match = self._DOMAIN_RE.search(target)
+        host = domain_match.group(1).lower() if domain_match else target
+        if "://" in target:
+            url = target
+        elif host == "flights.google.com":
+            url = "https://www.google.com/travel/flights"
+        else:
+            url = f"https://{host}"
+
+        from core.agent.harvey_agent import execute_tool
+
+        grant = execute_tool(
+            "grant_action_access",
+            {
+                "action": "browser/control",
+                "target": target,
+                "duration": "1h",
+                "label": "browser approval from chat",
+            },
+        )
+        if not grant.startswith("Granted."):
+            return f"Grant failed: {grant}"
+
+        result = execute_tool(
+            "operator_browser_read",
+            {
+                "url": url,
+                "query": query,
+                "browser": "default",
+                "timeout_seconds": 90,
+            },
+        )
+        return f"{grant}\n\nBrowser result:\n{result[:3500]}"
 
     def send(
         self,
@@ -541,6 +636,10 @@ class HarveyBridge:
         # hallucinated-failure loop — without it, the model keeps
         # pattern-matching its own prior defeatism.
         trimmed_history = self._sanitize_history(trimmed_history)
+
+        browser_approval = self._maybe_handle_browser_approval(message, trimmed_history)
+        if browser_approval is not None:
+            return browser_approval
 
         # Build history for agent (ensure current message is included)
         agent_history = []
