@@ -10,6 +10,61 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added — Pattern substrate v1 (`SPRINT-PATTERN-SUBSTRATE-V1`, 2026-05-01)
+
+A subagent dispatch substrate inspired by Daniel Miessler's Fabric, reframed
+for Makakoo's parasite-OS model. Patterns are markdown system-prompt units
+callable identically from CLI, MCP, and any future surface — letting Harvey
+shell out one-shot LLM dispatch without burning host CLI context tokens.
+
+- **`kind = "pattern"` plugin kind.** Patterns are markdown + TOML, no Python
+  entrypoint, no daemon. New `[pattern]` table declares `model`, `vendor`,
+  `strategy_default`, `mascot_default`, `tags`, and a `[[pattern.variables]]`
+  list. Sibling `system.md` carries the prompt body. Loader graceful-skips
+  pattern dirs missing `system.md`.
+- **`makakoo run pattern=<name>` CLI verb.** Composes
+  `strategy ⊕ mascot ⊕ pattern → system message`, fires `switchAILocal`,
+  returns text or JSON. Flags: `--input`/`--var`/`--mascot`/`--strategy`/
+  `--model`/`--vendor`/`--dry-run`/`--json`. Stdin (`-`), file (`@path`),
+  or literal input all supported.
+- **Five strategy files** baked in via `include_str!`:
+  `cot, tot, react, harvey-rigor, caveman`. User overrides at
+  `$MAKAKOO_HOME/data/strategies/<name>.md` win when present. The caveman
+  strategy ports lope's `CAVEMAN_VALIDATOR_DIRECTIVE` plus a HARD-GATE
+  BYPASS preamble that skips compression for any external-writing context.
+- **Per-pattern model + vendor pinning.** Resolution precedence (highest
+  first): pattern.toml → flag → `FABRIC_MODEL_<NAME>` env → kernel default.
+  Same shape for vendor sans env. Hyphens in pattern names normalize to
+  underscores in the env-var key.
+- **Mascot persona externalization.** Olibia's `SYSTEM_PROMPT_FRAGMENT`
+  promoted to `plugins-core/mascot-olibia/persona.md`; Pixel/Cinder/Ziggy
+  ship as placeholder slots ready for voice authoring. Python `mascot.py`
+  lazy-loads from disk with the embedded constant as fallback.
+- **MCP auto-expose at boot.** `makakoo-mcp` walks
+  `<makakoo_home>/plugins/pattern-*/` and registers one `pattern_<name>`
+  tool per discovered pattern. JSON Schema is generated mechanically from
+  `[pattern].variables`. Five routing controls (`_strategy`, `_mascot`,
+  `_model`, `_vendor`, `_json`) are added to every tool's schema.
+  Every infected CLI sees new patterns as `mcp__harvey__pattern_<name>`
+  on next session — no per-CLI code, no manual registration.
+- **MCP caveman default with tag bypass (Locked Decision 11).** Patterns
+  invoked via MCP default to the `caveman` strategy when no
+  `strategy_default` is declared and the pattern's `tags` does not include
+  `external` or `polished`. The `_strategy` argument always overrides.
+  CLI invocations stay neutral — the host CLI already governs voice.
+- **Two seed patterns shipped:** `pattern-summarize` (5-bullet summary,
+  `gemini-2.5-flash-lite`) and `pattern-extract-wisdom` (insights extraction
+  with `harvey-rigor` strategy default, `gemini-2.5-pro`).
+
+Test counts: 1858 passed / 0 failed / 5 ignored (workspace), +74 net new
+tests across `manifest`, `registry`, `run::*`, `commands::run`,
+`tests/run_pattern.rs`, and `handlers::patterns`.
+
+Out of v1 scope (queued for v2 sprints): Brain-aware templating namespaces
+(`{{brain:...}}`, `{{garage:...}}`, `{{persona:...}}`), session resumption
+with vendor-message conversion, git-sourced pattern marketplace,
+pattern-driven file-changes apply, custom-pattern shadow directories.
+
 ### Added — `makakoo setup` interactive wizard (`MAKAKOO-SETUP-WIZARD`, 2026-04-23)
 
 - **Section dispatcher** — the one-shot `makakoo setup` persona picker is

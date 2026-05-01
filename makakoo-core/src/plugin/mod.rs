@@ -29,9 +29,9 @@ pub use lock::{lock_path, LockEntry, LockError, LockMeta, PluginsLock};
 pub use python_venv::{ensure_venv, EnsureVenvReport, InstallSpec, VenvError, VenvSpec};
 pub use manifest::{
     AbiTable, CapabilitiesTable, DependsTable, EntrypointTable, InfectTable, InstallTable,
-    Manifest, ManifestError, McpTable, McpToolSpec, PluginKind, PluginLanguage, PluginTable,
-    RestartPolicy, SanchoTable, SanchoTaskSpec, ServiceTable, SourceTable, StateRetention,
-    StateTable,
+    Manifest, ManifestError, McpTable, McpToolSpec, PatternTable, PluginKind, PluginLanguage,
+    PluginTable, RestartPolicy, SanchoTable, SanchoTaskSpec, ServiceTable, SourceTable,
+    StateRetention, StateTable, VariableDecl, VariableKind,
 };
 pub use registry::{LoadedPlugin, PluginRegistry, RegistryError};
 pub use resolver::{resolve_load_order, ResolverError, KERNEL_ABI_SUPPORT};

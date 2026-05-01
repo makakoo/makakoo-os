@@ -18,6 +18,9 @@ use thiserror::Error;
 static PLUGIN_NAME_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[a-z][a-z0-9-]{1,62}$").expect("valid regex"));
 
+static VARIABLE_NAME_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-z_][a-z0-9_]{0,62}$").expect("valid regex"));
+
 /// Every capability verb in the v0.1 vocabulary (spec/CAPABILITIES.md §1).
 /// Kept as a sorted slice so we can binary-search on validation.
 pub const KNOWN_VERBS: &[&str] = &[
@@ -108,6 +111,14 @@ pub enum PluginKind {
     /// `[service]` adds restart policy + health interval + optional
     /// HTTP health endpoint. Driven by `makakoo plugin start|stop|status|restart`.
     Service,
+    /// Callable system-prompt-shaped one-shot LLM dispatch unit. A pattern
+    /// is `system.md` + `[pattern]` table declaring model, vendor, vars,
+    /// strategy + mascot defaults, tags. No Python entrypoint, no daemon —
+    /// the kernel composes `strategy ⊕ mascot ⊕ system.md`, fires
+    /// switchAILocal, returns text or JSON. Auto-exposed as
+    /// `harvey_pattern_<name>` MCP tool at `makakoo-mcp` boot.
+    /// See `spec/PLUGIN_MANIFEST.md` and SPRINT-PATTERN-SUBSTRATE-V1.
+    Pattern,
 }
 
 impl PluginKind {
@@ -121,6 +132,7 @@ impl PluginKind {
             PluginKind::BootstrapFragment => "bootstrap-fragment",
             PluginKind::Library => "library",
             PluginKind::Service => "service",
+            PluginKind::Pattern => "pattern",
         }
     }
 }
@@ -341,6 +353,95 @@ pub struct MascotTable {
     pub flavor: Option<String>,
 }
 
+/// `[pattern]` table — required when `plugin.kind = "pattern"`. Declares
+/// the LLM dispatch contract for a callable system-prompt unit. The
+/// sibling `system.md` (next to `plugin.toml`) carries the prompt body;
+/// this table carries everything the kernel needs to route + render the
+/// call. See SPRINT-PATTERN-SUBSTRATE-V1.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PatternTable {
+    /// Human-readable description used in CLI listings and as the seed
+    /// for the auto-generated MCP tool description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Default model to dispatch against (e.g. "ail-compound",
+    /// "gemini-2.5-pro"). Resolution precedence at call time:
+    /// pattern.toml > flag > $FABRIC_MODEL_<NAME> env > kernel default.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Default vendor for the dispatch (e.g. "switchailocal"). Same
+    /// precedence as `model`. Defaults to "switchailocal" if unset.
+    #[serde(default)]
+    pub vendor: Option<String>,
+    /// Default strategy name to prepend to the system message (e.g.
+    /// "cot", "tot", "react", "harvey-rigor", "caveman"). The composer
+    /// resolves to `data/strategies/<name>.md`. Per-call `--strategy`
+    /// flag or `_strategy` MCP arg overrides.
+    #[serde(default)]
+    pub strategy_default: Option<String>,
+    /// Default mascot persona to overlay (e.g. "olibia"). The composer
+    /// resolves to `plugins-core/mascot-<name>/persona.md`. Per-call
+    /// `--mascot` flag or `_mascot` MCP arg overrides.
+    #[serde(default)]
+    pub mascot_default: Option<String>,
+    /// Pattern-author tags. Special values that affect runtime behavior:
+    ///   * `external` or `polished` — opts the pattern OUT of the MCP
+    ///     caveman default. Use for patterns that produce contracts,
+    ///     emails, posts, or any prose where voice and rhythm matter.
+    /// All other tag values are free-form and surface in `plugin list`.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Variables substituted into `system.md` at call time. Each entry
+    /// becomes both a CLI `--var <name>=<value>` (or `--input @file` for
+    /// the canonical `input` variable) and an MCP tool input-schema
+    /// property.
+    #[serde(default)]
+    pub variables: Vec<VariableDecl>,
+}
+
+impl PatternTable {
+    /// True if this pattern's tags opt it out of caveman default behavior
+    /// when invoked via MCP (Locked Decision 11).
+    pub fn opts_out_of_caveman(&self) -> bool {
+        self.tags
+            .iter()
+            .any(|t| t == "external" || t == "polished")
+    }
+}
+
+/// Kind of a pattern variable. Drives input parsing in the CLI verb
+/// and JSON Schema generation in the MCP auto-expose layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VariableKind {
+    /// Plain string — passed straight into the template.
+    #[default]
+    String,
+    /// Path to a file whose contents are read and substituted.
+    File,
+    /// JSON value — parsed before substitution; the rendered form is
+    /// the original JSON text (preserving quoting and structure).
+    Json,
+}
+
+/// One pattern variable declaration. Names are simple identifiers
+/// matching `^[a-z_][a-z0-9_]*$`. The canonical variable name `input`
+/// is treated specially by the CLI verb (`--input @file` or stdin).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VariableDecl {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub kind: VariableKind,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateTable {
@@ -459,6 +560,8 @@ pub struct Manifest {
     #[serde(default)]
     pub mascot: Option<MascotTable>,
     #[serde(default)]
+    pub pattern: Option<PatternTable>,
+    #[serde(default)]
     pub state: Option<StateTable>,
     #[serde(default)]
     pub test: TestTable,
@@ -481,6 +584,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "mcp",
     "infect",
     "mascot",
+    "pattern",
     "state",
     "test",
     "embedding",
@@ -581,12 +685,15 @@ impl Manifest {
         }
 
         // Rule 7 (partial): [abi] must not be empty — except for library
-        // plugins (importable code, no callable ABI surface) and service
-        // plugins (just a long-lived daemon, no callable API).
+        // plugins (importable code, no callable ABI surface), service
+        // plugins (just a long-lived daemon, no callable API), and
+        // pattern plugins (callable surface is dynamically registered
+        // as MCP tools at makakoo-mcp boot from the [pattern] table).
         if self.abi.is_empty()
             && self.plugin.kind != PluginKind::Library
             && self.plugin.kind != PluginKind::BootstrapFragment
             && self.plugin.kind != PluginKind::Service
+            && self.plugin.kind != PluginKind::Pattern
         {
             return Err(ManifestError::invalid(
                 path,
@@ -618,6 +725,36 @@ impl Manifest {
                         path,
                         "kind = bootstrap-fragment requires [infect.fragments]",
                     ));
+                }
+            }
+            PluginKind::Pattern => {
+                if self.pattern.is_none() {
+                    return Err(ManifestError::invalid(
+                        path,
+                        "[pattern] table required when plugin.kind = pattern",
+                    ));
+                }
+                // Variable name regex enforced inline so the parser
+                // catches typos before runtime substitution.
+                if let Some(p) = &self.pattern {
+                    let mut seen: BTreeSet<&str> = BTreeSet::new();
+                    for v in &p.variables {
+                        if !VARIABLE_NAME_RE.is_match(&v.name) {
+                            return Err(ManifestError::invalid(
+                                path,
+                                format!(
+                                    "[pattern].variables.name {:?} fails regex ^[a-z_][a-z0-9_]*$",
+                                    v.name
+                                ),
+                            ));
+                        }
+                        if !seen.insert(v.name.as_str()) {
+                            return Err(ManifestError::invalid(
+                                path,
+                                format!("duplicate [pattern].variables.name {:?}", v.name),
+                            ));
+                        }
+                    }
                 }
             }
             _ => {}
@@ -738,6 +875,12 @@ impl Manifest {
             }
             PluginKind::Library => {
                 // Library plugins provide importable code, not runnable entrypoints.
+            }
+            PluginKind::Pattern => {
+                // Pattern plugins declare their dispatch contract in the
+                // [pattern] table — the system prompt body lives in
+                // sibling system.md, not [entrypoint]. The composer
+                // (makakoo-core::run) reads it directly at call time.
             }
         }
         Ok(())
@@ -1529,5 +1672,221 @@ command = ".venv/bin/pytest"
                 &body.chars().take(60).collect::<String>()
             );
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Pattern plugin kind tests — SPRINT-PATTERN-SUBSTRATE-V1 Phase 1
+    // ─────────────────────────────────────────────────────────────────
+
+    fn pattern_minimal() -> String {
+        r#"
+[plugin]
+name = "pattern-summarize"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+
+[source]
+path = "plugins-core/pattern-summarize"
+
+[pattern]
+description = "5-bullet summary"
+model = "ail-compound"
+vendor = "switchailocal"
+
+[[pattern.variables]]
+name = "input"
+description = "text to summarize"
+kind = "string"
+required = true
+"#
+        .to_string()
+    }
+
+    #[test]
+    fn parses_minimal_pattern() {
+        let (m, w) = Manifest::parse(&pattern_minimal(), &p()).unwrap();
+        assert_eq!(m.plugin.name, "pattern-summarize");
+        assert_eq!(m.plugin.kind, PluginKind::Pattern);
+        assert!(w.is_empty(), "unexpected warnings: {:?}", w.0);
+        let pat = m.pattern.expect("[pattern] table populated");
+        assert_eq!(pat.model.as_deref(), Some("ail-compound"));
+        assert_eq!(pat.vendor.as_deref(), Some("switchailocal"));
+        assert_eq!(pat.variables.len(), 1);
+        assert_eq!(pat.variables[0].name, "input");
+        assert_eq!(pat.variables[0].kind, VariableKind::String);
+        assert!(pat.variables[0].required);
+        assert!(pat.tags.is_empty());
+        assert!(!pat.opts_out_of_caveman());
+    }
+
+    #[test]
+    fn pattern_kind_without_pattern_table_rejected() {
+        // Strip the [pattern] table — should fail with clear error.
+        let body = r#"
+[plugin]
+name = "pattern-broken"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+
+[source]
+path = "local/broken"
+"#;
+        let err = Manifest::parse(body, &p()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("[pattern] table required"),
+            "expected '[pattern] table required' in error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_skips_abi_requirement() {
+        // Pattern plugins have no callable ABI — the MCP auto-expose
+        // dynamically registers them. Verify [abi] absence is OK.
+        let body = pattern_minimal();
+        // Confirm there's no [abi] in the body to begin with.
+        assert!(!body.contains("[abi]"));
+        let (m, _w) = Manifest::parse(&body, &p()).unwrap();
+        assert!(m.abi.is_empty());
+    }
+
+    #[test]
+    fn pattern_rejects_bad_variable_name() {
+        let body = pattern_minimal().replace(r#"name = "input""#, r#"name = "Bad-Name""#);
+        let err = Manifest::parse(&body, &p()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("variables.name") && msg.contains("regex"),
+            "expected variable-name regex error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_rejects_duplicate_variable_names() {
+        let mut body = pattern_minimal();
+        body.push_str(
+            r#"
+[[pattern.variables]]
+name = "input"
+kind = "string"
+"#,
+        );
+        let err = Manifest::parse(&body, &p()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("duplicate") && msg.contains("\"input\""),
+            "expected duplicate-variable error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_external_tag_opts_out_of_caveman() {
+        let body = pattern_minimal().replace(
+            r#"vendor = "switchailocal""#,
+            r#"vendor = "switchailocal"
+tags = ["external"]"#,
+        );
+        let (m, _w) = Manifest::parse(&body, &p()).unwrap();
+        let pat = m.pattern.expect("table populated");
+        assert_eq!(pat.tags, vec!["external".to_string()]);
+        assert!(pat.opts_out_of_caveman());
+    }
+
+    #[test]
+    fn pattern_polished_tag_also_opts_out_of_caveman() {
+        let body = pattern_minimal().replace(
+            r#"vendor = "switchailocal""#,
+            r#"vendor = "switchailocal"
+tags = ["polished", "marketing"]"#,
+        );
+        let (m, _w) = Manifest::parse(&body, &p()).unwrap();
+        assert!(m.pattern.unwrap().opts_out_of_caveman());
+    }
+
+    #[test]
+    fn pattern_unrelated_tags_do_not_opt_out_of_caveman() {
+        let body = pattern_minimal().replace(
+            r#"vendor = "switchailocal""#,
+            r#"vendor = "switchailocal"
+tags = ["audit", "security"]"#,
+        );
+        let (m, _w) = Manifest::parse(&body, &p()).unwrap();
+        assert!(!m.pattern.unwrap().opts_out_of_caveman());
+    }
+
+    #[test]
+    fn pattern_strategy_default_round_trips() {
+        let body = pattern_minimal().replace(
+            r#"vendor = "switchailocal""#,
+            r#"vendor = "switchailocal"
+strategy_default = "harvey-rigor"
+mascot_default = "olibia""#,
+        );
+        let (m, _w) = Manifest::parse(&body, &p()).unwrap();
+        let pat = m.pattern.unwrap();
+        assert_eq!(pat.strategy_default.as_deref(), Some("harvey-rigor"));
+        assert_eq!(pat.mascot_default.as_deref(), Some("olibia"));
+    }
+
+    #[test]
+    fn pattern_rejects_unknown_field_in_table() {
+        let body = pattern_minimal().replace(
+            r#"vendor = "switchailocal""#,
+            r#"vendor = "switchailocal"
+unknown_field = "value""#,
+        );
+        let err = Manifest::parse(&body, &p()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("unknown_field") || msg.contains("unknown field"),
+            "expected deny_unknown_fields error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_variable_kinds_round_trip() {
+        let body = r#"
+[plugin]
+name = "pattern-multi"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+
+[source]
+path = "local/multi"
+
+[pattern]
+description = "uses all variable kinds"
+
+[[pattern.variables]]
+name = "input"
+kind = "string"
+required = true
+
+[[pattern.variables]]
+name = "context_file"
+kind = "file"
+required = false
+
+[[pattern.variables]]
+name = "config"
+kind = "json"
+default = "{}"
+"#;
+        let (m, _w) = Manifest::parse(body, &p()).unwrap();
+        let pat = m.pattern.unwrap();
+        assert_eq!(pat.variables.len(), 3);
+        assert_eq!(pat.variables[0].kind, VariableKind::String);
+        assert_eq!(pat.variables[1].kind, VariableKind::File);
+        assert!(!pat.variables[1].required);
+        assert_eq!(pat.variables[2].kind, VariableKind::Json);
+        assert_eq!(pat.variables[2].default.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn plugin_kind_pattern_as_str() {
+        assert_eq!(PluginKind::Pattern.as_str(), "pattern");
     }
 }

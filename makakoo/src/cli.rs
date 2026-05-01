@@ -132,6 +132,47 @@ pub enum Commands {
         args: Vec<String>,
     },
 
+    /// Run a pattern — one-shot LLM dispatch with strategy + mascot
+    /// composition. Pattern primitive shipped by
+    /// SPRINT-PATTERN-SUBSTRATE-V1. Pattern name resolves with or
+    /// without the `pattern-` prefix (e.g. `summarize` or
+    /// `pattern-summarize`). Input arrives via `--input`, an
+    /// `--input @file` path, or stdin when `--input -` is set.
+    Run {
+        /// Pattern name. The `pattern-` directory prefix is optional.
+        pattern: String,
+        /// User input as a literal string, `@/path/to/file` to read from
+        /// disk, or `-` to read from stdin. Bound to the canonical
+        /// `input` variable. Omit to skip.
+        #[arg(short = 'i', long)]
+        input: Option<String>,
+        /// Set additional variables — `--var name=value`. Repeatable.
+        #[arg(long = "var", value_name = "NAME=VALUE")]
+        vars: Vec<String>,
+        /// Override the mascot persona (e.g. `olibia`).
+        #[arg(long)]
+        mascot: Option<String>,
+        /// Override the strategy (`cot`, `tot`, `react`,
+        /// `harvey-rigor`, `caveman`).
+        #[arg(long)]
+        strategy: Option<String>,
+        /// Override the model. Resolution: flag > pattern.toml >
+        /// FABRIC_MODEL_<NAME> env > kernel default.
+        #[arg(long)]
+        model: Option<String>,
+        /// Override the vendor. Same precedence sans env.
+        #[arg(long)]
+        vendor: Option<String>,
+        /// Compose without firing — prints route + composed messages
+        /// to stdout. No network call. Exits 0.
+        #[arg(long)]
+        dry_run: bool,
+        /// Validate the response is JSON and emit it raw. Non-JSON
+        /// responses produce exit code 2 with the body on stderr.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Print version, persona, and build metadata.
     Version,
 

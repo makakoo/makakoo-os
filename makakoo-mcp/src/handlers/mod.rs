@@ -17,6 +17,7 @@
 use crate::dispatch::{ToolContext, ToolRegistry};
 use std::sync::Arc;
 
+pub mod patterns; // SPRINT-PATTERN-SUBSTRATE-V1 Phase 5 — auto-expose
 pub mod tier_a; // T13 — 20 read tools
 pub mod tier_b; // T14 — 15 write + multimodal tools
 pub mod tier_c; // T15 — 6 heavy + swarm tools
@@ -40,6 +41,12 @@ pub fn register_all(registry: &mut ToolRegistry, ctx: &Arc<ToolContext>) {
 
     // T15 — Tier-C: 6 heavy / swarm / comm handlers.
     tier_c::register_tier_c(registry, Arc::clone(ctx));
+
+    // SPRINT-PATTERN-SUBSTRATE-V1 Phase 5 — pattern auto-expose.
+    // Walks `<makakoo_home>/plugins/pattern-*/` and registers one
+    // tool per discovered pattern. New patterns appear on next
+    // restart with no per-CLI code changes.
+    patterns::register_pattern_tools(registry, Arc::clone(ctx));
 }
 
 #[cfg(test)]

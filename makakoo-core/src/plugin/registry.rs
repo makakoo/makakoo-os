@@ -13,7 +13,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use super::lock::PluginsLock;
-use super::manifest::{Manifest, ManifestError, ParseWarnings};
+use super::manifest::{Manifest, ManifestError, ParseWarnings, PluginKind};
 use super::resolver::{resolve_load_order, ResolverError};
 
 #[derive(Debug, Error)]
@@ -90,7 +90,6 @@ impl PluginRegistry {
     /// These paths should be prepended to PYTHONPATH (or equivalent) so that
     /// skill and agent plugins can import library code.
     pub fn get_library_paths(&self) -> Vec<PathBuf> {
-        use super::manifest::PluginKind;
         self.plugins
             .iter()
             .filter(|p| p.manifest.plugin.kind == PluginKind::Library)
@@ -182,6 +181,21 @@ impl PluginRegistry {
                     continue;
                 }
             };
+
+            // SPRINT-PATTERN-SUBSTRATE-V1 Phase 1.4: pattern plugins
+            // require a sibling system.md (the prompt body). Reject the
+            // plugin (graceful skip + warn) if missing — better than
+            // failing at first dispatch.
+            if manifest.plugin.kind == PluginKind::Pattern
+                && !path.join("system.md").exists()
+            {
+                warn!(
+                    plugin = %manifest.plugin.name,
+                    plugin_path = %path.display(),
+                    "skipping pattern plugin — sibling system.md is missing",
+                );
+                continue;
+            }
 
             // Rule 14/15/16 rely on plugin name uniqueness too — check
             // before we add to the pile.
@@ -325,11 +339,93 @@ run = "true"
         )
     }
 
+    fn pattern_toml(name: &str) -> String {
+        format!(
+            r#"
+[plugin]
+name = "{name}"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+
+[source]
+path = "."
+
+[pattern]
+description = "test pattern"
+model = "ail-compound"
+
+[[pattern.variables]]
+name = "input"
+kind = "string"
+required = true
+"#
+        )
+    }
+
+    fn seed_pattern(dir: &Path, name: &str, with_system_md: bool) {
+        let p = dir.join(name);
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("plugin.toml"), pattern_toml(name)).unwrap();
+        if with_system_md {
+            std::fs::write(p.join("system.md"), "# {{input}}\n").unwrap();
+        }
+    }
+
     #[test]
     fn empty_plugins_dir_returns_empty_registry() {
         let tmp = TempDir::new().unwrap();
         let reg = PluginRegistry::load_default(tmp.path()).unwrap();
         assert!(reg.is_empty());
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Pattern plugin loader tests — SPRINT-PATTERN-SUBSTRATE-V1 Phase 1.4
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pattern_with_system_md_loads_cleanly() {
+        let tmp = TempDir::new().unwrap();
+        let plugins = tmp.path().join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        seed_pattern(&plugins, "pattern-summarize", true);
+
+        let reg = PluginRegistry::load_default(tmp.path()).unwrap();
+        assert_eq!(reg.len(), 1);
+        let p = reg.get("pattern-summarize").unwrap();
+        assert_eq!(p.manifest.plugin.kind, PluginKind::Pattern);
+        assert!(p.manifest.pattern.is_some());
+    }
+
+    #[test]
+    fn pattern_without_system_md_is_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let plugins = tmp.path().join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        // Pattern dir with plugin.toml but missing system.md — should
+        // be skipped with a warning, not crash boot.
+        seed_pattern(&plugins, "pattern-broken", false);
+        // Add a healthy skill alongside to confirm the loader keeps
+        // walking after the bad pattern.
+        seed(&plugins, "alpha", &skill("alpha", "1.0.0", &[]));
+
+        let reg = PluginRegistry::load_default(tmp.path()).unwrap();
+        // Only the skill survives; the pattern is graceful-skipped.
+        assert_eq!(reg.len(), 1);
+        assert!(reg.get("alpha").is_some());
+        assert!(reg.get("pattern-broken").is_none());
+    }
+
+    #[test]
+    fn skill_without_sibling_files_still_loads() {
+        // The system.md requirement is pattern-only — skills don't
+        // care about siblings. Regression guard for the kind-check.
+        let tmp = TempDir::new().unwrap();
+        let plugins = tmp.path().join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        seed(&plugins, "alpha", &skill("alpha", "1.0.0", &[]));
+        let reg = PluginRegistry::load_default(tmp.path()).unwrap();
+        assert_eq!(reg.len(), 1);
     }
 
     #[test]

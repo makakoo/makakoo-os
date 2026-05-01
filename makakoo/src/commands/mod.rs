@@ -33,6 +33,7 @@ pub mod perms;
 pub mod plugin;
 pub mod promotions;
 pub mod query;
+pub mod run;
 pub mod s3;
 pub mod s3_endpoint;
 pub mod sancho;
@@ -77,6 +78,22 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             promotions::run(ctx, threshold, limit)
         }
         Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,
+        Commands::Run {
+            pattern,
+            input,
+            vars,
+            mascot,
+            strategy,
+            model,
+            vendor,
+            dry_run,
+            json,
+        } => {
+            run::run(
+                &pattern, input, vars, mascot, strategy, model, vendor, dry_run, json, ctx,
+            )
+            .await
+        }
         Commands::Version => version::run(),
         Commands::Setup {
             section,

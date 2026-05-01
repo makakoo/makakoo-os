@@ -1,0 +1,18 @@
+[plugin]
+name = "mascot-pixel"
+version = "0.1.0"
+kind = "mascot"
+language = "shell"
+summary = "Pixel — placeholder slot. Sebastian to author voice."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/mascot-pixel"
+
+[abi]
+mascot = "^1.0"
+
+[mascot]
+species = "TODO"
+flavor = "Placeholder slot. Persona to be authored by Sebastian."

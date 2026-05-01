@@ -27,6 +27,7 @@ pub mod nursery;
 pub mod outbound;
 pub mod platform;
 pub mod plugin;
+pub mod run;
 pub mod sancho;
 pub mod session;
 pub mod source_fetch;

@@ -1,0 +1,23 @@
+[plugin]
+name = "pattern-extract-wisdom"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Extract surprising, insightful, useful claims from any text"
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-extract-wisdom"
+
+[pattern]
+description = "Extracts the most surprising, insightful, and actionable claims from any input — articles, transcripts, papers, talks. Returns structured sections."
+model = "gemini-2.5-pro"
+vendor = "switchailocal"
+strategy_default = "harvey-rigor"
+
+[[pattern.variables]]
+name = "input"
+description = "The text to extract wisdom from"
+kind = "string"
+required = true

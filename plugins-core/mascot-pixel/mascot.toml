@@ -1,0 +1,13 @@
+# Pixel — placeholder mascot. Sebastian to author voice.
+#
+# When this file is filled in, the MCP auto-expose layer surfaces
+# Pixel as a usable `--mascot` option across all 8 infected CLIs.
+# Until then, callers passing `--mascot pixel` get the placeholder
+# text in `persona.md` (no-op overlay).
+
+name = "pixel"
+role = "TODO — Sebastian to define. Suggested vibes: pixel-art enthusiast, game-dev companion, retro-creative."
+emoji = ""
+color = ""
+voice_traits = []
+tone_examples = []
