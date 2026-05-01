@@ -391,6 +391,16 @@ SLOTS: List[GlobalSlot] = [
     # pi coding agent — added 2026-04-16 as the 9th host. pi.dev
     # loads ~/.pi/AGENTS.md or ~/.pi/CLAUDE.md as global context.
     GlobalSlot(HostType.PI, ".pi/AGENTS.md", "markdown"),
+    # Kimi CLI (moonshotai/kimi-cli) — added 2026-05-01 as the 10th host.
+    # Bootstrap lives at ~/.kimi/agents/makakoo/agent.yaml under
+    # `agent.system_prompt_args.ROLE_ADDITIONAL`. The Rust writer in
+    # makakoo/src/infect/writer.rs (`write_kimi_yaml`) owns the YAML
+    # serialization; this Python mirror exists for parity with the
+    # Rust SLOTS list and for tooling that walks the Python registry
+    # (host_detector, mcp_registrar). Format string "kimi_yaml" is
+    # parsed by the Rust writer; the legacy Python writer treats it
+    # the same as "markdown" for the rare case it's still invoked.
+    GlobalSlot(HostType.KIMI, ".kimi/agents/makakoo/agent.yaml", "kimi_yaml"),
 ]
 
 

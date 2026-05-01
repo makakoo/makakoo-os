@@ -188,6 +188,7 @@ pub fn write_bootstrap_to_slot(
     match slot.format {
         SlotFormat::Markdown => write_markdown(slot, &path, bootstrap_body, dry_run),
         SlotFormat::OpencodeJson => write_opencode(slot, &path, bootstrap_body, dry_run),
+        SlotFormat::KimiYaml => write_kimi_yaml(slot, &path, bootstrap_body, dry_run),
     }
 }
 
@@ -208,6 +209,7 @@ pub fn remove_bootstrap_from_slot(
     match slot.format {
         SlotFormat::Markdown => remove_markdown(slot, &path, dry_run),
         SlotFormat::OpencodeJson => remove_opencode(slot, &path, dry_run),
+        SlotFormat::KimiYaml => remove_kimi_yaml(slot, &path, dry_run),
     }
 }
 
@@ -548,6 +550,277 @@ fn opencode_entry_version(entry: &str) -> Option<String> {
         .map(|g| g.as_str().to_string())
 }
 
+// ───────────────────── Kimi YAML slot ─────────────────────
+//
+// Kimi (`@moonshotai/kimi-cli`) reads `~/.kimi/agents/<name>/agent.yaml`
+// for named-agent bootstraps. The Makakoo slot lives at
+// `~/.kimi/agents/makakoo/agent.yaml`. We own the
+// `agent.system_prompt_args.ROLE_ADDITIONAL` field exclusively — the
+// bootstrap markdown block is the entire string value. Other top-level
+// `agent.*` keys (`name`, `extend`, `model`, `when_to_use`, …) are
+// preserved on rewrites; missing scaffolding is created on first
+// install.
+//
+// Versioning re-uses the markdown markers
+// `<!-- harvey:infect-global START v12 --> ... END -->` inside the
+// ROLE_ADDITIONAL string, so the same `upsert_markdown_block` /
+// `find_prior_version` machinery the markdown slots use applies here.
+//
+// Schema sketch:
+//   version: 1
+//   agent:
+//     name: "Harvey"
+//     extend: default
+//     system_prompt_args:
+//       ROLE_ADDITIONAL: |
+//         <!-- harvey:infect-global START v12 -->
+//         <bootstrap body>
+//         <!-- harvey:infect-global END -->
+
+/// Resolve `agent.system_prompt_args.ROLE_ADDITIONAL` from a parsed
+/// Kimi yaml document, returning the current string content (or empty
+/// when missing). Robust against partial / malformed YAML — returns
+/// empty string for any unexpected shape so the caller can write a
+/// fresh value without throwing.
+fn kimi_role_additional(doc: &serde_yml::Value) -> String {
+    doc.get("agent")
+        .and_then(|a| a.get("system_prompt_args"))
+        .and_then(|s| s.get("ROLE_ADDITIONAL"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
+/// Inject (or create) `agent.system_prompt_args.ROLE_ADDITIONAL = value`
+/// into a parsed Kimi yaml document. Creates the
+/// `version` / `agent` / `system_prompt_args` scaffolding on first
+/// install. Preserves any other `agent.*` keys the user has set.
+fn kimi_set_role_additional(doc: &mut serde_yml::Value, value: String) {
+    use serde_yml::{Mapping, Value};
+
+    if !doc.is_mapping() {
+        *doc = Value::Mapping(Mapping::new());
+    }
+    let root = doc.as_mapping_mut().expect("doc is a mapping");
+    // version: 1 — only set when missing so a user override survives.
+    root.entry(Value::String("version".into()))
+        .or_insert(Value::Number(1u64.into()));
+
+    // agent: { name, extend, system_prompt_args }
+    let agent = root
+        .entry(Value::String("agent".into()))
+        .or_insert(Value::Mapping(Mapping::new()));
+    if !agent.is_mapping() {
+        *agent = Value::Mapping(Mapping::new());
+    }
+    let agent_map = agent.as_mapping_mut().expect("agent is a mapping");
+    agent_map
+        .entry(Value::String("name".into()))
+        .or_insert(Value::String("Harvey".into()));
+    agent_map
+        .entry(Value::String("extend".into()))
+        .or_insert(Value::String("default".into()));
+
+    let spa = agent_map
+        .entry(Value::String("system_prompt_args".into()))
+        .or_insert(Value::Mapping(Mapping::new()));
+    if !spa.is_mapping() {
+        *spa = Value::Mapping(Mapping::new());
+    }
+    let spa_map = spa.as_mapping_mut().expect("system_prompt_args is a mapping");
+    spa_map.insert(
+        Value::String("ROLE_ADDITIONAL".into()),
+        Value::String(value),
+    );
+}
+
+fn write_kimi_yaml(
+    slot: &CliSlot,
+    path: &Path,
+    bootstrap_body: &str,
+    dry_run: bool,
+) -> SlotWriteResult {
+    // Load existing doc (or empty mapping if file missing). A parse
+    // error is fatal — refuse to clobber a malformed file the user
+    // might be debugging.
+    let mut doc: serde_yml::Value = if path.exists() {
+        match std::fs::read_to_string(path) {
+            Ok(s) if !s.trim().is_empty() => match serde_yml::from_str(&s) {
+                Ok(v) => v,
+                Err(e) => {
+                    return SlotWriteResult {
+                        slot_name: slot.name,
+                        path: path.to_path_buf(),
+                        status: SlotStatus::Error(format!("invalid kimi YAML: {e}")),
+                        prior_version: None,
+                    }
+                }
+            },
+            _ => serde_yml::Value::Mapping(serde_yml::Mapping::new()),
+        }
+    } else {
+        serde_yml::Value::Mapping(serde_yml::Mapping::new())
+    };
+
+    let existing_role = kimi_role_additional(&doc);
+    let new_block = render_markdown_block(bootstrap_body);
+    let (new_role, status, prior_version) = upsert_markdown_block(&existing_role, &new_block);
+
+    if matches!(status, SlotStatus::Unchanged) {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status,
+            prior_version,
+        };
+    }
+    if dry_run {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::DryRun,
+            prior_version,
+        };
+    }
+
+    kimi_set_role_additional(&mut doc, new_role);
+
+    let serialized = match serde_yml::to_string(&doc) {
+        Ok(s) => s,
+        Err(e) => {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("serialize kimi YAML: {e}")),
+                prior_version,
+            }
+        }
+    };
+
+    match atomic_write(path, &serialized) {
+        Ok(()) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status,
+            prior_version,
+        },
+        Err(e) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Error(e.to_string()),
+            prior_version,
+        },
+    }
+}
+
+fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResult {
+    if !path.exists() {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    }
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("read {}: {e}", path.display())),
+                prior_version: None,
+            }
+        }
+    };
+    let mut doc: serde_yml::Value = if existing.trim().is_empty() {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    } else {
+        match serde_yml::from_str(&existing) {
+            Ok(v) => v,
+            Err(e) => {
+                return SlotWriteResult {
+                    slot_name: slot.name,
+                    path: path.to_path_buf(),
+                    status: SlotStatus::Error(format!("invalid kimi YAML: {e}")),
+                    prior_version: None,
+                }
+            }
+        }
+    };
+    let role = kimi_role_additional(&doc);
+    let prior_version = find_prior_version(&role);
+    let (new_role, removed) = remove_markdown_block(&role);
+    if !removed {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Unchanged,
+            prior_version: None,
+        };
+    }
+    if dry_run {
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::DryRun,
+            prior_version,
+        };
+    }
+    // If the cleaned ROLE_ADDITIONAL is empty after stripping the block,
+    // delete the whole agent.yaml — infect created the file, uninfect
+    // removes it. If anything substantive remains (the user added their
+    // own prose alongside the marker block), keep the file with a
+    // trimmed ROLE_ADDITIONAL.
+    if new_role.trim().is_empty() {
+        if let Err(e) = std::fs::remove_file(path) {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("remove {}: {e}", path.display())),
+                prior_version,
+            };
+        }
+        return SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Updated,
+            prior_version,
+        };
+    }
+    kimi_set_role_additional(&mut doc, new_role);
+    let serialized = match serde_yml::to_string(&doc) {
+        Ok(s) => s,
+        Err(e) => {
+            return SlotWriteResult {
+                slot_name: slot.name,
+                path: path.to_path_buf(),
+                status: SlotStatus::Error(format!("serialize kimi YAML: {e}")),
+                prior_version,
+            }
+        }
+    };
+    match atomic_write(path, &serialized) {
+        Ok(()) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Updated,
+            prior_version,
+        },
+        Err(e) => SlotWriteResult {
+            slot_name: slot.name,
+            path: path.to_path_buf(),
+            status: SlotStatus::Error(e.to_string()),
+            prior_version,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -837,5 +1110,137 @@ mod tests {
         assert_eq!(result.status, SlotStatus::Updated);
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(!after.contains(JSON_TAG_FINGERPRINT));
+    }
+
+    // ─────── Kimi YAML slot ───────
+
+    fn kimi_test_slot() -> CliSlot {
+        CliSlot {
+            name: "kimi",
+            rel_path: ".kimi/agents/makakoo/agent.yaml",
+            format: SlotFormat::KimiYaml,
+        }
+    }
+
+    #[test]
+    fn write_bootstrap_to_kimi_yaml_creates_full_scaffolding() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        let result = write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Installed);
+
+        let path = slot.absolute(tmp.path());
+        let raw = std::fs::read_to_string(&path).unwrap();
+        // Markers + body land inside the YAML scalar; scaffolding is built.
+        assert!(raw.contains(BLOCK_START));
+        assert!(raw.contains(BLOCK_END));
+        assert!(raw.contains(BODY));
+
+        let parsed: serde_yml::Value = serde_yml::from_str(&raw).unwrap();
+        assert_eq!(parsed.get("agent").and_then(|a| a.get("name")).and_then(|v| v.as_str()), Some("Harvey"));
+        assert_eq!(parsed.get("agent").and_then(|a| a.get("extend")).and_then(|v| v.as_str()), Some("default"));
+    }
+
+    #[test]
+    fn write_bootstrap_to_kimi_yaml_preserves_other_agent_fields() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        let path = slot.absolute(tmp.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // User has set their own model + when_to_use + a custom name.
+        // After infect, those must survive.
+        std::fs::write(
+            &path,
+            "version: 1\nagent:\n  name: \"Custom Name\"\n  extend: default\n  model: kimi-k2.5\n  when_to_use: \"coding\"\n",
+        )
+        .unwrap();
+
+        let result = write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Installed);
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_yml::Value = serde_yml::from_str(&raw).unwrap();
+        assert_eq!(parsed.get("agent").and_then(|a| a.get("name")).and_then(|v| v.as_str()), Some("Custom Name"));
+        assert_eq!(parsed.get("agent").and_then(|a| a.get("model")).and_then(|v| v.as_str()), Some("kimi-k2.5"));
+        assert_eq!(parsed.get("agent").and_then(|a| a.get("when_to_use")).and_then(|v| v.as_str()), Some("coding"));
+        assert!(raw.contains(BLOCK_START));
+        assert!(raw.contains(BODY));
+    }
+
+    #[test]
+    fn write_bootstrap_to_kimi_yaml_unchanged_on_same_version() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        let r1 = write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        assert_eq!(r1.status, SlotStatus::Installed);
+        let r2 = write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        assert_eq!(r2.status, SlotStatus::Unchanged);
+    }
+
+    #[test]
+    fn kimi_yaml_dry_run_writes_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        let result = write_bootstrap_to_slot(&slot, BODY, tmp.path(), true);
+        assert_eq!(result.status, SlotStatus::DryRun);
+        assert!(!slot.absolute(tmp.path()).exists());
+    }
+
+    #[test]
+    fn kimi_yaml_invalid_existing_yaml_is_an_error() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        let path = slot.absolute(tmp.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "[: not yaml :}").unwrap();
+        let result = write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        match result.status {
+            SlotStatus::Error(msg) => assert!(msg.contains("invalid kimi YAML"), "msg = {msg}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_bootstrap_from_kimi_yaml_deletes_when_block_was_only_content() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        let path = slot.absolute(tmp.path());
+        assert!(path.exists());
+
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Updated);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn remove_bootstrap_from_kimi_yaml_preserves_user_prose() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        // First infect, then prepend user prose to ROLE_ADDITIONAL.
+        write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
+        let path = slot.absolute(tmp.path());
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut doc: serde_yml::Value = serde_yml::from_str(&raw).unwrap();
+        let role = kimi_role_additional(&doc);
+        let mixed = format!("user-prose-line\n\n{}", role);
+        kimi_set_role_additional(&mut doc, mixed);
+        std::fs::write(&path, serde_yml::to_string(&doc).unwrap()).unwrap();
+
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Updated);
+        assert!(path.exists(), "user content kept the file alive");
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("user-prose-line"));
+        assert!(!after.contains(BLOCK_START));
+        assert!(!after.contains(BLOCK_END));
+    }
+
+    #[test]
+    fn remove_bootstrap_from_kimi_yaml_unchanged_when_not_infected() {
+        let tmp = TempDir::new().unwrap();
+        let slot = kimi_test_slot();
+        let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
+        assert_eq!(result.status, SlotStatus::Unchanged);
     }
 }

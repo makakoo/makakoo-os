@@ -55,6 +55,14 @@ pub enum SlotFormat {
     /// JSON file with a top-level `instructions: []` array; the bootstrap
     /// is stored as a tagged string entry in that array.
     OpencodeJson,
+    /// YAML file with structure `version: 1, agent: { name, extend,
+    /// system_prompt_args: { ROLE_ADDITIONAL: <bootstrap> } }`. Used by
+    /// Kimi (`@moonshotai/kimi-cli`). The bootstrap occupies the
+    /// `ROLE_ADDITIONAL` field exclusively — it's the slot's canonical
+    /// home, written and read by Makakoo. Other agent fields (`name`,
+    /// `extend`) are preserved on rewrites; new ones the user adds
+    /// (e.g. `model`, `when_to_use`) survive intact.
+    KimiYaml,
 }
 
 /// One CLI global-config slot. Paths are relative to `$HOME` — use
@@ -132,6 +140,18 @@ pub const SLOTS: &[CliSlot] = &[
         rel_path: ".pi/AGENTS.md",
         format: SlotFormat::Markdown,
     },
+    // Kimi (moonshotai/kimi-cli) — 9th host, added 2026-05-01. Kimi's
+    // global config slot is a YAML file at ~/.kimi/agents/makakoo/agent.yaml
+    // following the pi-style "named agent" pattern. The bootstrap lives
+    // under `agent.system_prompt_args.ROLE_ADDITIONAL` as a multi-line
+    // string with the same `<!-- harvey:infect-global START/END -->`
+    // markers used by markdown slots. Other agent fields (model,
+    // when_to_use) are preserved on rewrites.
+    CliSlot {
+        name: "kimi",
+        rel_path: ".kimi/agents/makakoo/agent.yaml",
+        format: SlotFormat::KimiYaml,
+    },
 ];
 
 #[cfg(test)]
@@ -139,16 +159,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn eight_slots_match_python() {
-        assert_eq!(SLOTS.len(), 8);
+    fn nine_slots_match_python() {
+        assert_eq!(SLOTS.len(), 9);
         let names: Vec<&str> = SLOTS.iter().map(|s| s.name).collect();
         assert_eq!(
             names,
             vec![
                 "claude", "gemini", "codex", "opencode", "vibe", "cursor",
-                "qwen", "pi"
+                "qwen", "pi", "kimi"
             ]
         );
+    }
+
+    #[test]
+    fn kimi_slot_targets_agent_yaml() {
+        let kimi = SLOTS
+            .iter()
+            .find(|s| s.name == "kimi")
+            .expect("kimi slot must exist in the 9-slot list");
+        assert_eq!(kimi.rel_path, ".kimi/agents/makakoo/agent.yaml");
+        assert!(matches!(kimi.format, SlotFormat::KimiYaml));
     }
 
     #[test]
@@ -162,12 +192,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_is_json_others_are_markdown() {
+    fn opencode_is_json_kimi_is_yaml_others_are_markdown() {
         for slot in SLOTS {
-            if slot.name == "opencode" {
-                assert_eq!(slot.format, SlotFormat::OpencodeJson);
-            } else {
-                assert_eq!(slot.format, SlotFormat::Markdown);
+            match slot.name {
+                "opencode" => assert_eq!(slot.format, SlotFormat::OpencodeJson),
+                "kimi" => assert_eq!(slot.format, SlotFormat::KimiYaml),
+                _ => assert_eq!(slot.format, SlotFormat::Markdown),
             }
         }
     }

@@ -52,6 +52,8 @@ class HostType(Enum):
     CURSOR = "cursor"      # v3: Cursor
     QWEN = "qwen-code"     # v7: Qwen Code (Gemini-CLI fork, uses ~/.qwen/QWEN.md)
     PI = "pi"              # v9: pi coding agent (pi.dev)
+    KIMI = "kimi"          # v10 (2026-05-01): Kimi CLI (moonshotai/kimi-cli),
+                           # YAML-based agent config at ~/.kimi/agents/<name>/agent.yaml
     DYNAMIC = "dynamic"    # v8: runtime-registered via `harvey onboard <name>`
                             # — actual host name lives in GlobalSlot.display_name
     UNKNOWN = "unknown"
@@ -135,6 +137,12 @@ _SIGNALS = [
     # pi coding agent — pi.dev, sets PI_CODING_AGENT=true in env
     (HostType.PI, "env", "PI_CODING_AGENT", 0.95),
     (HostType.PI, "ppid", "pi", 0.85),
+
+    # Kimi CLI (moonshotai/kimi-cli) — 9th host onboarded 2026-05-01.
+    # YAML-based agent config slot at `~/.kimi/agents/<name>/agent.yaml`.
+    # Detection by ppid substring since Kimi doesn't expose a unique
+    # env var yet.
+    (HostType.KIMI, "ppid", "kimi", 0.85),
 ]
 
 

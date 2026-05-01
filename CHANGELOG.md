@@ -10,6 +10,56 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added — Kimi adapter (`SPRINT-KIMI-ADAPTER`, 2026-05-01)
+
+Kimi (`@moonshotai/kimi-cli`) joins the `makakoo infect` roster as the
+9th supported AI CLI. Previously infected manually via a hand-written
+`agent.yaml`; now `makakoo infect --target kimi` (or `makakoo infect`
+to hit all slots) writes/upgrades the file automatically alongside
+the other 8 hosts.
+
+- **`SlotFormat::KimiYaml`** in `makakoo/src/infect/slots.rs`. New
+  variant alongside the existing `Markdown` + `OpencodeJson` formats.
+  The Kimi slot lives at `~/.kimi/agents/makakoo/agent.yaml` and
+  follows Kimi's "named-agent" pattern (one directory per agent
+  with a single `agent.yaml`). The bootstrap occupies
+  `agent.system_prompt_args.ROLE_ADDITIONAL` — wrapped in the same
+  `<!-- harvey:infect-global START v12 --> ... END -->` markers
+  used by markdown slots, so versioned in-place upgrades work
+  identically.
+- **`write_kimi_yaml` + `remove_kimi_yaml`** in
+  `makakoo/src/infect/writer.rs`. Round-trip the YAML via `serde_yml`,
+  ensure scaffolding (`version: 1`, `agent.name: "Harvey"`,
+  `agent.extend: default`, `agent.system_prompt_args: {}`) on first
+  install, and crucially **preserve any other `agent.*` keys the
+  user has set** (`model`, `when_to_use`, custom names) on
+  rewrites. Re-uses the existing `upsert_markdown_block` /
+  `find_prior_version` machinery so the YAML path benefits from
+  the same in-place upgrade logic the markdown slots use.
+- **9-slot SLOTS table.** Kimi is the 9th entry. The order matches
+  `plugins-core/lib-harvey-core/src/core/orchestration/infect_global.py`
+  exactly (Python mirror also updated — `HostType.KIMI` added to
+  the host-detector enum + a ppid-based detection signal at 0.85
+  confidence).
+- **`detect.rs` BINARIES table** gained `("kimi", "kimi")` and
+  `("pi", "pi")` (closes a long-standing gap where `pi` was in
+  SLOTS but not in BINARIES — `binary_for("pi")` silently returned
+  `None`). The `probe_covers_canonical_slots` test now requires
+  `kimi` alongside the other 8.
+
+Test counts: workspace test suite 1776 → +9 net new for the kimi
+adapter (5 in `writer.rs::tests::*kimi*`, 4 updated in
+`infect::tests` + `slots::tests` + `detect::tests`). All 1785+
+pass.
+
+Live smoke against `~/.kimi/agents/makakoo/agent.yaml` confirmed:
+the manually-installed bootstrap survives in place above the
+marker-bracketed block, and re-running `makakoo infect` flips
+status to `unchanged`. Future runs will replace only the
+marker-bracketed region — the manual leftover above it is
+harmless and the user can delete it by hand if they want a tidy
+file.
+
 ### Added — `makakoo upgrade` self-update verb (`SPRINT-MAKAKOO-UPGRADE-VERB`, 2026-05-01)
 
 Self-upgrade for the `makakoo` + `makakoo-mcp` binaries. Detects the
