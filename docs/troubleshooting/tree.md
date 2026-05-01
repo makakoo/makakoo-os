@@ -35,8 +35,25 @@ Verify: `which makakoo` should return a path.
 You typed a subcommand that doesn't exist. Either:
 
 - **Typo** → `makakoo --help` to see the real list.
-- **You're thinking of a subcommand from an older version** → `makakoo --version`. If below `0.1.0`, upgrade.
+- **You're thinking of a subcommand from an older version** → `makakoo --version`. If below `0.1.3`, upgrade — `makakoo upgrade` itself is one of the verbs you'd be missing pre-0.1.3.
 - **You're thinking of a subcommand that the v1 sprint draft mentioned but was never implemented** (e.g. `makakoo doctor`, `makakoo agent start`) → see DOGFOOD-FINDINGS in the grandma-docs sprint workspace.
+
+### `makakoo upgrade` fails or refuses to run
+
+Three failure modes, all from the upgrade dispatcher:
+
+- **`install method is "Unknown" — running binary at <path> was installed in a way Makakoo cannot auto-upgrade`** — the detector saw a binary path it doesn't recognise (custom prefix, manually-copied binary, dev build under `target/debug` or `target/release`). Either reinstall via cargo / brew / `install.sh`, or pass `--method <cargo|brew|curl-pipe>` to override the detector. For developers running from a checkout: use `cargo install --path <checkout>/makakoo --locked --force` directly instead of `makakoo upgrade`.
+- **`non-HTTPS install script URL refused: <url>`** — `--install-script-url` only accepts `https://...`. Insecure URLs are deliberately blocked. Pass an HTTPS URL.
+- **`subprocess failed: <label> (exit code <code>)`** — one of the queued actions exited non-zero. The label says which: `cargo install …`, `brew update`, `brew upgrade …`, or `curl … | sh`. Run that exact action manually (it's printed in the plan) to surface the underlying error. The chain aborts on first failure; if the kernel succeeded but `makakoo-mcp` didn't, run `makakoo upgrade --only-mcp` after fixing the root cause.
+
+After any successful upgrade:
+
+```sh
+launchctl kickstart -k gui/$UID/com.traylinx.makakoo   # macOS
+systemctl --user restart makakoo                         # Linux (systemd)
+```
+
+Then **restart any infected CLI session** so it spawns a fresh `makakoo-mcp` against the new binary. Without a CLI restart, your hosts keep talking to the old MCP child forever.
 
 ### `error: plugin not installed: <name>`
 

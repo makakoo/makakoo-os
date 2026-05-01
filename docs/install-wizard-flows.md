@@ -294,7 +294,7 @@ makakoo daemon status            # daemon running?
 makakoo plugin list              # installed plugins
 makakoo sancho status            # proactive task engine
 makakoo memory stats             # recall log + promotion candidates
-makakoo infect --verify          # drift check across all 8 CLI slots
+makakoo infect --verify          # drift check across every infected CLI / IDE slot
 ```
 
 Each prints a colorized summary. Exit code 0 = healthy.

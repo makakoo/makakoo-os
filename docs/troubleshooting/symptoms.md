@@ -52,6 +52,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## I
 
 - **`install.source is empty`** — Plugin manifest has no `[source]` section. Manifest schema violation — edit the plugin's `plugin.toml`.
+- **`install method is `Unknown` — running binary at <path> was installed in a way Makakoo cannot auto-upgrade.`** — `makakoo upgrade` couldn't classify the binary's install path. The full error lists supported methods. Either reinstall via cargo / homebrew / curl-pipe, or pass `--method <cargo\|brew\|curl-pipe>` to override. Dev builds (`target/debug/`, `target/release/`) are deliberately rejected — use `cargo install --path <checkout>/makakoo` instead.
 - **`Invalid API key`** (from the LLM gateway) — [Harvey / MCP not responding → rate limit / resource exhausted](./tree.md#harvey--mcp-not-responding). Specifically: the gateway's stable-key map isn't synced yet; wait 2 seconds or `tytus restart` / `makakoo daemon restart`.
 
 ## L
@@ -65,6 +66,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## N
 
 - **`no .py entry file in <path>`** — Python plugin entrypoint couldn't be located. `plugin.toml`'s `[entrypoint].start` references a missing file. Reinstall the plugin or edit the manifest.
+- **`non-HTTPS install script URL refused: <url>`** — `makakoo upgrade --install-script-url <url>` rejected a non-HTTPS URL. Pass an `https://...` URL; insecure URLs are deliberately blocked.
 - **`no $HOME`** — See `cannot resolve $HOME` above.
 - **`no current dir available: <error>`** — Your cwd was deleted out from under the process. `cd ~` and retry.
 - **`no grant matches path <p>`** — [I ran a command and got an error → `perms revoke` by path](./tree.md#i-ran-a-command-and-got-an-error). Use `makakoo perms list` to confirm the exact scope; revoke by id instead: `makakoo perms revoke <g_id>`.
@@ -108,6 +110,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 - **`skill '<name>' not found under <dir>`** — `makakoo skill <name>` couldn't locate a matching Python skill. Confirm the name with `makakoo plugin list`; many former "skills" now route through `makakoo plugin info <name>` instead.
 - **`skills dir <path> does not exist`** — The registry scan root is missing. Reinstall `lib-harvey-core` or set `MAKAKOO_SKILLS_DIR`.
 - **`staging error: target plugin dir already exists — uninstall first`** — [I ran a command and got an error → `staging error`](./tree.md#error-staging-error-target-plugin-dir-already-exists---uninstall-first).
+- **`subprocess failed: <label> (exit code <code>)`** — One of the actions queued by `makakoo upgrade` exited non-zero. The label tells you which (`cargo install …`, `brew upgrade …`, `curl … | sh`). Run the action manually to see the full output, fix the root cause, then retry. The chain aborts on first failure — partial upgrades are possible if the kernel succeeds but `makakoo-mcp` fails.
 - **`superbrain connection mutex poisoned`** — A thread crashed while holding the DB mutex. `makakoo daemon restart`.
 
 ## T
@@ -120,6 +123,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## U
 
 - **`unknown --format <other> (accepted: markdown, html, json)`** — You passed an unsupported output format. Use one of `markdown`, `html`, `json`.
+- **`error: unrecognized subcommand 'upgrade'`** — Your installed binary predates v0.1.3 and doesn't have the `upgrade` verb yet. First-install or `brew upgrade traylinx/tap/makakoo` (or `cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo`) to land v0.1.3+; from then on `makakoo upgrade` works.
 - **`unknown provider for model <alias>`** — [I ran a command and got an error → `error: llm error`](./tree.md#error-llm-error-http-400-unknown-provider-for-model-alias).
 - **`unknown role '<other>'. Valid: validator, delegate, swarm_member`** — Adapter-manifest `[peer].role` expects one of the three listed values. Edit the manifest.
 - **`unknown section in --only: '<name>'. Valid: <list>`** — `makakoo setup --only <name>` was given a section that doesn't exist. Valid sections: `persona`, `brain`, `cli-agent`, `terminal` (macOS), `model-provider`, `infect`.

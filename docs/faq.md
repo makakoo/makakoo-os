@@ -34,7 +34,7 @@ AI CLI any time later, then run `makakoo infect` to light it up.
 
 ### Which AI CLIs does Makakoo know about?
 
-Seven first-class hosts:
+Nine first-class hosts at v0.1.3, and the roster grows as new CLIs land:
 
 - Claude Code (`claude`)
 - Gemini CLI (`gemini`)
@@ -43,9 +43,10 @@ Seven first-class hosts:
 - Mistral Vibe (`vibe`)
 - Cursor (`cursor`)
 - Qwen Code (`qwen`)
+- Kimi (`@moonshotai/kimi-cli`) — added v0.1.3
+- pi (the blessed CLI coding agent Makakoo ships with)
 
-Plus `pi` (the blessed CLI coding agent Makakoo ships with). IDE
-assistants (GitHub Copilot, Continue, Cline, JetBrains AI) are detected
+IDE assistants (GitHub Copilot, Continue, Cline, JetBrains AI) are detected
 but not infected — they handle their own persona.
 
 ### Does installing Makakoo change any files outside its own directory?
@@ -97,6 +98,22 @@ rm -rf ~/.makakoo ~/MAKAKOO   # ⚠️  deletes your Brain
 ```
 
 Full guide: [Uninstall](troubleshooting/uninstall.md).
+
+### How do I upgrade to a newer version?
+
+```sh
+makakoo upgrade            # auto-detects how you installed (cargo / brew / curl-pipe)
+makakoo upgrade --dry-run  # preview the plan without spawning anything
+makakoo upgrade --reinfect # also refresh CLI bootstrap fragments after the binary swap
+```
+
+Available since v0.1.3 (2026-05-02). For pre-v0.1.3 binaries you'll first
+need a one-time manual upgrade — `brew upgrade traylinx/tap/makakoo`,
+`cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo`,
+or re-run the curl-pipe install script — to land v0.1.3+, after which
+`makakoo upgrade` is the one-command path forever after.
+
+Full reference: [`docs/upgrade.md`](upgrade.md) and [`docs/user-manual/makakoo-upgrade.md`](user-manual/makakoo-upgrade.md).
 
 ### My AI CLI session feels slower after infect. Why?
 

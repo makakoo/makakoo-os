@@ -74,12 +74,20 @@ pub fn classify(exe: &Path, home: &Path) -> InstallMethod {
     }
 
     // Homebrew prefixes (Apple Silicon + Intel + Linuxbrew).
+    //
+    // Match either the user-visible `<prefix>/bin/` symlink or the actual
+    // `<prefix>/Cellar/...` package store — `canonicalize()` resolves the
+    // symlink to the Cellar path, so a real brew install reaches us as
+    // `/usr/local/Cellar/makakoo/0.1.3/bin/makakoo` rather than
+    // `/usr/local/bin/makakoo`.
     for brew_prefix in [
         Path::new("/opt/homebrew"),
         Path::new("/usr/local"),
         Path::new("/home/linuxbrew/.linuxbrew"),
     ] {
-        if exe.starts_with(brew_prefix.join("bin")) {
+        if exe.starts_with(brew_prefix.join("bin"))
+            || exe.starts_with(brew_prefix.join("Cellar"))
+        {
             return InstallMethod::Homebrew {
                 prefix: brew_prefix.to_path_buf(),
             };
@@ -149,6 +157,38 @@ mod tests {
             &p("/home/linuxbrew"),
         );
         assert!(matches!(result, InstallMethod::Homebrew { .. }));
+    }
+
+    #[test]
+    fn classifies_homebrew_canonicalized_cellar_path_intel() {
+        // What `canonicalize()` actually produces on real Intel brew installs:
+        // the symlink `/usr/local/bin/makakoo` resolves to the Cellar version
+        // dir. Earlier versions of the detector only matched `<prefix>/bin/`
+        // and mis-classified this as Unknown.
+        let result = classify(
+            &p("/usr/local/Cellar/makakoo/0.1.3/bin/makakoo"),
+            &p("/Users/sebastian"),
+        );
+        match result {
+            InstallMethod::Homebrew { prefix } => {
+                assert_eq!(prefix, p("/usr/local"));
+            }
+            other => panic!("expected Homebrew, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classifies_homebrew_canonicalized_cellar_path_apple_silicon() {
+        let result = classify(
+            &p("/opt/homebrew/Cellar/makakoo/0.1.3/bin/makakoo"),
+            &p("/Users/sebastian"),
+        );
+        match result {
+            InstallMethod::Homebrew { prefix } => {
+                assert_eq!(prefix, p("/opt/homebrew"));
+            }
+            other => panic!("expected Homebrew, got {other:?}"),
+        }
     }
 
     #[test]

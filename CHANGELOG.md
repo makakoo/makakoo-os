@@ -10,6 +10,21 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-02
+
+### Fixed
+
+- **`makakoo upgrade` Homebrew detection on real installs.** Live smoke
+  on a Homebrew install (`brew install traylinx/tap/makakoo`) showed the
+  detector classified the binary as `Unknown` and refused to upgrade.
+  Root cause: `canonicalize()` resolves `/usr/local/bin/makakoo` to
+  `/usr/local/Cellar/makakoo/<ver>/bin/makakoo`, and the matcher only
+  checked `<prefix>/bin/`. Widened to also recognise `<prefix>/Cellar/`
+  paths (`makakoo-core/src/upgrade/detect.rs:82`). +2 regression tests
+  covering both Intel + Apple Silicon canonical Cellar paths. v0.1.3 was
+  the first release containing the upgrade verb at all, so brew users
+  hit this on every invocation.
+
 ## [0.1.3] - 2026-05-02
 
 Cuts a release for the three sprints that landed after `v0.1.2` was tagged

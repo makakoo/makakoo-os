@@ -31,6 +31,7 @@ makakoo <command> [options] [arguments]
 |---------|-------------|
 | [setup](setup-wizard.md) | Interactive re-runnable wizard (persona / brain / cli-agent / terminal / model-provider / infect) |
 | [install](../getting-started.md) | One-shot installer umbrella — distro + daemon + infect + health + optional setup |
+| [upgrade](makakoo-upgrade.md) | Self-update the kernel + MCP binaries — auto-detects cargo / brew / curl-pipe install (since v0.1.3) |
 | [query](makakoo-query.md) | Search the Brain with LLM synthesis |
 | [search](makakoo-search.md) | Full-text search the Brain |
 | [infect](makakoo-infect.md) | Infect AI CLIs with shared brain |
@@ -149,6 +150,29 @@ makakoo infect --target claude,gemini
 # Remove infection
 makakoo uninfect --global
 ```
+
+### Upgrade
+
+```bash
+# Auto-detect install method + upgrade both binaries
+makakoo upgrade
+
+# Preview without spawning
+makakoo upgrade --dry-run
+
+# Upgrade + refresh bootstrap fragments in every infected CLI / IDE slot
+makakoo upgrade --reinfect
+
+# Force a specific method (rare — when auto-detect picks the wrong path)
+makakoo upgrade --method brew
+makakoo upgrade --method cargo
+makakoo upgrade --method curl-pipe
+
+# Upgrade Cargo install from a local checkout instead of the public repo
+makakoo upgrade --source ~/makakoo-os
+```
+
+Full reference: [makakoo-upgrade.md](makakoo-upgrade.md). Task-oriented walkthrough: [docs/upgrade.md](../upgrade.md).
 
 ### Write-access grants
 

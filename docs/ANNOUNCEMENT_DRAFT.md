@@ -78,7 +78,7 @@ Everything's at [github.com/makakoo/makakoo-os](https://github.com/makakoo/makak
 
 > Hi HN. I've been building my own AI rig for about a year — every time a new CLI ships (Claude Code, Gemini CLI, Cursor agent mode) I'd wire it into the same Logseq-backed Brain I've been teaching. By month eight the wiring had become the product. So I extracted it, rewrote it in Rust, and open-sourced it.
 >
-> Makakoo OS is a thin kernel that gives every AI CLI on your machine the same persistent memory + tool surface. One install infects 7 CLIs + 4 IDE hosts with a shared bootstrap; a daemon runs proactive maintenance tasks (dream passes, memory consolidation, superbrain sync) while you sleep; a capability-sandboxed plugin system lets you write a skill once and call it from every host.
+> Makakoo OS is a thin kernel that gives every AI CLI on your machine the same persistent memory + tool surface. One install infects an open-ended roster of CLIs + IDE hosts (9 CLIs at v0.1.3, plus 4 IDE assistants — the list grows as new CLIs land) with a shared bootstrap; a daemon runs proactive maintenance tasks (dream passes, memory consolidation, superbrain sync) while you sleep; a capability-sandboxed plugin system lets you write a skill once and call it from every host.
 >
 > v0.1 ships macOS + Linux + Windows. MIT. Zero telemetry. No VC. The README is honest about what's gated on external stuff (signing certs, Homebrew tap) vs what's code-complete (everything else).
 >
