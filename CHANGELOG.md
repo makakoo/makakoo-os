@@ -10,7 +10,17 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-05-01
+## [0.1.2] - 2026-05-01
+
+> **Note on the v0.1.1 tag.** A release named `v0.1.1` was published
+> 2026-04-27 pointing at the docs-mcp Phases A–F commit
+> ([`9d905bf`](https://github.com/makakoo/makakoo-os/commit/9d905bf)).
+> That release shipped before the workspace `Cargo.toml` `version`
+> field was bumped, so binaries from that release self-report as
+> `makakoo 0.1.0`. v0.1.2 is the first release where
+> `makakoo --version` reports the same string as the git tag — and
+> the first to roll up the post-Phase-F polish (Pattern substrate
+> v1, setup wizard, security lockdown).
 
 ### Added — Docs MCP server (`SPRINT-MAKAKOO-DOCS-MCP`, 2026-05-01)
 

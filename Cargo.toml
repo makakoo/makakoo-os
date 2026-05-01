@@ -3,7 +3,7 @@ resolver = "2"
 members = ["makakoo-core", "makakoo-client", "makakoo-mcp", "makakoo-platform", "makakoo", "makakoo-docs-mcp"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
