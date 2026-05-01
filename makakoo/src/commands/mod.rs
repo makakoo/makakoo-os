@@ -35,6 +35,7 @@ pub mod promotions;
 pub mod query;
 pub mod run;
 pub mod s3;
+pub mod upgrade;
 pub mod s3_endpoint;
 pub mod sancho;
 pub mod search;
@@ -78,6 +79,27 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             promotions::run(ctx, threshold, limit)
         }
         Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,
+        Commands::Upgrade {
+            dry_run,
+            reinfect,
+            method,
+            source,
+            install_script_url,
+            only_kernel,
+            only_mcp,
+        } => {
+            upgrade::run(
+                reinfect,
+                dry_run,
+                method,
+                source,
+                install_script_url,
+                only_kernel,
+                only_mcp,
+                ctx,
+            )
+            .await
+        }
         Commands::Run {
             pattern,
             input,

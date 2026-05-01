@@ -513,7 +513,11 @@ pub async fn run_with_home_and_body(
         }
         let body_for_slot = match slot.format {
             slots::SlotFormat::OpencodeJson => opencode_body.as_str(),
-            slots::SlotFormat::Markdown => pointer_body.as_str(),
+            // KimiYaml takes the same markdown pointer body as the
+            // other slots — the YAML writer wraps it in
+            // `<!-- harvey:infect-global START/END -->` markers and
+            // tucks it under `agent.system_prompt_args.ROLE_ADDITIONAL`.
+            slots::SlotFormat::Markdown | slots::SlotFormat::KimiYaml => pointer_body.as_str(),
         };
         let r = write_bootstrap_to_slot(slot, body_for_slot, home, dry_run);
         report.results.push(r);
@@ -794,8 +798,8 @@ mod tests {
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
             .await
             .unwrap();
-        assert_eq!(report.results.len(), 8);
-        assert_eq!(report.installed_count(), 8);
+        assert_eq!(report.results.len(), 9);
+        assert_eq!(report.installed_count(), 9);
         assert_eq!(report.error_count(), 0);
         // Verify each slot exists on disk.
         for slot in SLOTS {
@@ -810,7 +814,7 @@ mod tests {
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, true, None)
             .await
             .unwrap();
-        assert_eq!(report.results.len(), 8);
+        assert_eq!(report.results.len(), 9);
         for r in &report.results {
             assert!(matches!(r.status, SlotStatus::DryRun));
             assert!(!r.path.exists());
@@ -826,7 +830,7 @@ mod tests {
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
             .await
             .unwrap();
-        assert_eq!(report.unchanged_count(), 8);
+        assert_eq!(report.unchanged_count(), 9);
         assert_eq!(report.installed_count(), 0);
     }
 
@@ -845,9 +849,9 @@ mod tests {
         let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
             .await
             .unwrap();
-        // Claude got updated, the other 7 got installed.
+        // Claude got updated, the other 8 got installed.
         assert_eq!(report.updated_count(), 1);
-        assert_eq!(report.installed_count(), 7);
+        assert_eq!(report.installed_count(), 8);
 
         let content = std::fs::read_to_string(&claude_path).unwrap();
         assert!(content.contains("# My own notes"));
@@ -886,10 +890,10 @@ mod tests {
     }
 
     #[test]
-    fn planned_paths_lists_eight_absolute() {
+    fn planned_paths_lists_nine_absolute() {
         let tmp = TempDir::new().unwrap();
         let planned = planned_paths(tmp.path());
-        assert_eq!(planned.len(), 8);
+        assert_eq!(planned.len(), 9);
         for (_, p) in &planned {
             assert!(p.starts_with(tmp.path()));
         }

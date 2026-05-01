@@ -34,6 +34,8 @@ pub const BINARIES: &[(&str, &str)] = &[
     ("vibe", "vibe"),
     ("cursor", "cursor"),
     ("qwen", "qwen"),
+    ("pi", "pi"),
+    ("kimi", "kimi"),
 ];
 
 /// Result of probing one host.
@@ -443,14 +445,28 @@ mod tests {
     }
 
     #[test]
-    fn probe_covers_all_eight_slots() {
+    fn probe_covers_canonical_slots() {
+        // Open-ended assertion per feedback `dont_pin_cli_count` —
+        // the roster grows as new AI CLIs/IDEs land, so the test
+        // checks for known slots being present rather than pinning
+        // a specific count. Adding a new slot should not break
+        // this test; only forgetting to wire one should.
         let tmp = TempDir::new().unwrap();
         let all = detect_all(tmp.path());
-        assert_eq!(all.len(), 8);
-        let names: Vec<&str> = all.iter().map(|h| h.name).collect();
-        assert_eq!(
-            names,
-            vec!["claude", "gemini", "codex", "opencode", "vibe", "cursor", "qwen", "pi"]
+        let names: std::collections::HashSet<&str> =
+            all.iter().map(|h| h.name).collect();
+        for required in &[
+            "claude", "gemini", "codex", "opencode", "vibe", "cursor", "qwen", "pi", "kimi",
+        ] {
+            assert!(
+                names.contains(required),
+                "expected slot {required:?} in detect_all, got {names:?}"
+            );
+        }
+        assert!(
+            all.len() >= 8,
+            "expected at least 8 slots, got {} ({names:?})",
+            all.len()
         );
     }
 }

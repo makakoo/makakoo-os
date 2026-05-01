@@ -10,6 +10,63 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added — `makakoo upgrade` self-update verb (`SPRINT-MAKAKOO-UPGRADE-VERB`, 2026-05-01)
+
+Self-upgrade for the `makakoo` + `makakoo-mcp` binaries. Detects the
+install method by inspecting the running binary's path, dispatches to
+the matching update command, and prints the version delta plus a
+platform-specific daemon-restart hint. Closes the gap surfaced after
+SPRINT-PATTERN-SUBSTRATE-V1 shipped — users now have a single command
+that picks the right upgrade path instead of memorizing
+`cargo install --path` vs `brew upgrade` vs `curl-pipe`.
+
+- **`makakoo upgrade` CLI verb** with flags:
+  - `--dry-run` — print the upgrade plan without spawning anything.
+  - `--reinfect` — after a successful upgrade, run
+    `makakoo infect --verify --repair` to refresh bootstrap fragments
+    in every infected CLI / IDE host.
+  - `--method <cargo|brew|curl-pipe>` — override the detector (rare).
+  - `--source <path>` — for Cargo upgrades, point at a local source
+    checkout (overrides `MAKAKOO_SOURCE_PATH` env). Defaults to
+    `cargo install --git https://github.com/makakoo/makakoo-os`.
+  - `--install-script-url <url>` — for curl-pipe upgrades, override
+    the default `https://makakoo.com/install.sh`. Refuses non-HTTPS.
+  - `--only-kernel` / `--only-mcp` — upgrade just one of the two
+    binaries (mutually exclusive). Default: both.
+- **Install-method detector** at `makakoo-core/src/upgrade/detect.rs`.
+  Resolves symlinks via `canonicalize`, then maps the running binary's
+  path to `Cargo` (`~/.cargo/bin/`), `Homebrew`
+  (`/opt/homebrew/`, `/usr/local/`, `/home/linuxbrew/.linuxbrew/`),
+  `CurlPipe` (`$MAKAKOO_PREFIX/bin/`, default `$HOME/.local/bin/`), or
+  `Unknown`. Dev builds running from `target/debug/` or
+  `target/release/` are explicitly classified as `Unknown` with a
+  message pointing the user at `cargo install --path`.
+- **Per-method upgrade dispatchers** at `makakoo-core/src/upgrade/dispatch.rs`.
+  Plans actions purely (so `--dry-run` shares the same code path), then
+  spawns subprocesses sequentially. First failure aborts the chain.
+- **Version delta** captured by re-running `makakoo version` before and
+  after; if unchanged, the verb exits 1 with a warning. Uses text
+  parsing of the existing `version` command output — no new `--json`
+  flag in v1.
+- **Daemon restart hint** at `makakoo-core/src/upgrade/verify.rs` —
+  v1 does NOT auto-restart the daemon (the existing `makakoo daemon`
+  surface lacks a `restart` subcommand). Instead, the verb prints a
+  platform-specific copy-pasteable command after a successful upgrade:
+  - macOS: `launchctl kickstart -k gui/$UID/com.traylinx.makakoo`
+  - Linux (systemd): `systemctl --user restart makakoo`
+  Adding a real `daemon restart` is queued as a follow-up sprint.
+
+Test counts: 1893 passed / 0 failed / 5 ignored (workspace), +35 net
+new tests across `upgrade::detect`, `upgrade::dispatch`,
+`upgrade::verify`, plus the renamed `probe_covers_canonical_slots`
+test (was `probe_covers_all_eight_slots` — pinned a hard "8" count
+that tripped over recently-added Kimi support; rewritten to assert
+required slots are present without pinning a count).
+
+Out of v1 scope (queued for follow-up sprints): auto `daemon restart`,
+upgrade rollback, beta-channel selection, scheduled auto-upgrade,
+`makakoo version --json` flag.
+
 ## [0.1.2] - 2026-05-01
 
 > **Note on the v0.1.1 tag.** A release named `v0.1.1` was published

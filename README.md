@@ -84,6 +84,16 @@ makakoo setup      # interactive wizard — persona, brain, pi, Ghostty,
 
 **First time using Makakoo?** After install, start at [Walkthrough 01 — Fresh install on a new Mac](docs/walkthroughs/01-fresh-install-mac.md). The walkthroughs are a 12-guide tour through every major feature — copy-paste runnable, dependency-chained, in plain language.
 
+**Upgrade** — one command, auto-detects how you installed:
+
+```sh
+makakoo upgrade            # cargo / brew / curl-pipe — picks the right path
+makakoo upgrade --dry-run  # preview without spawning
+makakoo upgrade --reinfect # also refresh CLI bootstrap fragments
+```
+
+See [`docs/upgrade.md`](docs/upgrade.md) for per-method details.
+
 **Uninstall** — symmetric inverse:
 
 ```sh

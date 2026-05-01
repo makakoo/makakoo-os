@@ -35,6 +35,7 @@ pub mod superbrain;
 pub mod swarm;
 pub mod telemetry;
 pub mod transport;
+pub mod upgrade;
 pub mod wiki;
 
 pub use error::{MakakooError, Result};

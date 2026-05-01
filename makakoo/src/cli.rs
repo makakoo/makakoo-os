@@ -132,6 +132,41 @@ pub enum Commands {
         args: Vec<String>,
     },
 
+    /// Self-upgrade the makakoo + makakoo-mcp binaries by detecting
+    /// the install method (cargo / homebrew / curl-pipe) and running
+    /// the matching update command. Prints the version delta and a
+    /// platform-specific daemon-restart hint. v1 does not auto-restart
+    /// the daemon — copy-paste the printed command if needed.
+    Upgrade {
+        /// Print the upgrade plan without spawning anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// After a successful upgrade, run `makakoo infect --verify
+        /// --repair` to refresh bootstrap fragments in every CLI host.
+        #[arg(long)]
+        reinfect: bool,
+        /// Override auto-detection. Valid: `cargo`, `brew`,
+        /// `curl-pipe`. Use only if the detector picks the wrong
+        /// method.
+        #[arg(long)]
+        method: Option<String>,
+        /// For Cargo upgrades: explicit local source path. Falls back
+        /// to `MAKAKOO_SOURCE_PATH` env var, then defaults to the
+        /// public Git repo.
+        #[arg(long)]
+        source: Option<String>,
+        /// For curl-pipe upgrades: override the install script URL.
+        /// Default: https://makakoo.com/install.sh
+        #[arg(long)]
+        install_script_url: Option<String>,
+        /// Upgrade only the `makakoo` kernel binary, not `makakoo-mcp`.
+        #[arg(long, conflicts_with = "only_mcp")]
+        only_kernel: bool,
+        /// Upgrade only the `makakoo-mcp` binary, not the kernel.
+        #[arg(long)]
+        only_mcp: bool,
+    },
+
     /// Run a pattern — one-shot LLM dispatch with strategy + mascot
     /// composition. Pattern primitive shipped by
     /// SPRINT-PATTERN-SUBSTRATE-V1. Pattern name resolves with or
