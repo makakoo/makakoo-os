@@ -12,7 +12,7 @@
 # for the hash.
 
 PackageIdentifier: makakoo.makakoo
-PackageVersion: 0.1.0
+PackageVersion: 0.1.2
 Publisher: Makakoo OS
 PublisherUrl: https://makakoo.com
 PublisherSupportUrl: https://github.com/makakoo/makakoo-os/issues
@@ -44,12 +44,12 @@ ManifestVersion: 1.6.0
 Installers:
   - Architecture: x64
     InstallerType: zip
-    InstallerUrl: https://github.com/makakoo/makakoo-os/releases/download/v0.1.0/makakoo-x86_64-pc-windows-msvc.zip
-    InstallerSha256: PLACEHOLDER_SHA256_WINDOWS_X64
+    InstallerUrl: https://github.com/makakoo/makakoo-os/releases/download/v0.1.2/makakoo-x86_64-pc-windows-msvc.zip
+    InstallerSha256: 17914DB8747AEF147AC3566310BD79C8BDE786BB5780577D01BEEB8A1A1B58A5
     NestedInstallerType: portable
     NestedInstallerFiles:
       - RelativeFilePath: makakoo-x86_64-pc-windows-msvc\makakoo.exe
         PortableCommandAlias: makakoo
       - RelativeFilePath: makakoo-x86_64-pc-windows-msvc\makakoo-mcp.exe
         PortableCommandAlias: makakoo-mcp
-    ReleaseDate: 2026-04-20
+    ReleaseDate: 2026-05-01
