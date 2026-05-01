@@ -10,6 +10,60 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-01
+
+### Added — Docs MCP server (`SPRINT-MAKAKOO-DOCS-MCP`, 2026-05-01)
+
+Makakoo OS docs are now queryable from any AI CLI in real time, with
+citations linking back to the source markdown. Modeled on Microsoft's
+`azure-docs` pattern + Google's Firebase MCP. Bundled into the main
+`makakoo` binary — users add one MCP entry, no separate install.
+
+- **`makakoo docs-mcp --stdio` subcommand.** New stdio JSON-RPC MCP
+  server exposing four tools that any AI CLI (Claude Code, Gemini,
+  OpenCode, Cursor, Codex, Qwen, Vibe) can call:
+  - `makakoo_docs_search(query, limit?)` — BM25 full-text search over
+    the indexed corpus, returns `[{path, title, snippet, score}]`.
+  - `makakoo_docs_read(path)` — full markdown content for a path
+    surfaced by a prior search/list call.
+  - `makakoo_docs_list(prefix?)` — directory-style listing with size
+    + title per entry.
+  - `makakoo_docs_topic(name)` — resolves a topic keyword (e.g.
+    `agent`, `infect`, `brain`) to its canonical doc plus breadcrumb
+    + sibling related docs.
+- **117 markdown files baked into the binary** (~822 KB) at build
+  time via `build.rs` → SQLite FTS5 with `porter unicode61`
+  tokenizer. `include_bytes!` embeds the index file so cold queries
+  work offline with zero setup.
+- **`makakoo docs update [--from-github] [--from-branch <branch>]`.**
+  Pulls the latest `docs/` + `spec/` from
+  `github.com/makakoo/makakoo-os` (default `main`, override per
+  flag), rebuilds the FTS5 index, and writes
+  `~/.makakoo/docs-cache/index.db`. The MCP server prefers the
+  cache when present and falls back to the baked-in corpus —
+  build-pinned lower bound, user-refreshable upper bound.
+- **Standalone `makakoo-docs-mcp` binary** (workspace member, same
+  source) for users who prefer to wire the MCP server directly
+  without going through `makakoo`. Both invocation paths are
+  byte-identical.
+- **Setup doc at `docs/docs-mcp-setup.md`** with config snippets
+  for all 7 supported AI CLIs (Claude Code, Gemini, OpenCode,
+  Cursor, Qwen, Vibe, Codex), `--update` workflow, citation
+  format, and troubleshooting.
+- **13 user-manual stubs deepened** to ~60 lines each (target locked
+  by lope verdict Q1, 2026-04-27): `makakoo-{adapter,completion,
+  daemon,distro,infect,mcp,plugin,query,sancho,search,secret,status,
+  uninfect}.md`. Search snippets land on real prose now, not 19-line
+  `--help` shims.
+
+Test counts: 6/6 passing in `makakoo-docs-mcp` (`search` /
+`read` / `list` / `topic` round-trip + cache-prefer fallback).
+
+Out of v1 scope (queued): Tytus docs vendoring (Q2 verdict locked
+to "index existing 3 files" — wiring deferred pending build-time
+network policy decision); on-disk index versioning beyond
+`built_for_version`; per-tool rate limiting.
+
 ### Added — Pattern substrate v1 (`SPRINT-PATTERN-SUBSTRATE-V1`, 2026-05-01)
 
 A subagent dispatch substrate inspired by Daniel Miessler's Fabric, reframed
