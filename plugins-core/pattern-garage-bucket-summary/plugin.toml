@@ -1,0 +1,23 @@
+[plugin]
+name = "pattern-garage-bucket-summary"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "S3 / Garage bucket listing → human-readable summary of what's there and what's anomalous."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-garage-bucket-summary"
+
+[pattern]
+description = "Read the output of `aws s3 ls` (or `makakoo bucket list`) and produce a human summary: what's in this bucket, dominant prefixes, recent activity, suspicious files, total approximate size. Useful for periodic audits of shared inter-agent storage."
+model = "gemini-2.5-flash-lite"
+vendor = "switchailocal"
+strategy_default = "harvey-rigor"
+
+[[pattern.variables]]
+name = "input"
+description = "Output of an S3-style bucket listing. One key per line, optionally with size and timestamp."
+kind = "string"
+required = true

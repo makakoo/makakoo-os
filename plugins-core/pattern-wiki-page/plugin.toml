@@ -1,0 +1,22 @@
+[plugin]
+name = "pattern-wiki-page"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Topic + optional notes → first-draft Logseq wiki page with sections + wikilinks."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-wiki-page"
+
+[pattern]
+description = "Generate a first-draft wiki page for a topic in Logseq outliner format. Adds Overview, Key Facts, Related (with wikilinks), and Open Questions sections. Designed to seed `pages/<Topic>.md` in the Brain — Sebastian then refines."
+model = "gemini-2.5-pro"
+vendor = "switchailocal"
+
+[[pattern.variables]]
+name = "input"
+description = "Topic name plus optional rough notes / source material."
+kind = "string"
+required = true

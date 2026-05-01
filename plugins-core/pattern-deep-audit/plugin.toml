@@ -1,0 +1,23 @@
+[plugin]
+name = "pattern-deep-audit"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Long-context structured audit of files, diffs, dumps. Best fired at long-context models."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-deep-audit"
+
+[pattern]
+description = "Audit a long input (file, diff, log, SARIF dump) for risks, smells, missing tests, and surprising assumptions. Returns structured FINDINGS / QUESTIONS / RECOMMENDATIONS sections. Designed for long-context dispatch — defaults to gemini-2.5-pro and tree-of-thought strategy."
+model = "gemini-2.5-pro"
+vendor = "switchailocal"
+strategy_default = "tot"
+
+[[pattern.variables]]
+name = "input"
+description = "The artifact to audit — file content, diff, log, dump, or transcript."
+kind = "string"
+required = true

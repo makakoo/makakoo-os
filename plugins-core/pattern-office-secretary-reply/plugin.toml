@@ -1,0 +1,30 @@
+[plugin]
+name = "pattern-office-secretary-reply"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Incoming email → polished draft reply in Sebastian's voice. Tagged external — no caveman."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-office-secretary-reply"
+
+[pattern]
+description = "Read an incoming email (or chat thread) and produce a polished draft reply in Sebastian's professional voice. Output is human-quality prose suitable for sending. Tagged external — caveman default skipped."
+model = "claude-sonnet-4-20250514"
+vendor = "switchailocal"
+tags = ["external", "polished"]
+
+[[pattern.variables]]
+name = "input"
+description = "Full email body or chat thread to reply to."
+kind = "string"
+required = true
+
+[[pattern.variables]]
+name = "intent"
+description = "One-line steer on what the reply should do (e.g. 'accept the meeting', 'decline politely', 'ask for clarification on X')."
+kind = "string"
+required = false
+default = "respond appropriately to the message — accept what's actionable, ask for clarification where needed, decline gracefully if appropriate"

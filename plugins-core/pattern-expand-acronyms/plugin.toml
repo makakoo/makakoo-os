@@ -1,0 +1,22 @@
+[plugin]
+name = "pattern-expand-acronyms"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Detect acronyms in text and emit a glossary plus an inline-expanded version."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-expand-acronyms"
+
+[pattern]
+description = "Find every acronym/initialism in the input. Return a GLOSSARY (acronym → expansion → 1-line meaning) plus an EXPANDED version of the original text with first occurrences spelled out. Useful when sharing internal docs externally or onboarding."
+model = "gemini-2.5-flash-lite"
+vendor = "switchailocal"
+
+[[pattern.variables]]
+name = "input"
+description = "The text to scan for acronyms."
+kind = "string"
+required = true

@@ -1,0 +1,22 @@
+[plugin]
+name = "pattern-extract-claims"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Extract verifiable factual claims from any input text — articles, transcripts, papers, threads."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-extract-claims"
+
+[pattern]
+description = "Pull every verifiable factual claim from the input as a numbered list. Each claim is one sentence, self-contained, attributable. Useful as the first pass before fact-checking, citation hunting, or wiki ingestion."
+model = "gemini-2.5-flash-lite"
+vendor = "switchailocal"
+
+[[pattern.variables]]
+name = "input"
+description = "The text to extract claims from."
+kind = "string"
+required = true

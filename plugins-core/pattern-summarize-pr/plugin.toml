@@ -1,0 +1,23 @@
+[plugin]
+name = "pattern-summarize-pr"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Turn a git diff into a 3-paragraph PR description: what / why / risks."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-summarize-pr"
+
+[pattern]
+description = "Read a git diff (or paste of file changes) and write a 3-paragraph PR description: WHAT changed, WHY (motivation derived from the diff), and RISKS to flag for reviewers. Tagged external — output is human-readable polished prose, no caveman."
+model = "gemini-2.5-pro"
+vendor = "switchailocal"
+tags = ["external"]
+
+[[pattern.variables]]
+name = "input"
+description = "Output of `git diff` or `git diff main...HEAD`, or a paste of file changes."
+kind = "string"
+required = true

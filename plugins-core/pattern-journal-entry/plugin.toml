@@ -1,0 +1,22 @@
+[plugin]
+name = "pattern-journal-entry"
+version = "0.1.0"
+kind = "pattern"
+language = "shell"
+summary = "Free-form notes → Logseq-style outliner journal entry with [[wikilinks]]."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/pattern-journal-entry"
+
+[pattern]
+description = "Convert rough notes (bullets, paragraphs, voice transcript) into a Logseq-compatible outliner journal entry. Every line begins with `- `. Wraps key entities in [[wikilinks]] so the Brain graph picks them up. No invention — if a topic isn't in the source, no link."
+model = "gemini-2.5-flash-lite"
+vendor = "switchailocal"
+
+[[pattern.variables]]
+name = "input"
+description = "Free-form notes — bullets, paragraphs, or transcript."
+kind = "string"
+required = true
