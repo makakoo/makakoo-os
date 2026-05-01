@@ -10,6 +10,13 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-02
+
+Cuts a release for the three sprints that landed after `v0.1.2` was tagged
+on 2026-05-01: `SPRINT-MAKAKOO-UPGRADE-VERB`, `SPRINT-KIMI-ADAPTER`, and the
+`winget` manifest version bump. No new functionality beyond what is captured
+in those sections — this release just gets the bits onto user machines.
+
 ### Added — Kimi adapter (`SPRINT-KIMI-ADAPTER`, 2026-05-01)
 
 Kimi (`@moonshotai/kimi-cli`) joins the `makakoo infect` roster as the
