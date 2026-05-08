@@ -178,13 +178,32 @@ try {
         Write-Host "    [Environment]::SetEnvironmentVariable('Path', `"`$env:Path;$InstallDir`", 'User')"
     }
 
-    Write-Host ""
-    Write-Host "next step:"
-    Write-Host "    $binDst install"
-    Write-Host ""
-    Write-Host "This runs the core distro install, registers the Task Scheduler"
-    Write-Host "agent, and infects every detected AI CLI host with the Makakoo"
-    Write-Host "bootstrap block."
+    # ─── auto-launch `makakoo install` + setup wizard ───────────────
+    #
+    # `makakoo install` runs the core distro install, registers the
+    # Task Scheduler agent, infects every detected AI CLI host with
+    # the Makakoo bootstrap block, and hands off to the interactive
+    # `makakoo setup` wizard on success.
+    #
+    # Skip when the host is non-interactive (CI / piped) or when the
+    # caller opts out with $env:MAKAKOO_NO_AUTORUN = "1".
+    $isInteractive = [Environment]::UserInteractive `
+        -and -not [Console]::IsInputRedirected `
+        -and ($env:MAKAKOO_NO_AUTORUN -ne "1")
+
+    if (-not $isInteractive) {
+        Write-Host ""
+        Write-Host "next step (run interactively to land in the setup wizard):"
+        Write-Host "    $binDst install"
+    } else {
+        Write-Host ""
+        Write-Host "launching: $binDst install"
+        Write-Host "  Sets up the core distro, registers the Task Scheduler"
+        Write-Host "  agent, infects every detected AI CLI, then hands off"
+        Write-Host "  to the setup wizard."
+        Write-Host ""
+        & "$binDst" install
+    }
 }
 finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue

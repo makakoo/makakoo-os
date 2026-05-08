@@ -46,6 +46,7 @@ jobs:
           # point: the post-public smoke gates on actual public
           # accessibility.
           export MAKAKOO_VERSION="${{ inputs.version }}"
+          export MAKAKOO_NO_AUTORUN=1
           curl -fsSL https://raw.githubusercontent.com/makakoo/makakoo-os/main/distribution/install.sh | bash
 
       - name: Verify --version
@@ -65,6 +66,7 @@ jobs:
       - name: Run anonymous install one-liner
         run: |
           export MAKAKOO_VERSION="${{ inputs.version }}"
+          export MAKAKOO_NO_AUTORUN=1
           curl -fsSL https://raw.githubusercontent.com/makakoo/makakoo-os/main/distribution/install.sh | bash
 
       - name: Verify --version
@@ -85,6 +87,7 @@ jobs:
         shell: pwsh
         run: |
           $env:MAKAKOO_VERSION = "${{ inputs.version }}"
+          $env:MAKAKOO_NO_AUTORUN = "1"
           iwr -useb https://raw.githubusercontent.com/makakoo/makakoo-os/main/install/install.ps1 | iex
 
       - name: Verify --version

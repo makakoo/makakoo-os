@@ -1,34 +1,41 @@
-# Makakoo OS Homebrew formula
+# Makakoo OS Homebrew formula — source of truth.
 #
-# Pinned to v0.1.0 — first public release (2026-04-27). Update version
-# + sha256 lines at each release. SHAs come from
-#   gh release download <tag> --pattern '*.sha256' --output -
-# in the makakoo/makakoo-os repo.
+# This file mirrors the live formula at
+#   github.com/traylinx/homebrew-tap/Formula/makakoo.rb
+# Bump `version` + the four `sha256` lines at each release. SHAs come
+# from the .sha256 sidecar files attached to the GitHub release:
+#
+#   gh release download v<NEW> -R makakoo/makakoo-os \
+#     --pattern '*.sha256' --output -
+#
+# Then mirror this file into the homebrew-tap repo (see
+# `docs/RELEASING.md`). Until the live tap is bumped, brew users stay
+# on the previous version.
 class Makakoo < Formula
   desc "Makakoo OS — autonomous cognitive extension for any AI CLI"
   homepage "https://makakoo.com"
-  version "0.1.0"
+  version "0.1.5"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-apple-darwin.tar.gz"
-      sha256 "ca6a8023cab9c0a7a02b69aa49834c8b4a43812ebb5268e9cb893e2b7d7bef5a"
+      sha256 "REPLACE_AT_RELEASE_aarch64-apple-darwin"
     end
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-apple-darwin.tar.gz"
-      sha256 "d955143c60bd5bdb2b22f9778fa7d3893911e3f17c497afdd72cb8e3fb6083ac"
+      sha256 "REPLACE_AT_RELEASE_x86_64-apple-darwin"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "6c1d9e10a6b9e3774f775200734faa1f1524ec8f0c5a877dfff8d77859a3a2cb"
+      sha256 "REPLACE_AT_RELEASE_x86_64-unknown-linux-gnu"
     end
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "6c49b9fd0a41ba4339b9246d31b21c83fbc08bc78cd86b4d1f6e147fd260efc2"
+      sha256 "REPLACE_AT_RELEASE_aarch64-unknown-linux-gnu"
     end
   end
 
@@ -43,6 +50,6 @@ class Makakoo < Formula
   end
 
   test do
-    assert_match "makakoo 0.1.0", shell_output("#{bin}/makakoo --version")
+    assert_match "makakoo 0.1.5", shell_output("#{bin}/makakoo --version")
   end
 end

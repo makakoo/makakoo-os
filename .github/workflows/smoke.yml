@@ -63,6 +63,7 @@ jobs:
       - name: Run install.sh against local artifact
         run: |
           export MAKAKOO_LOCAL_TARBALL=/tmp/artifacts/makakoo-aarch64-apple-darwin.tar.gz
+          export MAKAKOO_NO_AUTORUN=1
           bash distribution/install.sh
 
       - name: Verify --version
@@ -105,6 +106,7 @@ jobs:
       - name: Run install.sh against local artifact
         run: |
           export MAKAKOO_LOCAL_TARBALL=/tmp/artifacts/makakoo-x86_64-unknown-linux-gnu.tar.gz
+          export MAKAKOO_NO_AUTORUN=1
           bash distribution/install.sh
 
       - name: Verify --version
@@ -151,6 +153,7 @@ jobs:
         shell: pwsh
         run: |
           $env:MAKAKOO_LOCAL_TARBALL = "C:\artifacts\makakoo-x86_64-pc-windows-msvc.zip"
+          $env:MAKAKOO_NO_AUTORUN = "1"
           .\install\install.ps1
 
       - name: Verify --version

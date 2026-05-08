@@ -10,6 +10,26 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-05-08
+
+### Changed
+
+- **Installer hands off to the setup wizard automatically.** Both
+  `install.sh` (Linux/macOS) and `install.ps1` (Windows) now exec
+  `makakoo install` at the end of the install — which itself runs
+  the core distro install, registers the daemon, infects every
+  detected AI CLI, and lands the user in the interactive `makakoo
+  setup` wizard on success. Re-attaches `/dev/tty` so `curl … | sh`
+  pipes still get an interactive wizard rather than a silent
+  non-TTY skip.
+  - Opt out: set `MAKAKOO_NO_AUTORUN=1` (sh) or
+    `$env:MAKAKOO_NO_AUTORUN = "1"` (ps1) before invoking. Used by
+    `smoke.yml` / unattended CI.
+  - Removed the old "next steps: `makakoo infect --global` /
+    `makakoo daemon install`" copy from the installer's tail —
+    `makakoo install` already covers both.
+  - Files: `distribution/install.sh:93`, `install/install.ps1:170`.
+
 ## [0.1.4] - 2026-05-02
 
 ### Fixed

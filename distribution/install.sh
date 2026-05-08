@@ -93,9 +93,28 @@ done
 echo "✓ installed makakoo to $PREFIX/bin"
 echo "✓ bundled distros + plugins-core to $SHARE"
 echo ""
-echo "  run: $PREFIX/bin/makakoo version"
 echo "  add to PATH: export PATH=\"\$PATH:$PREFIX/bin\""
+
+# ─── auto-launch the install + setup wizard ──────────────────────────
+#
+# `makakoo install` is the umbrella one-shot: distro + daemon + infect +
+# health check, with an automatic hand-off into the interactive `makakoo
+# setup` wizard on success. Re-attach /dev/tty so `curl … | sh` users
+# land in the wizard instead of getting a silent non-TTY skip.
+#
+# Opt out with MAKAKOO_NO_AUTORUN=1 (used by smoke.yml / unattended CI).
+
+if [ "${MAKAKOO_NO_AUTORUN:-0}" = "1" ] || [ ! -t 1 ] || [ ! -r /dev/tty ]; then
+  echo ""
+  echo "→ next step (run interactively to land in the setup wizard):"
+  echo "    $PREFIX/bin/makakoo install"
+  exit 0
+fi
+
 echo ""
-echo "→ next steps:"
-echo "    $PREFIX/bin/makakoo infect --global    # onboard your AI CLIs"
-echo "    $PREFIX/bin/makakoo daemon install     # auto-start on login"
+echo "→ launching: $PREFIX/bin/makakoo install"
+echo "  Sets up the core distro, the background daemon, infects every"
+echo "  AI CLI we detect, then hands off to the setup wizard."
+echo ""
+
+exec "$PREFIX/bin/makakoo" install </dev/tty
