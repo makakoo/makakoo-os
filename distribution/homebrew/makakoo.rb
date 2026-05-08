@@ -20,22 +20,22 @@ class Makakoo < Formula
   on_macos do
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-apple-darwin.tar.gz"
-      sha256 "REPLACE_AT_RELEASE_aarch64-apple-darwin"
+      sha256 "94de006735cd48fef7dc47a09d88a58b3a69009ded54c7455b8baa83f69ca0ec"
     end
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-apple-darwin.tar.gz"
-      sha256 "REPLACE_AT_RELEASE_x86_64-apple-darwin"
+      sha256 "29d5417a968bd49c0ddcbdb068889b327b94d8c2c7e5060f00073e402ebfc348"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "REPLACE_AT_RELEASE_x86_64-unknown-linux-gnu"
+      sha256 "f54e59571e5549cedc5e914d64715ff8e1003a1835673179d0c61a1f24cd8fd4"
     end
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "REPLACE_AT_RELEASE_aarch64-unknown-linux-gnu"
+      sha256 "e4941cadeceebd4a9104a31f59da6a3ea123871324350c259d4f09025deb4649"
     end
   end
 
