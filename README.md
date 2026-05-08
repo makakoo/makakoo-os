@@ -3,7 +3,7 @@
 [![CI](https://github.com/makakoo/makakoo-os/actions/workflows/ci.yml/badge.svg)](https://github.com/makakoo/makakoo-os/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-blue)
-![Status](https://img.shields.io/badge/status-v0.1.0%20launch-orange)
+![Status](https://img.shields.io/badge/status-released-brightgreen)
 
 > **Many bodies. One mind.**
 > Open-source autonomous cognitive extension that gives every AI CLI on your machine the same persistent brain.
@@ -57,10 +57,17 @@ every step, and common-error fixes inline.
 
 **Already comfortable in a terminal? The short version:**
 
-**macOS / Linux** — one-liner (works after v0.1.0 release tag lands):
+**macOS / Linux** — one-liner. Drops pre-built binaries under `~/.local/bin/` and auto-execs `makakoo install`, which itself hands off to the interactive setup wizard. End state: every detected AI CLI infected, daemon running, you're inside the wizard.
 
 ```sh
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install.sh | sh
+```
+
+**macOS / Linux** — Homebrew alternative:
+
+```sh
+brew install traylinx/tap/makakoo
+makakoo install    # runs distro + daemon + infect, then hands off to the wizard
 ```
 
 **Windows** — PowerShell one-liner (Developer Mode must be on):
@@ -69,18 +76,17 @@ curl -fsSL https://makakoo.com/install | sh
 iwr -UseBasicParsing https://makakoo.com/install.ps1 | iex
 ```
 
-**From source** — works today:
+**From source** — every platform, useful for contributors:
 
 ```sh
 git clone https://github.com/makakoo/makakoo-os
 cd makakoo-os
 cargo install --path makakoo
 cargo install --path makakoo-mcp
-makakoo install    # distro + daemon + infect + health
-makakoo setup      # interactive wizard — persona, brain, pi, Ghostty,
-                   # model provider, infect. Run again any time.
-                   # See docs/user-manual/setup-wizard.md.
+makakoo install    # distro + daemon + infect + health, then hands off to the wizard
 ```
+
+`makakoo install` always finishes with the interactive wizard in a TTY shell. Skip with `--no-setup` (or `MAKAKOO_NO_AUTORUN=1` on the curl-pipe) for unattended installs. Re-enter any wizard section later with `makakoo setup --only <section>`. See [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md).
 
 **First time using Makakoo?** After install, start at [Walkthrough 01 — Fresh install on a new Mac](docs/walkthroughs/01-fresh-install-mac.md). The walkthroughs are a 12-guide tour through every major feature — copy-paste runnable, dependency-chained, in plain language.
 
@@ -179,7 +185,7 @@ cargo test --workspace
 cargo clippy -p makakoo-platform --all-targets -- -D warnings
 ```
 
-Release profile: `lto=true`, `strip=true`, `opt-level="z"`, `codegen-units=1`, `panic="abort"`. Binary sizes at v0.1.0: `makakoo` ~5 MB, `makakoo-mcp` ~4.7 MB.
+Release profile: `lto=true`, `strip=true`, `opt-level="z"`, `codegen-units=1`, `panic="abort"`. Stripped binaries are roughly `makakoo` ~5 MB and `makakoo-mcp` ~4.7 MB on `aarch64-apple-darwin`; sizes drift slightly between releases.
 
 ## Contributing
 

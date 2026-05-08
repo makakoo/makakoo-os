@@ -1,6 +1,6 @@
 # Install + Wizard — every flow, every use case
 
-This is the **single comprehensive reference** for installing Makakoo OS and walking the setup wizard. Every command verified live against `v0.1.0` (bootstrap v12, infect pointer pattern, 2026-04-25).
+This is the **single comprehensive reference** for installing Makakoo OS and walking the setup wizard. Every command is exercised in CI on every release (bootstrap v12 pointer pattern).
 
 If you only have 30 seconds: jump to [§1.1 The fastest path](#11-the-fastest-path-fresh-mac-or-linux). Everything else is for when something doesn't fit that path.
 
@@ -29,14 +29,24 @@ There are three valid ways to install. Pick by your context, not by preference.
 You have a clean machine, you trust the install script, you want one command:
 
 ```sh
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install.sh | sh
 ```
 
-This bootstraps cargo, builds + installs `makakoo` and `makakoo-mcp`, runs `makakoo install` (distro + daemon + infect + health check), and starts the setup wizard. End state: every AI CLI on the machine knows about Makakoo.
+The script downloads pre-built `makakoo` + `makakoo-mcp` binaries from the latest GitHub Release, drops them under `~/.local/bin/`, copies bundled `distros/` + `plugins-core/` to `~/.local/share/makakoo/`, and then **execs `makakoo install` automatically** with `/dev/tty` re-attached so the curl-pipe still lands you in the interactive setup wizard. End state: every AI CLI on the machine knows about Makakoo.
 
-**Caveats**:
-- Public install URL is live **after** the v0.1.0 release tag lands. Until then use §1.3 (from source).
-- Requires a working `cargo` (or willingness to install Rust toolchain).
+**Notes**:
+- No Rust toolchain required — the installer ships pre-built binaries for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`.
+- Opt out of the auto-handoff with `MAKAKOO_NO_AUTORUN=1` (used by CI / unattended installs).
+- Pin a version with `MAKAKOO_VERSION=0.1.5` instead of latest.
+
+### 1.1a Homebrew — recommended on macOS / Linux with brew
+
+```sh
+brew install traylinx/tap/makakoo
+makakoo install
+```
+
+`brew install` only places the binaries; it doesn't auto-run the wizard. So follow up with `makakoo install` (which itself runs distro + daemon + infect + health check, then hands off to the setup wizard). Upgrades use `brew upgrade traylinx/tap/makakoo`.
 
 ### 1.2 Windows — PowerShell one-liner
 
@@ -48,20 +58,19 @@ iwr -UseBasicParsing https://makakoo.com/install.ps1 | iex
 
 Same end state as §1.1. Developer Mode is required because Makakoo creates symlinks for the auto-memory shared store.
 
-### 1.3 From source — works today, every platform
+### 1.3 From source — every platform, useful for contributors
 
-For when you want to inspect the code before running it, contribute, or you're pre-v0.1.0:
+For when you want to inspect the code before running it, contribute, or build for an unsupported target:
 
 ```sh
 git clone https://github.com/makakoo/makakoo-os
 cd makakoo-os
 cargo install --path makakoo
 cargo install --path makakoo-mcp
-makakoo install
-makakoo setup           # interactive wizard
+makakoo install         # runs distro + daemon + infect, then auto-hands off to the wizard
 ```
 
-`cargo install` builds in release mode, ~3-5 minutes on a modern Mac. The two binaries land in `~/.cargo/bin/`.
+`cargo install` builds in release mode, ~3–5 minutes on a modern Mac. The two binaries land in `~/.cargo/bin/`. `makakoo install` itself drops you into `makakoo setup` on success, so you don't need to invoke the wizard separately. (Run it manually any time later with `makakoo setup`.)
 
 ### 1.4 Already have Makakoo? (re-install / upgrade)
 
@@ -79,7 +88,7 @@ Note: **MCP children don't auto-upgrade** — restart any open AI CLI session af
 
 ## §2 — What `makakoo install` actually does
 
-`makakoo install` is the one-shot orchestrator. It does **four** things in order, each idempotent:
+`makakoo install` is the one-shot orchestrator. It does **four** things in order (each idempotent), then hands off to the interactive setup wizard:
 
 ### Step 1 — distro install
 
@@ -132,6 +141,12 @@ A short audit that confirms:
 - The daemon is running and reachable on its socket
 
 Output is a human-readable summary, exit code 0 if healthy, exit code 1 + diagnostic if drift detected.
+
+### Step 5 — wizard hand-off
+
+On a successful install in an interactive shell, `makakoo install` automatically execs `makakoo setup` (the interactive wizard described in §3). This is what makes the curl-pipe one-liner end with the user inside the wizard rather than at a "next steps" prompt.
+
+Skip with `--no-setup` for unattended installs (CI, scripted provisioning). Non-TTY shells skip the hand-off automatically.
 
 ---
 
@@ -338,15 +353,21 @@ makakoo setup --only model-provider --reset    # reset just one section
 
 ### Upgrade
 
+The fastest path is the built-in `makakoo upgrade` verb — it auto-detects how the binary was installed (curl-pipe / Homebrew / cargo) and dispatches the matching update command. Resolves symlinks, recognises Homebrew Cellar paths, prints a version delta on success.
+
 ```sh
-cd makakoo-os
-git pull
-cargo install --path makakoo --force
-cargo install --path makakoo-mcp --force
-makakoo install                  # idempotent — picks up new bootstrap version, refreshes pointers
+makakoo upgrade
 ```
 
-After upgrading `makakoo-mcp`, **restart your AI CLIs** so they spawn the new MCP child binary. Pre-existing CLI sessions keep running the old one.
+If you prefer to drive the channel manually:
+
+| Original install | Manual upgrade |
+|---|---|
+| `curl …\| sh` | `curl -fsSL https://makakoo.com/install.sh \| sh` (re-runs latest) |
+| `brew install traylinx/tap/makakoo` | `brew upgrade traylinx/tap/makakoo` |
+| `cargo install --path makakoo` | `cd makakoo-os && git pull && cargo install --path makakoo --force && cargo install --path makakoo-mcp --force` |
+
+After any upgrade, run `makakoo install` once — it's idempotent, picks up new bootstrap versions, and refreshes infect pointers. Then **restart your AI CLIs** so they spawn the new `makakoo-mcp` child; pre-existing sessions keep running the old MCP binary until you do.
 
 If the bootstrap version bumped (v11 → v12 → v13...), all 8 slot pointers get rewritten on the next `makakoo infect --global` run. Old marker blocks are stripped cleanly.
 
@@ -374,14 +395,15 @@ makakoo uninfect --dry-run       # show what would be stripped
 ### "I'm on a fresh Mac and want everything"
 
 ```sh
-curl -fsSL https://makakoo.com/install | sh    # post-v0.1.0
-# OR
+curl -fsSL https://makakoo.com/install.sh | sh   # auto-hands off into the wizard
+# OR (Homebrew)
+brew install traylinx/tap/makakoo && makakoo install
+# OR (from source)
 git clone https://github.com/makakoo/makakoo-os && cd makakoo-os && \
-  cargo install --path makakoo && cargo install --path makakoo-mcp && \
-  makakoo install && makakoo setup
+  cargo install --path makakoo && cargo install --path makakoo-mcp && makakoo install
 ```
 
-→ §1.1 / §1.3 → §3 (full wizard)
+→ §1.1 / §1.1a / §1.3 → §3 (full wizard)
 
 ### "I have Claude Code installed but no other CLIs"
 

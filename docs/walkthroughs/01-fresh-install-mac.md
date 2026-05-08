@@ -29,28 +29,47 @@ Press `⌘` + `Space` to open Spotlight, type `Terminal`, press Enter. A window 
 Copy the next line exactly, paste it into Terminal, press Enter.
 
 ```sh
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install.sh | sh
 ```
 
-You should see something like:
+The installer detects your CPU, downloads pre-built binaries from the latest GitHub Release, drops them under `~/.local/bin/`, and then **automatically execs `makakoo install`** (the one-shot orchestrator: distro + background daemon + AI-CLI infect + health check), which itself hands off to the interactive setup wizard.
+
+You'll see roughly:
 
 ```text
-Makakoo OS installer
-detected: darwin-arm64 (or darwin-x86_64 on Intel)
-downloading makakoo@latest...
-✓ installed  /Users/you/.local/bin/makakoo
-next: run `makakoo install` to set up the kernel
+→ installing makakoo (latest) for aarch64-apple-darwin into /Users/you/.local/bin
+→ downloading https://github.com/makakoo/makakoo-os/releases/latest/download/makakoo-aarch64-apple-darwin.tar.gz
+✓ installed makakoo to /Users/you/.local/bin
+✓ bundled distros + plugins-core to /Users/you/.local/share/makakoo
+→ launching: /Users/you/.local/bin/makakoo install
+  Sets up the core distro, the background daemon, infects every
+  AI CLI we detect, then hands off to the setup wizard.
+
+distro install  → core
+daemon install  → ~/Library/LaunchAgents/com.makakoo.daemon.plist
+infect          → claude, gemini, codex, opencode, vibe, cursor, qwen, pi (detected)
+✓ install complete
+
+[1/6] Persona configuration
+Persona name (what should I call myself?) [Harvey]:
+…
 ```
 
-> **If `makakoo.com/install` returns 404** — the public v0.1.0 release has not landed yet. Skip to **Alternative install: from source** at the bottom of this page. That path works today from a cloned repository.
+Walk through each wizard prompt — defaults are sensible on a fresh install. The wizard is fully idempotent; you can re-enter any section later with `makakoo setup --only <section>`.
+
+> **Don't have any AI CLI installed yet?** The `infect` step will say `no CLI hosts detected`. That's fine — install Claude Code, Gemini CLI, or any of the others later and rerun `makakoo infect` when you do.
+
+> **Want to skip the auto-handoff** (CI / unattended install)? Set `MAKAKOO_NO_AUTORUN=1` before piping into `sh`. The script will install the binaries and exit, leaving `makakoo install` for you to run manually.
 
 ### 3. Reload your shell so the new command is found
+
+The wizard opened the binary with an absolute path; the rest of this walkthrough invokes `makakoo` by name, so make sure `~/.local/bin` is on your `$PATH`:
 
 ```sh
 exec $SHELL
 ```
 
-No output — that's correct.
+No output — that's correct. If your shell didn't have `~/.local/bin` on `$PATH` already, the installer's tail printed the line to add to your shell rc.
 
 ### 4. Verify the binary is on `$PATH`
 
@@ -58,10 +77,10 @@ No output — that's correct.
 makakoo --version
 ```
 
-Expected output:
+Expected output (your version may be newer):
 
 ```text
-makakoo 0.1.0
+makakoo 0.1.5
 ```
 
 If you get `command not found`, skip to **If something went wrong** → *PATH issue*.
@@ -72,36 +91,17 @@ If you get `command not found`, skip to **If something went wrong** → *PATH is
 makakoo version
 ```
 
-Expected output (the `home` path will reflect your username):
+Expected output (the `home` path will reflect your username; the version will match step 4):
 
 ```text
-makakoo 0.1.0 (unknown)
+makakoo 0.1.5 (release)
 persona: Harvey (pronoun=he/him, voice_default=caveman)
 home: /Users/you/MAKAKOO
 ```
 
-The `home` directory (`~/MAKAKOO`) does not exist yet — `makakoo install` in the next step creates it.
+`~/MAKAKOO` was created by the install step in §2.
 
-### 6. Run the one-shot install
-
-This step installs the **core distro** (a small curated set of plugins), registers the **background daemon** (the task engine that runs while you work), and **infects** every AI CLI you already have installed with the shared Makakoo bootstrap.
-
-```sh
-makakoo install
-```
-
-Answer `y` at each interactive prompt (the defaults are fine). On a fresh machine you'll see roughly:
-
-```text
-distro install  → core (plugin count: 38)
-daemon install  → ~/Library/LaunchAgents/com.makakoo.daemon.plist
-infect          → claude, gemini, codex, opencode, vibe, cursor, qwen, pi (detected)
-✓ install complete — run `makakoo setup` for the interactive wizard
-```
-
-> **Don't have any AI CLI installed yet?** The `infect` step will say `no CLI hosts detected`. That's fine — you can install Claude Code, Gemini CLI, or any of the others later and rerun `makakoo infect` when you do.
-
-### 7. Confirm the task engine is alive
+### 6. Confirm the task engine is alive
 
 ```sh
 makakoo sancho status
@@ -119,7 +119,7 @@ SANCHO — 8 tasks registered
 
 `last_run=-` means SANCHO hasn't fired yet (normal — you just installed it).
 
-### 8. Confirm the memory layer responds
+### 7. Confirm the memory layer responds
 
 ```sh
 makakoo memory stats
@@ -136,18 +136,23 @@ last promoter run:   never
 
 Zeros are healthy here — you haven't used Makakoo yet, so nothing has been recorded.
 
-### 9. (Optional) Run the interactive setup wizard
+### 8. Re-run the wizard later (optional)
+
+The wizard ran automatically in step 2 as part of `curl | sh`. If you want to revisit any section — e.g. switch to a different LLM provider or point Makakoo at an Obsidian vault — invoke it directly:
 
 ```sh
-makakoo setup
+makakoo setup                          # walk all six sections
+makakoo setup --only model-provider    # just one section
+makakoo setup --reset                  # clear stored answers and re-prompt
 ```
 
-The wizard walks through naming the assistant, registering brain sources, setting up the blessed terminal (Ghostty on macOS), picking a primary LLM provider, and re-infecting CLI hosts. Every section is idempotent — you can run the wizard as many times as you like, or skip it entirely for now.
+Every section is idempotent; previous answers become defaults.
 
 ## What just happened?
 
-- `curl | sh` downloaded the Makakoo binary for your Mac's CPU and placed it in `~/.local/bin/makakoo`. Nothing else on your system changed.
-- `makakoo install` created the Makakoo filesystem at `~/MAKAKOO`, registered a **LaunchAgent** (a small background service that starts automatically on login — you can remove it any time with `makakoo daemon uninstall`), and added the **Makakoo bootstrap block** to any AI CLI it detected. From now on, every AI CLI on this Mac shares the same Brain.
+- `curl | sh` downloaded pre-built `makakoo` and `makakoo-mcp` binaries for your Mac's CPU and placed them in `~/.local/bin/`, with bundled `distros/` + `plugins-core/` under `~/.local/share/makakoo/`. Nothing else on your system changed.
+- The installer auto-execed `makakoo install`, which created the Makakoo filesystem at `~/MAKAKOO`, registered a **LaunchAgent** (a small background service that starts automatically on login — you can remove it any time with `makakoo daemon uninstall`), and added the **Makakoo bootstrap block** to any AI CLI it detected. From now on, every AI CLI on this Mac shares the same Brain.
+- `makakoo install` then handed off to the interactive `makakoo setup` wizard, where you named your persona and picked an LLM provider.
 - `makakoo sancho status` confirmed the proactive task engine is registered and ready to run scheduled tasks in the background.
 - `makakoo memory stats` confirmed the SQLite memory pipeline is alive and empty, as expected.
 
@@ -159,13 +164,24 @@ You now have a working Makakoo install. The next walkthrough, [02 — First skil
 |---|---|
 | `makakoo: command not found` | PATH issue. Run `export PATH=$HOME/.local/bin:$PATH` then retry. Make it permanent by adding that line to `~/.zshrc`. |
 | `curl: (7) Failed to connect to makakoo.com` | No internet, or DNS / firewall blocking. Test with `curl https://github.com`. If that also fails, fix your network first. |
-| `curl: 404` on `makakoo.com/install` | The public v0.1.0 release has not landed yet. Use the **Alternative install: from source** section below. |
+| `curl: 404` on `makakoo.com/install.sh` | Either makakoo.com is down or you typed the URL wrong. Re-check the URL — the script is `install.sh`, not `install`. If makakoo.com is down, fall back to the source install at the bottom of this page. |
 | `makakoo install` prompts for a password | Makakoo itself does not need `sudo`. If you see a password prompt, cancel it (`Ctrl+C`), then inspect the prompt context — most likely Homebrew (if installed as a dependency for another plugin) is asking. |
 | Anything else | See the full troubleshooting guide at [`docs/troubleshooting/index.md`](../troubleshooting/index.md). If the symptom-rooted tree (Phase 3 of the docs sprint) is live, start there. |
 
+## Alternative install: Homebrew
+
+If you already use Homebrew, this is a one-liner alternative to `curl | sh`:
+
+```sh
+brew install traylinx/tap/makakoo
+makakoo install         # runs distro + daemon + infect, then hands off to the wizard
+```
+
+`brew install` only places the binaries; the Homebrew formula deliberately doesn't auto-launch the wizard (Homebrew installs are typically scripted). So follow up with `makakoo install` to run the orchestrator. Future upgrades: `brew upgrade traylinx/tap/makakoo`.
+
 ## Alternative install: from source
 
-Use this if `curl https://makakoo.com/install` 404s (pre-v0.1.0 release) or if you prefer building from source.
+Useful if you want to inspect the code before running it, contribute changes, or build for a target the prebuilt installer doesn't cover.
 
 Prerequisites for this path **only**: `git`, `rust` (install with one command: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`).
 
@@ -174,7 +190,7 @@ git clone https://github.com/makakoo/makakoo-os
 cd makakoo-os
 cargo install --path makakoo
 cargo install --path makakoo-mcp
-makakoo install
+makakoo install         # idempotent — runs distro + daemon + infect, hands off to the wizard
 ```
 
-After `cargo install` finishes, `~/.cargo/bin/makakoo` is on your `$PATH` if you accepted rustup's defaults. The subsequent steps (4–9) above are identical.
+After `cargo install` finishes, `~/.cargo/bin/makakoo` is on your `$PATH` if you accepted rustup's defaults. The subsequent steps (4–8) above are identical.

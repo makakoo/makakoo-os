@@ -70,11 +70,30 @@ Copy the right line for your OS, paste it into the terminal, press Enter.
 <summary><strong>🍎 macOS / 🐧 Linux</strong></summary>
 
 ```sh
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install.sh | sh
 ```
 
-What happens: a script downloads, detects your OS + CPU, downloads the
-right `makakoo` binary, and puts it in `~/.local/bin/`.
+What happens: the script detects your OS + CPU, downloads the matching
+pre-built `makakoo` and `makakoo-mcp` binaries from the latest GitHub
+Release, drops them in `~/.local/bin/` (with bundled runtime data under
+`~/.local/share/makakoo/`), and then **automatically execs `makakoo
+install`**, which itself hands off to the interactive setup wizard.
+You'll walk straight from one curl-pipe into a working install + the
+wizard.
+
+</details>
+
+<details>
+<summary><strong>🍺 macOS / 🐧 Linux — Homebrew alternative</strong></summary>
+
+```sh
+brew install traylinx/tap/makakoo
+makakoo install
+```
+
+`brew install` only places the binaries; `makakoo install` then runs
+the orchestrator (distro + daemon + infect + wizard hand-off). Future
+upgrades: `brew upgrade traylinx/tap/makakoo`.
 
 </details>
 
@@ -85,16 +104,29 @@ right `makakoo` binary, and puts it in `~/.local/bin/`.
 iwr -UseBasicParsing https://makakoo.com/install.ps1 | iex
 ```
 
+Same auto-handoff as macOS / Linux — drops the binaries under
+`%LOCALAPPDATA%\Makakoo\bin\` and execs `makakoo install` at the
+end.
+
 </details>
 
-**Expected output:**
+**Expected output (snipped — the install + wizard run inline):**
 
 ```
-→ Detected: aarch64-apple-darwin (or your platform)
-→ Downloading makakoo v0.1.0 …
-→ Installed to /Users/you/.local/bin/makakoo
-✓ Done. Run `makakoo install` to finish setup.
+→ installing makakoo (latest) for aarch64-apple-darwin into /Users/you/.local/bin
+→ downloading https://github.com/makakoo/makakoo-os/releases/latest/download/makakoo-aarch64-apple-darwin.tar.gz
+✓ installed makakoo to /Users/you/.local/bin
+✓ bundled distros + plugins-core to /Users/you/.local/share/makakoo
+→ launching: /Users/you/.local/bin/makakoo install
+…
 ```
+
+(The full install + wizard output is shown in Step 3 below.)
+
+> **Want to skip the auto-handoff?** Set `MAKAKOO_NO_AUTORUN=1` (sh)
+> or `$env:MAKAKOO_NO_AUTORUN = "1"` (ps1) before running. Used by
+> CI / scripted provisioning — the script will install the binaries
+> and exit, leaving `makakoo install` for you to run manually.
 
 ### "Which-makakoo not found" after installing?
 
@@ -115,9 +147,13 @@ Close and re-open the terminal, then try `makakoo --version` again.
 
 ---
 
-## Step 3 — Complete the install
+## Step 3 — Walk through the install + wizard
 
-Still in the terminal, run:
+Step 2 already invoked `makakoo install` for you (the curl-pipe and
+the iwr-pipe both auto-handoff into it). This step shows what you'll
+see scrolling past — and the questions the wizard asks.
+
+If you opted out with `MAKAKOO_NO_AUTORUN=1`, run it yourself:
 
 ```sh
 makakoo install
@@ -163,12 +199,19 @@ install complete
   detected hosts: 4
     claude, gemini, codex, opencode
 
-Run the setup wizard now? Configures persona, brain, pi, Ghostty, model provider, and CLI infect. [Y/n]:
+→ launching the setup wizard
+[1/6] Persona configuration
+Persona name (what should I call myself?) [Harvey]:
+…
 ```
 
-Say yes (press Enter) — the setup wizard walks you through the
-remaining one-time configuration. See [Setup wizard](user-manual/setup-wizard.md)
-for what each section does.
+The wizard hand-off is automatic in interactive shells. It walks you
+through six sections — persona, brain, CLI hosts, terminal, LLM
+provider, and a final infect pass. Press Enter to accept defaults at
+any prompt; the wizard is fully idempotent and you can re-run any
+section later with `makakoo setup --only <section>`. See
+[Setup wizard](user-manual/setup-wizard.md) for what each section
+does.
 
 ### "Permission denied" or "command not found: makakoo"
 
@@ -192,10 +235,10 @@ makakoo status
 makakoo query "hello"
 ```
 
-**Expected:**
+**Expected** (your version may be newer):
 
 ```
-Makakoo OS v0.1.0 (build 1234abc, 2026-04-23)
+makakoo 0.1.5
 ```
 
 ```

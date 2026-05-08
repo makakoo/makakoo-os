@@ -137,13 +137,10 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 ## 🚀 Quick Start
 
 ```bash
-# Install
-curl -fsSL https://makakoo.com/install | sh
+# Install — drops binaries, runs `makakoo install`, lands you in the wizard
+curl -fsSL https://makakoo.com/install.sh | sh
 
-# Infect your CLIs
-makakoo infect --global
-
-# Query your brain
+# Query your brain (the wizard already infected every detected CLI)
 makakoo query "what did I work on yesterday?"
 ```
 
