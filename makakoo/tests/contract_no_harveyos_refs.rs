@@ -131,7 +131,7 @@ fn walk(dir: &Path, hits: &mut Vec<(PathBuf, u32)>) {
 }
 
 fn is_allowlisted(path: &Path) -> bool {
-    let s = path.to_string_lossy();
+    let s = path.to_string_lossy().replace('\\', "/");
     ALLOWLIST.iter().any(|allow| s.contains(allow))
 }
 

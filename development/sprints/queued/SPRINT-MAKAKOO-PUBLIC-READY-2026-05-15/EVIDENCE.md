@@ -164,3 +164,10 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
 - Fix applied: added `makakoo/build.rs` with `/STACK:8388608` for Windows `makakoo` binary builds. This affects CI and shipped Windows binary headroom.
 - Local proof:
   - `cargo test -p makakoo --test adapter_cli` PASS (`7` tests)
+
+## Windows HarveyOS allowlist path normalization — 2026-05-15
+
+- GitHub CI run `25931623644` passed `verify-docs` and the Windows adapter stack fix, then failed Windows `contract_no_harveyos_refs` because allowlist substrings used `/` while Windows paths printed `\`.
+- Fix applied: normalize path separators to `/` before allowlist matching.
+- Local proof:
+  - `cargo test -p makakoo --test contract_no_harveyos_refs` PASS (`1` test)
