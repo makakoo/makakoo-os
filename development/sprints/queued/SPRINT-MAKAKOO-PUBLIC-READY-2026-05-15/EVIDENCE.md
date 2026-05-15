@@ -156,3 +156,11 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
 - Final fix: match `setup_wizard.rs` and use compile-time `env!("CARGO_BIN_EXE_makakoo")` directly; remove current-exe inference entirely for these integration tests.
 - Local proof:
   - `cargo test -p makakoo --test adapter_cli` PASS (`7` tests)
+
+## Windows makakoo.exe stack reserve fix — 2026-05-15
+
+- GitHub CI run `25931184911` still failed Windows `adapter_cli` with `thread 'main' has overflowed its stack`, even when using Cargo's binary path.
+- Root cause now treated as real Windows debug/runtime stack headroom for `makakoo.exe` startup under clap/tokio.
+- Fix applied: added `makakoo/build.rs` with `/STACK:8388608` for Windows `makakoo` binary builds. This affects CI and shipped Windows binary headroom.
+- Local proof:
+  - `cargo test -p makakoo --test adapter_cli` PASS (`7` tests)
