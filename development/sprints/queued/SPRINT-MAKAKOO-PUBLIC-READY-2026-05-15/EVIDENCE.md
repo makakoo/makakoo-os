@@ -101,3 +101,14 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
   - `ci/verify-docs.sh` PASS (`Total: 15 Pass: 0 Skip: 15 Fail: 0`)
   - Fresh isolated install smoke PASS:
     `distro core: installed 17, skipped 0, failed 0 / total 17`
+
+## CI docs coverage unblock — 2026-05-15
+
+- GitHub verify-docs run `25928014378` failed at `verify agent/mascot doc coverage` because `docs/agents/harveychat-cortex-memory.md` is a cross-cutting feature page, not an installed `agent-*` plugin manual.
+- Escalated to Lope Team as requested:
+  - `claude` recommended adding `harveychat-cortex-memory` to `_NON_AGENT_PAGES`.
+  - `opencode` was queried twice and timed out both times (`180s`, then `60s`).
+- Applied allowlist fix in `scripts/verify_agent_manual_coverage.py`.
+- Local proof:
+  - `python3 scripts/verify_agent_manual_coverage.py` PASS (`15` agents, `5` mascots)
+  - `ci/verify-docs.sh` PASS (`Total: 15 Pass: 0 Skip: 15 Fail: 0`)

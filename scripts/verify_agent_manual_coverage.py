@@ -92,6 +92,9 @@ _NON_AGENT_PAGES = frozenset(
         "swarm-in-action",
         "bring-your-own-agent",
         "consuming-makakoo-externally",
+        # Feature manual for the Cortex long-term memory layer that augments
+        # agent-harveychat. Lives in lib-harvey-core, not a standalone plugin.
+        "harveychat-cortex-memory",
     }
 )
 
