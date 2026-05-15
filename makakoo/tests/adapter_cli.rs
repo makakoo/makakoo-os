@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn makakoo_bin() -> PathBuf {
+    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_makakoo") {
+        return PathBuf::from(path);
+    }
     if let Some(path) = option_env!("CARGO_BIN_EXE_makakoo") {
         return PathBuf::from(path);
     }

@@ -140,3 +140,12 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
 - Local proof:
   - `cargo test -p makakoo-core plugin::install::tests::apply_update_swaps_installed_version_and_preserves_disabled_flag -- --nocapture` PASS
   - `python3 scripts/verify_troubleshooting_coverage.py` PASS
+
+## Windows adapter CLI CI unblock — 2026-05-15
+
+- GitHub CI run `25930293511` passed verify-docs and fixed temp-root cascade, but failed Windows `makakoo/tests/adapter_cli.rs` with `thread 'main' has overflowed its stack`.
+- Root cause: `makakoo_bin()` checked compile-time `option_env!("CARGO_BIN_EXE_makakoo")`; Cargo exposes that path to integration tests as a runtime env var, so Windows fell back to spawning the test binary recursively.
+- Escalated to Lope Team per rule; call launched against `claude,opencode` with `45s` timeout but produced no usable output.
+- Fix applied: `makakoo_bin()` now checks `std::env::var_os("CARGO_BIN_EXE_makakoo")` first, then retains the fallback path logic.
+- Local proof:
+  - `cargo test -p makakoo --test adapter_cli` PASS (`7` tests)
