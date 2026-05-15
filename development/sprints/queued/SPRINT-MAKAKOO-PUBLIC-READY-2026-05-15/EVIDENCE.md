@@ -126,3 +126,17 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
   - `python3 scripts/verify_agent_manual_coverage.py` PASS
   - `python3 scripts/verify_troubleshooting_coverage.py` PASS (`Missing from symptoms.md: 0`)
   - `ci/verify-docs.sh` PASS (`Total: 15 Pass: 0 Skip: 15 Fail: 0`)
+
+## CI temp-root unblock — 2026-05-15
+
+- GitHub CI run `25928942615` passed verify-docs, but failed workspace tests:
+  - macOS: 177 cascading tempfile failures under `/Users/runner/work/_temp/.tmp*`.
+  - Ubuntu: `plugin::install::tests::apply_update_swaps_installed_version_and_preserves_disabled_flag` missing lock entry.
+- Root cause found in `apply_update` / `drop_probe`: both removed `probe.staging_dir.parent()`. For `source_fetch::fetch_git()`, `staging_dir` is already the `TempDir` root, so parent is the shared runner temp root (`/Users/runner/work/_temp` or `/tmp`).
+- Escalated to Lope Team as requested; both `claude` and `opencode` timed out at `90s`.
+- Fix applied:
+  - Remove only `probe.staging_dir`, never its parent.
+  - Add CI guard to create `${{ runner.temp }}` before macOS/Windows tests.
+- Local proof:
+  - `cargo test -p makakoo-core plugin::install::tests::apply_update_swaps_installed_version_and_preserves_disabled_flag -- --nocapture` PASS
+  - `python3 scripts/verify_troubleshooting_coverage.py` PASS

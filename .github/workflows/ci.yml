@@ -46,6 +46,11 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
+      - name: Ensure runner temp root exists (macOS + Windows)
+        if: matrix.os != 'ubuntu-latest'
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path "${{ runner.temp }}" | Out-Null
+
       # On Linux, the `keyring` crate routes through Secret Service which
       # requires both a DBus session and an unlocked gnome-keyring-daemon.
       # `dbus-run-session` provides the session; we unlock with an empty

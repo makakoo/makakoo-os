@@ -74,9 +74,7 @@ pub enum InstallError {
     /// `[install].unix` script exited non-zero. The plugin dir stays on
     /// disk (script may have created helpful breadcrumbs) but the lock
     /// file is NOT updated, so the next install will retry cleanly.
-    #[error(
-        "[install].unix script for plugin {plugin:?} exited {exit}: {stderr}"
-    )]
+    #[error("[install].unix script for plugin {plugin:?} exited {exit}: {stderr}")]
     InstallScriptFailed {
         plugin: String,
         exit: i32,
@@ -86,10 +84,7 @@ pub enum InstallError {
     /// doesn't parse as one of the known prefixes (`path:`, `git:`,
     /// `tar:`). Points at corruption or a manually-edited lock file.
     #[error("lock entry for {plugin:?} has unparseable source: {source_str:?}")]
-    InvalidLockSource {
-        plugin: String,
-        source_str: String,
-    },
+    InvalidLockSource { plugin: String, source_str: String },
     /// Raised by `plugin update` on a path-sourced plugin — those use
     /// the legacy path-based update flow (uninstall + reinstall from
     /// recorded directory), handled at the CLI layer.
@@ -112,10 +107,7 @@ pub enum PluginSource {
     },
     /// A URL pointing at a `.tar.gz` (or plain `.tar`) + a sha256 that
     /// the downloaded archive MUST match before the tree is promoted.
-    Tarball {
-        url: String,
-        sha256: String,
-    },
+    Tarball { url: String, sha256: String },
 }
 
 /// Arguments for a single install.
@@ -378,14 +370,12 @@ pub fn apply_update(
         }
     }
 
-    // Best-effort: the staged tree was renamed into place by
-    // install_staged, but source_fetch::fetch() uses a tempdir with
-    // other subdirs (for tarballs: extract/, stage/). Clean them.
-    if let Some(parent) = probe.staging_dir.parent() {
-        // Only clean the immediate parent if it's clearly the fetcher's
-        // tempdir (contains a well-known download.tar.gz sibling or empty).
-        let _ = fs::remove_dir_all(parent);
-    }
+    // Best-effort: discard the fetched source tree after install_staged()
+    // copied it into $MAKAKOO_HOME/plugins/.stage/.  Do NOT remove the parent:
+    // source_fetch::fetch_git() returns the TempDir root itself as staging_dir,
+    // so its parent is the process/CI shared temp root. Removing that parent
+    // cascades into unrelated tempfile::TempDir failures.
+    let _ = fs::remove_dir_all(&probe.staging_dir);
 
     Ok(outcome)
 }
@@ -394,9 +384,6 @@ pub fn apply_update(
 /// declines a re-trust prompt.
 pub fn drop_probe(probe: UpstreamProbe) {
     let _ = fs::remove_dir_all(&probe.staging_dir);
-    if let Some(parent) = probe.staging_dir.parent() {
-        let _ = fs::remove_dir_all(parent);
-    }
 }
 
 /// List every lock entry whose source is git or tarball — the candidates
@@ -406,9 +393,7 @@ pub fn list_updatable(makakoo_home: &Path) -> Result<Vec<LockEntry>, InstallErro
     Ok(lock
         .plugins
         .into_iter()
-        .filter(|e| {
-            e.source.starts_with("git:") || e.source.starts_with("tar:")
-        })
+        .filter(|e| e.source.starts_with("git:") || e.source.starts_with("tar:"))
         .collect())
 }
 
@@ -428,9 +413,7 @@ fn parse_lock_source(plugin: &str, s: &str) -> Result<PluginSource, InstallError
         // git:<url>@<ref>. Split on the LAST '@' to sidestep `ssh://git@host`
         // (which shouldn't appear here but keep the parser defensive).
         let (url, ref_) = match rest.rfind('@') {
-            Some(i) if i > "https://".len() => {
-                (rest[..i].to_string(), rest[i + 1..].to_string())
-            }
+            Some(i) if i > "https://".len() => (rest[..i].to_string(), rest[i + 1..].to_string()),
             _ => (rest.to_string(), "HEAD".to_string()),
         };
         // A previously-accepted install implies the user already OK'd the
@@ -869,13 +852,29 @@ run = "true"
         // Every directory level must survive the install. A regression
         // that dropped `src/` (or the `core/` subdir, or the leaf file)
         // would show up as a missing path here.
-        assert!(outcome.final_dir.join("src").is_dir(),
-            "install dropped top-level src/ dir");
-        assert!(outcome.final_dir.join("src").join("core").is_dir(),
-            "install dropped src/core/ dir");
-        assert!(outcome.final_dir.join("src").join("core").join("terminal").is_dir(),
-            "install dropped src/core/terminal/ dir");
-        let leaf = outcome.final_dir.join("src").join("core").join("terminal").join("widgets.py");
+        assert!(
+            outcome.final_dir.join("src").is_dir(),
+            "install dropped top-level src/ dir"
+        );
+        assert!(
+            outcome.final_dir.join("src").join("core").is_dir(),
+            "install dropped src/core/ dir"
+        );
+        assert!(
+            outcome
+                .final_dir
+                .join("src")
+                .join("core")
+                .join("terminal")
+                .is_dir(),
+            "install dropped src/core/terminal/ dir"
+        );
+        let leaf = outcome
+            .final_dir
+            .join("src")
+            .join("core")
+            .join("terminal")
+            .join("widgets.py");
         assert!(leaf.is_file(), "install dropped the leaf widgets.py file");
         let bytes = fs::read(&leaf).unwrap();
         assert_eq!(bytes, b"class W: pass\n", "install mangled file contents");
@@ -1195,8 +1194,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
 
     #[test]
     fn install_from_git_tag_happy_path() {
-        let (_fixture, url, tag, expected_sha) =
-            seed_plugin_bare_repo("git-plugin", "");
+        let (_fixture, url, tag, expected_sha) = seed_plugin_bare_repo("git-plugin", "");
         let tmp_home = TempDir::new().unwrap();
         let home = tmp_home.path();
         let outcome = install_from_git(&url, &tag, false, home).unwrap();
@@ -1214,11 +1212,9 @@ tasks = [{ name = "dream", interval = "3600s" }]
 
     #[test]
     fn install_from_git_sha40_happy_path() {
-        let (_fixture, url, _tag, expected_sha) =
-            seed_plugin_bare_repo("sha40-plugin", "");
+        let (_fixture, url, _tag, expected_sha) = seed_plugin_bare_repo("sha40-plugin", "");
         let tmp_home = TempDir::new().unwrap();
-        let outcome =
-            install_from_git(&url, &expected_sha, false, tmp_home.path()).unwrap();
+        let outcome = install_from_git(&url, &expected_sha, false, tmp_home.path()).unwrap();
         let lock = PluginsLock::load(tmp_home.path()).unwrap();
         let entry = lock.get("sha40-plugin").unwrap();
         assert_eq!(entry.resolved_sha.as_deref(), Some(expected_sha.as_str()));
@@ -1258,12 +1254,10 @@ tasks = [{ name = "dream", interval = "3600s" }]
         // Plugin manifest declares an [install].unix line that writes a
         // marker file using $MAKAKOO_PLUGIN_DIR. Proves the script runs
         // from the promoted dir with the env exported.
-        let extras =
-            "\n[install]\nunix = \"echo ran > $MAKAKOO_PLUGIN_DIR/.install-marker\"\n";
+        let extras = "\n[install]\nunix = \"echo ran > $MAKAKOO_PLUGIN_DIR/.install-marker\"\n";
         let (_fixture, url, tag, _sha) = seed_plugin_bare_repo("script-plugin", extras);
         let tmp_home = TempDir::new().unwrap();
-        let outcome =
-            install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
+        let outcome = install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
         let marker = outcome.final_dir.join(".install-marker");
         assert!(marker.is_file(), "[install].unix did not run");
         let body = fs::read_to_string(&marker).unwrap();
@@ -1326,8 +1320,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let url = format!("file://{}", bare.display());
 
         let tmp_home = TempDir::new().unwrap();
-        let outcome =
-            install_from_git(&url, "v0.1.0", false, tmp_home.path()).unwrap();
+        let outcome = install_from_git(&url, "v0.1.0", false, tmp_home.path()).unwrap();
         let marker = outcome.final_dir.join(".bare-filename-marker");
         assert!(
             marker.is_file(),
@@ -1350,14 +1343,10 @@ tasks = [{ name = "dream", interval = "3600s" }]
 
     #[test]
     fn install_from_git_appends_resolved_sha_to_lock() {
-        let (_fixture, url, tag, expected_sha) =
-            seed_plugin_bare_repo("lock-sha", "");
+        let (_fixture, url, tag, expected_sha) = seed_plugin_bare_repo("lock-sha", "");
         let tmp_home = TempDir::new().unwrap();
         install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
-        let raw = fs::read_to_string(
-            tmp_home.path().join("config/plugins.lock"),
-        )
-        .unwrap();
+        let raw = fs::read_to_string(tmp_home.path().join("config/plugins.lock")).unwrap();
         assert!(
             raw.contains(&expected_sha),
             "lock file must record resolved git SHA, got:\n{raw}"
@@ -1372,8 +1361,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
 
     #[test]
     fn probe_upstream_uptodate_when_sha_unchanged() {
-        let (_fixture, url, tag, expected_sha) =
-            seed_plugin_bare_repo("probe-noop", "");
+        let (_fixture, url, tag, expected_sha) = seed_plugin_bare_repo("probe-noop", "");
         let tmp_home = TempDir::new().unwrap();
         install_from_git(&url, &tag, false, tmp_home.path()).unwrap();
         let entry = PluginsLock::load(tmp_home.path())
@@ -1406,9 +1394,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
         );
         run_git(&["tag", "-f", "v0.1.0"], Some(&wt));
         run_git(
-            &[
-                "push", "--quiet", "--force", "origin", "main", "--tags",
-            ],
+            &["push", "--quiet", "--force", "origin", "main", "--tags"],
             Some(&wt),
         );
 
@@ -1438,8 +1424,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
 
     #[test]
     fn probe_upstream_detects_manifest_change() {
-        let (fixture_tmp, url, _tag, _sha) =
-            seed_plugin_bare_repo("probe-manifest", "");
+        let (fixture_tmp, url, _tag, _sha) = seed_plugin_bare_repo("probe-manifest", "");
         let tmp_home = TempDir::new().unwrap();
         install_from_git(&url, "main", true, tmp_home.path()).unwrap();
 
@@ -1452,14 +1437,8 @@ tasks = [{ name = "dream", interval = "3600s" }]
             "\n[capabilities]\ngrants = [\"brain/read\"]\n",
         );
         run_git(&["add", "."], Some(&wt));
-        run_git(
-            &["commit", "--quiet", "-m", "add capability"],
-            Some(&wt),
-        );
-        run_git(
-            &["push", "--quiet", "--force", "origin", "main"],
-            Some(&wt),
-        );
+        run_git(&["commit", "--quiet", "-m", "add capability"], Some(&wt));
+        run_git(&["push", "--quiet", "--force", "origin", "main"], Some(&wt));
 
         let entry = PluginsLock::load(tmp_home.path())
             .unwrap()
@@ -1468,14 +1447,16 @@ tasks = [{ name = "dream", interval = "3600s" }]
             .unwrap();
         let probe = probe_upstream(&entry).unwrap();
         assert_eq!(probe.drift, ProbeDrift::ManifestChange);
-        assert_ne!(probe.new_manifest_hash, entry.manifest_hash.unwrap_or_default());
+        assert_ne!(
+            probe.new_manifest_hash,
+            entry.manifest_hash.unwrap_or_default()
+        );
         drop_probe(probe);
     }
 
     #[test]
     fn apply_update_swaps_installed_version_and_preserves_disabled_flag() {
-        let (fixture_tmp, url, _tag, _sha) =
-            seed_plugin_bare_repo("apply-update", "");
+        let (fixture_tmp, url, _tag, _sha) = seed_plugin_bare_repo("apply-update", "");
         let tmp_home = TempDir::new().unwrap();
         install_from_git(&url, "main", true, tmp_home.path()).unwrap();
 
@@ -1491,10 +1472,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
         fs::write(wt.join("v2.py"), b"# v2\n").unwrap();
         run_git(&["add", "."], Some(&wt));
         run_git(&["commit", "--quiet", "-m", "v2"], Some(&wt));
-        run_git(
-            &["push", "--quiet", "--force", "origin", "main"],
-            Some(&wt),
-        );
+        run_git(&["push", "--quiet", "--force", "origin", "main"], Some(&wt));
 
         let entry = PluginsLock::load(tmp_home.path())
             .unwrap()
@@ -1548,12 +1526,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
         fs::write(&pack, b"garbage tarball bytes").unwrap();
         let url = format!("file://{}", pack.display());
         let tmp_home = TempDir::new().unwrap();
-        let err = install_from_tarball_url(
-            &url,
-            &"0".repeat(64),
-            tmp_home.path(),
-        )
-        .unwrap_err();
+        let err = install_from_tarball_url(&url, &"0".repeat(64), tmp_home.path()).unwrap_err();
         // Either Sha256Mismatch (hash check fires) or TarballHttp (curl
         // can't fetch file:// on this platform). Either proves nothing
         // was promoted.
