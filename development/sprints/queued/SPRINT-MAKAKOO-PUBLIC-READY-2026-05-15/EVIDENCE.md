@@ -186,3 +186,14 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
 - Local proof:
   - `cargo test -p makakoo-core --lib` PASS (`1106` passed, `1` ignored)
   - Targeted regressions PASS: destroy restore path, plugin install script success/failure, cargo path overrides, supervisor shutdown grace.
+
+## Windows docs-MCP path normalization — 2026-05-15
+
+- GitHub CI run `25933106544` passed `verify-docs`, Ubuntu/macOS tests, and Windows `makakoo-core` tests, then failed Windows `makakoo-docs-mcp --lib`:
+  - `index::runtime::tests::read_round_trips` panicked with `at least one doc under docs/`.
+- Escalated to Lope Team per rule:
+  - `claude` confirmed build-time path normalization in `makakoo-docs-mcp/build.rs` is the correct fix.
+  - `opencode` timed out at `90s`.
+- Fix applied: normalize baked docs index paths to forward slashes with `.replace('\\', "/")` at corpus build time.
+- Local proof:
+  - `cargo test -p makakoo-docs-mcp --lib` PASS (`6` tests)

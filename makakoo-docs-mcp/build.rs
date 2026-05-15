@@ -75,7 +75,7 @@ fn main() -> Result<()> {
                 .strip_prefix(&workspace_root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
             conn.execute(
                 "INSERT INTO docs(path, title, body) VALUES (?1, ?2, ?3)",
                 rusqlite::params![rel, title, body],
