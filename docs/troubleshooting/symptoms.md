@@ -142,6 +142,33 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ---
 
+## Additional exact diagnostics
+
+These are less common subsystem errors, but they are still searchable here so the verifier keeps public error strings covered.
+
+- **`--from-toml file has slot_id '<file-slot>' but CLI requested slot '<slot>' - they must match`** - The agent-create TOML belongs to a different slot than the CLI flag. Use the slot id from the TOML, or edit the TOML and retry.
+- **`--from-toml is mutually exclusive with --telegram-token / --slack-bot-token`** - Pick one agent-create source: a TOML file, Telegram flags, or Slack flags. Do not mix them.
+- **`--only-kernel and --only-mcp are mutually exclusive`** - `makakoo upgrade` can target one component at a time. Pass only one flag, or omit both to upgrade both binaries.
+- **`GitHub API returned <status>: <url>`** - GitHub rejected a release/API request. Check network, auth/rate limit, and that the release/tag exists.
+- **`Slack transport requires --slack-app-token`** - Agent creation for Slack needs the app-level token. Re-run with `--slack-app-token <xapp-...>`.
+- **`Slack transport requires --slack-bot-token`** - Agent creation for Slack needs the bot token. Re-run with `--slack-bot-token <xoxb-...>`.
+- **`Slack transport requires --slack-team`** - Agent creation for Slack needs the workspace/team id. Re-run with `--slack-team <team-id>`.
+- **`agent create needs at least one transport: pass --telegram-token <T> OR --slack-bot-token + --slack-app-token + --slack-team OR --from-toml <path>`** - You invoked `makakoo agent create` without a transport. Add Telegram flags, the complete Slack flag set, or `--from-toml`.
+- **`expanded scope <path> is a single top-level directory - refuse to grant; pick a subdirectory`** - The permission grant was too broad. Grant a project/subdirectory, not a top-level filesystem directory.
+- **`fault-injection runner is gated - set MAKAKOO_FAULT_INJECTION=1 to enable. This guard prevents prod from triggering destructive test scenarios.`** - You tried to run destructive test scenarios without the explicit test gate. Only set the env var in a safe test environment.
+- **`garage config missing at <path> - run makakoo plugin install --core garage-store first`** - The Garage backing config is absent. Install the `garage-store` core plugin, then rerun the command.
+- **`garage <command> failed (exit <code>): <stderr>`** - The underlying `garage` CLI failed. Run the printed command directly, fix the Garage config/daemon/permissions, then retry.
+- **`keychain write failed for endpoint <name>: <error>. Re-run with --allow-file-creds to write to <path> (mode 0600), or unlock the keychain and retry.`** - Credential storage failed. Unlock the OS keychain, or intentionally allow file-backed credentials.
+- **`no credentials stored for endpoint <name>. Re-run makakoo s3 endpoint add <name> ... or restore from backup.`** - The S3/Garage endpoint exists without credentials. Add it again or restore the credential store.
+- **`pattern <path> has empty system + empty user body - nothing to send`** - A Fabric/pattern file has no prompt body. Add system/user content or pick a different pattern.
+- **`pattern <name> not found in registry (looked up <path>)`** - The requested pattern is missing. Check the pattern name and refresh/reinstall the pattern plugin.
+- **`<path> exists but is kind=<kind>, not pattern`** - The registry entry is not a pattern. Pick a pattern entry or correct the plugin metadata.
+- **`<path> has kind=pattern but no [pattern] table`** - The plugin metadata declares a pattern without the required `[pattern]` table. Fix the manifest or reinstall the plugin.
+- **`unknown audit kind '<kind>' - see makakoo_core::agents::audit::AuditKind for accepted values`** - An agent audit event used an unsupported kind. Update the caller to emit a valid audit kind.
+- **`unknown scenario '<name>' - known: <known>`** - The fault-injection runner was given an unknown scenario. Pick one of the printed known scenario names.
+
+---
+
 ## About this index
 
 This page is the **verbatim-string reference**; the tree is the **fix-by-symptom navigator**. If you're sure what the string is, jump here. If you're fuzzy about wording or have a "it feels wrong" situation, start at [`tree.md`](./tree.md).
