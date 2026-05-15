@@ -1,7 +1,7 @@
 # Makakoo OS Homebrew formula — source of truth.
 #
 # This file mirrors the live formula at
-#   github.com/makakoo/homebrew-tap/Formula/makakoo.rb
+#   github.com/traylinx/homebrew-tap/Formula/makakoo.rb
 # Bump `version` + the four `sha256` lines at each release. SHAs come
 # from the .sha256 sidecar files attached to the GitHub release:
 #
