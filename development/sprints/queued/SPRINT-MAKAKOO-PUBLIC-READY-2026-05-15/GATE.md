@@ -1,6 +1,6 @@
-# Public readiness gate — INITIAL NO-GO
+# Public readiness gate — FINAL GO
 
-Status: **NO-GO** until all sprint phases pass.
+Status: **GO** for public developer-beta marketing as of 2026-05-15.
 
 ## Launch posture decision
 
@@ -32,13 +32,13 @@ Post-launch trigger:
 
 | Gate | Status | Evidence required |
 |---|---:|---|
-| Repo public + pushed | PASS | `git status -sb`, `gh repo view`, final release URL |
-| Main CI green | FAIL | Latest `CI` run on `main` success |
-| verify-docs green/intentional | FAIL | Latest `verify-docs` run success or documented hermetic skip list |
-| Installer endpoints consistent | FAIL | `/install` and `/install.sh` match, or homepage only uses `/install.sh` |
-| Real anonymous install smoke | FAIL | No `aborted.`, `--yes --no-setup`, plugin failure count zero |
-| Core plugin install complete | FAIL | `distro core: installed N, failed 0` on macOS/Linux/Windows x64 |
-| Website source links correct | FAIL | Homepage source link resolves to `makakoo/makakoo-os` |
-| Windows ARM64 claim resolved | FAIL | Either shipped/smoked or explicitly unsupported |
-| Signing/beta copy explicit | FAIL | README/homepage/install copy consistent |
-| Final release cut after fixes | FAIL | New release after all fixes + Homebrew bump + smoke proof |
+| Repo public + pushed | PASS | `makakoo/makakoo-os` public; `main` pushed; release `v0.1.6` published |
+| Main CI green | PASS | `CI` run `25934374828` on `main` success (`ce6c4bf`) |
+| verify-docs green/intentional | PASS | `verify-docs` run `25934374787` on `main` success (`ce6c4bf`) |
+| Installer endpoints consistent | PASS | `https://makakoo.com/install` matches `/install.sh`; `/install.ps1` live |
+| Real anonymous install smoke | PASS | `Smoke (post-public anonymous)` run `25934418432` success for `0.1.6` |
+| Core plugin install complete | PASS | Public smoke enforces `failed 0`; local isolated smoke `installed 17, failed 0` |
+| Website source links correct | PASS | Live homepage links to `https://github.com/makakoo/makakoo-os` |
+| Windows ARM64 claim resolved | PASS | Windows ARM64 explicitly unsupported in installer and public copy; Windows x64 shipped |
+| Signing/beta copy explicit | PASS | Public copy says developer beta / unsigned binaries / Gatekeeper + SmartScreen friction |
+| Final release cut after fixes | PASS | Release `v0.1.6` published; Homebrew tap `47839a8`; smoke `25934418432` |

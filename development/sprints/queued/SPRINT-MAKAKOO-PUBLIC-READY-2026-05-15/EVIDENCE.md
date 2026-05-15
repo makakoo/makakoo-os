@@ -197,3 +197,23 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
 - Fix applied: normalize baked docs index paths to forward slashes with `.replace('\\', "/")` at corpus build time.
 - Local proof:
   - `cargo test -p makakoo-docs-mcp --lib` PASS (`6` tests)
+
+
+## Final public release closeout — 2026-05-15
+
+- Main branch final head: `ce6c4bf` (`docs(homebrew): keep live tap reference canonical`).
+- Final main gates:
+  - `CI` run `25934374828` PASS on `main` / `ce6c4bf`.
+  - `verify-docs` run `25934374787` PASS on `main` / `ce6c4bf`.
+- Release cut and published:
+  - GitHub release `v0.1.6`: https://github.com/makakoo/makakoo-os/releases/tag/v0.1.6
+  - Release workflow `25934007023` PASS.
+  - Assets shipped for supported targets: macOS arm64/x64, Linux arm64/x64, Windows x64. No Windows ARM64 asset, intentionally unsupported.
+- Homebrew:
+  - Source formula bumped in `distribution/homebrew/makakoo.rb`.
+  - Live tap pushed: `traylinx/homebrew-tap` commit `47839a8` (`makakoo 0.1.6`).
+- Public anonymous smoke:
+  - Workflow `Smoke (post-public anonymous)` run `25934418432` PASS with `version=0.1.6` across macOS, Ubuntu, Windows x64.
+- Website:
+  - Production `https://makakoo.com` patched with correct GitHub URL, install command, supported OS matrix, Windows ARM64 unsupported stance, and developer-beta unsigned-binary copy.
+  - Netlify deploy: `https://6a07419c9a033c09b6970d47--makakoo-os-prelaunch.netlify.app`.
