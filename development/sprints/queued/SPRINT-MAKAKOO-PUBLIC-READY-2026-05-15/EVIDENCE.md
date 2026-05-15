@@ -149,3 +149,10 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
 - Fix applied: `makakoo_bin()` now checks `std::env::var_os("CARGO_BIN_EXE_makakoo")` first, then retains the fallback path logic.
 - Local proof:
   - `cargo test -p makakoo --test adapter_cli` PASS (`7` tests)
+
+## Windows adapter CLI CI unblock follow-up — 2026-05-15
+
+- GitHub CI run `25930810146` still failed Windows `adapter_cli` with stack overflow after runtime-env fallback.
+- Final fix: match `setup_wizard.rs` and use compile-time `env!("CARGO_BIN_EXE_makakoo")` directly; remove current-exe inference entirely for these integration tests.
+- Local proof:
+  - `cargo test -p makakoo --test adapter_cli` PASS (`7` tests)

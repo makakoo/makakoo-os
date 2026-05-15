@@ -9,24 +9,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn makakoo_bin() -> PathBuf {
-    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_makakoo") {
-        return PathBuf::from(path);
-    }
-    if let Some(path) = option_env!("CARGO_BIN_EXE_makakoo") {
-        return PathBuf::from(path);
-    }
-
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.join(if cfg!(windows) {
-        "makakoo.exe"
-    } else {
-        "makakoo"
-    })
+    // Cargo exposes the real package binary to integration tests here.
+    // Do not infer from current_exe(): on Windows that can resolve back to
+    // the adapter_cli test harness and recursively spawn itself until stack
+    // overflow.
+    PathBuf::from(env!("CARGO_BIN_EXE_makakoo"))
 }
+
 
 fn new_scratch() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let home = tempfile::tempdir().unwrap();
