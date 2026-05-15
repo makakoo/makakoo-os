@@ -37,7 +37,7 @@ The script downloads pre-built `makakoo` + `makakoo-mcp` binaries from the lates
 **Notes**:
 - No Rust toolchain required — the installer ships pre-built binaries for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`.
 - Opt out of the auto-handoff with `MAKAKOO_NO_AUTORUN=1` (used by CI / unattended installs).
-- Pin a version with `MAKAKOO_VERSION=0.1.5` instead of latest.
+- Pin a version with `MAKAKOO_VERSION=0.1.6` instead of latest.
 
 ### 1.1a Homebrew — recommended on macOS / Linux with brew
 

@@ -10,6 +10,21 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-05-15
+
+### Fixed
+
+- Made the public installer fail hard on aborted or failed distro/plugin installs instead of printing a false-success completion.
+- Installed core distro plugins in dependency order so bundled plugins can rely on `lib-harvey-core`.
+- Made `agent-browser-harness` degrade cleanly when Python 3.11+ is missing, with a re-run command after Python is installed.
+- Hardened macOS, Linux, and Windows smoke workflows so public install tests assert a real successful distro summary.
+- Clarified public platform support: macOS arm64/x64, Linux arm64/x64, Windows x64; Windows ARM64 is explicitly unsupported until assets ship.
+
+### Changed
+
+- Narrowed executable documentation verification to public quickstart/getting-started docs while long walkthroughs wait for hermetic fixtures.
+- Updated makakoo.com install copy and GitHub links for the public beta.
+
 ## [0.1.5] - 2026-05-08
 
 ### Changed

@@ -52,6 +52,35 @@ else
 fi
 
 echo "→ [agent-browser-harness] bootstrapping venv + pip install -e upstream/"
+# browser-harness currently requires Python >=3.11. macOS system python can
+# still be 3.9, so pick a compatible interpreter when present. If none is
+# available, keep the wrapper installed and let `makakoo agent doctor` explain
+# the missing runtime instead of failing the whole Makakoo core distro.
+PYTHON_BIN="${MAKAKOO_VENV_PYTHON:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+    for candidate in python3.13 python3.12 python3.11 python3; do
+        if command -v "${candidate}" >/dev/null 2>&1 && "${candidate}" - <<'PYVERSION' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PYVERSION
+        then
+            PYTHON_BIN="${candidate}"
+            break
+        fi
+    done
+fi
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+    cat <<'NOTE'
+    ⚠ agent-browser-harness runtime skipped: Python >=3.11 not found.
+      The wrapper is installed, but the browser harness venv was not created.
+      Install Python 3.11+ and re-run:
+        makakoo plugin install --core agent-browser-harness
+NOTE
+    exit 0
+fi
+
+export MAKAKOO_VENV_PYTHON="${PYTHON_BIN}"
 # Pass the editable target via --spec so `pip install -e <dir>` runs.
 makakoo-venv-bootstrap pip "-e ${UPSTREAM_DIR}"
 

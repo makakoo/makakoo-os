@@ -72,6 +72,7 @@ Copy the right line for your OS, paste it into the terminal, press Enter.
 ```sh
 curl -fsSL https://makakoo.com/install.sh | sh
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 What happens: the script detects your OS + CPU, downloads the matching
 pre-built `makakoo` and `makakoo-mcp` binaries from the latest GitHub
@@ -90,6 +91,7 @@ wizard.
 brew install traylinx/tap/makakoo
 makakoo install
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 `brew install` only places the binaries; `makakoo install` then runs
 the orchestrator (distro + daemon + infect + wizard hand-off). Future
@@ -142,6 +144,7 @@ source ~/.zshrc
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 Close and re-open the terminal, then try `makakoo --version` again.
 
@@ -158,6 +161,7 @@ If you opted out with `MAKAKOO_NO_AUTORUN=1`, run it yourself:
 ```sh
 makakoo install
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 > 🍎 **macOS users — heads up.** The first time the install runs, macOS
 > may show a security prompt about a "background item" trying to load.
@@ -234,11 +238,12 @@ makakoo --version
 makakoo status
 makakoo query "hello"
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 **Expected** (your version may be newer):
 
 ```
-makakoo 0.1.5
+makakoo 0.1.6
 ```
 
 ```
@@ -265,6 +270,7 @@ claude
 gemini
 # or whichever you have
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 You'll notice the first message of every session now starts with a
 short "Makakoo bootstrap" block explaining which tools the AI has and

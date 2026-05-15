@@ -51,3 +51,53 @@ Windows ARM64 release asset missing: makakoo-aarch64-pc-windows-msvc.zip
 
 ## Homepage/source location unknown
 The deployed website content is live at https://makakoo.com/ but local source file was not found in /Users/sebastian/makakoo-os during sprint creation. Phase 4 starts with locating the website source/deploy repo.
+
+## Execution evidence — 2026-05-15 local sprint pass
+
+- Fixed `makakoo distro install` to return non-zero on prompt abort and any plugin install failure.
+- Added distro install dependency ordering from plugin manifests (`[depends].plugins`) before hook execution.
+- Added `lib-harvey-core` to `core` distro and declared `agent-browser-harness -> lib-harvey-core` dependency.
+- Fixed plugin hook environment to expose `MAKAKOO_BIN` and respect bash shebangs.
+- Hardened smoke workflows to use `--yes --no-setup` and assert no `aborted.` plus `failed 0 / total N`.
+- Fixed Windows adapter CLI test binary resolution (`CARGO_BIN_EXE_makakoo`, `.exe` fallback).
+- Fixed CI macOS tempdir failures by pinning `TMPDIR/TMP/TEMP` to `${{ runner.temp }}` for macOS/Windows test job.
+- Reduced docs executable manifest to public entry docs and marked non-hermetic public examples with explicit verify skips.
+- Fixed Windows ARM64 mismatch: installer now exits clearly because no Windows ARM64 release asset exists.
+- Fixed/deployed live website: `/install` equals `/install.sh`, homepage uses `/install.sh`, GitHub link points `makakoo/makakoo-os`, beta/signing/Windows x64 copy explicit.
+
+### Local gates run
+
+```text
+cargo test -p makakoo --test adapter_cli --test agent_browser_harness --test install_sh
+=> 18 passed, 0 failed
+
+ci/verify-docs.sh
+=> Total: 15 Pass: 0 Skip: 15 Fail: 0
+
+target/debug/makakoo install --skip-daemon --skip-infect --yes --no-setup (fresh MAKAKOO_HOME)
+=> distro core: installed 17, skipped 0, failed 0 / total 17
+=> install complete
+
+live website verification
+=> https://makakoo.com/install byte-identical to /install.sh
+=> homepage contains github.com/makakoo/makakoo-os
+=> homepage contains install.sh command and developer beta/signing copy
+```
+
+### Deployed website
+
+```text
+Production URL: https://makakoo.com
+Deploy URL: https://6a07419c9a033c09b6970d47--makakoo-os-prelaunch.netlify.app
+Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a07419c9a033c09b6970d47
+```
+
+## Release bump gate — 2026-05-15
+
+- Bumped workspace version to `0.1.6` for the public-readiness release candidate.
+- Re-ran local gates after version bump:
+  - `cargo build -p makakoo --locked` PASS
+  - `cargo test -p makakoo --test adapter_cli --test agent_browser_harness --test install_sh` PASS (18 tests)
+  - `ci/verify-docs.sh` PASS (`Total: 15 Pass: 0 Skip: 15 Fail: 0`)
+  - Fresh isolated install smoke PASS:
+    `distro core: installed 17, skipped 0, failed 0 / total 17`

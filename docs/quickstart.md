@@ -41,6 +41,7 @@ Planning
 - [x] Chose PostgreSQL (2026-04-20)
 EOF
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ### 4. Search Everything
 
@@ -51,6 +52,7 @@ makakoo search "polymarket"
 # Ask a complex question
 makakoo query "what are my active trading strategies?"
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ---
 
@@ -62,6 +64,7 @@ makakoo query "what are my active trading strategies?"
 # Get daily briefing
 makakoo query "what should I focus on today?"
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ### During Work: Remember Decisions
 
@@ -80,6 +83,7 @@ makakoo search "today"
 # Ask for summary
 makakoo query "summarize my work this week"
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ---
 
@@ -117,6 +121,7 @@ makakoo perms revoke --path last
 # See what's open right now
 makakoo perms list
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 Hardening in v0.3.1 + v0.3.2:
 
@@ -146,6 +151,7 @@ makakoo search "keywords"
 
 # Write to journal (automatic when AI mentions)
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ### Daily Maintenance
 
@@ -159,6 +165,7 @@ makakoo sancho status
 # Check plugins
 makakoo plugin list
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ### Exploration
 
@@ -172,6 +179,7 @@ ls ~/MAKAKOO/Brain/pages/
 # Read a journal
 cat ~/MAKAKOO/Brain/journals/$(date +%Y_%m_%d).md
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ---
 
@@ -245,6 +253,7 @@ Makakoo creates the file...
 > What do I know about AI agents?
 Makakoo synthesizes from all your notes...
 ```
+<!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
 ---
 

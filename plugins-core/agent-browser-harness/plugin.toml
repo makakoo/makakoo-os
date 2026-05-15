@@ -22,6 +22,7 @@ agent = "^1.0"
 "mcp-tool" = "^1.0"
 
 [depends]
+plugins = ["lib-harvey-core *"]
 python = ">=3.9"
 system = ["git", "curl"]
 # The plugin doctor checks for Chrome with CDP enabled — installing

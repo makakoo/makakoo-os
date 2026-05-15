@@ -74,7 +74,10 @@ jobs:
       - name: Verify install --skip-daemon
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          makakoo install --skip-daemon --skip-infect
+          set -o pipefail
+          makakoo install --skip-daemon --skip-infect --yes --no-setup 2>&1 | tee /tmp/makakoo-install.log
+          ! grep -q 'aborted\.' /tmp/makakoo-install.log
+          grep -Eq 'distro core: installed [0-9]+, skipped [0-9]+, failed 0 / total [0-9]+' /tmp/makakoo-install.log
 
   smoke-ubuntu:
     name: smoke Ubuntu (x86_64)
@@ -117,7 +120,10 @@ jobs:
       - name: Verify install --skip-daemon
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          makakoo install --skip-daemon --skip-infect
+          set -o pipefail
+          makakoo install --skip-daemon --skip-infect --yes --no-setup 2>&1 | tee /tmp/makakoo-install.log
+          ! grep -q 'aborted\.' /tmp/makakoo-install.log
+          grep -Eq 'distro core: installed [0-9]+, skipped [0-9]+, failed 0 / total [0-9]+' /tmp/makakoo-install.log
 
   smoke-windows:
     name: smoke Windows (x86_64)
@@ -166,4 +172,8 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$env:LOCALAPPDATA\Makakoo\bin;$env:PATH"
-          makakoo install --skip-daemon --skip-infect
+          makakoo install --skip-daemon --skip-infect --yes --no-setup 2>&1 | Tee-Object -FilePath "$env:TEMP\makakoo-install.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Get-Content "$env:TEMP\makakoo-install.log" -Raw
+          if ($log -match 'aborted\.') { throw "install aborted but smoke continued" }
+          if ($log -notmatch 'distro core: installed [0-9]+, skipped [0-9]+, failed 0 / total [0-9]+') { throw "missing successful distro summary" }

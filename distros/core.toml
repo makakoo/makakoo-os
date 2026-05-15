@@ -21,6 +21,7 @@ version = "^0.1"
 # Libraries — importable Python packages that skills depend on.
 "lib-hte" = { version = "*" }
 "lib-agent-loop" = { version = "*" }
+"lib-harvey-core" = { version = "*" }
 
 # Browser — Chrome CDP harness for harvey_browse in every infected CLI.
 "agent-browser-harness" = { version = "*" }

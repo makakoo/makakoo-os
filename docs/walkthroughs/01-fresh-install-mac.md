@@ -80,7 +80,7 @@ makakoo --version
 Expected output (your version may be newer):
 
 ```text
-makakoo 0.1.5
+makakoo 0.1.6
 ```
 
 If you get `command not found`, skip to **If something went wrong** → *PATH issue*.
@@ -94,7 +94,7 @@ makakoo version
 Expected output (the `home` path will reflect your username; the version will match step 4):
 
 ```text
-makakoo 0.1.5 (release)
+makakoo 0.1.6 (release)
 persona: Harvey (pronoun=he/him, voice_default=caveman)
 home: /Users/you/MAKAKOO
 ```

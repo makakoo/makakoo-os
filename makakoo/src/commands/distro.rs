@@ -12,7 +12,7 @@ use makakoo_core::distro::{
     resolve_distro, DistroFile, DistroTable, KernelTable, PluginPin, PluginPinFull,
 };
 use makakoo_core::plugin::{
-    install_from_path, InstallError, InstallRequest, PluginSource, PluginsLock,
+    install_from_path, resolve_load_order, InstallRequest, Manifest, PluginSource, PluginsLock,
 };
 
 use crate::cli::DistroCmd;
@@ -71,10 +71,7 @@ fn list(ctx: &CliContext) -> anyhow::Result<i32> {
             .to_string();
         match DistroFile::load(&path) {
             Ok(f) => rows.push((file_stem, f, path.clone())),
-            Err(e) => output::print_warn(format!(
-                "skipping {}: {e}",
-                path.display()
-            )),
+            Err(e) => output::print_warn(format!("skipping {}: {e}", path.display())),
         }
     }
 
@@ -161,28 +158,57 @@ fn install(
 
     if !yes && !resolved.plugins.is_empty() && !confirm("Proceed?")? {
         output::print_info("aborted.");
-        return Ok(0);
+        return Ok(1);
     }
 
     // Install each plugin. Source resolution: v0.1 looks up each plugin
     // under `plugins-core/<name>/` — the in-tree defaults cover the four
     // shipped core plugins. Later phases add git/tar sources.
-    let plugins_core: Option<PathBuf> =
-        crate::commands::plugin::plugins_core_root().ok();
+    let plugins_core: Option<PathBuf> = crate::commands::plugin::plugins_core_root().ok();
+
+    let mut install_order = resolved.plugins.clone();
+    if let Some(root) = &plugins_core {
+        let mut manifests = Vec::new();
+        let mut pin_by_manifest_name = BTreeMap::new();
+
+        for pin in &resolved.plugins {
+            let manifest_path = root.join(&pin.name).join("plugin.toml");
+            if !manifest_path.is_file() {
+                continue;
+            }
+            let (manifest, _warnings) = Manifest::load(&manifest_path)?;
+            pin_by_manifest_name.insert(manifest.plugin.name.clone(), pin.clone());
+            manifests.push(manifest);
+        }
+
+        if !manifests.is_empty() {
+            match resolve_load_order(&manifests) {
+                Ok(ordered) => {
+                    let mut ordered_pins = Vec::with_capacity(install_order.len());
+                    for manifest in ordered {
+                        if let Some(pin) = pin_by_manifest_name.remove(&manifest.plugin.name) {
+                            ordered_pins.push(pin);
+                        }
+                    }
+                    // Preserve any entries without a loadable manifest so the
+                    // normal installer loop can surface source/manifest errors.
+                    ordered_pins.extend(pin_by_manifest_name.into_values());
+                    install_order = ordered_pins;
+                }
+                Err(e) => {
+                    output::print_error(format!(
+                        "distro dependency resolution failed before install: {e}"
+                    ));
+                    return Ok(1);
+                }
+            }
+        }
+    }
 
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut failed: Vec<(String, String)> = Vec::new();
-    // Plugins where ONLY the [install].unix script failed — the source
-    // is on disk and lock entry exists, but the post-install hook
-    // returned non-zero. Demoted to a warning instead of an umbrella
-    // failure: the hook usually depends on environmental tools (git,
-    // pip, network, Chrome with CDP) that aren't required for v0.1's
-    // launch promise. User can re-run `makakoo plugin install <name>`
-    // once the env is ready.
-    let mut script_only_failures: usize = 0;
-
-    for pin in &resolved.plugins {
+    for pin in &install_order {
         let source_path = match &plugins_core {
             Some(root) => root.join(&pin.name),
             None => PathBuf::from(&pin.name),
@@ -222,9 +248,6 @@ fn install(
                 installed += 1;
             }
             Err(e) => {
-                if matches!(e, InstallError::InstallScriptFailed { .. }) {
-                    script_only_failures += 1;
-                }
                 failed.push((pin.name.clone(), e.to_string()));
                 output::print_warn(format!("  failed {}: {e}", pin.name));
             }
@@ -253,20 +276,17 @@ fn install(
         println!("{msg}");
     }
 
-    // Critical failures are anything OTHER than [install].unix script
-    // exits — manifest parse errors, missing source, blake3 mismatch,
-    // io errors. Those mean the plugin is genuinely broken and the
-    // distro install must fail. Script-only failures are environmental
-    // (the plugin source landed on disk, lock entry was NOT touched,
-    // user can re-run `makakoo plugin install <name>` later) so they
-    // don't gate the umbrella result.
-    let critical_failures = failed.len().saturating_sub(script_only_failures);
-    if script_only_failures > 0 {
-        output::print_warn(format!(
-            "{script_only_failures} plugin install hook(s) failed (non-fatal — re-run `makakoo plugin install <name>` once the environment is ready)"
+    // Any plugin failure makes the distro install fail. Public install
+    // smoke must prove the default distro actually landed; treating
+    // hook failures as warnings produced false-green release evidence
+    // (`aborted.` / `failed 1` followed by `install complete`).
+    if !failed.is_empty() {
+        output::print_error(format!(
+            "{} plugin install failure(s) — distro install incomplete",
+            failed.len()
         ));
     }
-    Ok(if critical_failures > 0 { 1 } else { 0 })
+    Ok(if failed.is_empty() { 0 } else { 1 })
 }
 
 fn save(
@@ -409,7 +429,10 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
     let stdin = std::io::stdin();
     let mut line = String::new();
     stdin.lock().read_line(&mut line)?;
-    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 // Allow unused imports if a downstream refactor removes something; cheap

@@ -8,33 +8,11 @@
 # Start small — grow as we gain confidence.
 
 files = [
-    # ───── Walkthroughs (Phase 1 of the grandma-docs sprint) ─────
-    "docs/walkthroughs/01-fresh-install-mac.md",
-    "docs/walkthroughs/02-first-brain-entry.md",
-    "docs/walkthroughs/03-install-plugin.md",
-    "docs/walkthroughs/04-write-brain-journal.md",
-    "docs/walkthroughs/05-ask-harvey.md",
-    "docs/walkthroughs/06-grant-write-access.md",
-    "docs/walkthroughs/07-browse-website.md",
-    "docs/walkthroughs/08-use-agent.md",
-    "docs/walkthroughs/09-ingest-document.md",
-    "docs/walkthroughs/10-mascot-mission.md",
-    "docs/walkthroughs/11-connect-tytus.md",
-    "docs/walkthroughs/12-octopus-federation.md",
-
-    # ───── Landing + install companion pages ─────
+    # Public entry docs only. Long walkthroughs and agent/mascot manuals
+    # intentionally stay out of the executable harness until they have
+    # hermetic fixtures; many require GUI apps, external CLIs, local LLMs,
+    # Chrome/CDP, Tytus, or user-specific plugin state. Their examples must
+    # carry explicit verify-skip markers when listed here.
     "docs/getting-started.md",
     "docs/quickstart.md",
-
-    # ───── Agent + mascot manuals ─────
-    # These pages cite commands but most blocks are `makakoo plugin info`
-    # and similar read-only checks — safe to verify.
-    "docs/agents/agent-browser-harness.md",
-    "docs/agents/agent-knowledge-extractor.md",
-    "docs/agents/agent-multimodal-knowledge.md",
-    "docs/mascots/pixel.md",
-    "docs/mascots/cinder.md",
-    "docs/mascots/ziggy.md",
-    "docs/mascots/glimmer.md",
-    "docs/mascots/olibia.md",
 ]

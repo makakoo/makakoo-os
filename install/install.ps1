@@ -77,7 +77,10 @@ Then re-run this installer.
 $arch = $env:PROCESSOR_ARCHITECTURE
 switch ($arch) {
     "AMD64" { $target = "x86_64-pc-windows-msvc" }
-    "ARM64" { $target = "aarch64-pc-windows-msvc" }
+    "ARM64" {
+        Write-Error "Windows ARM64 is not published yet. Use Windows x64/AMD64, macOS arm64, or Linux arm64."
+        exit 1
+    }
     default { Write-Error "unsupported arch: $arch"; exit 1 }
 }
 

@@ -55,6 +55,10 @@ jobs:
       # talks to it without any process-session plumbing.
       - name: Test workspace (macOS + Windows)
         if: matrix.os != 'ubuntu-latest'
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo test --workspace --locked
 
       - name: Test workspace (Ubuntu with keyring session)

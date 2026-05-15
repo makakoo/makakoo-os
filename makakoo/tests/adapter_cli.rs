@@ -9,12 +9,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn makakoo_bin() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_makakoo") {
+        return PathBuf::from(path);
+    }
+
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     if path.ends_with("deps") {
         path.pop();
     }
-    path.join("makakoo")
+    path.join(if cfg!(windows) {
+        "makakoo.exe"
+    } else {
+        "makakoo"
+    })
 }
 
 fn new_scratch() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -209,9 +217,7 @@ fn migrate_config_emits_toml_per_provider() {
     assert!(body.contains("legacy-subprocess"));
     assert!(body.contains("legacy-http"));
 
-    assert!(adapters
-        .join("registered/legacy-subprocess.toml")
-        .is_file());
+    assert!(adapters.join("registered/legacy-subprocess.toml").is_file());
     assert!(adapters.join("registered/legacy-http.toml").is_file());
 }
 
@@ -380,7 +386,10 @@ sandbox_profile = "network-io"
             "--allow-unsigned",
         ],
     );
-    assert!(!out.status.success(), "must exit nonzero on per-adapter fail");
+    assert!(
+        !out.status.success(),
+        "must exit nonzero on per-adapter fail"
+    );
     let body = String::from_utf8_lossy(&out.stdout);
     assert!(body.contains("good"), "good missing: {body}");
     assert!(body.contains("bad"), "bad missing: {body}");

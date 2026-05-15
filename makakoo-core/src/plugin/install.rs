@@ -587,7 +587,13 @@ fn run_install_script(
         Ok(existing) => format!("{}:{existing}", shim_dir.display()),
         Err(_) => shim_dir.display().to_string(),
     };
-    let mut cmd = Command::new("sh");
+    let makakoo_bin = std::env::current_exe().ok();
+    let shell = if invoke_as_file && script_wants_bash(&resolved_script) {
+        "bash"
+    } else {
+        "sh"
+    };
+    let mut cmd = Command::new(shell);
     if invoke_as_file {
         cmd.arg(&resolved_script);
     } else {
@@ -598,6 +604,12 @@ fn run_install_script(
         .env("MAKAKOO_PLUGIN_DIR", plugin_dir)
         .env("MAKAKOO_HOME", makakoo_home)
         .env("MAKAKOO_BIN_DIR", &shim_dir)
+        .env(
+            "MAKAKOO_BIN",
+            makakoo_bin
+                .as_deref()
+                .unwrap_or_else(|| Path::new("makakoo")),
+        )
         .env("PATH", path)
         .output()
         .map_err(|source| InstallError::Io {
@@ -615,6 +627,14 @@ fn run_install_script(
         });
     }
     Ok(())
+}
+
+fn script_wants_bash(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|body| body.lines().next().map(str::to_string))
+        .map(|first| first.contains("bash"))
+        .unwrap_or(false)
 }
 
 /// sha256 of the raw plugin.toml bytes — used as the manifest_hash in
