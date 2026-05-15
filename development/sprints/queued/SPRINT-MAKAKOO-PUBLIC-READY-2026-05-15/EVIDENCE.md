@@ -171,3 +171,18 @@ Build logs: https://app.netlify.com/projects/makakoo-os-prelaunch/deploys/6a0741
 - Fix applied: normalize path separators to `/` before allowlist matching.
 - Local proof:
   - `cargo test -p makakoo --test contract_no_harveyos_refs` PASS (`1` test)
+
+## Windows workspace-test unblock — 2026-05-15
+
+- GitHub CI run `25932083441` passed Ubuntu/macOS tests and failed Windows `cargo test --workspace --locked` in `makakoo-core --lib`:
+  - path-string assertions used `/` while Windows rendered `\` in destroy and upgrade tests.
+  - `[install].unix` script tests expected Unix shell behavior on Windows even though production intentionally only runs them on Unix.
+  - supervisor shutdown waited full `SHUTDOWN_GRACE` on Windows because Unix SIGTERM/SIGKILL code was cfg-gated and no cross-platform kill path ran.
+- Escalated to Lope Team per rule; both `claude` and `opencode` timed out at `90s`.
+- Fix applied:
+  - Normalize path-string assertions in unit tests.
+  - Gate Unix-only plugin install-script tests with `#[cfg(unix)]`.
+  - Use `child.start_kill()` on non-Unix shutdown, and as the post-grace kill fallback on Unix.
+- Local proof:
+  - `cargo test -p makakoo-core --lib` PASS (`1106` passed, `1` ignored)
+  - Targeted regressions PASS: destroy restore path, plugin install script success/failure, cargo path overrides, supervisor shutdown grace.

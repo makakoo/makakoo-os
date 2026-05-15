@@ -84,9 +84,8 @@ pub fn spawn_gateway(spec: &GatewayLaunchSpec) -> Result<Child> {
         cmd.current_dir(dir);
     }
     cmd.kill_on_drop(true);
-    cmd.spawn().map_err(|e| {
-        MakakooError::Internal(format!("spawn gateway '{}': {e}", spec.program))
-    })
+    cmd.spawn()
+        .map_err(|e| MakakooError::Internal(format!("spawn gateway '{}': {e}", spec.program)))
 }
 
 /// Periodic task that snapshots the supervisor state to status.json
@@ -197,20 +196,23 @@ pub async fn run_gateway_watcher(
             }
             _ = shutdown.wait() => {
                 let pid = child.id();
-                if let Some(pid) = pid {
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
-                    }
-                }
-                let exited = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
-                if exited.is_err() {
+                #[cfg(unix)]
+                {
                     if let Some(pid) = pid {
-                        #[cfg(unix)]
                         unsafe {
-                            libc::kill(pid as i32, libc::SIGKILL);
+                            libc::kill(pid as i32, libc::SIGTERM);
                         }
                     }
+                    let exited = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
+                    if exited.is_err() {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = pid;
+                    let _ = child.start_kill();
                     let _ = child.wait().await;
                 }
                 let mut inner = handle.lock().unwrap();
@@ -386,7 +388,10 @@ mod tests {
 
         {
             let inner = h.lock().unwrap();
-            assert!(inner.restart.count() >= 1, "expected at least one crash recorded");
+            assert!(
+                inner.restart.count() >= 1,
+                "expected at least one crash recorded"
+            );
         }
 
         trigger.fire();

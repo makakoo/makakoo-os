@@ -62,8 +62,7 @@ impl UpgradeAction {
 }
 
 fn shell_quote(s: &str) -> String {
-    if s
-        .chars()
+    if s.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.' | '=' | ':'))
     {
         s.to_string()
@@ -81,10 +80,7 @@ pub enum UpgradeError {
     InsecureUrl { url: String },
 
     #[error("subprocess failed: {label} (exit code {code:?})")]
-    SpawnFailed {
-        label: String,
-        code: Option<i32>,
-    },
+    SpawnFailed { label: String, code: Option<i32> },
 
     #[error("upgrade error: {0}")]
     Other(String),
@@ -190,10 +186,7 @@ pub fn plan_upgrade(
             Ok(vec![UpgradeAction {
                 label: format!("curl-pipe install from {install_script_url}"),
                 program: "sh".to_string(),
-                args: vec![
-                    "-c".into(),
-                    format!("curl -fsSL {install_script_url} | sh"),
-                ],
+                args: vec!["-c".into(), format!("curl -fsSL {install_script_url} | sh")],
             }])
         }
     }
@@ -266,6 +259,10 @@ mod tests {
         "https://makakoo.com/install.sh"
     }
 
+    fn normalize_path_arg(s: &str) -> String {
+        s.replace('\\', "/")
+    }
+
     #[test]
     fn cargo_default_uses_git() {
         std::env::remove_var("MAKAKOO_SOURCE_PATH");
@@ -290,8 +287,8 @@ mod tests {
         let actions = plan_upgrade(&cargo(), BinaryTarget::Both, override_src, url()).unwrap();
         assert_eq!(actions.len(), 2);
         assert!(actions[0].args.contains(&"--path".to_string()));
-        assert_eq!(actions[0].args[2], "/repo/makakoo");
-        assert_eq!(actions[1].args[2], "/repo/makakoo-mcp");
+        assert_eq!(normalize_path_arg(&actions[0].args[2]), "/repo/makakoo");
+        assert_eq!(normalize_path_arg(&actions[1].args[2]), "/repo/makakoo-mcp");
     }
 
     #[test]
@@ -299,7 +296,7 @@ mod tests {
         std::env::set_var("MAKAKOO_SOURCE_PATH", "/from/env");
         let actions = plan_upgrade(&cargo(), BinaryTarget::Both, None, url()).unwrap();
         std::env::remove_var("MAKAKOO_SOURCE_PATH");
-        assert_eq!(actions[0].args[2], "/from/env/makakoo");
+        assert_eq!(normalize_path_arg(&actions[0].args[2]), "/from/env/makakoo");
     }
 
     #[test]
@@ -308,7 +305,7 @@ mod tests {
         let override_src = Some(CargoSource::LocalPath(PathBuf::from("/from/arg")));
         let actions = plan_upgrade(&cargo(), BinaryTarget::Both, override_src, url()).unwrap();
         std::env::remove_var("MAKAKOO_SOURCE_PATH");
-        assert_eq!(actions[0].args[2], "/from/arg/makakoo");
+        assert_eq!(normalize_path_arg(&actions[0].args[2]), "/from/arg/makakoo");
     }
 
     #[test]
@@ -367,7 +364,11 @@ mod tests {
         let action = UpgradeAction {
             label: "test".into(),
             program: "cargo".into(),
-            args: vec!["install".into(), "--path".into(), "/path with spaces".into()],
+            args: vec![
+                "install".into(),
+                "--path".into(),
+                "/path with spaces".into(),
+            ],
         };
         let rendered = action.render();
         assert!(rendered.contains("'/path with spaces'"));
@@ -387,14 +388,9 @@ mod tests {
     fn dry_run_does_not_spawn() {
         std::env::remove_var("MAKAKOO_SOURCE_PATH");
         let mut count = 0;
-        let actions = run_upgrade(
-            &cargo(),
-            BinaryTarget::Both,
-            None,
-            url(),
-            true,
-            |_| count += 1,
-        )
+        let actions = run_upgrade(&cargo(), BinaryTarget::Both, None, url(), true, |_| {
+            count += 1
+        })
         .unwrap();
         assert_eq!(actions.len(), 2);
         assert_eq!(count, 2);

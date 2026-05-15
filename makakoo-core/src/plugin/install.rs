@@ -1250,6 +1250,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
     }
 
     #[test]
+    #[cfg(unix)]
     fn install_runs_install_script_and_env_is_set() {
         // Plugin manifest declares an [install].unix line that writes a
         // marker file using $MAKAKOO_PLUGIN_DIR. Proves the script runs
@@ -1264,7 +1265,6 @@ tasks = [{ name = "dream", interval = "3600s" }]
         assert!(body.contains("ran"));
     }
 
-    #[test]
     /// Regression: a bare filename in `[install].unix = "install.sh"`
     /// must be resolved against the plugin dir, not looked up on PATH.
     /// `sh -c "install.sh"` would otherwise fail with "command not found"
@@ -1330,6 +1330,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
     }
 
     #[test]
+    #[cfg(unix)]
     fn install_script_failure_bubbles_up_as_error() {
         let extras = "\n[install]\nunix = \"exit 7\"\n";
         let (_fixture, url, tag, _sha) = seed_plugin_bare_repo("fail-plugin", extras);

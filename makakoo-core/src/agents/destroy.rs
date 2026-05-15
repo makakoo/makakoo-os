@@ -129,21 +129,18 @@ pub fn destroy_slot(
     // variant (secret_ref + app_token_ref + signing_secret_ref +
     // verify_token_ref + access_token_ref + password_ref +
     // refresh_token_ref + client_secret_ref).
-    let toml_body = std::fs::read_to_string(&toml_path).map_err(|e| {
-        DestroyError::SlotNotFound {
+    let toml_body =
+        std::fs::read_to_string(&toml_path).map_err(|e| DestroyError::SlotNotFound {
             slot_id: format!("could not read slot TOML: {e}"),
             path: toml_path.clone(),
-        }
-    })?;
+        })?;
     let detected_secrets = scan_secret_refs(&toml_body);
 
     // Move the TOML.
     let archived_toml = dst.join(format!("{slot_id}.toml"));
-    std::fs::rename(&toml_path, &archived_toml).map_err(|e| {
-        DestroyError::SlotNotFound {
-            slot_id: format!("could not move slot TOML: {e}"),
-            path: toml_path.clone(),
-        }
+    std::fs::rename(&toml_path, &archived_toml).map_err(|e| DestroyError::SlotNotFound {
+        slot_id: format!("could not move slot TOML: {e}"),
+        path: toml_path.clone(),
     })?;
 
     // Always create `<archive>/data/`. If the source data dir
@@ -154,19 +151,15 @@ pub fn destroy_slot(
     let data_dst = dst.join("data");
     let data_src = slot_data_dir(makakoo_home, slot_id);
     let archived_data_dir = if data_src.exists() {
-        std::fs::rename(&data_src, &data_dst).map_err(|e| {
-            DestroyError::SlotNotFound {
-                slot_id: format!("could not move slot data dir: {e}"),
-                path: data_src.clone(),
-            }
+        std::fs::rename(&data_src, &data_dst).map_err(|e| DestroyError::SlotNotFound {
+            slot_id: format!("could not move slot data dir: {e}"),
+            path: data_src.clone(),
         })?;
         Some(data_dst.clone())
     } else {
-        std::fs::create_dir_all(&data_dst).map_err(|e| {
-            DestroyError::SlotNotFound {
-                slot_id: format!("could not create empty data archive: {e}"),
-                path: data_dst.clone(),
-            }
+        std::fs::create_dir_all(&data_dst).map_err(|e| DestroyError::SlotNotFound {
+            slot_id: format!("could not create empty data archive: {e}"),
+            path: data_dst.clone(),
         })?;
         None
     };
@@ -211,7 +204,11 @@ pub fn scan_secret_refs(toml_body: &str) -> Vec<String> {
                 // don't match `inline_secret_ref` against
                 // `secret_ref`).
                 if pos > 0
-                    && !trimmed[..pos].chars().last().map(char::is_whitespace).unwrap_or(true)
+                    && !trimmed[..pos]
+                        .chars()
+                        .last()
+                        .map(char::is_whitespace)
+                        .unwrap_or(true)
                 {
                     continue;
                 }
@@ -262,9 +259,7 @@ pub fn render_restore_one_liner(outcome: &DestroyOutcome, makakoo_home: &Path) -
     let cfg = makakoo_home.join("config/agents").display().to_string();
     if outcome.archived_data_dir.is_some() {
         let data = slot_data_dir(makakoo_home, slot).display().to_string();
-        format!(
-            "to restore: mv {archive}/{slot}.toml {cfg}/ && mv {archive}/data {data}"
-        )
+        format!("to restore: mv {archive}/{slot}.toml {cfg}/ && mv {archive}/data {data}")
     } else {
         format!("to restore: mv {archive}/{slot}.toml {cfg}/")
     }
@@ -322,7 +317,10 @@ mod tests {
         write_slot(tmp.path(), "harveychat", "slot_id = \"harveychat\"\n");
         let err = destroy_slot(tmp.path(), "harveychat", false, 1700000002).unwrap_err();
         assert!(matches!(err, DestroyError::HarveychatProtected));
-        assert!(slot_path(tmp.path(), "harveychat").exists(), "TOML preserved");
+        assert!(
+            slot_path(tmp.path(), "harveychat").exists(),
+            "TOML preserved"
+        );
     }
 
     #[test]
@@ -350,7 +348,10 @@ mod tests {
         fs::create_dir_all(&pre).unwrap();
         let err = destroy_slot(tmp.path(), "secretary", false, 1700000005).unwrap_err();
         assert!(matches!(err, DestroyError::ArchiveExists { .. }));
-        assert!(slot_path(tmp.path(), "secretary").exists(), "TOML preserved on collision");
+        assert!(
+            slot_path(tmp.path(), "secretary").exists(),
+            "TOML preserved on collision"
+        );
     }
 
     #[test]
@@ -360,7 +361,10 @@ mod tests {
 secret_ref = "agent/secretary/telegram-main/bot_token"
 "#;
         let v = scan_secret_refs(body);
-        assert_eq!(v, vec!["agent/secretary/telegram-main/bot_token".to_string()]);
+        assert_eq!(
+            v,
+            vec!["agent/secretary/telegram-main/bot_token".to_string()]
+        );
     }
 
     #[test]
@@ -404,7 +408,10 @@ secret_ref = "real"
 inline_secret_dev = "should-not-match"
 "#;
         let v = scan_secret_refs(body);
-        assert!(v.is_empty(), "inline_secret_dev must not match secret_ref scan; got {v:?}");
+        assert!(
+            v.is_empty(),
+            "inline_secret_dev must not match secret_ref scan; got {v:?}"
+        );
     }
 
     #[test]
@@ -439,16 +446,15 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
             slot_id: "secretary".into(),
             archive_dir: PathBuf::from("/m/archive/agents/secretary-1700000000"),
             archived_toml: PathBuf::from("/m/archive/agents/secretary-1700000000/secretary.toml"),
-            archived_data_dir: Some(PathBuf::from(
-                "/m/archive/agents/secretary-1700000000/data",
-            )),
+            archived_data_dir: Some(PathBuf::from("/m/archive/agents/secretary-1700000000/data")),
             detected_secrets: vec![],
         };
         let line = render_restore_one_liner(&outcome, Path::new("/m"));
+        let normalized = line.replace('\\', "/");
         assert!(line.contains("mv "));
-        assert!(line.contains("/m/archive/agents/secretary-1700000000/secretary.toml"));
-        assert!(line.contains("/m/config/agents/"));
-        assert!(line.contains("/m/archive/agents/secretary-1700000000/data"));
+        assert!(normalized.contains("/m/archive/agents/secretary-1700000000/secretary.toml"));
+        assert!(normalized.contains("/m/config/agents/"));
+        assert!(normalized.contains("/m/archive/agents/secretary-1700000000/data"));
     }
 
     #[test]
@@ -464,8 +470,9 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
             detected_secrets: vec![],
         };
         let line = render_restore_one_liner(&outcome, Path::new("/m"));
+        let normalized = line.replace('\\', "/");
         assert!(line.contains("mv "));
-        assert!(line.contains("/m/archive/agents/secretary-1700000000/secretary.toml"));
+        assert!(normalized.contains("/m/archive/agents/secretary-1700000000/secretary.toml"));
         assert!(
             !line.contains("data"),
             "no data restore arm should appear; got: {line}"
