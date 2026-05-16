@@ -10,6 +10,13 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-16
+
+### Fixed
+
+- Made `makakoo upgrade` treat an already-current package-manager no-op as a successful up-to-date result instead of exiting with a scary warning.
+- Made `makakoo upgrade --method brew` reuse the detected Homebrew prefix when the current install is already Homebrew, so forced dry-runs report `/usr/local` vs `/opt/homebrew` correctly.
+
 ## [0.1.7] - 2026-05-16
 
 ### Added

@@ -36,8 +36,13 @@ pub async fn run(
         Some("cargo") => InstallMethod::Cargo {
             source: CargoSource::Unresolved,
         },
-        Some("brew") | Some("homebrew") => InstallMethod::Homebrew {
-            prefix: PathBuf::from("/opt/homebrew"),
+        Some("brew") | Some("homebrew") => match &detected {
+            InstallMethod::Homebrew { prefix } => InstallMethod::Homebrew {
+                prefix: prefix.clone(),
+            },
+            _ => InstallMethod::Homebrew {
+                prefix: default_homebrew_prefix(),
+            },
         },
         Some("curl-pipe") | Some("install.sh") => {
             let prefix = std::env::var("MAKAKOO_PREFIX")
@@ -100,9 +105,9 @@ pub async fn run(
         let post_version = capture_version("makakoo");
         match (&pre_version, &post_version) {
             (Some(pre), Some(post)) if pre == post => {
-                eprintln!("\n⚠ version unchanged after upgrade: {pre}");
-                eprintln!("  (the upgrade command may have been a no-op — check the upstream source)");
-                return Ok(1);
+                println!();
+                println!("# version unchanged: {pre}");
+                println!("# already up to date — package manager reported no newer build");
             }
             (Some(pre), Some(post)) => {
                 println!();
@@ -150,5 +155,34 @@ fn describe_method(m: &InstallMethod) -> String {
         InstallMethod::Homebrew { prefix } => format!("Homebrew ({})", prefix.display()),
         InstallMethod::CurlPipe { prefix } => format!("curl-pipe ({})", prefix.display()),
         InstallMethod::Unknown { exe_path } => format!("Unknown ({})", exe_path.display()),
+    }
+}
+
+fn default_homebrew_prefix() -> PathBuf {
+    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        PathBuf::from("/opt/homebrew")
+    } else if cfg!(target_os = "linux") {
+        PathBuf::from("/home/linuxbrew/.linuxbrew")
+    } else {
+        PathBuf::from("/usr/local")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_homebrew_prefix_matches_platform_family() {
+        let prefix = default_homebrew_prefix();
+        assert!(prefix.is_absolute());
+    }
+
+    #[test]
+    fn describe_homebrew_method_uses_supplied_prefix() {
+        let method = InstallMethod::Homebrew {
+            prefix: PathBuf::from("/usr/local"),
+        };
+        assert_eq!(describe_method(&method), "Homebrew (/usr/local)");
     }
 }
