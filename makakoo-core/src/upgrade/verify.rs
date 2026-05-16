@@ -17,19 +17,13 @@ pub fn capture_version(binary: &str) -> Option<String> {
     stdout.lines().next().map(|s| s.trim().to_string())
 }
 
-/// Render the platform-specific daemon-restart command.
+/// Render the daemon-restart command users can copy-paste.
 ///
-/// v1 of `makakoo upgrade` does not auto-restart the daemon — see
-/// PHASE-0-RESULTS.md P0.3. This helper renders the one-line manual
-/// command the user can copy-paste.
+/// `makakoo daemon restart` intentionally re-registers the OS service
+/// descriptor before starting it, so upgrades installed into a new Homebrew
+/// Cellar/prefix path do not leave launchd/systemd pointing at the old binary.
 pub fn daemon_restart_hint() -> String {
-    if cfg!(target_os = "macos") {
-        "launchctl kickstart -k gui/$UID/com.traylinx.makakoo".into()
-    } else if cfg!(target_os = "linux") {
-        "systemctl --user restart makakoo".into()
-    } else {
-        "(no daemon-restart command for this platform — restart manually if needed)".into()
-    }
+    "makakoo daemon restart".into()
 }
 
 #[cfg(test)]
@@ -38,7 +32,10 @@ mod tests {
 
     #[test]
     fn capture_version_returns_none_for_missing_binary() {
-        assert_eq!(capture_version("/definitely/not/a/binary/makakoo-12345"), None);
+        assert_eq!(
+            capture_version("/definitely/not/a/binary/makakoo-12345"),
+            None
+        );
     }
 
     #[test]
@@ -48,16 +45,7 @@ mod tests {
     }
 
     #[test]
-    fn macos_hint_uses_launchctl() {
-        if cfg!(target_os = "macos") {
-            assert!(daemon_restart_hint().contains("launchctl"));
-        }
-    }
-
-    #[test]
-    fn linux_hint_uses_systemctl() {
-        if cfg!(target_os = "linux") {
-            assert!(daemon_restart_hint().contains("systemctl"));
-        }
+    fn restart_hint_uses_first_class_cli_command() {
+        assert_eq!(daemon_restart_hint(), "makakoo daemon restart");
     }
 }

@@ -4,10 +4,9 @@
 //! the running binary's path, dispatches to the matching update command,
 //! and helps the caller capture before/after version for verification.
 //!
-//! v1 deliberately does NOT auto-restart the daemon — the existing
-//! `makakoo daemon` surface only has install/uninstall/status/logs/run,
-//! no restart. The CLI verb prints a platform-specific restart hint
-//! instead. Adding `daemon restart` is queued as a follow-up sprint.
+//! v1 deliberately does NOT auto-restart the daemon. The CLI verb prints
+//! `makakoo daemon restart`, which re-registers the daemon descriptor and
+//! starts it so upgraded binary paths are picked up safely.
 
 pub mod detect;
 pub mod dispatch;

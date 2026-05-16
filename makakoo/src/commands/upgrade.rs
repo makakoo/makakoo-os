@@ -2,7 +2,7 @@
 //!
 //! SPRINT-MAKAKOO-UPGRADE-VERB. Detects install method, dispatches the
 //! matching update command, prints version delta, surfaces a manual
-//! daemon-restart command (v1 doesn't auto-restart — see Phase 0).
+//! `makakoo daemon restart` command (the upgrade verb itself still does not auto-restart).
 
 use std::path::PathBuf;
 use std::process::Command;

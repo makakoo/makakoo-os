@@ -85,12 +85,12 @@ If the binary lives somewhere the detector doesn't recognize (custom prefix, man
 
 ## Daemon restart
 
-The Makakoo daemon (auto-start service registered via `makakoo daemon install`) keeps running with the old binary loaded into memory until you restart it. After a successful upgrade, `makakoo upgrade` prints the platform-specific command to do this:
+The Makakoo daemon (auto-start service registered via `makakoo daemon install`) keeps running with the old binary loaded into memory until you restart it. After a successful upgrade, `makakoo upgrade` prints the restart command to do this:
 
-- **macOS:** `launchctl kickstart -k gui/$UID/com.traylinx.makakoo`
-- **Linux (systemd):** `systemctl --user restart makakoo`
+- **macOS:** `makakoo daemon restart`
+- **Linux (systemd):** `makakoo daemon restart`
 
-v1 of the verb does NOT auto-restart the daemon — copy-paste the printed command. A future sprint will add `makakoo daemon restart` as a first-class subcommand.
+`makakoo upgrade` does not auto-restart the daemon automatically. Run the printed `makakoo daemon restart` command if a daemon is installed or running; it re-registers the service descriptor so Homebrew/installer path changes are picked up.
 
 ## MCP child staleness
 

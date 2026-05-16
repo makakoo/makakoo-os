@@ -49,8 +49,7 @@ Three failure modes, all from the upgrade dispatcher:
 After any successful upgrade:
 
 ```sh
-launchctl kickstart -k gui/$UID/com.traylinx.makakoo   # macOS
-systemctl --user restart makakoo                         # Linux (systemd)
+makakoo daemon restart   # macOS / Linux / Windows
 ```
 
 Then **restart any infected CLI session** so it spawns a fresh `makakoo-mcp` against the new binary. Without a CLI restart, your hosts keep talking to the old MCP child forever.

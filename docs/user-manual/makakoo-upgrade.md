@@ -53,14 +53,14 @@ Auto-detected from the running binary's path (override with `--method`):
 
 ## Daemon restart
 
-The Makakoo daemon (registered via `makakoo daemon install`) keeps the old binary mapped into memory until it's restarted. v1 of the verb does NOT auto-restart; instead it prints the platform-specific command:
+The Makakoo daemon (registered via `makakoo daemon install`) keeps the old binary mapped into memory until it's restarted. The verb does not auto-restart; instead it prints the restart command:
 
 | Platform | Command |
 |---|---|
-| macOS | `launchctl kickstart -k gui/$UID/com.traylinx.makakoo` |
-| Linux (systemd) | `systemctl --user restart makakoo` |
+| macOS | `makakoo daemon restart` |
+| Linux (systemd) | `makakoo daemon restart` |
 
-A first-class `makakoo daemon restart` is queued for a follow-up sprint.
+`makakoo daemon restart` is first-class and re-registers the daemon descriptor before starting it, so upgraded binary paths are picked up.
 
 ## MCP child staleness
 
@@ -102,7 +102,7 @@ makakoo upgrade --only-mcp
 
 ## Out of v1 scope (queued)
 
-- `makakoo daemon restart` first-class subcommand
+- `makakoo daemon restart` re-registers and restarts the daemon after binary upgrades
 - Upgrade rollback if a mid-flight action fails
 - Beta-channel / release-train selection
 - Scheduled auto-upgrade (deliberately omitted — explicit consent is required every time)

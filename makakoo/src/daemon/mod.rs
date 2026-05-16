@@ -18,6 +18,7 @@ use clap::Subcommand;
 use tracing::{error, info};
 
 pub mod install;
+pub mod restart;
 pub mod status;
 pub mod uninstall;
 pub mod watchdog;
@@ -38,6 +39,8 @@ pub enum DaemonCmd {
     Uninstall,
     /// Show daemon status (running / installed / not installed).
     Status,
+    /// Restart the daemon service so it picks up the current makakoo binary.
+    Restart,
     /// Tail the daemon log file.
     Logs {
         /// How many lines to tail from the end of the log.
@@ -55,6 +58,7 @@ pub async fn dispatch(cmd: DaemonCmd) -> Result<()> {
         DaemonCmd::Install => install::run().await,
         DaemonCmd::Uninstall => uninstall::run().await,
         DaemonCmd::Status => status::run().await,
+        DaemonCmd::Restart => restart::run().await,
         DaemonCmd::Logs { lines } => status::tail_logs(lines).await,
         DaemonCmd::Run => run_forever().await,
     }

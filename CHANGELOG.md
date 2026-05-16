@@ -10,6 +10,17 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-16
+
+### Added
+
+- Added `makakoo daemon restart` as a first-class command. It re-registers the daemon service descriptor before starting it so Homebrew/curl-pipe upgrades do not leave launchd/systemd pointing at an old binary path.
+
+### Fixed
+
+- Fixed `makakoo upgrade` daemon restart guidance to print `makakoo daemon restart` instead of stale platform-specific commands or documentation-only commands.
+- Updated daemon/upgrade documentation so public beta users get one working restart command after upgrades.
+
 ## [0.1.6] - 2026-05-15
 
 ### Fixed
@@ -156,12 +167,9 @@ that picks the right upgrade path instead of memorizing
   parsing of the existing `version` command output — no new `--json`
   flag in v1.
 - **Daemon restart hint** at `makakoo-core/src/upgrade/verify.rs` —
-  v1 does NOT auto-restart the daemon (the existing `makakoo daemon`
-  surface lacks a `restart` subcommand). Instead, the verb prints a
-  platform-specific copy-pasteable command after a successful upgrade:
-  - macOS: `launchctl kickstart -k gui/$UID/com.traylinx.makakoo`
-  - Linux (systemd): `systemctl --user restart makakoo`
-  Adding a real `daemon restart` is queued as a follow-up sprint.
+  initial v0.1.3 behavior printed platform-specific commands after a
+  successful upgrade. This was superseded in v0.1.7 by the first-class
+  `makakoo daemon restart` command.
 
 Test counts: 1893 passed / 0 failed / 5 ignored (workspace), +35 net
 new tests across `upgrade::detect`, `upgrade::dispatch`,

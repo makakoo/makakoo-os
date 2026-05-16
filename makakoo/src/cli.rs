@@ -135,7 +135,7 @@ pub enum Commands {
     /// Self-upgrade the makakoo + makakoo-mcp binaries by detecting
     /// the install method (cargo / homebrew / curl-pipe) and running
     /// the matching update command. Prints the version delta and a
-    /// platform-specific daemon-restart hint. v1 does not auto-restart
+    /// `makakoo daemon restart` hint. The upgrade verb does not auto-restart
     /// the daemon — copy-paste the printed command if needed.
     Upgrade {
         /// Print the upgrade plan without spawning anything.
@@ -242,7 +242,7 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Daemon management — install/uninstall/status/logs/run.
+    /// Daemon management — install/uninstall/status/restart/logs/run.
     Daemon {
         #[command(subcommand)]
         cmd: crate::daemon::DaemonCmd,
@@ -2120,6 +2120,17 @@ mod tests {
             assert!(!dry_run);
         } else {
             panic!("expected Distro::Install");
+        }
+    }
+
+    #[test]
+    fn parse_daemon_restart() {
+        let cli = Cli::try_parse_from(["makakoo", "daemon", "restart"]).unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                cmd: crate::daemon::DaemonCmd::Restart,
+            } => {}
+            _ => panic!("expected Daemon::Restart"),
         }
     }
 

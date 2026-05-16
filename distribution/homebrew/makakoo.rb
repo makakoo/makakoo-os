@@ -14,28 +14,28 @@
 class Makakoo < Formula
   desc "Makakoo OS — autonomous cognitive extension for any AI CLI"
   homepage "https://makakoo.com"
-  version "0.1.6"
+  version "0.1.7"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-apple-darwin.tar.gz"
-      sha256 "58862aba6b705aa99a7f0e918217ef40e66366d0710b23ecf4bbd9e99f6b928e"
+      sha256 "REPLACE_AT_RELEASE_AARCH64_APPLE_DARWIN"
     end
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-apple-darwin.tar.gz"
-      sha256 "e808725d98cbae9b60d70583d2c4af71162a841fce455cf88b436a85af2dbe3b"
+      sha256 "REPLACE_AT_RELEASE_X86_64_APPLE_DARWIN"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "8b972197031f8c88415626e5b2d1878feb55c8393214f493973da13b78a2f7e9"
+      sha256 "REPLACE_AT_RELEASE_X86_64_UNKNOWN_LINUX_GNU"
     end
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "bcd268d68a2927ee797b4b2a539db813e252fcf150614ecda7ae44f38ad47d2b"
+      sha256 "REPLACE_AT_RELEASE_AARCH64_UNKNOWN_LINUX_GNU"
     end
   end
 
@@ -50,6 +50,6 @@ class Makakoo < Formula
   end
 
   test do
-    assert_match "makakoo 0.1.6", shell_output("#{bin}/makakoo --version")
+    assert_match "makakoo 0.1.7", shell_output("#{bin}/makakoo --version")
   end
 end
