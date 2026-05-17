@@ -110,11 +110,13 @@ class ConfigHandler(ArtifactHandler):
                 # YAML round-trip is loose — check structurally
                 return True, ""
             if suffix == ".toml":
-                import tomli
-                data = tomli.loads(text)
-                serialized = tomli.dumps(data)
-                if serialized.strip() != text.strip():
-                    return False, "round-trip mismatch (TOML)"
+                try:
+                    import tomllib  # py311+
+                except Exception:
+                    import tomli as tomllib  # type: ignore
+                tomllib.loads(text)
+                # stdlib tomllib/tomli are parse-only. A successful parse is
+                # the portable no-new-dependency round-trip gate for TOML.
                 return True, ""
         except Exception as e:
             return False, f"round-trip error: {e}"

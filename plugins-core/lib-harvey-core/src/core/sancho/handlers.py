@@ -25,7 +25,7 @@ from typing import Callable, Dict, Optional
 
 log = logging.getLogger("harvey.sancho.handlers")
 
-HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
+HARVEY_HOME = os.environ.get("MAKAKOO_HOME") or os.environ.get("HARVEY_HOME") or os.path.expanduser("~/MAKAKOO")
 
 HEARTBEAT_PATH = Path(HARVEY_HOME) / "HEARTBEAT.md"
 HEARTBEAT_STATE_PATH = Path(HARVEY_HOME) / "data" / "sancho_heartbeat_state.json"
@@ -33,6 +33,11 @@ HEARTBEAT_OK_TOKEN = "HEARTBEAT_OK"
 HEARTBEAT_LLM_BASE_URL = os.environ.get("AIL_BASE_URL", "http://localhost:18080/v1")
 HEARTBEAT_LLM_MODEL = os.environ.get("SANCHO_HEARTBEAT_MODEL", "auto")
 HEARTBEAT_LLM_TIMEOUT = int(os.environ.get("SANCHO_HEARTBEAT_TIMEOUT", "60"))
+
+
+def _makakoo_home() -> Path:
+    """Canonical Makakoo home, honoring public install env vars first."""
+    return Path(os.environ.get("MAKAKOO_HOME") or os.environ.get("HARVEY_HOME") or (Path.home() / "MAKAKOO"))
 
 
 def handle_dream() -> Dict:
@@ -817,9 +822,7 @@ def handle_gym_simplify() -> Dict:
     No eval harness here — only structural analysis of diffs.
     """
     from core.gym.simplify import compute_simplicity_delta, summarize_delta
-    from pathlib import Path
-
-    approved_dir = Path.home() / "MAKAKOO" / "data" / "improvements" / "approved"
+    approved_dir = _makakoo_home() / "data" / "improvements" / "approved"
     if not approved_dir.exists():
         return {"skipped": True, "reason": "no approved dir", "flagged": []}
 
@@ -866,7 +869,9 @@ def handle_gym_eval_run() -> Dict:
     """
     from core.gym.eval_harness import evaluate_skill, save_benchmark_result, DEFAULT_BENCHMARK
 
-    plugins_dir = Path.home() / "MAKAKOO" / "plugins"
+    plugins_dir = _makakoo_home() / "plugins"
+    if not plugins_dir.exists():
+        return {"skipped": True, "reason": f"plugins dir missing: {plugins_dir}", "evaluated": 0}
     mascots = [p for p in plugins_dir.iterdir() if p.name.startswith("mascot-") and p.is_dir()]
 
     results = []
@@ -912,8 +917,9 @@ def handle_gym_polar_fan() -> Dict:
     from core.gym.autoresearch import POLAR_EXPRESS_COEFFS
 
     targets = [
-        Path.home() / "MAKAKOO" / "bootstrap" / "global.md",
-        Path.home() / "MAKAKOO" / "harvey-os" / "SOUL.md",
+        _makakoo_home() / "bootstrap" / "global.md",
+        _makakoo_home() / "AGENTS.md",
+        _makakoo_home() / "CLAUDE.md",
     ]
 
     results = []
@@ -954,14 +960,18 @@ def handle_gym_snapshot() -> Dict:
     from pathlib import Path
     import json, hashlib, datetime
 
-    snap_dir = Path.home() / "MAKAKOO" / "data" / "gym" / "snapshots"
+    snap_dir = _makakoo_home() / "data" / "gym" / "snapshots"
     snap_dir.mkdir(parents=True, exist_ok=True)
 
-    plugins_dir = Path.home() / "MAKAKOO" / "plugins"
+    plugins_dir = _makakoo_home() / "plugins"
+    if not plugins_dir.exists():
+        plugins_dir = _makakoo_home() / "plugins-core"
+    if not plugins_dir.exists():
+        return {"skipped": True, "reason": "plugins dir missing", "mascots": 0, "total_files": 0}
     mascots = [p for p in plugins_dir.iterdir() if p.name.startswith("mascot-") and p.is_dir()]
 
     snapshot = {
-        "timestamp": datetime.datetime.now(_UTC).isoformat(),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "mascots": {},
         "total_skill_files": 0,
     }
@@ -980,7 +990,7 @@ def handle_gym_snapshot() -> Dict:
 
         snapshot["mascots"][mascot.name] = files
 
-    snap_file = snap_dir / f"snapshot_{datetime.datetime.now(_UTC).strftime('%Y%m%d_%H%M%S')}.json"
+    snap_file = snap_dir / f"snapshot_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
     with open(snap_file, "w") as f:
         json.dump(snapshot, f, indent=2)
 
@@ -988,4 +998,34 @@ def handle_gym_snapshot() -> Dict:
         "saved": str(snap_file),
         "mascots": len(snapshot["mascots"]),
         "total_files": snapshot["total_skill_files"],
+    }
+
+
+def handle_gym_cascade() -> Dict:
+    """
+    Nightly GYM cascade.
+
+    Runs the cheap autoresearch-style maintenance passes as one visible
+    rollup so plugin.toml's `gym_cascade` task has a real handler. Heavy
+    hypothesis generation and Lope voting remain on their dedicated tasks.
+    """
+    steps = [
+        ("snapshot", handle_gym_snapshot),
+        ("simplify", handle_gym_simplify),
+        ("polar_fan", handle_gym_polar_fan),
+    ]
+    results = {}
+    errors = {}
+
+    for name, func in steps:
+        try:
+            results[name] = func()
+        except Exception as exc:
+            errors[name] = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "cascade": True,
+        "steps": results,
+        "errors": errors,
+        "ok": not errors,
     }

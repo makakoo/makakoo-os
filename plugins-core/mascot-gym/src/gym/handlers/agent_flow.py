@@ -11,7 +11,6 @@ import json
 import os
 import subprocess
 import urllib.request
-import yaml
 from pathlib import Path
 
 from gym.handlers.base import ArtifactHandler
@@ -53,15 +52,12 @@ class AgentFlowHandler(ArtifactHandler):
 
         # Check for agent flow markers
         if path.suffix in (".yaml", ".yml"):
-            try:
-                data = yaml.safe_load(content)
-                if data and isinstance(data, dict):
-                    keys = set(data.keys())
-                    flow_markers = {"steps", "tools", "agents", "flow", "pipeline", "tasks"}
-                    if keys & flow_markers:
-                        return True
-            except Exception:
-                pass
+            ok, data, _ = self._parse_flow(content, path)
+            if ok and data and isinstance(data, dict):
+                keys = set(data.keys())
+                flow_markers = {"steps", "tools", "agents", "flow", "pipeline", "tasks"}
+                if keys & flow_markers:
+                    return True
         elif path.suffix == ".json":
             try:
                 data = json.loads(content)
@@ -73,8 +69,11 @@ class AgentFlowHandler(ArtifactHandler):
                 pass
         elif path.suffix == ".toml":
             try:
-                import tomli
-                data = tomli.loads(content)
+                try:
+                    import tomllib  # py311+
+                except Exception:
+                    import tomli as tomllib  # type: ignore
+                data = tomllib.loads(content)
                 if isinstance(data, dict):
                     if any(k for k in data.keys() if k in ["agent", "agents", "steps", "flow"]):
                         return True
@@ -101,14 +100,21 @@ class AgentFlowHandler(ArtifactHandler):
         """Parse and return (success, data, error_message)."""
         try:
             if path.suffix in (".yaml", ".yml"):
+                try:
+                    import yaml
+                except Exception as exc:
+                    return False, None, f"PyYAML unavailable: {exc}"
                 data = yaml.safe_load(text)
                 return True, data, ""
             elif path.suffix == ".json":
                 data = json.loads(text)
                 return True, data, ""
             elif path.suffix == ".toml":
-                import tomli
-                data = tomli.loads(text)
+                try:
+                    import tomllib  # py311+
+                except Exception:
+                    import tomli as tomllib  # type: ignore
+                data = tomllib.loads(text)
                 return True, data, ""
         except Exception as e:
             return False, None, str(e)
@@ -157,7 +163,7 @@ class AgentFlowHandler(ArtifactHandler):
             result = subprocess.run(
                 ["makakoo", "flow", "dry-run", str(path)],
                 capture_output=True, text=True, timeout=30,
-                env={**os.environ, "MAKAKOO_HOME": str(Path.home() / "MAKAKOO")}
+                env={**os.environ, "MAKAKOO_HOME": os.environ.get("MAKAKOO_HOME", str(Path.home() / "MAKAKOO"))}
             )
             if result.returncode == 0:
                 return True, 20.0, "dry-run passed"

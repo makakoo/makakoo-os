@@ -33,6 +33,7 @@ from core.sancho.handlers import (
     handle_dynamic_checklist,
     handle_graph_rebuild,
     handle_gym_classify,
+    handle_gym_cascade,
     handle_gym_hypothesize,
     handle_gym_lope_gate,
     handle_gym_eval_run,
@@ -313,6 +314,68 @@ class Sancho:
             gates=GateSystem([
                 time_gate(state, "gym_morning_report", min_hours=23.5),
                 active_hours_gate("06:00", "09:00", task_name="gym_morning_report"),
+            ]),
+            read_only=False,
+            brief=True,
+        ))
+
+        # Harvey's Mascot GYM — autoresearch-style maintenance tasks.
+        # These back the public mascot-gym plugin.toml entries and must be
+        # registered here too for the in-process SANCHO engine.
+        self.registry.register(ProactiveTask(
+            name="gym_eval_run",
+            handler=handle_gym_eval_run,
+            interval_minutes=720,  # 12 hours
+            gates=GateSystem([
+                time_gate(state, "gym_eval_run", min_hours=11.5),
+                active_hours_gate("06:00", "08:00", task_name="gym_eval_run"),
+            ]),
+            read_only=False,
+            brief=True,
+        ))
+
+        self.registry.register(ProactiveTask(
+            name="gym_polar_fan",
+            handler=handle_gym_polar_fan,
+            interval_minutes=360,  # 6 hours
+            gates=GateSystem([
+                time_gate(state, "gym_polar_fan", min_hours=5.5),
+            ]),
+            read_only=True,
+            brief=True,
+        ))
+
+        self.registry.register(ProactiveTask(
+            name="gym_simplify",
+            handler=handle_gym_simplify,
+            interval_minutes=1440,
+            gates=GateSystem([
+                time_gate(state, "gym_simplify", min_hours=23.5),
+                active_hours_gate("09:00", "11:00", task_name="gym_simplify"),
+            ]),
+            read_only=True,
+            brief=True,
+        ))
+
+        self.registry.register(ProactiveTask(
+            name="gym_snapshot",
+            handler=handle_gym_snapshot,
+            interval_minutes=1440,
+            gates=GateSystem([
+                time_gate(state, "gym_snapshot", min_hours=23.5),
+                active_hours_gate("23:00", "23:59", task_name="gym_snapshot"),
+            ]),
+            read_only=False,
+            brief=True,
+        ))
+
+        self.registry.register(ProactiveTask(
+            name="gym_cascade",
+            handler=handle_gym_cascade,
+            interval_minutes=1440,
+            gates=GateSystem([
+                time_gate(state, "gym_cascade", min_hours=23.5),
+                active_hours_gate("22:00", "23:59", task_name="gym_cascade"),
             ]),
             read_only=False,
             brief=True,

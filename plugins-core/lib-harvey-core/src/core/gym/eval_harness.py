@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Optional, Union
-import json, time, re
+import json, time, re, os
 
 # Default benchmark rubric — a pinned set of quality indicators
 # These represent "known-good skill" quality markers.
@@ -30,6 +30,14 @@ import json, time, re
 #
 # Autoreseach benchmark = pinned shard_06542 + evaluate_bpb()
 # GYM benchmark = static rubric applied to persona.md content
+
+def _makakoo_home() -> Path:
+    return Path(os.environ.get("MAKAKOO_HOME") or os.environ.get("HARVEY_HOME") or (Path.home() / "MAKAKOO"))
+
+
+def _eval_cache_path() -> Path:
+    return _makakoo_home() / "data" / "gym" / "eval_cache.json"
+
 
 DEFAULT_BENCHMARK = [
     {
@@ -242,7 +250,7 @@ def load_or_init_benchmark_cache() -> Dict:
     Autoreseach has results.tsv.  GYM has eval_cache.json.
     Both track: tag → score over time.
     """
-    cache_path = Path.home() / "MAKAKOO" / "data" / "gym" / "eval_cache.json"
+    cache_path = _eval_cache_path()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     if cache_path.exists():
         with open(cache_path) as f:
@@ -260,7 +268,7 @@ def save_benchmark_result(benchmark_id: str, result: HarnessResult, tag: str = "
         "timestamp": time.time(),
         **result.to_dict(),
     })
-    cache_path = Path.home() / "MAKAKOO" / "data" / "gym" / "eval_cache.json"
+    cache_path = _eval_cache_path()
     with open(cache_path, "w") as f:
         json.dump(cache, f, indent=2)
 

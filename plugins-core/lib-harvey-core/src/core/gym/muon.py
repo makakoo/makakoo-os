@@ -139,6 +139,7 @@ class MuonAdamW:
             p.data.add_(exp_avg / denom, alpha=-step_size)
 
     def _step_muon(self, group: Dict[str, Any]):
+        torch = _require_torch()
         params = group.get("params", [])
         if not params:
             return
@@ -244,9 +245,23 @@ class MuonAdamW:
         }
 
 
-def _scalar(value: float) -> "torch.Tensor":
+def _require_torch():
+    """Import torch only when the optimizer is actually instantiated/stepped.
+
+    Makakoo ships GYM metadata without a torch dependency. Importing this
+    module must stay quiet on user machines that either lack torch or have a
+    broken optional torch/numpy stack.
+    """
+    try:
+        import torch as _torch
+    except Exception as exc:  # torch can raise non-ImportError during init
+        raise RuntimeError("MuonAdamW requires torch at runtime; importing core.gym.muon does not") from exc
+    return _torch
+
+
+def _scalar(value: float):
     """CPU 0-D tensor — avoids recompilation on value change (train.py pattern)."""
-    import torch
+    torch = _require_torch()
     return torch.tensor(value, dtype=torch.float32, device="cpu")
 
 
@@ -335,10 +350,3 @@ def setup_optimizer(
     for group in opt.param_groups:
         group["initial_lr"] = group["lr"]
     return opt
-
-
-# Minimal torch dependency shim (works without torch installed)
-try:
-    import torch
-except ImportError:
-    torch = None  # type: ignore

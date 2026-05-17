@@ -10,6 +10,20 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-05-17
+
+### Added
+
+- Added the first public Mascot GYM autoresearch loop: fixed eval cache, simplicity scoring, Polar Express constants, Muon optimizer port, universal artifact handlers, and SANCHO maintenance tasks.
+- Added release-readiness smoke tests for lazy Muon imports, GYM task registration, Makakoo-home-aware eval cache writes, optional PyYAML behavior, and `gym_cascade` subprocess dispatch.
+
+### Fixed
+
+- Registered the new GYM SANCHO tasks in the in-process scheduler and added the missing `gym_cascade` handler so plugin task declarations no longer point at dead handlers.
+- Made GYM imports safe on fresh user machines by keeping torch and PyYAML optional until the specific runtime path needs them.
+- Made new GYM paths honor `MAKAKOO_HOME` / `HARVEY_HOME` instead of writing only under `~/MAKAKOO`.
+- Fixed the GYM snapshot handler's UTC timestamp crash and removed a TOML round-trip dependency on non-existent `tomli.dumps`.
+
 ## [0.1.8] - 2026-05-16
 
 ### Fixed
