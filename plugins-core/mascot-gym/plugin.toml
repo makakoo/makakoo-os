@@ -42,6 +42,13 @@ tasks = [
   { name = "mascot_ziggy_doctor",     interval = "86400s", active_hours = [8, 10] },
   { name = "mascot_glimmer_garden",   interval = "86400s", active_hours = [22, 23] },
   { name = "mascot_olibia_weekly",    interval = "604800s", active_hours = [9, 11] },
+
+  # ── Autoreseach-style GYM auto-improvement tasks ─────────────────────
+  { name = "gym_cascade",     interval = "86400s",  active_hours = [22, 24] },
+  { name = "gym_eval_run",    interval = "43200s",  active_hours = [6, 8]   },
+  { name = "gym_polar_fan",  interval = "21600s"                          },
+  { name = "gym_simplify",   interval = "86400s",  active_hours = [9, 11] },
+  { name = "gym_snapshot",   interval = "86400s",  active_hours = [23, 24] },
 ]
 
 [state]
