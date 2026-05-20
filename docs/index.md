@@ -28,14 +28,14 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 │   └── brain/index.md            ✅ Memory system guide
 │
 ├── 💻 User Manual
-│   └── user-manual/index.md      ✅ All CLI commands
+│   └── user-manual/index.md      ✅ All CLI commands, including agent sessions
 │
 ├── 🔌 Plugins
 │   ├── plugins/index.md         ✅ Using plugins
 │   └── plugins/writing.md      ✅ Creating plugins
 │
 ├── 🤖 Agents
-│   └── agents/index.md          ✅ Per-agent user manuals (15 agents)
+│   └── agents/index.md          ✅ Per-agent manuals + Agent Sessions
 │
 ├── 🦊 Mascots
 │   └── mascots/index.md         ✅ Pixel, Cinder, Ziggy, Glimmer, Olibia
@@ -131,6 +131,7 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 | **Superbrain** | FTS5 + vector search + LLM |
 | **SANCHO** | Proactive tasks while you sleep |
 | **Plugins** | 38 built-in, extensible |
+| **Agent Sessions** | Durable child-agent sessions with compact result/log handles |
 | **Capabilities** | Security sandboxing |
 | **Any Model** | Claude, Gemini, GPT, local |
 

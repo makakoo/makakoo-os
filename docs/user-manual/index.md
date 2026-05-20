@@ -13,6 +13,8 @@ for "I want to X" recipes.
 | [Setup wizard](setup-wizard.md) | The 6 sections (persona, brain, cli-agent, terminal, model-provider, infect) walked through end-to-end. |
 | [Write-access grants (`makakoo perms`)](makakoo-perms.md) | Grant / revoke / audit runtime write permissions. |
 | [Multi-bot subagents (`makakoo agent`)](agent.md) | Create, run, and tear down per-transport subagent slots (Telegram / Slack / Discord / WhatsApp / Voice / Email / Web). |
+| [Agent sessions (`makakoo agent-session`)](makakoo-agent-session.md) | Durable child-agent work sessions with compact result handles and verification gates. |
+| [Handle reads (`makakoo handle`)](makakoo-handle.md) | Bounded reads from durable Makakoo handles such as `agent-artifact://...`. |
 | [HarveyChat Cortex Memory](../agents/harveychat-cortex-memory.md) | Configure long-term memory and cross-channel aliases for HarveyChat. |
 
 *(More task-oriented chapters coming — brain sources, adapter
@@ -48,6 +50,8 @@ makakoo <command> [options] [arguments]
 | [adapter](makakoo-adapter.md) | Manage AI adapters |
 | [mcp](makakoo-mcp.md) | MCP server management |
 | [agent](agent.md) | Multi-bot subagents — slot lifecycle + transports (v2.0) |
+| [agent-session](makakoo-agent-session.md) | Durable child-agent sessions — open/eval/read/gate without flooding parent context |
+| [handle](makakoo-handle.md) | Bounded reads from Makakoo handles such as `agent-artifact://...` |
 
 ## Global Options
 
@@ -95,6 +99,22 @@ makakoo plugin update
 makakoo plugin disable my-plugin
 makakoo plugin enable my-plugin
 ```
+
+### Agent sessions
+
+```bash
+# Create a durable child-agent work record
+makakoo agent-session open --name repo-audit --role explore --task "Inspect plugin install flow" --workspace .
+
+# Complete sync v1 evaluation and read only the evidence section
+makakoo agent-session eval repo-audit --wait
+makakoo agent-session read repo-audit --section EVIDENCE
+
+# Attach a verification gate and keep full logs behind a handle
+makakoo agent-session gate repo-audit --name tests --cwd . --cmd "cargo test -p makakoo-core agent_session"
+```
+
+Full reference: [makakoo-agent-session.md](makakoo-agent-session.md) and [makakoo-handle.md](makakoo-handle.md).
 
 ### SANCHO Tasks
 

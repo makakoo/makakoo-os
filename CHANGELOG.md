@@ -10,6 +10,19 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-05-20
+
+### Added
+
+- Added Agent Sessions v1: `makakoo agent-session open/list/status/eval/read/gate/gates/close` for durable child-agent work records without flooding parent context.
+- Added `makakoo handle read` for bounded reads from `agent-artifact://...` handles with summary, head, tail, section, and small JSONPath projections.
+- Added persistent `$MAKAKOO_HOME/data/agent_sessions.db` storage for sessions, events, artifacts, and verification gates.
+- Added Agent Sessions documentation in the agents catalog and user manual.
+
+### Changed
+
+- Session names are validated as labels, active duplicate names are rejected by SQLite, and verification gates persist full stdout/stderr behind handles.
+
 ## [0.1.9] - 2026-05-17
 
 ### Added

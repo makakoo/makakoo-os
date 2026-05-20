@@ -1,6 +1,6 @@
 # Agents
 
-Makakoo ships ~15 **agent plugins** in `plugins-core/agent-*/`. An agent is a plugin whose `plugin.toml` declares `kind = "agent"` and has a `[entrypoint]` section — the Makakoo daemon spawns it on startup and keeps it alive.
+Makakoo ships ~15 **agent plugins** in `plugins-core/agent-*/`. It also ships **Agent Sessions**, a durable CLI primitive for bounded child-agent work that is not itself a long-running plugin. An agent is a plugin whose `plugin.toml` declares `kind = "agent"` and has a `[entrypoint]` section — the Makakoo daemon spawns it on startup and keeps it alive.
 
 Read the cross-cutting model in [Walkthrough 08 — Use an agent](../walkthroughs/08-use-agent.md) first. Then use this page as a reference when you need to know what a specific agent does.
 
@@ -23,6 +23,7 @@ Read the cross-cutting model in [Walkthrough 08 — Use an agent](../walkthrough
 | `agent-pg-watchdog` | Postgres health + schema-drift watchdog | [manual](./agent-pg-watchdog.md) |
 | `agent-pi` | pi-mono wrapped as a first-class Makakoo worker | [manual](./agent-pi.md) |
 | `agent-switchailocal` | Unified local LLM gateway on port 18080 | [manual](./agent-switchailocal.md) |
+| Agent Sessions | Durable child-agent work records, result handles, and verification gates | [manual](./agent-sessions.md) |
 
 ## Shared template
 
@@ -43,6 +44,7 @@ If an agent's behavior diverges from this template (e.g. `agent-dreams` is actua
 ## Related docs
 
 - [Walkthrough 08 — Use an agent](../walkthroughs/08-use-agent.md) — the cross-cutting agent lifecycle walkthrough.
+- [`makakoo agent-session`](../user-manual/makakoo-agent-session.md) — durable child-agent session CLI reference.
 - [`mascots/index.md`](../mascots/) — the mascot specialization of agents.
 - [`plugins/`](../plugins/) — how agent plugins fit into the broader plugin model.
 - [`user-manual/makakoo-plugin.md`](../user-manual/makakoo-plugin.md) — the `makakoo plugin` CLI reference.

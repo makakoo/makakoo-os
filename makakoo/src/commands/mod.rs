@@ -9,6 +9,8 @@
 pub mod adapter;
 pub mod adapter_gen;
 pub mod agent;
+pub mod agent_session;
+pub mod handle;
 pub mod docs;
 pub mod docs_mcp;
 pub mod agent_audit;
@@ -184,6 +186,8 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Adapter { cmd } => adapter::run(ctx, cmd).await,
         Commands::Octopus { args } => octopus::run(args),
         Commands::Agent { cmd } => agent::run(ctx, cmd),
+        Commands::AgentSession { cmd } => agent_session::run(ctx, cmd),
+        Commands::Handle { cmd } => handle::run(ctx, cmd),
         Commands::S3 { cmd } => s3::run(ctx, cmd),
         Commands::Bucket { cmd } => bucket::run(ctx, cmd).await,
     }

@@ -60,10 +60,16 @@ pub async fn run(
     };
 
     // Resolve cargo source override from CLI flag.
-    let cargo_source_override = source.clone().map(|p| CargoSource::LocalPath(PathBuf::from(p)));
+    let cargo_source_override = source
+        .clone()
+        .map(|p| CargoSource::LocalPath(PathBuf::from(p)));
 
     let target = match (only_kernel, only_mcp) {
-        (true, true) => return Err(anyhow!("--only-kernel and --only-mcp are mutually exclusive")),
+        (true, true) => {
+            return Err(anyhow!(
+                "--only-kernel and --only-mcp are mutually exclusive"
+            ))
+        }
         (true, false) => BinaryTarget::KernelOnly,
         (false, true) => BinaryTarget::McpOnly,
         (false, false) => BinaryTarget::Both,
@@ -143,7 +149,10 @@ pub async fn run(
 
     if dry_run {
         println!();
-        println!("# dry-run complete — {} action(s) planned, 0 executed", actions.len());
+        println!(
+            "# dry-run complete — {} action(s) planned, 0 executed",
+            actions.len()
+        );
     }
 
     Ok(0)
@@ -163,6 +172,11 @@ fn default_homebrew_prefix() -> PathBuf {
         PathBuf::from("/opt/homebrew")
     } else if cfg!(target_os = "linux") {
         PathBuf::from("/home/linuxbrew/.linuxbrew")
+    } else if cfg!(target_os = "windows") {
+        // Homebrew is not a supported Windows install channel, but `--method
+        // brew --dry-run` and tests should still use a platform-absolute path
+        // instead of a Unix-rooted string that Windows treats as relative.
+        PathBuf::from(r"C:\ProgramData\Homebrew")
     } else {
         PathBuf::from("/usr/local")
     }
