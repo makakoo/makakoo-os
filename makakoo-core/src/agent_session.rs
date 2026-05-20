@@ -514,11 +514,7 @@ impl AgentSessionStore {
         let session = self.get(name_or_id)?;
         let cwd = normalize_existing_dir(cwd)?;
         let start = Instant::now();
-        let output = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(&cwd)
-            .output()?;
+        let output = shell_command(cmd).current_dir(&cwd).output()?;
         let duration_ms = start.elapsed().as_millis() as i64;
         let exit_code = output.status.code().unwrap_or(128);
         let log = format!(
@@ -625,6 +621,21 @@ impl AgentSessionStore {
         let conn = self.lock()?;
         conn.execute("INSERT INTO agent_session_items (id,session_id,kind,status,summary,artifact_id,metadata_json,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![item_id, session_id, kind, status, summary, artifact_id, serde_json::to_string(&metadata)?, now])?;
         Ok(item_id)
+    }
+}
+
+fn shell_command(cmd: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(cmd);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = Command::new("/bin/sh");
+        c.arg("-c").arg(cmd);
+        c
     }
 }
 
@@ -997,7 +1008,7 @@ mod tests {
             )
             .unwrap();
         let g = store
-            .run_gate("gate", "true", dir.path(), "printf hello")
+            .run_gate("gate", "true", dir.path(), "echo hello")
             .unwrap();
         assert_eq!(g.classification, "pass");
         let log = store
