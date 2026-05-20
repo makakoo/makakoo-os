@@ -496,6 +496,18 @@ pub enum Commands {
         cmd: AgentCmd,
     },
 
+    /// Persistent child-agent work sessions — open/eval/read/gate without flooding parent context.
+    AgentSession {
+        #[command(subcommand)]
+        cmd: AgentSessionCmd,
+    },
+
+    /// Bounded reads from Makakoo handles such as `agent-artifact://...`.
+    Handle {
+        #[command(subcommand)]
+        cmd: HandleCmd,
+    },
+
     /// S3 endpoint operations — bootstrap the Makakoo-owned service
     /// keypair against the local Garage instance.
     ///
@@ -757,6 +769,115 @@ pub enum BucketCmd {
         /// Required to use `--ttl permanent`.
         #[arg(long)]
         confirm_yes_really: bool,
+    },
+}
+
+/// `makakoo agent-session <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum AgentSessionCmd {
+    /// Open a durable queued agent session.
+    Open {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        role: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long)]
+        workspace: std::path::PathBuf,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List agent sessions.
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        include_closed: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one session by name or id.
+    Status {
+        name_or_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Evaluate a queued/running session synchronously in this process.
+    Eval {
+        name_or_id: String,
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+        /// Override the original task text for this sync evaluation.
+        #[arg(long)]
+        message: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read this session's result handle.
+    Read {
+        name_or_id: String,
+        #[arg(long, conflicts_with_all = ["head", "tail"])]
+        section: Option<String>,
+        #[arg(long, conflicts_with_all = ["section", "tail"])]
+        head: Option<usize>,
+        #[arg(long, conflicts_with_all = ["section", "head"])]
+        tail: Option<usize>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close/archive a session.
+    Close {
+        name_or_id: String,
+        #[arg(long)]
+        cancel: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a structured verification gate attached to a session.
+    Gate {
+        name_or_id: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        cwd: std::path::PathBuf,
+        #[arg(long)]
+        cmd: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List gates for a session.
+    Gates {
+        name_or_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `makakoo handle <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum HandleCmd {
+    /// Read bounded content from a handle.
+    Read {
+        handle: String,
+        #[arg(long, conflicts_with_all = ["head", "tail", "section", "jsonpath"])]
+        summary: bool,
+        #[arg(long, conflicts_with_all = ["summary", "tail", "section", "jsonpath"])]
+        head: Option<usize>,
+        #[arg(long, conflicts_with_all = ["summary", "head", "section", "jsonpath"])]
+        tail: Option<usize>,
+        #[arg(long, conflicts_with_all = ["summary", "head", "tail", "jsonpath"])]
+        section: Option<String>,
+        #[arg(long, conflicts_with_all = ["summary", "head", "tail", "section"])]
+        jsonpath: Option<String>,
+        #[arg(long, default_value_t = 8192)]
+        max_bytes: usize,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -2182,6 +2303,67 @@ mod tests {
             assert!(!skip_infect);
         } else {
             panic!("expected Install");
+        }
+    }
+
+    #[test]
+    fn parse_agent_session_open() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "agent-session",
+            "open",
+            "--name",
+            "w",
+            "--role",
+            "general",
+            "--task",
+            "do",
+            "--workspace",
+            ".",
+            "--json",
+        ])
+        .unwrap();
+        if let Commands::AgentSession {
+            cmd:
+                AgentSessionCmd::Open {
+                    name,
+                    role,
+                    task,
+                    json,
+                    ..
+                },
+        } = cli.command.unwrap()
+        {
+            assert_eq!(name, "w");
+            assert_eq!(role, "general");
+            assert_eq!(task, "do");
+            assert!(json);
+        } else {
+            panic!("expected AgentSession::Open");
+        }
+    }
+
+    #[test]
+    fn parse_handle_read_section() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "handle",
+            "read",
+            "agent-artifact://x",
+            "--section",
+            "EVIDENCE",
+        ])
+        .unwrap();
+        if let Commands::Handle {
+            cmd: HandleCmd::Read {
+                handle, section, ..
+            },
+        } = cli.command.unwrap()
+        {
+            assert_eq!(handle, "agent-artifact://x");
+            assert_eq!(section.as_deref(), Some("EVIDENCE"));
+        } else {
+            panic!("expected Handle::Read");
         }
     }
 

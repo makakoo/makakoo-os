@@ -7,6 +7,7 @@
 //! CLI, SANCHO, nursery, etc. on top of these primitives.
 
 pub mod adapter;
+pub mod agent_session;
 pub mod agents;
 pub mod capability;
 pub mod channel_ops;
