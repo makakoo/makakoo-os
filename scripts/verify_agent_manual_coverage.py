@@ -95,6 +95,9 @@ _NON_AGENT_PAGES = frozenset(
         # Feature manual for the Cortex long-term memory layer that augments
         # agent-harveychat. Lives in lib-harvey-core, not a standalone plugin.
         "harveychat-cortex-memory",
+        # Durable local child-agent sessions live in the CLI/kernel, not as
+        # a long-running plugins-core/agent-* entrypoint.
+        "agent-sessions",
     }
 )
 

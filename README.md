@@ -116,6 +116,7 @@ rm -rf ~/.makakoo ~/MAKAKOO
 | See what I can do with Makakoo day-to-day | [`docs/use-cases.md`](docs/use-cases.md) |
 | Understand the setup wizard's 6 sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
 | Look up a specific `makakoo` subcommand | [`docs/user-manual/`](docs/user-manual/index.md) |
+| Run durable child-agent work without transcript floods | [`docs/user-manual/makakoo-agent-session.md`](docs/user-manual/makakoo-agent-session.md) |
 | Fix something that broke | [`docs/troubleshooting/`](docs/troubleshooting/index.md) |
 | Understand architecture / internals | [`docs/concepts/`](docs/concepts/) and [`spec/`](spec/) |
 | Write or publish an adapter | [`docs/adapters.md`](docs/adapters.md), [`docs/adapter-publishing.md`](docs/adapter-publishing.md) |
@@ -135,6 +136,11 @@ makakoo plugin install skill-research-arxiv --core
 
 # See what's registered (native Rust tasks + manifest-driven plugins)
 makakoo sancho status
+
+# Open a durable child-agent session and read only the evidence slice
+makakoo agent-session open --name repo-audit --role explore --task "Inspect this repo" --workspace .
+makakoo agent-session eval repo-audit --wait
+makakoo agent-session read repo-audit --section EVIDENCE
 
 # Preview what infect would do, then commit
 makakoo infect --global --dry-run
@@ -160,7 +166,7 @@ and the structured `list --json` envelope).
 |---|---|
 | `makakoo-core/` | Engine library — platform, config, LLM client, superbrain (FTS5 + vectors + graph), SANCHO, capability socket + grant resolver + audit log |
 | `makakoo-mcp/` | MCP stdio server — NDJSON JSON-RPC, 40+ tools, drop-in for any MCP client |
-| `makakoo/` | CLI binary — search, query, sancho, plugin, distro, daemon, infect, uninfect, skill, secret, mcp, completion |
+| `makakoo/` | CLI binary — search, query, sancho, plugin, distro, daemon, infect, uninfect, skill, secret, mcp, completion, agent-session, handle |
 | `makakoo-platform/` | Per-OS adapter — launchd (macOS), systemd (Linux), auto-launch (Windows), POSIX symlinks + Windows Dev Mode symlinks |
 | `makakoo-client/` + `makakoo-client-py/` | Plugin client libraries (Rust + Python) over the capability socket |
 | `plugins-core/` | 38 shipped plugin manifests — skills, watchdogs, monitors, mascot GYM, agent-dreams |

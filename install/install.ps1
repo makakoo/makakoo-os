@@ -12,8 +12,8 @@ After the binary is on disk, finish setup with:
     makakoo install
 
 .PARAMETER Version
-Release to install. Defaults to `latest`. Accepts both `0.1.9` and
-`v0.1.9`.
+Release to install. Defaults to `latest`. Accepts both `0.1.10` and
+`v0.1.10`.
 
 .PARAMETER InstallDir
 Directory to place `makakoo.exe`. Defaults to
@@ -26,7 +26,7 @@ Print the plan without downloading or installing.
 iwr -UseBasicParsing https://makakoo.com/install.ps1 | iex
 
 .EXAMPLE
-$env:MAKAKOO_VERSION = "0.1.9"
+$env:MAKAKOO_VERSION = "0.1.10"
 iwr -UseBasicParsing https://makakoo.com/install.ps1 | iex
 #>
 
