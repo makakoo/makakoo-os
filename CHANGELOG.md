@@ -10,6 +10,13 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-06-07
+
+### Fixed
+
+- Disabled background Brain vector embedding by default in native SANCHO and legacy Python handlers. This stops daemon boot from spawning Ollama `qwen3-embedding:0.6b` / `llama-server` and saturating local CPU.
+- Kept Brain writes immediately searchable through FTS/entity sync while making embedding refresh opt-in via `MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC=1`.
+
 ## [0.1.10] - 2026-05-20
 
 ### Added

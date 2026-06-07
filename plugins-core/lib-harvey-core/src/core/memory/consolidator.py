@@ -226,6 +226,12 @@ class ConsolidationEngine:
         if not facts:
             return []
 
+        enabled = os.environ.get("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", "").lower()
+        legacy_enabled = os.environ.get("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC", "").lower()
+        if enabled not in {"1", "true", "yes", "on"} and legacy_enabled not in {"1", "true", "yes", "on"}:
+            log.info("Background memory embeddings disabled; using one-fact clusters")
+            return [[fact] for fact in facts]
+
         # Embed each fact
         embeddings = []
         for fact in facts:

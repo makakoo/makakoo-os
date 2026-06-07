@@ -976,15 +976,17 @@ def tool_brain_write(content: str) -> str:
         log.warning(f"brain_write failed: {e}")
         return f"Brain write error: {e}"
 
-    # Sync to Superbrain (FTS5 + entity graph + embedding) so the entry
-    # is immediately searchable. This block is reached IF AND ONLY IF
-    # the write succeeded. Sync failure must not lose the write.
+    # Sync to Superbrain (FTS5 + entity graph) so the entry is immediately
+    # searchable. Embeddings are opt-in because local Ollama embedding sync can
+    # saturate CPU; sync failure must not lose the write.
     sync_status = ""
     if wrote_file and journal_path is not None:
         try:
             from core.superbrain.superbrain import Superbrain
             sb = Superbrain()
-            if sb.sync_file(str(journal_path), embed=True):
+            embed_enabled = os.environ.get("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", "").lower() in {"1", "true", "yes", "on"}
+            embed_enabled = embed_enabled or os.environ.get("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC", "").lower() in {"1", "true", "yes", "on"}
+            if sb.sync_file(str(journal_path), embed=embed_enabled):
                 sync_status = " [synced]"
             else:
                 sync_status = " [sync skipped]"

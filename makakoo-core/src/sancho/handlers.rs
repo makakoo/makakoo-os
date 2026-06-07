@@ -549,6 +549,15 @@ impl SanchoHandler for SuperbrainSyncEmbedHandler {
 
     async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
         let start = Instant::now();
+        if !background_embed_sync_enabled() {
+            let report = HandlerReport::ok(
+                "superbrain_sync_embed",
+                "skipped: background embed sync disabled; set MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC=1 to opt in",
+                start.elapsed(),
+            );
+            publish_report(ctx, &report);
+            return Ok(report);
+        }
         let candidates = ctx.store.docs_missing_vectors(self.max_docs)?;
         let mut embedded = 0usize;
         for (doc_id, text) in candidates {
@@ -570,6 +579,18 @@ impl SanchoHandler for SuperbrainSyncEmbedHandler {
         publish_report(ctx, &report);
         Ok(report)
     }
+}
+
+fn background_embed_sync_enabled() -> bool {
+    fn enabled_value(name: &str) -> bool {
+        std::env::var(name)
+            .ok()
+            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    }
+
+    enabled_value("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC")
+        || enabled_value("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1109,6 +1130,31 @@ mod tests {
         let report = h.run(&ctx).await.unwrap();
         assert!(report.ok);
         assert_eq!(report.handler, "index_rebuild");
+    }
+
+    #[tokio::test]
+    async fn superbrain_sync_embed_is_opt_in() {
+        std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC");
+        std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC");
+
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_store(&dir);
+        ctx.store
+            .write_document(
+                "doc-missing-vector",
+                "long enough content that would normally be embedded by the background task",
+                "page",
+                serde_json::json!([]),
+            )
+            .unwrap();
+
+        let h = SuperbrainSyncEmbedHandler::new();
+        let report = h.run(&ctx).await.unwrap();
+
+        assert!(report.ok);
+        assert_eq!(report.handler, "superbrain_sync_embed");
+        assert!(report.message.contains("background embed sync disabled"));
+        assert_eq!(ctx.store.stats().unwrap().vector_count, 0);
     }
 
     #[tokio::test]

@@ -233,12 +233,9 @@ class Sancho:
         self.registry.register(ProactiveTask(
             name="superbrain_sync_embed",
             handler=handle_superbrain_sync_embed,
-            interval_minutes=15,  # v4.1: 15 min — safe because sync_brain is
-                                  # content-hash incremental (unchanged files
-                                  # skip). Catches auto-memory writes from
-                                  # any CLI within one interval.
+            interval_minutes=1440,  # opt-in background embedding safety net; disabled by default
             gates=GateSystem([
-                time_gate(state, "superbrain_sync_embed", min_hours=0.2),  # ~12 min
+                time_gate(state, "superbrain_sync_embed", min_hours=24),
             ]),
             read_only=False,
             brief=True,

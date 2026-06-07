@@ -231,14 +231,21 @@ def handle_memory_promotion() -> Dict:
 
 
 def handle_superbrain_sync_embed() -> Dict:
-    """Nightly safety net: re-sync Brain + embed any orphaned docs.
+    """Optional safety net: re-sync Brain + embed any orphaned docs.
 
-    Phase 3 of SPRINT-SUPERBRAIN-REPAIR closed the tool_brain_write orphan
-    gap, but a periodic sync is still valuable: if any write path ever
-    skips sync_file (new tool, third-party agent, or temporary backend
-    outage), this task catches the drift within 24h instead of letting it
-    accumulate silently.
+    Disabled by default because local Ollama embeddings can saturate CPU for
+    minutes on large Brain rows and SANCHO may run state-less tasks on daemon
+    boot. Operators can opt in with MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC=1.
     """
+    enabled = os.environ.get("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", "").lower()
+    legacy_enabled = os.environ.get("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC", "").lower()
+    if enabled not in {"1", "true", "yes", "on"} and legacy_enabled not in {"1", "true", "yes", "on"}:
+        return {
+            "status": "skipped",
+            "reason": "background embed sync disabled",
+            "enable_with": "MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC=1",
+        }
+
     from core.superbrain.superbrain import Superbrain
 
     sb = Superbrain()
