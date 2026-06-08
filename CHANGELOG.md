@@ -10,6 +10,15 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-06-08
+
+### Added
+
+- Added a SkillSpector security gate for plugin installs. `makakoo plugin install` now scans staged plugin source before promotion, blocks high/critical findings by default, writes per-plugin risk metadata, and supports explicit reviewed overrides with `--allow-risk --risk-ack`.
+- Added `makakoo skill audit <target>` for manual SkillSpector scans with terminal, JSON, SARIF, and audit-log output.
+- Added `makakoo skill audit --all [--limit N]` for fleet audits across installed plugins and local skill roots, with dated JSON/Markdown summary reports.
+- Added documentation for macOS SkillSpector prerequisites, report locations, false-positive handling, override policy, and experimental `--llm` semantic triage.
+
 ## [0.1.11] - 2026-06-07
 
 ### Fixed
