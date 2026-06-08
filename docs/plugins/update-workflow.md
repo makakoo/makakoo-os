@@ -81,6 +81,19 @@ If a plugin update adds a new capability grant, expands its sandbox, or changes 
 
 `manifest_hash` is a sha256 of the raw `plugin.toml` bytes, captured at install time. Any whitespace-only change also triggers the prompt; we'd rather over-prompt than miss a capability-expansion hidden behind formatting.
 
+## Security gate interaction during updates
+
+Every plugin update is subject to the **SkillSpector** preflight scan.
+
+1. **Risk scanning:** When you run `makakoo plugin update <name>` or `makakoo plugin update --all`, the new version is fetched and scanned by the security gate.
+2. **Scan failure / block:** If the new version of the plugin triggers a `HIGH` or `CRITICAL` risk score (>= 85), the installation of the update is **blocked**.
+3. **Command update limitation:** The `makakoo plugin update` command does **not** accept override flags (`--allow-risk` or `--risk-ack`). Therefore, a flagged update will always fail.
+4. **Post-failure state:** If the update is blocked during the reinstall step, the update fails after the old version has been removed. Reinstall a known-good version or perform an explicit reviewed install with override flags.
+5. **How to override an update block:** To force upgrade to a flagged new version, you must perform a clean install pointing directly to the new source/tag with override flags:
+   ```bash
+   makakoo plugin install git+https://github.com/acme/my-plugin@v1.1.0 --allow-risk --risk-ack "Reviewed updated sources."
+   ```
+
 ## Rollback
 
 Makakoo doesn't ship a first-class "rollback" command. The workflow:

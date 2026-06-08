@@ -15,6 +15,7 @@ for "I want to X" recipes.
 | [Multi-bot subagents (`makakoo agent`)](agent.md) | Create, run, and tear down per-transport subagent slots (Telegram / Slack / Discord / WhatsApp / Voice / Email / Web). |
 | [Agent sessions (`makakoo agent-session`)](makakoo-agent-session.md) | Durable child-agent work sessions with compact result handles and verification gates. |
 | [Handle reads (`makakoo handle`)](makakoo-handle.md) | Bounded reads from durable Makakoo handles such as `agent-artifact://...`. |
+| [Skill security & auditing](makakoo-skill-security.md) | Plugin preflight security scans, overrides, and manual SkillSpector audits. |
 | [HarveyChat Cortex Memory](../agents/harveychat-cortex-memory.md) | Configure long-term memory and cross-channel aliases for HarveyChat. |
 
 *(More task-oriented chapters coming — brain sources, adapter
@@ -45,6 +46,7 @@ makakoo <command> [options] [arguments]
 | [secret](makakoo-secret.md) | Manage secrets |
 | [perms](makakoo-perms.md) | Runtime write-access grants (v0.3 / hardened in v0.3.1-v0.3.2) |
 | [brain](setup-wizard.md#sections) | Multi-source brain registry (`list / add / remove / set-default / sync / init`) |
+| [skill](makakoo-skill-security.md) | Run a plugin skill or execute security audits |
 | [status](makakoo-status.md) | Show system status |
 | [completion](makakoo-completion.md) | Shell completion setup |
 | [adapter](makakoo-adapter.md) | Manage AI adapters |

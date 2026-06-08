@@ -30,7 +30,20 @@ pub async fn run(ctx: &CliContext, cmd: PluginCmd) -> anyhow::Result<i32> {
             blake3,
             sha256,
             allow_unstable_ref,
-        } => install(ctx, &source, core, blake3, sha256, allow_unstable_ref),
+            allow_risk,
+            risk_ack,
+            no_skill_scan,
+        } => install(
+            ctx,
+            &source,
+            core,
+            blake3,
+            sha256,
+            allow_unstable_ref,
+            allow_risk,
+            risk_ack,
+            no_skill_scan,
+        ),
         PluginCmd::Uninstall { name, purge } => uninstall(ctx, &name, purge),
         PluginCmd::Enable { name } => set_enabled(ctx, &name, true),
         PluginCmd::Disable { name } => set_enabled(ctx, &name, false),
@@ -303,7 +316,15 @@ fn install(
     blake3: Option<String>,
     sha256: Option<String>,
     allow_unstable_ref: bool,
+    allow_risk: bool,
+    risk_ack: Option<String>,
+    no_skill_scan: bool,
 ) -> anyhow::Result<i32> {
+    if allow_risk && risk_ack.as_deref().unwrap_or("").trim().is_empty() {
+        output::print_error("--allow-risk requires a non-empty --risk-ack explanation");
+        return Ok(1);
+    }
+
     let plugin_source = match parse_install_source(source, use_core, sha256, allow_unstable_ref) {
         Ok(s) => s,
         Err(msg) => {
@@ -317,6 +338,12 @@ fn install(
             output::print_error(format!("source does not exist: {}", p.display()));
             return Ok(1);
         }
+        if no_skill_scan {
+            output::print_warn("Skipping security scan for local path install as requested.");
+        }
+    } else if no_skill_scan {
+        output::print_error("--no-skill-scan is only allowed for local path installs");
+        return Ok(1);
     }
     if let PluginSource::Git {
         ref ref_,
@@ -336,7 +363,13 @@ fn install(
         expected_blake3: blake3,
     };
 
-    match core_install(&req, ctx.home()) {
+    match core_install(
+        &req,
+        allow_risk,
+        risk_ack.as_deref(),
+        no_skill_scan,
+        ctx.home(),
+    ) {
         Ok(outcome) => {
             output::print_info(format!(
                 "installed {} → {} (blake3: {})",

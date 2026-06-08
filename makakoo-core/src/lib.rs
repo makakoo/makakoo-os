@@ -31,6 +31,7 @@ pub mod plugin;
 pub mod run;
 pub mod sancho;
 pub mod session;
+pub mod skill_security;
 pub mod source_fetch;
 pub mod superbrain;
 pub mod swarm;

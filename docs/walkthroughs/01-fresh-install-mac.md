@@ -14,7 +14,8 @@ Install Makakoo OS on a Mac, verify the binary is on your `$PATH`, and run three
   ```
   Any number that starts with `12.`, `13.`, `14.`, `15.`, or higher is fine.
 - **An internet connection.** The installer downloads a small binary (~20 MB) from GitHub.
-- **No other setup.** You do not need Homebrew, Rust, Python, or admin privileges for Makakoo itself. You do not need an AI API key. You do not need a GitHub account.
+- **Python 3.12 + `uv`.** Required for running Python plugins and performing security audits via the SkillSpector gate. You can install them easily using Homebrew: `brew install python@3.12 uv`
+- **No other setup.** You do not need Rust, admin privileges, an AI API key, or a GitHub account to get started.
 
 > **Apple Silicon vs Intel:** the installer detects your CPU automatically. You do not need to pick.
 

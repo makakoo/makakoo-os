@@ -1120,6 +1120,18 @@ pub enum PluginCmd {
         /// the ref to be a semver tag or 40-char SHA.
         #[arg(long)]
         allow_unstable_ref: bool,
+
+        /// Bypass risk check and block for high/critical security findings.
+        #[arg(long)]
+        allow_risk: bool,
+
+        /// Acknowledgement explanation required when --allow-risk is specified.
+        #[arg(long)]
+        risk_ack: Option<String>,
+
+        /// Skip SkillSpector static security scan (only permitted for local path installs).
+        #[arg(long)]
+        no_skill_scan: bool,
     },
 
     /// Remove an installed plugin. With `--purge`, also wipe its state dir.

@@ -51,6 +51,9 @@ pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Resul
         eprintln!("      To see skill details: python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --match {skill_name}");
         return Ok(1);
     }
+    if name == "audit" {
+        return super::skill_security::run_audit(args, ctx).await;
+    }
 
     let home = makakoo_home();
     let registry = PluginRegistry::load_default(&home).unwrap_or_default();

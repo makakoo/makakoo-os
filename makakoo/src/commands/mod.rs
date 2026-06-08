@@ -45,6 +45,7 @@ pub mod session;
 pub mod setup;
 pub mod sync;
 pub mod skill;
+pub mod skill_security;
 pub mod version;
 
 use crate::cli::Commands;

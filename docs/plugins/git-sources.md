@@ -71,6 +71,19 @@ installed_at = "2026-04-21T03:14:00Z"
 enabled = true
 ```
 
+## Security preflight gate (SkillSpector)
+
+Every plugin installed from a git source is scanned by the **SkillSpector** security gate before the installation is finalized.
+
+- **Risk Blocking:** If a plugin receives a `HIGH` or `CRITICAL` risk score (>= 85), the installation is blocked by default.
+- **Bypassing / Overriding:**
+  - For remote git repositories, you cannot bypass the scan using `--no-skill-scan` (which is restricted to local path installations).
+  - To override a blocked remote repository installation, you must explicitly accept the risk and provide a non-empty explanation:
+    `makakoo plugin install git+https://github.com/... --allow-risk --risk-ack "<audit explanation>"`
+- **State logs:** The override status is stored in `$MAKAKOO_HOME/state/plugin-risk/<plugin-name>.json`.
+
+For more details on reports, manual auditing, and configuration, see the [Skill security & auditing manual](../user-manual/makakoo-skill-security.md).
+
 ## Publishing your own
 
 1. Write a `plugin.toml` and `install.sh` in a git repo.

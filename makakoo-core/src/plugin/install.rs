@@ -23,6 +23,7 @@ use tracing::{debug, warn};
 use super::lock::{LockEntry, LockError, PluginsLock};
 use super::manifest::{Manifest, ManifestError};
 use super::staging::{stage_and_install, stage_dir, StagingError};
+use crate::skill_security::{run_scan, RiskSeverity, ScanOptions, SkillSecurityConfig};
 use crate::source_fetch::{self, FetchError, SourceSpec};
 
 #[derive(Debug, Error)]
@@ -90,6 +91,19 @@ pub enum InstallError {
     /// recorded directory), handled at the CLI layer.
     #[error("plugin {plugin:?} has a path source — use the path-based update flow instead")]
     UpdateWrongSource { plugin: String },
+    #[error(
+        "SkillSpector flagged this plugin: {severity} {score}/100.\n\
+             Install blocked pending explicit override.\n\
+             Run:\n\
+             \x20\x20makakoo plugin install <source> --allow-risk --risk-ack \"<explanation>\""
+    )]
+    SecurityRiskBlocked { severity: String, score: u32 },
+    #[error("SkillSpector scan error: {0}")]
+    SecurityScanError(String),
+    #[error("--allow-risk requires a non-empty --risk-ack explanation")]
+    MissingRiskAck,
+    #[error("--no-skill-scan is only allowed for local path installs")]
+    NoSkillScanForbidden,
 }
 
 /// Where a plugin's source lives. v0.4 accepts all three shapes the
@@ -129,7 +143,7 @@ pub fn install_from_path(
     req: &InstallRequest,
     makakoo_home: &Path,
 ) -> Result<super::staging::InstallOutcome, InstallError> {
-    install(req, makakoo_home)
+    install(req, false, None, false, makakoo_home)
 }
 
 /// Install a plugin — dispatches on `PluginSource`. Git + Tarball
@@ -139,6 +153,9 @@ pub fn install_from_path(
 /// the path case.
 pub fn install(
     req: &InstallRequest,
+    allow_risk: bool,
+    risk_ack: Option<&str>,
+    no_skill_scan: bool,
     makakoo_home: &Path,
 ) -> Result<super::staging::InstallOutcome, InstallError> {
     match &req.source {
@@ -147,6 +164,9 @@ pub fn install(
             format!("path:{}", p.display()),
             None,
             req.expected_blake3.as_deref(),
+            allow_risk,
+            risk_ack,
+            no_skill_scan,
             makakoo_home,
         ),
         PluginSource::Git {
@@ -165,6 +185,9 @@ pub fn install(
                 source_str,
                 Some(fetched.resolved_sha.clone()),
                 req.expected_blake3.as_deref(),
+                allow_risk,
+                risk_ack,
+                no_skill_scan,
                 makakoo_home,
             );
             // Always clean the fetcher's tempdir — promotion above moves
@@ -184,6 +207,9 @@ pub fn install(
                 source_str,
                 Some(fetched.resolved_sha.clone()),
                 req.expected_blake3.as_deref(),
+                allow_risk,
+                risk_ack,
+                no_skill_scan,
                 makakoo_home,
             );
             let _ = fs::remove_dir_all(&fetched.staging_dir);
@@ -208,6 +234,9 @@ pub fn install_from_git(
             },
             expected_blake3: None,
         },
+        false,
+        None,
+        false,
         makakoo_home,
     )
 }
@@ -226,6 +255,9 @@ pub fn install_from_tarball_url(
             },
             expected_blake3: None,
         },
+        false,
+        None,
+        false,
         makakoo_home,
     )
 }
@@ -358,6 +390,9 @@ pub fn apply_update(
         source_str,
         resolved_sha,
         None,
+        false,
+        None,
+        false,
         makakoo_home,
     )?;
 
@@ -448,6 +483,9 @@ fn install_staged(
     source_str: String,
     resolved_sha: Option<String>,
     expected_blake3: Option<&str>,
+    allow_risk: bool,
+    risk_ack: Option<&str>,
+    no_skill_scan: bool,
     makakoo_home: &Path,
 ) -> Result<super::staging::InstallOutcome, InstallError> {
     // 1) Basic sanity on the source tree.
@@ -503,6 +541,90 @@ fn install_staged(
         src_path.display(),
         stage_target.display()
     );
+
+    // Security preflight check
+    let config = SkillSecurityConfig::load();
+    if config.skillspector.enabled {
+        if no_skill_scan {
+            if source_str.starts_with("path:") {
+                warn!("Skipping security scan for local path install as requested.");
+            } else {
+                return Err(InstallError::NoSkillScanForbidden);
+            }
+        } else {
+            let options = ScanOptions {
+                target: stage_target.to_string_lossy().to_string(),
+                no_llm: true,
+                no_cache: false,
+                sarif_path: None,
+            };
+            let (report, report_json_path) =
+                run_scan(&options).map_err(|e| InstallError::SecurityScanError(e.to_string()))?;
+
+            let block_threshold = RiskSeverity::parse(&config.skillspector.block_on);
+            let report_severity = RiskSeverity::parse(&report.risk_assessment.severity);
+
+            if report_severity >= block_threshold && block_threshold != RiskSeverity::Off {
+                let mut blocked = true;
+                if config.skillspector.allow_override && allow_risk {
+                    if let Some(ack) = risk_ack {
+                        if !ack.trim().is_empty() {
+                            blocked = false;
+                        }
+                    }
+                }
+                if blocked {
+                    return Err(InstallError::SecurityRiskBlocked {
+                        severity: report.risk_assessment.severity,
+                        score: report.risk_assessment.score,
+                    });
+                } else {
+                    // Log the override event
+                    let audit_log_path = makakoo_home.join("logs").join("audit.jsonl");
+                    if let Some(parent) = audit_log_path.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    if let Ok(mut file) = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&audit_log_path)
+                    {
+                        let override_event = serde_json::json!({
+                            "ts": Utc::now().to_rfc3339(),
+                            "event": "skillspector.override",
+                            "plugin": name,
+                            "source": source_str,
+                            "score": report.risk_assessment.score,
+                            "severity": report.risk_assessment.severity,
+                            "ack": risk_ack,
+                        });
+                        use std::io::Write;
+                        if let Ok(line) = serde_json::to_string(&override_event) {
+                            let _ = writeln!(file, "{}", line);
+                        }
+                    }
+                }
+            }
+
+            // Write companion file under $MAKAKOO_HOME/state/plugin-risk/<plugin>.json
+            let metadata = serde_json::json!({
+                "plugin": name,
+                "source": source_str,
+                "scan_score": report.risk_assessment.score,
+                "scan_severity": report.risk_assessment.severity,
+                "report_path": report_json_path.to_string_lossy(),
+                "override": allow_risk,
+                "override_ack": risk_ack,
+                "override_ts": if allow_risk { Some(Utc::now().to_rfc3339()) } else { None },
+            });
+            let metadata_dir = makakoo_home.join("state").join("plugin-risk");
+            fs::create_dir_all(&metadata_dir).ok();
+            let metadata_path = metadata_dir.join(format!("{}.json", name));
+            if let Ok(file) = fs::File::create(&metadata_path) {
+                serde_json::to_writer_pretty(file, &metadata).ok();
+            }
+        }
+    }
 
     // 3) Hand off to stage_and_install: verifies blake3, atomic rename.
     let outcome = stage_and_install(&stage_target, makakoo_home, expected_blake3)?;
@@ -749,6 +871,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
 
     fn write_manifest(dir: &Path, name: &str, extras: &str) {
@@ -1538,5 +1661,230 @@ tasks = [{ name = "dream", interval = "3600s" }]
         ));
         // $MAKAKOO_HOME/plugins/ should not exist.
         assert!(!tmp_home.path().join("plugins").exists());
+    }
+
+    fn skillspector_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn test_preflight_scan_low_risk_permits_install() {
+        let _guard = skillspector_env_lock();
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+
+        // 1) Write mock skillspector binary
+        let mock_bin = tmp.path().join("mock_skillspector");
+        let script = r#"#!/bin/sh
+format="$4"
+output="$6"
+if [ "$format" = "json" ]; then
+  cat <<EOF > "$output"
+{
+  "risk_assessment": {
+    "score": 0,
+    "severity": "LOW",
+    "recommendation": "SAFE"
+  },
+  "issues": []
+}
+EOF
+elif [ "$format" = "sarif" ]; then
+  echo '{"runs":[]}' > "$output"
+fi
+"#;
+        fs::write(&mock_bin, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
+
+        // 2) Run install
+        let src = seed_source(tmp.path(), "safe-plugin");
+        let outcome = install(
+            &InstallRequest {
+                source: PluginSource::Path(src),
+                expected_blake3: None,
+            },
+            false,
+            None,
+            false,
+            &home,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.name, "safe-plugin");
+        assert!(outcome.final_dir.exists());
+
+        // Check companion metadata exists and says override: false
+        let metadata_path = home
+            .join("state")
+            .join("plugin-risk")
+            .join("safe-plugin.json");
+        assert!(metadata_path.exists());
+        let meta_content = fs::read_to_string(metadata_path).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&meta_content).unwrap();
+        assert_eq!(meta["scan_severity"], "LOW");
+        assert_eq!(meta["override"].as_bool(), Some(false));
+
+        std::env::remove_var("MAKAKOO_TEST_SKILLSPECTOR_BIN");
+    }
+
+    #[test]
+    fn test_preflight_scan_high_risk_blocks_install() {
+        let _guard = skillspector_env_lock();
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+
+        // 1) Write mock skillspector binary returning HIGH risk
+        let mock_bin = tmp.path().join("mock_skillspector");
+        let script = r#"#!/bin/sh
+format="$4"
+output="$6"
+if [ "$format" = "json" ]; then
+  cat <<EOF > "$output"
+{
+  "risk_assessment": {
+    "score": 85,
+    "severity": "HIGH",
+    "recommendation": "DO_NOT_INSTALL"
+  },
+  "issues": [
+    {
+      "id": "PE3",
+      "severity": "HIGH",
+      "category": "Credential Access",
+      "location": "main.py:5"
+    }
+  ]
+}
+EOF
+elif [ "$format" = "sarif" ]; then
+  echo '{"runs":[]}' > "$output"
+fi
+"#;
+        fs::write(&mock_bin, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
+
+        // 2) Run install - must fail
+        let src = seed_source(tmp.path(), "risky-plugin");
+        let err = install(
+            &InstallRequest {
+                source: PluginSource::Path(src),
+                expected_blake3: None,
+            },
+            false,
+            None,
+            false,
+            &home,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, InstallError::SecurityRiskBlocked { ref severity, score } if severity == "HIGH" && score == 85),
+            "expected SecurityRiskBlocked error, got {:?}",
+            err
+        );
+
+        // Verify plugin directory was NOT promoted
+        assert!(!home.join("plugins").join("risky-plugin").exists());
+
+        std::env::remove_var("MAKAKOO_TEST_SKILLSPECTOR_BIN");
+    }
+
+    #[test]
+    fn test_preflight_scan_high_risk_with_override_permits_install() {
+        let _guard = skillspector_env_lock();
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+
+        // 1) Write mock skillspector binary returning HIGH risk
+        let mock_bin = tmp.path().join("mock_skillspector");
+        let script = r#"#!/bin/sh
+format="$4"
+output="$6"
+if [ "$format" = "json" ]; then
+  cat <<EOF > "$output"
+{
+  "risk_assessment": {
+    "score": 85,
+    "severity": "HIGH",
+    "recommendation": "DO_NOT_INSTALL"
+  },
+  "issues": [
+    {
+      "id": "PE3",
+      "severity": "HIGH",
+      "category": "Credential Access",
+      "location": "main.py:5"
+    }
+  ]
+}
+EOF
+elif [ "$format" = "sarif" ]; then
+  echo '{"runs":[]}' > "$output"
+fi
+"#;
+        fs::write(&mock_bin, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
+
+        // 2) Run install with allow_risk and risk_ack
+        let src = seed_source(tmp.path(), "risky-override-plugin");
+        let outcome = install(
+            &InstallRequest {
+                source: PluginSource::Path(src),
+                expected_blake3: None,
+            },
+            true,                                          // allow_risk
+            Some("Reviewed report, known false positive"), // risk_ack
+            false,
+            &home,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.name, "risky-override-plugin");
+        assert!(outcome.final_dir.exists());
+
+        // Check companion metadata exists and says override: true
+        let metadata_path = home
+            .join("state")
+            .join("plugin-risk")
+            .join("risky-override-plugin.json");
+        assert!(metadata_path.exists());
+        let meta_content = fs::read_to_string(metadata_path).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&meta_content).unwrap();
+        assert_eq!(meta["scan_severity"], "HIGH");
+        assert_eq!(meta["override"].as_bool(), Some(true));
+        assert_eq!(
+            meta["override_ack"].as_str(),
+            Some("Reviewed report, known false positive")
+        );
+        assert!(meta["override_ts"].is_string());
+
+        // Check audit event log
+        let audit_path = home.join("logs").join("audit.jsonl");
+        assert!(audit_path.exists());
+        let audit_content = fs::read_to_string(audit_path).unwrap();
+        assert!(audit_content.contains("skillspector.override"));
+        assert!(audit_content.contains("risky-override-plugin"));
+        assert!(audit_content.contains("Reviewed report, known false positive"));
+
+        std::env::remove_var("MAKAKOO_TEST_SKILLSPECTOR_BIN");
     }
 }
