@@ -10,6 +10,13 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-06-12
+
+### Fixed
+
+- Fixed fresh `makakoo install` on clean machines by skipping SkillSpector scans for bundled distro plugins that already ship inside the release archive. Manual plugin installs and remote plugin sources still use the security gate.
+
+
 ## [0.1.13] - 2026-06-12
 
 ### Added
