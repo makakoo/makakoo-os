@@ -10,6 +10,19 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-06-12
+
+### Added
+
+- Added identity capture to the core setup flow so new installs can persist both the assistant persona name and the human user name globally across infected CLIs.
+- Added the persona capture and registry bootstrap plugins to the core distro so names chosen during setup become part of Makakoo OS identity state instead of one CLI session state.
+
+### Fixed
+
+- Fixed infected Codex/OpenCode/Vibe MCP configuration to prefer the installed `makakoo-mcp` next to the active `makakoo` binary or on `PATH`, avoiding stale `$HOME/.cargo/bin/makakoo-mcp` paths on VPS installs.
+- Fixed setup and plugin-install tests so CI no longer shells out to host package managers or real SkillSpector bootstrap paths while validating setup status and risk-gate behavior.
+
+
 ## [0.1.12] - 2026-06-08
 
 ### Added
