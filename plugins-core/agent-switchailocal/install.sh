@@ -35,11 +35,33 @@ _npm_pkg_installed() {
 
 _ail_bin() {
     # The npm package ships a bin.js that downloads the binary on first run.
-    # Find it via npm's global bin dir.
-    local npm_bin
-    npm_bin="$(npm bin -g 2>/dev/null)" && [[ -n "${npm_bin}" ]] && \
-        echo "${npm_bin}/switchailocal" && return
-    # Fallback: search PATH
+    # npm 10+ on some Linux distros removed `npm bin -g`, and SSH/non-login
+    # sessions often omit npm's global prefix bin dir from PATH. Resolve all
+    # known locations explicitly before falling back to command -v.
+    local npm_bin npm_prefix npm_root candidate
+
+    if npm_bin="$(npm bin -g 2>/dev/null)" && [[ -n "${npm_bin}" ]]; then
+        candidate="${npm_bin}/switchailocal"
+        [[ -f "${candidate}" || -L "${candidate}" ]] && echo "${candidate}" && return 0
+    fi
+
+    if npm_prefix="$(npm prefix -g 2>/dev/null)" && [[ -n "${npm_prefix}" ]]; then
+        for candidate in \
+            "${npm_prefix}/bin/switchailocal" \
+            "${npm_prefix}/switchailocal"; do
+            [[ -f "${candidate}" || -L "${candidate}" ]] && echo "${candidate}" && return 0
+        done
+    fi
+
+    if npm_root="$(npm root -g 2>/dev/null)" && [[ -n "${npm_root}" ]]; then
+        for candidate in \
+            "$(dirname "${npm_root}")/bin/switchailocal" \
+            "${npm_root}/../bin/switchailocal"; do
+            [[ -f "${candidate}" || -L "${candidate}" ]] && echo "${candidate}" && return 0
+        done
+    fi
+
+    # Fallback: search PATH.
     command -v switchailocal 2>/dev/null
 }
 

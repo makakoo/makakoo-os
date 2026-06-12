@@ -10,8 +10,33 @@ $stateDir  = "$env:MAKAKOO_HOME\state\agent-switchailocal"
 $logDir    = "$stateDir\logs"
 $svcName   = "switchailocal"
 
-$npmBin    = (npm bin -g).Trim()
-$binary    = "$npmBin\switchailocal.cmd"
+function Resolve-NpmBinDir {
+    $npmBin = $null
+    try {
+        $npmBin = (& npm bin -g 2>$null | Select-Object -First 1).Trim()
+    } catch { }
+    if ($npmBin -and (Test-Path (Join-Path $npmBin "switchailocal.cmd"))) {
+        return $npmBin
+    }
+
+    $prefix = $null
+    try {
+        $prefix = (& npm prefix -g 2>$null | Select-Object -First 1).Trim()
+    } catch { }
+    if ($prefix) {
+        foreach ($dir in @($prefix, (Join-Path $prefix "bin"))) {
+            if (Test-Path (Join-Path $dir "switchailocal.cmd")) { return $dir }
+        }
+        return $prefix
+    }
+
+    $cmd = Get-Command switchailocal.cmd -ErrorAction SilentlyContinue
+    if ($cmd) { return Split-Path -Parent $cmd.Source }
+    return ""
+}
+
+$npmBin    = Resolve-NpmBinDir
+$binary    = Join-Path $npmBin "switchailocal.cmd"
 
 function New-Item-Dir($path) {
     if (-not (Test-Path $path)) { New-Item -ItemType Directory -Force -Path $path | Out-Null }

@@ -10,6 +10,13 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-06-12
+
+### Fixed
+
+- Fixed `agent-switchailocal` install on servers where npm no longer supports `npm bin -g` and SSH/non-login shells do not include npm's global prefix bin directory on `PATH`.
+
+
 ## [0.1.14] - 2026-06-12
 
 ### Fixed
