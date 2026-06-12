@@ -403,7 +403,7 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
     }
 
     // 1. Run for JSON
-    let mut cmd = Command::new(&bin_path);
+    let mut cmd = skillspector_command(&bin_path);
     cmd.arg("scan");
     cmd.arg(&options.target);
     cmd.arg("--format").arg("json");
@@ -424,7 +424,7 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
         serde_json::from_str(&json_content).context("Failed to parse SkillSpector JSON report")?;
 
     // 2. Run for SARIF
-    let mut cmd_sarif = Command::new(&bin_path);
+    let mut cmd_sarif = skillspector_command(&bin_path);
     cmd_sarif.arg("scan");
     cmd_sarif.arg(&options.target);
     cmd_sarif.arg("--format").arg("sarif");
@@ -449,6 +449,19 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
     }
 
     Ok((report, report_json_path))
+}
+
+fn skillspector_command(bin_path: &Path) -> Command {
+    #[cfg(all(test, windows))]
+    {
+        if bin_path.extension().and_then(|ext| ext.to_str()) == Some("py") {
+            let mut cmd = Command::new("python");
+            cmd.arg(bin_path);
+            return cmd;
+        }
+    }
+
+    Command::new(bin_path)
 }
 
 fn save_audit_entry(

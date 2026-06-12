@@ -478,6 +478,19 @@ fn parse_lock_source(plugin: &str, s: &str) -> Result<PluginSource, InstallError
 /// `source_str` is the human-readable lock-file source (e.g. `path:/x`,
 /// `git:https://.../repo@v0.1.0`, `tar:https://.../x.tar.gz`).
 /// `resolved_sha` is the git SHA or tarball sha256 (None for path installs).
+fn skill_security_config_for_install(makakoo_home: &Path) -> SkillSecurityConfig {
+    let path = makakoo_home.join("config").join("skill_security.toml");
+    #[cfg(test)]
+    {
+        if !path.exists() {
+            let mut config = SkillSecurityConfig::default();
+            config.skillspector.enabled = false;
+            return config;
+        }
+    }
+    SkillSecurityConfig::load_from(&path)
+}
+
 fn install_staged(
     src_path: &Path,
     source_str: String,
@@ -542,8 +555,10 @@ fn install_staged(
         stage_target.display()
     );
 
-    // Security preflight check
-    let config = SkillSecurityConfig::load();
+    // Security preflight check. Production reads the target Makakoo home. Unit tests
+    // default to disabled unless they explicitly seed a config file, so ordinary
+    // install tests do not require uv/Python/SkillSpector on CI runners.
+    let config = skill_security_config_for_install(makakoo_home);
     if config.skillspector.enabled {
         if no_skill_scan {
             if source_str.starts_with("path:") {
@@ -903,6 +918,70 @@ run = "true"
         write_manifest(&src, name, "");
         fs::write(src.join("hello.py"), b"print('hi')").unwrap();
         src
+    }
+
+    fn enable_skillspector(home: &Path) {
+        let config_dir = home.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("skill_security.toml"),
+            "[skillspector]\nenabled = true\n",
+        )
+        .unwrap();
+    }
+
+    fn write_mock_skillspector(tmp: &TempDir, stem: &str, json_report: &str) -> PathBuf {
+        let py_path = tmp.path().join(format!("{stem}.py"));
+        let wrapper_path = tmp.path().join(stem);
+
+        let report_literal = serde_json::to_string(json_report).unwrap();
+        let py = format!(
+            r#"import sys
+from pathlib import Path
+
+report = {report_literal}
+args = sys.argv[1:]
+fmt = None
+out = None
+i = 0
+while i < len(args):
+    if args[i] == "--format" and i + 1 < len(args):
+        fmt = args[i + 1]
+        i += 2
+        continue
+    if args[i] == "--output" and i + 1 < len(args):
+        out = args[i + 1]
+        i += 2
+        continue
+    i += 1
+
+if not out:
+    sys.exit(0)
+if fmt == "json":
+    Path(out).write_text(report, encoding="utf-8")
+elif fmt == "sarif":
+    Path(out).write_text('{{"runs":[]}}', encoding="utf-8")
+"#
+        );
+        fs::write(&py_path, py).unwrap();
+
+        if cfg!(windows) {
+            return py_path;
+        }
+
+        let file = py_path.file_name().unwrap().to_string_lossy();
+        fs::write(
+            &wrapper_path,
+            format!("#!/bin/sh\nexec python3 \"$(dirname \"$0\")/{file}\" \"$@\"\n"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        wrapper_path
     }
 
     #[test]
@@ -1674,33 +1753,21 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        enable_skillspector(&home);
 
         // 1) Write mock skillspector binary
-        let mock_bin = tmp.path().join("mock_skillspector");
-        let script = r#"#!/bin/sh
-format="$4"
-output="$6"
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{
+        let mock_bin = write_mock_skillspector(
+            &tmp,
+            "mock_skillspector",
+            r#"{
   "risk_assessment": {
     "score": 0,
     "severity": "LOW",
     "recommendation": "SAFE"
   },
   "issues": []
-}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{"runs":[]}' > "$output"
-fi
-"#;
-        fs::write(&mock_bin, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+}"#,
+        );
         std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
 
         // 2) Run install
@@ -1740,15 +1807,13 @@ fi
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        enable_skillspector(&home);
 
         // 1) Write mock skillspector binary returning HIGH risk
-        let mock_bin = tmp.path().join("mock_skillspector");
-        let script = r#"#!/bin/sh
-format="$4"
-output="$6"
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{
+        let mock_bin = write_mock_skillspector(
+            &tmp,
+            "mock_skillspector",
+            r#"{
   "risk_assessment": {
     "score": 85,
     "severity": "HIGH",
@@ -1762,18 +1827,8 @@ if [ "$format" = "json" ]; then
       "location": "main.py:5"
     }
   ]
-}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{"runs":[]}' > "$output"
-fi
-"#;
-        fs::write(&mock_bin, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+}"#,
+        );
         std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
 
         // 2) Run install - must fail
@@ -1808,15 +1863,13 @@ fi
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        enable_skillspector(&home);
 
         // 1) Write mock skillspector binary returning HIGH risk
-        let mock_bin = tmp.path().join("mock_skillspector");
-        let script = r#"#!/bin/sh
-format="$4"
-output="$6"
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{
+        let mock_bin = write_mock_skillspector(
+            &tmp,
+            "mock_skillspector",
+            r#"{
   "risk_assessment": {
     "score": 85,
     "severity": "HIGH",
@@ -1830,18 +1883,8 @@ if [ "$format" = "json" ]; then
       "location": "main.py:5"
     }
   ]
-}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{"runs":[]}' > "$output"
-fi
-"#;
-        fs::write(&mock_bin, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+}"#,
+        );
         std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
 
         // 2) Run install with allow_risk and risk_ack

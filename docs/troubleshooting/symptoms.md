@@ -39,6 +39,9 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 - **`failed to read <path>: <os-error>`** — Filesystem permission or missing-file. Check `ls -la <path>`.
 - **`failed to spawn plugin '<name>': <error>`** — The daemon tried to start a plugin's entrypoint and the process launch failed. Check the plugin's entrypoint in `plugin.toml` vs what's actually on disk; Cinder (mascot) auto-surfaces compile-time issues — see [cinder.md](../mascots/cinder.md).
+- **`failed to initialize venv: {e}`** — SkillSpector bootstrap could not create its Python environment. Confirm `uv` and Python 3.12 are installed, delete `$MAKAKOO_HOME/state/skillspector-venv`, then rerun the command.
+- **`failed to run skillspector scan for JSON: {e}`** — Makakoo found SkillSpector but could not execute the JSON scan. Check the executable path, Python venv health, and platform script permissions.
+- **`failed to run skillspector scan for SARIF: {e}`** — Makakoo found SkillSpector but could not execute the SARIF scan. Check the executable path, Python venv health, and platform script permissions.
 - **`failed to write bootstrap cache: <error>`** — The infect cache path isn't writable. `~/MAKAKOO/cache/infect/` must be writable by your user.
 
 ## G
@@ -82,6 +85,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ## P
 
+- **`Python 3.12 is missing. Please install it: brew install python@3.12 uv`** — SkillSpector needs Python 3.12 plus `uv`. On macOS run the printed Homebrew command; on Linux/Windows install equivalent Python 3.12 and `uv` packages, then retry.
 - **`peer-makakoo template requires --peer-name`** / **`peer-makakoo template requires --url <http://peer-host:port>`** — `makakoo adapter gen peer-makakoo` needs both flags. Pass them.
 - **`permanent grant outside $MAKAKOO_HOME (<path>) — pass --yes-really to confirm`** — `permanent` duration is only automatic inside `$MAKAKOO_HOME`. For other paths, confirm with `--yes-really`.
 - **`plugin not installed: <name>`** — [I ran a command and got an error → `error: plugin not installed`](./tree.md#error-plugin-not-installed-name).
@@ -109,6 +113,9 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 - **`scope <p> covers the entire home directory — grant a specific subdirectory`** / **`scope <p> is too broad — grant a specific subdirectory`** — [I ran a command and got an error → `error: too broad`](./tree.md#error-too-broad----or-~-home---).
 - **`skill '<name>' not found under <dir>`** — `makakoo skill <name>` couldn't locate a matching Python skill. Confirm the name with `makakoo plugin list`; many former "skills" now route through `makakoo plugin info <name>` instead.
 - **`skills dir <path> does not exist`** — The registry scan root is missing. Reinstall `lib-harvey-core` or set `MAKAKOO_SKILLS_DIR`.
+- **`skillspector executable not found in venv at {:?}`** — SkillSpector bootstrap completed but the expected binary is absent. Delete `$MAKAKOO_HOME/state/skillspector-venv` and rerun so Makakoo recreates it.
+- **`skillspector scan JSON command failed`** — SkillSpector ran but did not produce a successful JSON report. Inspect the stderr above it, then rerun with `--no-cache` to rebuild the venv if needed.
+- **`skillspector scan SARIF command failed`** — SkillSpector ran but did not produce a successful SARIF report. Inspect the stderr above it, then rerun with `--no-cache` to rebuild the venv if needed.
 - **`staging error: target plugin dir already exists — uninstall first`** — [I ran a command and got an error → `staging error`](./tree.md#error-staging-error-target-plugin-dir-already-exists---uninstall-first).
 - **`subprocess failed: <label> (exit code <code>)`** — One of the actions queued by `makakoo upgrade` exited non-zero. The label tells you which (`cargo install …`, `brew upgrade …`, `curl … | sh`). Run the action manually to see the full output, fix the root cause, then retry. The chain aborts on first failure — partial upgrades are possible if the kernel succeeds but `makakoo-mcp` fails.
 - **`superbrain connection mutex poisoned`** — A thread crashed while holding the DB mutex. `makakoo daemon restart`.
@@ -130,6 +137,9 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 - **`unknown template '<other>'. Valid: openai-compat, subprocess, mcp-stdio, peer-makakoo`** — `makakoo adapter gen` only knows the four listed templates. Pick one.
 - **`unrecognized subcommand '<name>'`** — [I ran a command and got an error → `error: unrecognized subcommand`](./tree.md#error-unrecognized-subcommand-name).
 - **`unsupported duration <value>; use 30m | 1h | 24h | 7d | permanent`** — `makakoo perms grant --for` got an unparseable value. Pass one of the listed units.
+- **`uv is missing. Please install it: brew install python@3.12 uv`** — SkillSpector bootstrap requires `uv`. Install `uv` and Python 3.12, or run plugin lifecycle tests with `--no-skill-scan` when intentionally skipping scans.
+- **`uv pip install of SkillSpector failed`** — `uv` could not install the pinned SkillSpector package. Check network/GitHub access and the pinned git ref, then delete `$MAKAKOO_HOME/state/skillspector-venv` and retry.
+- **`uv venv creation failed`** — `uv` could not create the SkillSpector venv. Check disk permissions under `$MAKAKOO_HOME/state/`, Python 3.12 availability, and rerun after deleting any partial venv.
 
 ## W
 

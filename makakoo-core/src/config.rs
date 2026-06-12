@@ -76,6 +76,12 @@ fn default_voice_default() -> String {
 pub struct PersonaConfig {
     #[serde(default = "default_persona_name")]
     pub name: String,
+    /// Preferred user name. Optional so existing installs with the
+    /// historic `persona.json` shape continue to round-trip cleanly.
+    /// The setup wizard asks for this and persona-registry uses it to
+    /// seed `$MAKAKOO_HOME/config/persona_registry.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     /// Pronoun. Accepts either a Rust-era `pronoun` field OR the legacy
     /// Python-era `pronouns` alias (e.g. `"he/him"`). Defaults to `"they"`.
     #[serde(default = "default_pronoun", alias = "pronouns")]
@@ -88,6 +94,7 @@ impl Default for PersonaConfig {
     fn default() -> Self {
         Self {
             name: default_persona_name(),
+            user: None,
             pronoun: default_pronoun(),
             voice_default: default_voice_default(),
         }
@@ -188,6 +195,7 @@ mod tests {
         let path = dir.path().join("config").join("persona.json");
         let p = PersonaConfig {
             name: "Atlas".into(),
+            user: None,
             pronoun: "they".into(),
             voice_default: "caveman".into(),
         };
@@ -206,6 +214,7 @@ mod tests {
     fn roundtrip_serde() {
         let p = PersonaConfig {
             name: "Olibia".into(),
+            user: Some("Sebastian".into()),
             pronoun: "she".into(),
             voice_default: "friendly".into(),
         };
@@ -224,6 +233,20 @@ mod tests {
         let cfg = load_persona().unwrap();
         std::env::remove_var("MAKAKOO_HOME");
         assert_eq!(cfg, PersonaConfig::default());
+    }
+
+    #[test]
+    fn optional_user_roundtrips_when_present() {
+        let p = PersonaConfig {
+            name: "Harvey".into(),
+            user: Some("Sebastian Schkudlara".into()),
+            pronoun: "he/him".into(),
+            voice_default: "caveman".into(),
+        };
+        let raw = serde_json::to_string(&p).unwrap();
+        assert!(raw.contains("Sebastian Schkudlara"));
+        let back: PersonaConfig = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back.user.as_deref(), Some("Sebastian Schkudlara"));
     }
 
     /// T18 — the user's real persona.json has `{name, user, pronouns,
@@ -245,6 +268,7 @@ mod tests {
         let cfg = load_persona().unwrap();
         std::env::remove_var("MAKAKOO_HOME");
         assert_eq!(cfg.name, "Harvey");
+        assert_eq!(cfg.user.as_deref(), Some("tester"));
         assert_eq!(cfg.pronoun, "they/them"); // via alias
         assert_eq!(cfg.voice_default, "caveman"); // via serde default
     }
@@ -257,15 +281,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("config");
         std::fs::create_dir_all(&config_dir).unwrap();
-        std::fs::write(
-            config_dir.join("persona.json"),
-            r#"{"name":"Makakoo"}"#,
-        )
-        .unwrap();
+        std::fs::write(config_dir.join("persona.json"), r#"{"name":"Makakoo"}"#).unwrap();
         std::env::set_var("MAKAKOO_HOME", dir.path());
         let cfg = load_persona().unwrap();
         std::env::remove_var("MAKAKOO_HOME");
         assert_eq!(cfg.name, "Makakoo");
+        assert_eq!(cfg.user, None);
         assert_eq!(cfg.pronoun, "they");
         assert_eq!(cfg.voice_default, "caveman");
     }

@@ -33,7 +33,7 @@ same effect can be forced with `--non-interactive`.
 
 | Section          | What it does                                                                 | How status is decided                            |
 |------------------|-----------------------------------------------------------------------------|--------------------------------------------------|
-| `persona`        | Names your assistant + pronoun + voice default.                              | `config/persona.json` exists → already-satisfied |
+| `persona`        | Names your assistant + optional user name + pronoun + voice default; seeds persona registry/context when installed. | `config/persona.json` exists → already-satisfied |
 | `brain`          | Shells to the existing `skill-brain-multi-source` picker to register vaults.  | `config/brain_sources.json` has ≥1 non-default source |
 | `cli-agent`      | Installs pi (`@mariozechner/pi-coding-agent`) via `npm install -g`.          | `pi` is on `$PATH`                                |
 | `terminal`       | Installs Ghostty via `brew install --cask ghostty`. **macOS only.**           | `brew list --cask ghostty` exits 0                |
@@ -97,4 +97,6 @@ of the flag.
   nag (via the Brain journal) but never install without the wizard.
 - **Persona is preserved across refactors.** The old `makakoo setup`
   was a one-shot persona picker; it now lives as the `persona` section
-  inside this dispatcher with bit-for-bit identical prompts.
+  inside this dispatcher. Fresh core installs also seed
+  `config/persona_registry.json` and `config/persona_context.md` so
+  every infected CLI remembers user, companion, and channel names.

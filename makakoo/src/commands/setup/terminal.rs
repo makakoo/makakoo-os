@@ -213,15 +213,7 @@ mod tests {
 
     #[test]
     fn install_ghostty_reports_failed_when_brew_missing() {
-        let dir = TempDir::new().unwrap();
-        // stage a `which` shim that always reports not-found, so
-        // binary_on_path("brew") returns false. Prepend to original
-        // PATH (don't replace) so concurrent test readers still see sh
-        // etc. — this PathGuard holds the global mutex.
-        shim(dir.path(), "which", 1, "");
-        let orig = std::env::var("PATH").unwrap_or_default();
-        let new_path = format!("{}:{}", dir.path().display(), orig);
-        let _g = PathGuard::new(&new_path);
+        let _override = super::super::cli_agent::override_binary_on_path("brew", false);
 
         let stdin = Cursor::new(Vec::<u8>::new());
         let mut ui = Ui::new(stdin, Vec::<u8>::new());

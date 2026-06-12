@@ -436,6 +436,15 @@ version = "^1.0"
         assert_eq!(f.distro.name, "core");
         assert_eq!(f.include(), &["minimal.toml".to_string()]);
         assert!(f.plugins.len() >= 4);
+        assert!(
+            f.plugins.contains_key("skill-system-persona-capture"),
+            "core distro must install the global persona registry skill"
+        );
+        assert!(
+            f.plugins
+                .contains_key("bootstrap-fragment-persona-registry"),
+            "core distro must infect every CLI with persona-registry rules"
+        );
     }
 
     #[test]

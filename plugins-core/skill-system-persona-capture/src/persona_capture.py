@@ -49,6 +49,17 @@ def clean_name(value: str) -> str:
     return value.strip().strip(".!,;:()[]{}\"'")
 
 
+def default_user_name() -> str:
+    raw = (
+        os.environ.get("MAKAKOO_USER_NAME")
+        or os.environ.get("USER")
+        or os.environ.get("USERNAME")
+        or "user"
+    )
+    raw = clean_name(raw.replace("_", " ").replace(".", " "))
+    return raw or "user"
+
+
 def config_dir() -> Path:
     d = home() / "config"
     d.mkdir(parents=True, exist_ok=True)
@@ -89,7 +100,7 @@ def write_json(path: Path, data: Dict[str, Any]) -> None:
 def load_primary_persona() -> Dict[str, Any]:
     data = load_json(persona_path(), {})
     name = str(data.get("name") or "Harvey")
-    user = str(data.get("user") or "Sebastian")
+    user = str(data.get("user") or default_user_name())
     pronouns = str(data.get("pronouns") or "he/him")
     return {
         "id": slug(name),
@@ -104,7 +115,7 @@ def load_primary_persona() -> Dict[str, Any]:
 
 def default_registry() -> Dict[str, Any]:
     primary = load_primary_persona()
-    user_name = str(primary.get("user_from_persona_json") or "Sebastian")
+    user_name = str(primary.get("user_from_persona_json") or default_user_name())
     ts = now_iso()
     reg: Dict[str, Any] = {
         "version": SCHEMA_VERSION,
@@ -132,7 +143,7 @@ def load_registry() -> Dict[str, Any]:
     reg.setdefault("version", SCHEMA_VERSION)
     reg.setdefault("updated_at", now_iso())
     reg.setdefault("primary_persona", {k: v for k, v in load_primary_persona().items() if k != "user_from_persona_json"})
-    primary_user = load_primary_persona().get("user_from_persona_json") or "Sebastian"
+    primary_user = load_primary_persona().get("user_from_persona_json") or default_user_name()
     reg.setdefault("user", {"id": slug(str(primary_user)), "name": str(primary_user)})
     reg.setdefault("companions", {})
     reg.setdefault("channel_bindings", {"default-cli": reg.get("primary_persona", {}).get("id", "harvey")})
@@ -372,7 +383,7 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(json.dumps(reg, indent=2, ensure_ascii=False, sort_keys=True))
         return 0
     primary = reg.get("primary_persona", {}).get("name", "Harvey")
-    user = reg.get("user", {}).get("name", "Sebastian")
+    user = reg.get("user", {}).get("name", default_user_name())
     print(f"Primary: {primary}")
     print(f"User: {user}")
     print("Companions:")

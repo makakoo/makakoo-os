@@ -23,6 +23,11 @@ version = "^0.1"
 "lib-agent-loop" = { version = "*" }
 "lib-harvey-core" = { version = "*" }
 
+# Identity registry — persistent user/persona/companion/channel names for
+# every infected CLI. Setup seeds it; infect injects the bootstrap fragment.
+"skill-system-persona-capture" = { version = "*" }
+"bootstrap-fragment-persona-registry" = { version = "*" }
+
 # Browser — Chrome CDP harness for harvey_browse in every infected CLI.
 "agent-browser-harness" = { version = "*" }
 "bootstrap-fragment-browser-harness" = { version = "*" }
@@ -61,6 +66,8 @@ voice = "caveman"
 [post_install]
 message = """
 Makakoo Core installed. Plugins registered:
+  - skill-system-persona-capture — global user/persona/companion name registry
+  - bootstrap-fragment-persona-registry — teaches infected CLIs to use it
   - agent-browser-harness     — harvey_browse for every CLI (needs Chrome with CDP)
   - agent-switchailocal       — LLM gateway on :18080 (all platforms)
   - watchdog-switchailocal   (300s interval)
