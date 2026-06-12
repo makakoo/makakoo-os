@@ -115,18 +115,75 @@ fn install_pi(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
     Ok(SectionOutcome::Installed)
 }
 
-/// True when a binary resolves via the system `which` command. Mirrors
-/// the pattern already used in `skill_runner.rs` — simple, portable,
-/// no extra crate dependency.
+/// True when a binary resolves on PATH. Implemented without shelling out to
+/// `which` so setup tests and minimal CI images do not depend on a host helper.
 pub fn binary_on_path(name: &str) -> bool {
-    let Ok(out) = Command::new("which").arg(name).output() else {
+    #[cfg(test)]
+    if let Some(value) = binary_on_path_test_override(name) {
+        return value;
+    }
+
+    let Some(paths) = std::env::var_os("PATH") else {
         return false;
     };
-    if !out.status.success() {
-        return false;
+    for dir in std::env::split_paths(&paths) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            let pathext = std::env::var_os("PATHEXT")
+                .map(|v| v.to_string_lossy().to_string())
+                .unwrap_or_else(|| ".EXE;.CMD;.BAT;.COM".to_string());
+            for ext in pathext.split(';') {
+                let ext = ext.trim();
+                if ext.is_empty() {
+                    continue;
+                }
+                let with_ext = dir.join(format!("{name}{ext}"));
+                if with_ext.is_file() {
+                    return true;
+                }
+            }
+        }
     }
-    let path_line = String::from_utf8_lossy(&out.stdout);
-    !path_line.trim().is_empty()
+    false
+}
+
+#[cfg(test)]
+thread_local! {
+    static BINARY_ON_PATH_OVERRIDES: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(test)]
+fn binary_on_path_test_override(name: &str) -> Option<bool> {
+    BINARY_ON_PATH_OVERRIDES.with(|overrides| overrides.borrow().get(name).copied())
+}
+
+#[cfg(test)]
+pub(crate) struct BinaryOnPathOverride {
+    name: String,
+}
+
+#[cfg(test)]
+impl Drop for BinaryOnPathOverride {
+    fn drop(&mut self) {
+        BINARY_ON_PATH_OVERRIDES.with(|overrides| {
+            overrides.borrow_mut().remove(&self.name);
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn override_binary_on_path(name: &str, value: bool) -> BinaryOnPathOverride {
+    BINARY_ON_PATH_OVERRIDES.with(|overrides| {
+        overrides.borrow_mut().insert(name.to_string(), value);
+    });
+    BinaryOnPathOverride {
+        name: name.to_string(),
+    }
 }
 
 /// Best-effort `pi --version` readout. Returns None if the binary isn't
@@ -163,11 +220,7 @@ mod tests {
 
     #[test]
     fn status_alreadysatisfied_when_pi_on_path() {
-        let dir = TempDir::new().unwrap();
-        shim(dir.path(), "pi", 0, "pi 0.69.0");
-        let orig = std::env::var("PATH").unwrap_or_default();
-        let new_path = format!("{}:{}", isolated_path(dir.path()), orig);
-        let _g = PathGuard::new(&new_path);
+        let _override = override_binary_on_path("pi", true);
         let section = CliAgentSection::new();
         assert_eq!(section.status(), SectionStatus::AlreadySatisfied);
     }
@@ -247,18 +300,7 @@ mod tests {
 
     #[test]
     fn install_pi_reports_failed_when_npm_missing() {
-        let dir = TempDir::new().unwrap();
-        // A `which` shim that always exits 1 wins over /usr/bin/which
-        // because we prepend the shim dir. Effect: binary_on_path
-        // returns false regardless of what's actually installed.
-        shim(dir.path(), "which", 1, "");
-        let orig = std::env::var("PATH").unwrap_or_default();
-        // Prepend (don't replace) so other tests reading PATH still see
-        // system dirs — this PathGuard holds the global mutex so no
-        // other test mutates PATH concurrently, but readers in other
-        // unrelated modules may still race with us.
-        let new_path = format!("{}:{}", dir.path().display(), orig);
-        let _g = PathGuard::new(&new_path);
+        let _override = override_binary_on_path("npm", false);
 
         let stdin = Cursor::new(Vec::<u8>::new());
         let mut ui = Ui::new(stdin, Vec::<u8>::new());
