@@ -13,6 +13,82 @@ fn fresh_home() -> TempDir {
     TempDir::new().expect("tmp home")
 }
 
+fn write_mock_skillspector(
+    tmp: &TempDir,
+    stem: &str,
+    json_report: &str,
+    args_log: Option<&Path>,
+) -> PathBuf {
+    let py_path = tmp.path().join(format!("{stem}.py"));
+    let wrapper_path = if cfg!(windows) {
+        tmp.path().join(format!("{stem}.cmd"))
+    } else {
+        tmp.path().join(stem)
+    };
+
+    let report_literal = serde_json::to_string(json_report).unwrap();
+    let log_literal = args_log
+        .map(|p| serde_json::to_string(&p.to_string_lossy().to_string()).unwrap())
+        .unwrap_or_else(|| "None".to_string());
+    let py = format!(
+        r#"import json
+import sys
+from pathlib import Path
+
+report = {report_literal}
+args_log = {log_literal}
+args = sys.argv[1:]
+if args_log:
+    Path(args_log).write_text(" ".join(args), encoding="utf-8")
+
+fmt = None
+out = None
+i = 0
+while i < len(args):
+    if args[i] == "--format" and i + 1 < len(args):
+        fmt = args[i + 1]
+        i += 2
+        continue
+    if args[i] == "--output" and i + 1 < len(args):
+        out = args[i + 1]
+        i += 2
+        continue
+    i += 1
+
+if not out:
+    sys.exit(0)
+if fmt == "json":
+    Path(out).write_text(report, encoding="utf-8")
+elif fmt == "sarif":
+    Path(out).write_text('{{"runs":[]}}', encoding="utf-8")
+"#
+    );
+    fs::write(&py_path, py).unwrap();
+
+    if cfg!(windows) {
+        let file = py_path.file_name().unwrap().to_string_lossy();
+        fs::write(
+            &wrapper_path,
+            format!("@echo off\r\npython \"%~dp0{file}\" %*\r\n"),
+        )
+        .unwrap();
+    } else {
+        let file = py_path.file_name().unwrap().to_string_lossy();
+        fs::write(
+            &wrapper_path,
+            format!("#!/bin/sh\nexec python3 \"$(dirname \"$0\")/{file}\" \"$@\"\n"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    wrapper_path
+}
+
 fn run(home: &TempDir, args: &[&str], envs: &[(&str, &str)]) -> std::process::Output {
     let mut cmd = Command::new(binary_path());
     cmd.env("MAKAKOO_HOME", home.path())
@@ -54,31 +130,19 @@ fn plugin_install_low_risk_succeeds() {
     write_manifest(&plugin_src, "safe-plugin");
 
     // Mock skillspector
-    let mock_bin = tmp.path().join("mock_skillspector");
-    let script = r#"#!/bin/sh
-format="$4"
-output="$6"
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{
+    let mock_bin = write_mock_skillspector(
+        &tmp,
+        "mock_skillspector",
+        r#"{
   "risk_assessment": {
     "score": 0,
     "severity": "LOW",
     "recommendation": "SAFE"
   },
   "issues": []
-}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{"runs":[]}' > "$output"
-fi
-"#;
-    fs::write(&mock_bin, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+}"#,
+        None,
+    );
 
     let out = run(
         &home,
@@ -111,13 +175,10 @@ fn plugin_install_high_risk_blocked_by_default() {
     write_manifest(&plugin_src, "risky-plugin");
 
     // Mock skillspector returning HIGH risk
-    let mock_bin = tmp.path().join("mock_skillspector");
-    let script = r#"#!/bin/sh
-format="$4"
-output="$6"
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{
+    let mock_bin = write_mock_skillspector(
+        &tmp,
+        "mock_skillspector",
+        r#"{
   "risk_assessment": {
     "score": 85,
     "severity": "HIGH",
@@ -131,18 +192,9 @@ if [ "$format" = "json" ]; then
       "location": "main.py:5"
     }
   ]
-}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{"runs":[]}' > "$output"
-fi
-"#;
-    fs::write(&mock_bin, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+}"#,
+        None,
+    );
 
     let out = run(
         &home,
@@ -178,13 +230,10 @@ fn plugin_install_high_risk_with_override_succeeds() {
     write_manifest(&plugin_src, "risky-plugin");
 
     // Mock skillspector returning HIGH risk
-    let mock_bin = tmp.path().join("mock_skillspector");
-    let script = r#"#!/bin/sh
-format="$4"
-output="$6"
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{
+    let mock_bin = write_mock_skillspector(
+        &tmp,
+        "mock_skillspector",
+        r#"{
   "risk_assessment": {
     "score": 85,
     "severity": "HIGH",
@@ -198,18 +247,9 @@ if [ "$format" = "json" ]; then
       "location": "main.py:5"
     }
   ]
-}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{"runs":[]}' > "$output"
-fi
-"#;
-    fs::write(&mock_bin, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+}"#,
+        None,
+    );
 
     // 1) Test allow_risk without risk_ack -> fails
     let out_no_ack = run(
@@ -330,28 +370,10 @@ fn skill_audit_all_scans_fleet() {
     fs::write(vendor.join("SKILL.md"), "").unwrap();
 
     // Mock skillspector returning LOW/SAFE risk
-    let mock_bin = tmp.path().join("mock_skillspector");
-    let script = r#"#!/bin/sh
-format=""
-output=""
-for arg in "$@"; do
-  if [ "$arg" = "json" ] || [ "$arg" = "sarif" ]; then
-    format="$arg"
-  fi
-done
-# In CLI invocation: format is passed after --format and output is passed after --output
-# Let's parse args to find --format and --output correctly
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --format) format="$2"; shift ;;
-    --output) output="$2"; shift ;;
-  esac
-  shift
-done
-
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{
+    let mock_bin = write_mock_skillspector(
+        &tmp,
+        "mock_skillspector",
+        r#"{
   "risk_assessment": {
     "score": 10,
     "severity": "LOW",
@@ -365,18 +387,9 @@ if [ "$format" = "json" ]; then
       "location": "SKILL.md:5"
     }
   ]
-}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{"runs":[]}' > "$output"
-fi
-"#;
-    fs::write(&mock_bin, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+}"#,
+        None,
+    );
 
     let mut cmd = Command::new(binary_path());
     cmd.env("MAKAKOO_HOME", home.path())
@@ -444,49 +457,22 @@ fn skill_audit_llm_flag_behavior() {
     fs::create_dir_all(&audit_target).unwrap();
     fs::write(audit_target.join("SKILL.md"), "").unwrap();
 
-    let mock_bin = tmp.path().join("mock_skillspector");
     let args_log = tmp.path().join("args.log");
 
-    // We write a shell script that logs all its arguments to args_log
-    // and writes a dummy JSON report to the requested output path
-    let script = format!(
-        r#"#!/bin/sh
-# Log all args
-echo "$@" > "{}"
-
-format=""
-output=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --format) format="$2"; shift ;;
-    --output) output="$2"; shift ;;
-  esac
-  shift
-done
-
-if [ "$format" = "json" ]; then
-  cat <<EOF > "$output"
-{{
-  "risk_assessment": {{
+    // Mock logs all arguments and writes a dummy JSON report.
+    let mock_bin = write_mock_skillspector(
+        &tmp,
+        "mock_skillspector",
+        r#"{
+  "risk_assessment": {
     "score": 5,
     "severity": "LOW",
     "recommendation": "SAFE"
-  }},
+  },
   "issues": []
-}}
-EOF
-elif [ "$format" = "sarif" ]; then
-  echo '{{"runs":[]}}' > "$output"
-fi
-"#,
-        args_log.to_string_lossy()
+}"#,
+        Some(&args_log),
     );
-    fs::write(&mock_bin, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mock_bin, fs::Permissions::from_mode(0o755)).unwrap();
-    }
 
     // 1. Run skill audit without --llm -> should log `--no-llm`
     let out1 = run(

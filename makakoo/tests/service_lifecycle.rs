@@ -98,7 +98,12 @@ fn service_lifecycle_start_status_stop() {
     // Install via the path source — using --core would force a
     // different resolution path that doesn't apply here.
     let install = run(
-        &["plugin", "install", src_root.to_str().unwrap()],
+        &[
+            "plugin",
+            "install",
+            src_root.to_str().unwrap(),
+            "--no-skill-scan",
+        ],
         &home,
     );
     let _ = ok(&install);
@@ -107,7 +112,10 @@ fn service_lifecycle_start_status_stop() {
     let pre = run(&["plugin", "status", "dummy-service"], &home);
     let pre_stdout = String::from_utf8_lossy(&pre.stdout).to_string();
     assert!(!pre.status.success(), "pre-start status: {pre_stdout}");
-    assert!(pre_stdout.contains("down"), "pre-start stdout: {pre_stdout}");
+    assert!(
+        pre_stdout.contains("down"),
+        "pre-start stdout: {pre_stdout}"
+    );
 
     // Start: marker file should appear (backgrounded — poll).
     let start = run(&["plugin", "start", "dummy-service"], &home);
@@ -121,7 +129,10 @@ fn service_lifecycle_start_status_stop() {
     // Status: up.
     let status = run(&["plugin", "status", "dummy-service"], &home);
     let status_stdout = ok(&status);
-    assert!(status_stdout.contains("up"), "status stdout: {status_stdout}");
+    assert!(
+        status_stdout.contains("up"),
+        "status stdout: {status_stdout}"
+    );
 
     // Stop.
     let stop = run(&["plugin", "stop", "dummy-service"], &home);
@@ -171,7 +182,12 @@ health = "/bin/test -f {marker}"
     std::fs::write(src_root.join("plugin.toml"), &toml).unwrap();
 
     let _ = ok(&run(
-        &["plugin", "install", src_root.to_str().unwrap()],
+        &[
+            "plugin",
+            "install",
+            src_root.to_str().unwrap(),
+            "--no-skill-scan",
+        ],
         &home,
     ));
     let _ = ok(&run(&["plugin", "start", "dummy-restart"], &home));
@@ -215,7 +231,12 @@ run = "/bin/true"
     std::fs::write(src_root.join("plugin.toml"), toml).unwrap();
 
     let _ = ok(&run(
-        &["plugin", "install", src_root.to_str().unwrap()],
+        &[
+            "plugin",
+            "install",
+            src_root.to_str().unwrap(),
+            "--no-skill-scan",
+        ],
         &home,
     ));
     let out = run(&["plugin", "start", "dummy-skill"], &home);
