@@ -1,0 +1,22 @@
+[plugin]
+name = "bootstrap-fragment-persona-registry"
+version = "0.1.0"
+kind = "bootstrap-fragment"
+language = "shell"
+summary = "Teaches every infected CLI to use the global Makakoo persona registry for persistent names and channel identities."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/bootstrap-fragment-persona-registry"
+
+[abi]
+bootstrap-fragment = "^1.0"
+
+[depends]
+
+[capabilities]
+grants = []
+
+[infect.fragments]
+default = "fragments/default.md"
