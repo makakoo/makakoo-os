@@ -166,14 +166,21 @@ makakoo setup --reset                  # clear stored answers and re-prompt
 
 ### Section 1 — `persona`
 
-Tells Makakoo who YOU are and what to call your AI assistant. Defaults to "Harvey" (Sebastian's persona); can be any name.
+Tells Makakoo what to call the primary assistant persona and, optionally,
+what to call the user. The primary persona can be any name; Sebastian's
+install uses `Harvey`.
 
 Asks:
-- Persona name (default: `Harvey`)
-- User name (default: from `git config user.name` or `whoami`)
-- Tone (sharp/blunt/casual/formal — default `sharp`)
+- Persona name (suggestions: `Makakoo`, `Bongo`, `Kai`, `Nova`, `Sage`, or custom)
+- User name (optional; used to seed the global persona registry)
+- Pronoun (`they` default)
+- Voice default (`caveman` default)
 
-Writes to `$MAKAKOO_HOME/config/persona.json`. Read at every CLI session start by the bootstrap.
+Writes to `$MAKAKOO_HOME/config/persona.json`. On core installs, it also
+syncs `$MAKAKOO_HOME/config/persona_registry.json` and
+`$MAKAKOO_HOME/config/persona_context.md` through
+`skill-system-persona-capture`, so every infected CLI has the same durable
+name context.
 
 **Use case**: you want the AI to call you by name and identify as your custom persona instead of "Harvey".
 

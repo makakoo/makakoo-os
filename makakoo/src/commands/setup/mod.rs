@@ -15,9 +15,8 @@
 //!    - Map the [`SectionOutcome`] to a [`SectionStatus`] and persist.
 //! 5. Print a final summary table.
 //!
-//! Phase 1 registers only the persona section. Brain, CLI-agent,
-//! terminal, model-provider, and infect sections land in subsequent
-//! sprint phases.
+//! Current registry: persona → brain → cli-agent → terminal →
+//! model-provider → infect.
 
 use std::collections::HashSet;
 use std::io::{stdin, stdout};
@@ -68,9 +67,8 @@ pub fn run(args: SetupArgs) -> anyhow::Result<i32> {
         println!("Reset: wiped {}", state::state_path_for(&home).display());
     }
 
-    // Build the section registry. Later phases append more sections
-    // in the canonical order: persona → brain → cli-agent → terminal
-    // → model-provider → infect.
+    // Build the section registry in the canonical order: persona →
+    // brain → cli-agent → terminal → model-provider → infect.
     let mut sections: Vec<Box<dyn Section>> = vec![
         Box::new(persona::PersonaSection::new(args.force)),
         Box::new(brain::BrainSection::new()),

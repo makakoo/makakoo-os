@@ -23,6 +23,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 pub mod adapters;
@@ -55,16 +56,14 @@ pub struct McpServerSpec {
 
 impl McpServerSpec {
     /// Build the canonical spec. `home` resolves `MAKAKOO_HOME`/`HARVEY_HOME`
-    /// env values; `mcp_binary` is the absolute path to `makakoo-mcp`
-    /// (defaults to `~/.cargo/bin/makakoo-mcp` when caller passes None).
+    /// env values; `mcp_binary` is the path to `makakoo-mcp` resolved by
+    /// [`resolve_mcp_binary`]. If the caller passes None, fall back to the
+    /// bare command name so the host CLI can use its own PATH instead of a
+    /// stale hardcoded cargo path.
     pub fn default_harvey(home: &Path, mcp_binary: Option<&Path>) -> Self {
         let command = mcp_binary
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| {
-                dirs::home_dir()
-                    .map(|h| h.join(".cargo/bin/makakoo-mcp").to_string_lossy().to_string())
-                    .unwrap_or_else(|| "/usr/local/bin/makakoo-mcp".to_string())
-            });
+            .unwrap_or_else(|| mcp_binary_filename().to_string());
         let home_str = home.to_string_lossy().to_string();
         let mut env = BTreeMap::new();
         env.insert("MAKAKOO_HOME".to_string(), home_str.clone());
@@ -190,7 +189,8 @@ impl McpSyncReport {
                 "  {:<10} {:<14} {}\n",
                 target.short_name(),
                 tag,
-                target.config_path_for_home(&dirs::home_dir().unwrap_or_default())
+                target
+                    .config_path_for_home(&dirs::home_dir().unwrap_or_default())
                     .display(),
             ));
             if let SyncOutcome::Error { message } = outcome {
@@ -259,12 +259,8 @@ pub fn sync_one(
         }
     }
     match target.format() {
-        McpFormat::JsonMcpServers => {
-            adapters::json::sync(target, &path, spec, dry_run, false)
-        }
-        McpFormat::JsonOpencode => {
-            adapters::json::sync(target, &path, spec, dry_run, true)
-        }
+        McpFormat::JsonMcpServers => adapters::json::sync(target, &path, spec, dry_run, false),
+        McpFormat::JsonOpencode => adapters::json::sync(target, &path, spec, dry_run, true),
         McpFormat::TomlInlineTable => {
             // Codex doesn't read ~/AGENTS.md from $HOME by default —
             // its walk-up search stops at project markers, so the
@@ -281,27 +277,88 @@ pub fn sync_one(
     }
 }
 
-/// Resolve the absolute path to the `makakoo-mcp` binary. Looks at
-/// (1) `$MAKAKOO_MCP_BIN`, (2) `which makakoo-mcp` via PATH, (3) the
-/// `~/.cargo/bin/makakoo-mcp` default. Returns `None` only if every
-/// path is unusable.
+/// Resolve the installed `makakoo-mcp` binary path for infected MCP configs.
+///
+/// Resolution order:
+/// 1. `$MAKAKOO_MCP_BIN`, if it points at an existing executable/file.
+/// 2. Sibling of the currently running `makakoo` binary (curl/Homebrew/tarball
+///    installs put `makakoo` and `makakoo-mcp` in the same directory).
+/// 3. `makakoo-mcp` on `$PATH`.
+/// 4. `~/.cargo/bin/makakoo-mcp`, but only if it actually exists.
+///
+/// Returns `None` when no usable path is found. The caller then writes the bare
+/// `makakoo-mcp` command instead of poisoning fresh installs with a dead
+/// `~/.cargo/bin` path.
 pub fn resolve_mcp_binary() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("MAKAKOO_MCP_BIN") {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Some(pb);
+    resolve_mcp_binary_from(
+        std::env::var_os("MAKAKOO_MCP_BIN"),
+        std::env::current_exe().ok(),
+        std::env::var_os("PATH"),
+        dirs::home_dir(),
+    )
+}
+
+fn resolve_mcp_binary_from(
+    env_bin: Option<OsString>,
+    current_exe: Option<PathBuf>,
+    path_var: Option<OsString>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(p) = env_bin.and_then(existing_file) {
+        return Some(p);
+    }
+    if let Some(exe) = current_exe {
+        if let Some(parent) = exe.parent() {
+            if let Some(p) = existing_file(parent.join(mcp_binary_filename())) {
+                return Some(p);
+            }
         }
     }
-    if let Some(home) = dirs::home_dir() {
-        let cargo = home.join(".cargo/bin/makakoo-mcp");
-        if cargo.exists() {
-            return Some(cargo);
+    if let Some(path_var) = path_var {
+        if let Some(p) = find_binary_on_path(&path_var, mcp_binary_filename()) {
+            return Some(p);
         }
     }
-    // Last resort — let the caller live with a non-existent path so
-    // re-runs after `cargo install --force` self-heal once the path
-    // appears.
-    dirs::home_dir().map(|h| h.join(".cargo/bin/makakoo-mcp"))
+    if let Some(home) = home {
+        if let Some(p) = existing_file(home.join(".cargo/bin").join(mcp_binary_filename())) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn find_binary_on_path(path_var: &OsString, binary: &str) -> Option<PathBuf> {
+    for dir in std::env::split_paths(path_var) {
+        if let Some(p) = existing_file(dir.join(binary)) {
+            return Some(p);
+        }
+        #[cfg(windows)]
+        for ext in &["exe", "cmd", "bat"] {
+            if let Some(p) = existing_file(dir.join(binary).with_extension(ext)) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn existing_file<P: Into<PathBuf>>(path: P) -> Option<PathBuf> {
+    let path = path.into();
+    if path.is_file() {
+        Some(path.canonicalize().unwrap_or(path))
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn mcp_binary_filename() -> &'static str {
+    "makakoo-mcp.exe"
+}
+
+#[cfg(not(windows))]
+fn mcp_binary_filename() -> &'static str {
+    "makakoo-mcp"
 }
 
 #[cfg(test)]
@@ -328,14 +385,60 @@ mod tests {
             !spec.env.contains_key("PYTHONPATH"),
             "PYTHONPATH must not be in canonical env after harvey-os retirement"
         );
-        assert!(spec.prompt.as_deref().unwrap().contains("harvey_describe_video"));
+        assert!(spec
+            .prompt
+            .as_deref()
+            .unwrap()
+            .contains("harvey_describe_video"));
     }
 
     #[test]
-    fn default_harvey_falls_back_to_cargo_bin_when_unspecified() {
+    fn default_harvey_falls_back_to_bare_command_when_unspecified() {
         let home = PathBuf::from("/h/MAKAKOO");
         let spec = McpServerSpec::default_harvey(&home, None);
-        assert!(spec.command.ends_with(".cargo/bin/makakoo-mcp"));
+        assert_eq!(spec.command, mcp_binary_filename());
+    }
+
+    #[test]
+    fn resolve_mcp_binary_prefers_sibling_of_current_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let exe = bin_dir.join("makakoo");
+        let mcp = bin_dir.join(mcp_binary_filename());
+        std::fs::write(&exe, b"kernel").unwrap();
+        std::fs::write(&mcp, b"mcp").unwrap();
+
+        let resolved = resolve_mcp_binary_from(
+            None,
+            Some(exe),
+            Some(OsString::new()),
+            Some(dir.path().join("home")),
+        )
+        .unwrap();
+        assert_eq!(resolved, mcp.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_mcp_binary_uses_path_before_cargo_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_dir = dir.path().join("path-bin");
+        let home_bin = dir.path().join("home/.cargo/bin");
+        std::fs::create_dir_all(&path_dir).unwrap();
+        std::fs::create_dir_all(&home_bin).unwrap();
+        let path_mcp = path_dir.join(mcp_binary_filename());
+        let cargo_mcp = home_bin.join(mcp_binary_filename());
+        std::fs::write(&path_mcp, b"path").unwrap();
+        std::fs::write(&cargo_mcp, b"cargo").unwrap();
+
+        let resolved = resolve_mcp_binary_from(
+            None,
+            None,
+            Some(OsString::from(path_dir.as_os_str())),
+            Some(dir.path().join("home")),
+        )
+        .unwrap();
+        assert_eq!(resolved, path_mcp.canonicalize().unwrap());
     }
 
     #[test]
