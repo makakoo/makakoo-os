@@ -3,7 +3,7 @@
 //! Handles bootstrapping NVIDIA SkillSpector under $MAKAKOO_HOME/state/skillspector-venv/,
 //! scanning targets, parsing findings, and enforcing risk policy.
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use chrono::Utc;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -402,6 +402,13 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
         }
     }
 
+    // Avoid accidentally accepting a stale report if the scanner exits before
+    // writing the new output. SkillSpector returns a non-zero status for some
+    // real findings, so the existence + parseability of the fresh report is
+    // the signal we care about, not exit status alone.
+    let _ = fs::remove_file(&report_json_path);
+    let _ = fs::remove_file(&report_sarif_path);
+
     // 1. Run for JSON
     let mut cmd = skillspector_command(&bin_path);
     cmd.arg("scan");
@@ -415,11 +422,14 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
     let status = cmd
         .status()
         .map_err(|e| anyhow!("failed to run skillspector scan for JSON: {e}"))?;
-    if !status.success() {
-        return Err(anyhow!("skillspector scan JSON command failed"));
-    }
 
-    let json_content = fs::read_to_string(&report_json_path)?;
+    let json_content = fs::read_to_string(&report_json_path).with_context(|| {
+        format!(
+            "skillspector scan JSON command failed ({}) and did not write {}",
+            status,
+            report_json_path.display()
+        )
+    })?;
     let report: SkillspectorReport =
         serde_json::from_str(&json_content).context("Failed to parse SkillSpector JSON report")?;
 
@@ -436,8 +446,12 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
     let status_sarif = cmd_sarif
         .status()
         .map_err(|e| anyhow!("failed to run skillspector scan for SARIF: {e}"))?;
-    if !status_sarif.success() {
-        return Err(anyhow!("skillspector scan SARIF command failed"));
+    if !status_sarif.success() && !report_sarif_path.exists() {
+        return Err(anyhow!(
+            "skillspector scan SARIF command failed ({}) and did not write {}",
+            status_sarif,
+            report_sarif_path.display()
+        ));
     }
 
     // 3. Save audit log
