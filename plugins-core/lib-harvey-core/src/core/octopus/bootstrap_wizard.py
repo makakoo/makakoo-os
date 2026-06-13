@@ -73,7 +73,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     print("Next steps:")
     print("  1. Invite a peer:   makakoo octopus invite --link")
     print("  2. Peer joins with: makakoo octopus join <link>")
-    print("  3. Start the peer stack: makakoo agent start octopus-peer")
+    print("  3. Start the peer stack: makakoo agent start agent-octopus-peer")
     return 0
 
 

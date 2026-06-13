@@ -124,6 +124,40 @@ summary = "Full-featured personal setup"
 
 ---
 
+### federation
+
+Opt-in Brain Network federation for connecting multiple Makakoo installs.
+
+```toml
+# distros/federation.toml
+[distro]
+name = "federation"
+include = ["core.toml"]
+
+[plugins]
+"agent-octopus-peer" = { version = "*" }
+"skill-brain-network" = { version = "*" }
+```
+
+**Includes everything in core plus:**
+- `agent-octopus-peer` — signed MCP listener, inactive until activated.
+- `skill-brain-network` — `makakoo network` control plane.
+
+**Best for:**
+- Harvey laptop + Donna VPS setups
+- Tytus pod federation
+- Multi-machine Brain search
+- Operators who need explicit activate/deactivate semantics
+
+Default installs do not activate the listener. Start with:
+
+```bash
+makakoo distro install federation
+makakoo network activate --peer-name <node> --bind tailscale
+```
+
+---
+
 ### creator
 
 For writers, streamers, and creators.

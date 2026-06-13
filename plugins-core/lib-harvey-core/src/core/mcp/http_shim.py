@@ -87,7 +87,7 @@ except ImportError:
 
 # ────────────────────────── config ──────────────────────────────────
 
-BIND_HOST = os.environ.get("MAKAKOO_MCP_HTTP_BIND", "0.0.0.0")
+BIND_HOST = os.environ.get("MAKAKOO_MCP_HTTP_BIND", "127.0.0.1")
 BIND_PORT = int(os.environ.get("MAKAKOO_MCP_HTTP_PORT", "8765"))
 DRIFT_WINDOW_MS = 60_000  # matches makakoo_core::adapter::peer::DRIFT_WINDOW_MS
 SIG_PREFIX = "ed25519="

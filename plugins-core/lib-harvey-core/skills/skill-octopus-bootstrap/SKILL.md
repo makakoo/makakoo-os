@@ -66,7 +66,7 @@ $ makakoo octopus join "makakoo://join?t=eyJ2IjoxLCJ0aWQiOiJWWW4xX21Db..."
 Now Sarah's host is trusted by your host. Start the peer stack:
 
 ```bash
-$ makakoo agent start octopus-peer
+$ makakoo agent start agent-octopus-peer
 ```
 
 …and Sarah can call your Brain via `makakoo-mcp` over the tunnel.

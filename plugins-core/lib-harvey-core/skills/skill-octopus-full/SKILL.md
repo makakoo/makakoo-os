@@ -89,7 +89,7 @@ Green on all four above.
 ```bash
 # Fresh host
 $ makakoo octopus bootstrap --peer-name host-A
-$ makakoo agent start octopus-peer
+$ makakoo agent start agent-octopus-peer
 
 # See what's enforced
 $ makakoo octopus doctor

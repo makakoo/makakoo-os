@@ -88,7 +88,7 @@ makakoo install    # distro + daemon + infect + health, then hands off to the wi
 
 `makakoo install` always finishes with the interactive wizard in a TTY shell. Skip with `--no-setup` (or `MAKAKOO_NO_AUTORUN=1` on the curl-pipe) for unattended installs. Re-enter any wizard section later with `makakoo setup --only <section>`. See [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md).
 
-**First time using Makakoo?** After install, start at [Walkthrough 01 — Fresh install on a new Mac](docs/walkthroughs/01-fresh-install-mac.md). The walkthroughs are a 12-guide tour through every major feature — copy-paste runnable, dependency-chained, in plain language.
+**First time using Makakoo?** After install, start at [Walkthrough 01 — Fresh install on a new Mac](docs/walkthroughs/01-fresh-install-mac.md). The walkthroughs are a 14-guide tour through every major feature — copy-paste runnable, dependency-chained, in plain language.
 
 **Upgrade** — one command, auto-detects how you installed:
 

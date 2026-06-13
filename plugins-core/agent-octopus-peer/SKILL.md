@@ -1,5 +1,5 @@
 ---
-name: octopus-peer
+name: agent-octopus-peer
 version: 0.1.0
 description: |
   Harvey Octopus peer daemon — manages the HTTP shim (signed MCP endpoint)
@@ -19,9 +19,9 @@ tags:
   - systemd
 ---
 
-# octopus-peer — Harvey Octopus Mac-side daemon
+# agent-octopus-peer — Makakoo Octopus peer daemon
 
-`makakoo agent start octopus-peer` boots the complete Octopus peer stack on
+`makakoo agent start agent-octopus-peer` boots the complete Octopus peer stack on
 your Mac: the Python HTTP shim (signed peer MCP endpoint, launchd-daemon)
 plus the Node.js harvey-listen.js daemon (autonomous `@peer` mention poller
 with nonce-aware LRU self-ack filtering).
@@ -34,10 +34,10 @@ listener watches your Brain journal for `@pod-NN` mentions from teammates.
 
 | Scenario | How to use |
 |---|---|
-| First setup on a fresh Mac | `makakoo agent install octopus-peer && makakoo agent start octopus-peer` |
-| Daily start | `makakoo agent start octopus-peer` |
-| Check status | `makakoo agent health octopus-peer` |
-| Tear down | `makakoo agent stop octopus-peer` |
+| First setup on a fresh Mac | `makakoo plugin install --core agent-octopus-peer && makakoo agent start agent-octopus-peer` |
+| Daily start | `makakoo agent start agent-octopus-peer` |
+| Check status | `makakoo agent health agent-octopus-peer` |
+| Tear down | `makakoo agent stop agent-octopus-peer` |
 | Inside a Tytus pod | `node $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/harvey-listen.js` (the pod-side entrypoint; no shim needed since the pod is the caller) |
 
 ## Architecture
@@ -63,19 +63,19 @@ listener watches your Brain journal for `@pod-NN` mentions from teammates.
 ## Installation
 
 ```bash
-makakoo agent install octopus-peer
+makakoo plugin install --core agent-octopus-peer
 ```
 
 This writes the launchd plist (`com.makakoo.mcp.http.plist`) or systemd unit
 to `$MAKAKOO_HOME/state/agent-octopus-peer/` — it does NOT load/enable it
-yet. Run `makakoo agent start octopus-peer` to activate.
+yet. Run `makakoo agent start agent-octopus-peer` to activate.
 
 ## Configuration
 
 | Env var | Default | Meaning |
 |---|---|---|
 | `MAKAKOO_MCP_HTTP_PORT` | `8765` | Shim HTTP port. Peers must know this. |
-| `MAKAKOO_MCP_HTTP_BIND` | `0.0.0.0` | Shim bind address. Use `127.0.0.1` to restrict to loopback. |
+| `MAKAKOO_MCP_HTTP_BIND` | `127.0.0.1` | Shim bind address. Use `127.0.0.1` to restrict to loopback. |
 | `HARVEY_LISTEN_INTERVAL_S` | `30` | Listener poll cadence in seconds. |
 | `HARVEY_LISTEN_NONCE_LRU_SIZE` | `100` | Nonce LRU cache capacity. |
 | `OCTOPUS_KEY_DIR` | `$HOME/.makakoo/keys` | Listener identity dir (pods: `/app/workspace/.mcp-keys`). |
@@ -131,7 +131,7 @@ curl -sf "http://127.0.0.1:${MAKAKOO_MCP_HTTP_PORT}/rpc" \
   python3 -c "import sys,json; r=json.load(sys.stdin); print(f'tools: {len(r[\"result\"][\"tools\"])}')"
 
 # Listener health
-makakoo agent health octopus-peer
+makakoo agent health agent-octopus-peer
 
 # End-to-end: write from the Mac via makakoo-mcp CLI, check journal
 # for nonce suffix, then poll from the listener
@@ -154,5 +154,5 @@ for edge cases (e.g. a peer's nonce propagation is not yet deployed).
 |---|---|
 | Phase 1 (this sprint) | Plugin-core packaging: shim + brain_tail + listen.js + flock tests |
 | Phase 2 | `makakoo octopus bootstrap` — peer identity setup wizard |
-| Phase 3 | Pod-side bootstrap: `makakoo agent install octopus-peer` on pod |
+| Phase 3 | Pod-side bootstrap: `makakoo plugin install --core agent-octopus-peer` on pod |
 | Phase 4 | SME scaling: flock stress test at 10 peers × 30 writes/min |

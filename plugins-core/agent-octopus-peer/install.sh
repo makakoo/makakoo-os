@@ -7,7 +7,7 @@
 #                   survives terminal exits and restarts on boot.
 #   2. harvey-listen.js — Node.js autonomous listener daemon. Started as a
 #                   background subprocess managed by this script so
-#                   `makakoo agent stop octopus-peer` kills it cleanly.
+#                   `makakoo agent stop agent-octopus-peer` kills it cleanly.
 #
 # Usage (direct):
 #   install.sh            — install shim launchd/systemd unit (first run)
@@ -17,14 +17,23 @@
 #   install.sh health     — exit 0 if both shim + listener are healthy
 #
 # Invoked by AgentRunner as:
-#   makakoo agent start octopus-peer   → install.sh start
-#   makakoo agent stop  octopus-peer   → install.sh stop
-#   makakoo agent health octopus-peer  → install.sh health
+#   makakoo agent start agent-octopus-peer   → install.sh start
+#   makakoo agent stop  agent-octopus-peer   → install.sh stop
+#   makakoo agent health agent-octopus-peer  → install.sh health
 
 set -euo pipefail
 
 PLUGIN_DIR="${MAKAKOO_PLUGIN_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 MAKAKOO_HOME="${MAKAKOO_HOME:-$HOME/MAKAKOO}"
+# Optional env file written by `makakoo network activate`. Source this
+# before port/bind defaults so activation survives shell exits and daemon restarts.
+BRAIN_NETWORK_ENV="${MAKAKOO_HOME}/config/brain-network/octopus-peer.env"
+if [[ -f "${BRAIN_NETWORK_ENV}" ]]; then
+    # shellcheck source=/dev/null
+    set -a
+    source "${BRAIN_NETWORK_ENV}"
+    set +a
+fi
 STATE_DIR="${MAKAKOO_HOME}/state/agent-octopus-peer"
 LOG_DIR="${STATE_DIR}/logs"
 LISTENER_PID_FILE="${STATE_DIR}/listener.pid"
@@ -34,7 +43,7 @@ LISTENER_ERR="${LOG_DIR}/listener-stderr.log"
 # ── shim env ─────────────────────────────────────────────────────
 
 MAKAKOO_MCP_HTTP_PORT="${MAKAKOO_MCP_HTTP_PORT:-8765}"
-MAKAKOO_MCP_HTTP_BIND="${MAKAKOO_MCP_HTTP_BIND:-0.0.0.0}"
+MAKAKOO_MCP_HTTP_BIND="${MAKAKOO_MCP_HTTP_BIND:-127.0.0.1}"
 SHIM_PYTHONPATH="${MAKAKOO_HOME}/plugins/lib-harvey-core/src"
 SHIM_ENTRY="${MAKAKOO_HOME}/plugins/lib-harvey-core/src/core/mcp/http_shim.py"
 LISTENER_ENTRY="${MAKAKOO_HOME}/plugins/lib-harvey-core/src/core/harvey-listen.js"
@@ -275,7 +284,7 @@ do_install() {
     echo "  2. Opt the listener in (pods only):"
     echo "       touch \${MAKAKOO_HOME}/.mcp-keys/listener-enabled"
     echo "  3. Start:"
-    echo "       makakoo agent start octopus-peer"
+    echo "       makakoo agent start agent-octopus-peer"
 }
 
 do_start() {
