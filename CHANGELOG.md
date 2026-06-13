@@ -10,6 +10,11 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-06-13
+
+### Fixed
+- Improved `makakoo setup brain` Obsidian handling: detects whether the Obsidian app is installed, explains install steps when missing, treats `n/no/skip` at the vault path prompt as cancellation, and no longer registers nonexistent vault paths unless explicitly confirmed.
+
 ## [0.1.23] - 2026-06-13
 
 ### Fixed

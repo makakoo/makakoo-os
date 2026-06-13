@@ -19,6 +19,8 @@ Design principles:
 from __future__ import annotations
 
 import os
+import platform
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +38,8 @@ DEFAULT_OBSIDIAN_GUESSES = [
     "~/Documents/obsidian",
     "~/Obsidian",
 ]
+
+NO_PATH_SENTINELS = {"n", "no", "none", "skip", "s"}
 
 
 def _prompt(label: str, default: str = "") -> str:
@@ -66,6 +70,75 @@ def _guess_obsidian_vault() -> str | None:
         if expanded.exists() and (expanded / ".obsidian").exists():
             return str(candidate)
     return None
+
+
+def _detect_obsidian_app() -> tuple[bool, str]:
+    """Best-effort local Obsidian app detection for setup UX only."""
+    if shutil.which("obsidian"):
+        return True, "obsidian command on PATH"
+
+    system = platform.system().lower()
+    home = Path.home()
+    if system == "darwin":
+        for candidate in [
+            Path("/Applications/Obsidian.app"),
+            home / "Applications" / "Obsidian.app",
+        ]:
+            if candidate.exists():
+                return True, str(candidate)
+    elif system == "linux":
+        for candidate in [
+            Path("/usr/share/applications/obsidian.desktop"),
+            home / ".local/share/applications/obsidian.desktop",
+            Path("/snap/bin/obsidian"),
+            Path("/var/lib/flatpak/app/md.obsidian.Obsidian"),
+            home / ".local/share/flatpak/app/md.obsidian.Obsidian",
+        ]:
+            if candidate.exists():
+                return True, str(candidate)
+    elif system == "windows":
+        for env_name in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"]:
+            base = os.environ.get(env_name)
+            if not base:
+                continue
+            for rel in [
+                Path("Obsidian") / "Obsidian.exe",
+                Path("Programs") / "Obsidian" / "Obsidian.exe",
+            ]:
+                candidate = Path(base) / rel
+                if candidate.exists():
+                    return True, str(candidate)
+
+    return False, "not detected"
+
+
+def _normalize_optional_path(raw: str) -> str:
+    value = raw.strip()
+    if value.lower() in NO_PATH_SENTINELS:
+        return ""
+    return value
+
+
+def _prompt_obsidian_path(default: str = "") -> str:
+    path = _normalize_optional_path(
+        _prompt("  Obsidian vault path (blank / no = skip)", default=default)
+    )
+    if not path:
+        print("  Skipping Obsidian source registration.")
+        return ""
+
+    expanded = Path(os.path.expanduser(path))
+    if not expanded.exists():
+        print(f"  Warning: {expanded} doesn't exist.")
+        if not _yes_no("  Register this missing path anyway?", default=False):
+            print("  Skipping Obsidian source registration. Create the vault, then rerun: makakoo setup brain")
+            return ""
+    elif not (expanded / ".obsidian").exists():
+        print(f"  Warning: {expanded} does not contain a .obsidian folder.")
+        if not _yes_no("  Register it as an Obsidian vault anyway?", default=False):
+            print("  Skipping Obsidian source registration.")
+            return ""
+    return path
 
 
 def _ensure_default_logseq() -> None:
@@ -126,17 +199,27 @@ def run_interactive(non_interactive: bool = False) -> int:
 
     # Prompt 1 — additional Obsidian vault?
     guess = _guess_obsidian_vault()
+    obsidian_installed, obsidian_where = _detect_obsidian_app()
     add_obsidian = _yes_no(
-        "Do you have a separate Obsidian vault to register?"
-        + (f" (detected: {guess})" if guess else ""),
+        "Do you already have a separate Obsidian vault folder to register?"
+        + (f" (detected vault: {guess})" if guess else ""),
         default=bool(guess),
     )
     if add_obsidian:
-        path = _prompt("  Obsidian vault path", default=guess or "")
+        if not obsidian_installed:
+            print("\nObsidian app was not detected on this machine.")
+            print("Install Obsidian first if you want the desktop app here:")
+            print("  macOS:  brew install --cask obsidian")
+            print("  Linux:  install from https://obsidian.md/download, Flatpak, Snap, or AppImage")
+            print("You can also skip this and later open the default Brain as an Obsidian vault:")
+            print(f"  {DEFAULT_LOGSEQ_PATH}\n")
+            add_obsidian = _yes_no("Register an existing Obsidian vault path anyway?", default=False)
+        else:
+            print(f"Obsidian app detected: {obsidian_where}")
+
+    if add_obsidian:
+        path = _prompt_obsidian_path(default=guess or "")
         if path:
-            expanded = Path(os.path.expanduser(path))
-            if not expanded.exists():
-                print(f"  Warning: {expanded} doesn't exist yet. Will register anyway.")
             pending_adds.append({
                 "name": "obsidian",
                 "type": "obsidian",
