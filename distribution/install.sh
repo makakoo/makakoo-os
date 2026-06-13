@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Makakoo OS installer
-# Usage: curl -fsSL https://makakoo.com/install.sh | sh
+# Usage: curl -fsSL https://makakoo.com/install.sh | bash
 #
 # Env overrides:
 #   MAKAKOO_VERSION         — version tag to install (default: latest)

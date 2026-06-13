@@ -141,8 +141,8 @@ pub enum Commands {
         /// Print the upgrade plan without spawning anything.
         #[arg(long)]
         dry_run: bool,
-        /// After a successful upgrade, run `makakoo infect --verify
-        /// --repair` to refresh bootstrap fragments in every CLI host.
+        /// After a successful upgrade, run `makakoo infect --global`
+        /// and verify drift so every CLI host reloads bootstrap fragments.
         #[arg(long)]
         reinfect: bool,
         /// Override auto-detection. Valid: `cargo`, `brew`,

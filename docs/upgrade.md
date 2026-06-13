@@ -74,10 +74,30 @@ The Homebrew tap lives at `github.com/traylinx/homebrew-tap`. New tagged release
 ### curl-pipe
 
 ```bash
-curl -fsSL https://makakoo.com/install.sh | sh
+curl -fsSL https://makakoo.com/install.sh | bash
 ```
 
 Override the URL with `--install-script-url <url>` if needed. **The verb refuses non-HTTPS URLs.**
+
+### VPS / server quick path
+
+SSH into the server and run the same upgrade verb. Most headless installs use the curl-pipe layout under `$HOME/.local`, so the method is usually `curl-pipe`:
+
+```bash
+ssh makakoo-vps
+export MAKAKOO_HOME=$HOME/MAKAKOO HARVEY_HOME=$HOME/MAKAKOO
+export PATH=$HOME/.local/bin:$PATH
+
+makakoo upgrade --dry-run
+makakoo upgrade --method curl-pipe --reinfect
+makakoo daemon restart
+
+makakoo --version
+makakoo-mcp --version
+makakoo infect --verify --json
+```
+
+Restart any already-open AI CLI sessions after this so they spawn the new `makakoo-mcp` child and reread the refreshed bootstrap.
 
 ### Unknown
 
@@ -104,7 +124,7 @@ If a release ships new bootstrap fragments (Harvey persona changes, new MCP tool
 makakoo upgrade --reinfect
 ```
 
-This runs `makakoo infect --verify --repair` after the binary swap completes. Most upgrades don't need it — fragments rarely change between minor versions.
+This runs `makakoo infect --global` after the binary swap completes, then verifies with `makakoo infect --verify`. Most upgrades do not need it, but use it when the release notes mention CLI bootstrap, caveman, Headroom, persona, or MCP-tool instruction changes.
 
 ## Verifying the upgrade
 
@@ -130,4 +150,4 @@ The first line shows `makakoo X.Y.Z (gitsha)` — confirm the version bumped fro
 - `makakoo install` — initial install (distro + daemon + infect)
 - `makakoo plugin update <name>` — update a single plugin from its recorded source
 - `makakoo docs update` — refresh the docs corpus consumed by `makakoo docs-mcp`
-- `makakoo infect --verify --repair` — re-render bootstrap fragments without a binary upgrade
+- `makakoo infect --global` — re-render bootstrap fragments without a binary upgrade

@@ -6,7 +6,7 @@ One-liner installers for Makakoo OS.
 
 **macOS + Linux:**
 ```bash
-curl -sSL https://makakoo.com/install | sh
+curl -sSL https://makakoo.com/install | bash
 ```
 
 **Windows (PowerShell):**
@@ -102,5 +102,5 @@ up `makakoo.com` happens in Phase I alongside the public v0.1 launch.
 Until then, use the direct GitHub URL:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/makakoo/makakoo-os/main/install/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/makakoo/makakoo-os/main/install/install.sh | bash
 ```

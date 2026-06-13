@@ -49,7 +49,7 @@ I'm shipping a thing that's honestly 90% done because sitting on the 10% for ano
 
 ```sh
 # macOS / Linux
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install | bash
 
 # Windows (Developer Mode on)
 iwr -UseBasicParsing https://makakoo.com/install.ps1 | iex
@@ -137,7 +137,7 @@ What's honest about v0.1:
 **5/**
 MIT. Zero telemetry. No VC. Community-built.
 
-Try it: `curl -fsSL https://makakoo.com/install | sh`
+Try it: `curl -fsSL https://makakoo.com/install | bash`
 
 Or from source: github.com/makakoo/makakoo-os
 

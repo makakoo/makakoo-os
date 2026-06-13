@@ -70,7 +70,7 @@ curl -fsSL -o /dev/null -w "install.ps1: %{http_code}\n" https://makakoo.com/ins
 
 # 10. Smoke-test the curl-pipe path on a clean machine (or with
 #     MAKAKOO_NO_AUTORUN=1 in CI).
-curl -fsSL https://makakoo.com/install.sh | sh    # then rerun: makakoo --version
+curl -fsSL https://makakoo.com/install.sh | bash    # then rerun: makakoo --version
 ```
 
 ## End-user upgrade story

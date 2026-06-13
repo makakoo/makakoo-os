@@ -30,7 +30,7 @@ Press `⌘` + `Space` to open Spotlight, type `Terminal`, press Enter. A window 
 Copy the next line exactly, paste it into Terminal, press Enter.
 
 ```sh
-curl -fsSL https://makakoo.com/install.sh | sh
+curl -fsSL https://makakoo.com/install.sh | bash
 ```
 
 The installer detects your CPU, downloads pre-built binaries from the latest GitHub Release, drops them under `~/.local/bin/`, and then **automatically execs `makakoo install`** (the one-shot orchestrator: distro + background daemon + AI-CLI infect + health check), which itself hands off to the interactive setup wizard.

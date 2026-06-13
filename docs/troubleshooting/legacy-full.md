@@ -59,7 +59,7 @@ makakoo plugin list
 # Allow the installer
 chmod +x <(curl -fsSL https://makakoo.com/install)
 # Or run with sudo
-curl -fsSL https://makakoo.com/install | sudo sh
+curl -fsSL https://makakoo.com/install | sudo bash
 ```
 
 ### Windows: Developer Mode Required

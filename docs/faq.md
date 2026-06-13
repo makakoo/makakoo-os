@@ -104,7 +104,7 @@ Full guide: [Uninstall](troubleshooting/uninstall.md).
 ```sh
 makakoo upgrade            # auto-detects how you installed (cargo / brew / curl-pipe)
 makakoo upgrade --dry-run  # preview the plan without spawning anything
-makakoo upgrade --reinfect # also refresh CLI bootstrap fragments after the binary swap
+makakoo upgrade --reinfect # also rewrite + verify CLI bootstrap fragments after the binary swap
 ```
 
 Available since v0.1.3 (2026-05-02). For pre-v0.1.3 binaries you'll first

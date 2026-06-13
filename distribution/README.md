@@ -10,7 +10,7 @@ to users.
 | Channel | Install command |
 |---|---|
 | Homebrew (macOS + Linux) | `brew install makakoo/makakoo/makakoo` |
-| Shell installer (macOS + Linux) | `curl -fsSL https://makakoo.com/install.sh \| sh` |
+| Shell installer (macOS + Linux) | `curl -fsSL https://makakoo.com/install.sh \| bash` |
 | Cargo (from source) | `cargo install --path makakoo` |
 
 ## Targets

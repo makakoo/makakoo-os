@@ -117,7 +117,7 @@ Before the announcement drafts from `docs/ANNOUNCEMENT_DRAFT.md` go live:
 On a fresh laptop / VM:
 
 ```sh
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install | bash
 makakoo install
 makakoo sancho status    # expect 18+ tasks
 makakoo brain search test

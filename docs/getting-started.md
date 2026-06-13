@@ -70,7 +70,7 @@ Copy the right line for your OS, paste it into the terminal, press Enter.
 <summary><strong>🍎 macOS / 🐧 Linux</strong></summary>
 
 ```sh
-curl -fsSL https://makakoo.com/install.sh | sh
+curl -fsSL https://makakoo.com/install.sh | bash
 ```
 <!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 

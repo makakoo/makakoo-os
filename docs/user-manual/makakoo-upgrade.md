@@ -27,7 +27,7 @@ makakoo upgrade [--dry-run] [--reinfect]
 | Flag | What it does |
 |---|---|
 | `--dry-run` | Print the upgrade plan without spawning anything. Same code path as a real run, so what you see is what would execute. |
-| `--reinfect` | After a successful upgrade, run `makakoo infect --verify --repair` to refresh bootstrap fragments in every infected CLI / IDE slot. Useful when a release ships persona / MCP-tool changes. |
+| `--reinfect` | After a successful upgrade, run `makakoo infect --global`, then `makakoo infect --verify`, so every infected CLI / IDE slot gets freshly rendered bootstrap fragments. Use this when a release ships persona, caveman, Headroom, or MCP-tool instruction changes. |
 | `--method <cargo\|brew\|curl-pipe>` | Override the auto-detector. Rare — needed when you've moved the binary outside its canonical install location, or when multiple methods coexist. |
 | `--source <path>` | Cargo upgrades only — point at a local source checkout. Overrides `MAKAKOO_SOURCE_PATH`. Default: `cargo install --git https://github.com/makakoo/makakoo-os --locked --force`. |
 | `--install-script-url <url>` | Curl-pipe upgrades only — override `https://makakoo.com/install.sh`. **Refuses non-HTTPS URLs.** |
@@ -48,7 +48,7 @@ Auto-detected from the running binary's path (override with `--method`):
 |---|---|---|
 | Cargo | `~/.cargo/bin/makakoo` | `cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo` (and `makakoo-mcp` unless `--only-kernel`). With `--source <path>`: `cargo install --path <path>/makakoo[-mcp] --locked --force`. |
 | Homebrew | `/opt/homebrew/bin/`, `/usr/local/bin/`, `/home/linuxbrew/.linuxbrew/bin/` | `brew update && brew upgrade traylinx/tap/makakoo`. |
-| Curl-pipe | `$MAKAKOO_PREFIX/bin/` (default `$HOME/.local/bin/`) | `curl -fsSL <install-script-url> \| sh`. URL is HTTPS-only. |
+| Curl-pipe | `$MAKAKOO_PREFIX/bin/` (default `$HOME/.local/bin/`) | `curl -fsSL <install-script-url> \| bash`. URL is HTTPS-only. |
 | Unknown | Anything else (custom prefix, dev build, manually-copied binary) | Refuses with an error listing the supported methods. Pass `--method` to force a path, or reinstall via one of the above. |
 
 ## Daemon restart
@@ -115,4 +115,4 @@ makakoo upgrade --only-mcp
 - [`makakoo install`](../getting-started.md) — initial install (`distro + daemon + infect`).
 - [`makakoo plugin update`](makakoo-plugin.md) — update a single plugin from its recorded source.
 - [`makakoo docs update`](../docs-mcp.md) — refresh the docs corpus consumed by `makakoo docs-mcp`.
-- [`makakoo infect --verify --repair`](makakoo-infect.md) — re-render bootstrap fragments without a binary upgrade. (`makakoo upgrade --reinfect` chains this on top of the binary swap.)
+- [`makakoo infect --global`](makakoo-infect.md) — re-render bootstrap fragments without a binary upgrade. (`makakoo upgrade --reinfect` chains this on top of the binary swap, then verifies drift.)

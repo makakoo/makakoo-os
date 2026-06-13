@@ -26,7 +26,7 @@ Cut to terminal, prompt sitting at `$`.
 Voice-over, no text:
 
 ```sh
-$ curl -fsSL https://makakoo.com/install | sh
+$ curl -fsSL https://makakoo.com/install | bash
 ```
 
 Let the install ticker play. After it finishes:

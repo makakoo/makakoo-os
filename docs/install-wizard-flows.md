@@ -29,7 +29,7 @@ There are three valid ways to install. Pick by your context, not by preference.
 You have a clean machine, you trust the install script, you want one command:
 
 ```sh
-curl -fsSL https://makakoo.com/install.sh | sh
+curl -fsSL https://makakoo.com/install.sh | bash
 ```
 
 The script downloads pre-built `makakoo` + `makakoo-mcp` binaries from the latest GitHub Release, drops them under `~/.local/bin/`, copies bundled `distros/` + `plugins-core/` to `~/.local/share/makakoo/`, and then **execs `makakoo install` automatically** with `/dev/tty` re-attached so the curl-pipe still lands you in the interactive setup wizard. End state: every AI CLI on the machine knows about Makakoo.
@@ -370,7 +370,7 @@ If you prefer to drive the channel manually:
 
 | Original install | Manual upgrade |
 |---|---|
-| `curl …\| sh` | `curl -fsSL https://makakoo.com/install.sh \| sh` (re-runs latest) |
+| `curl …\| sh` | `curl -fsSL https://makakoo.com/install.sh \| bash` (re-runs latest) |
 | `brew install traylinx/tap/makakoo` | `brew upgrade traylinx/tap/makakoo` |
 | `cargo install --path makakoo` | `cd makakoo-os && git pull && cargo install --path makakoo --force && cargo install --path makakoo-mcp --force` |
 
@@ -402,7 +402,7 @@ makakoo uninfect --dry-run       # show what would be stripped
 ### "I'm on a fresh Mac and want everything"
 
 ```sh
-curl -fsSL https://makakoo.com/install.sh | sh   # auto-hands off into the wizard
+curl -fsSL https://makakoo.com/install.sh | bash   # auto-hands off into the wizard
 # OR (Homebrew)
 brew install traylinx/tap/makakoo && makakoo install
 # OR (from source)

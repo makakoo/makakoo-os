@@ -219,7 +219,7 @@ makakoo distro install creator
 makakoo distro install trader
 
 # Install with install
-curl -fsSL https://makakoo.com/install | sh -s -- --distro core
+curl -fsSL https://makakoo.com/install | bash -s -- --distro core
 ```
 
 ### List Available Distros

@@ -10,6 +10,13 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-06-13
+
+### Fixed
+- Made `makakoo upgrade --reinfect` perform a real `makakoo infect --global` refresh followed by `makakoo infect --verify`, so releases that change CLI bootstrap fragments actually update every infected host.
+- Updated upgrade docs and user manuals with the exact VPS/server upgrade sequence: `makakoo upgrade --method curl-pipe --reinfect`, `makakoo daemon restart`, then restart AI CLI sessions.
+- Fixed the curl-pipe upgrade path to invoke the Bash installer with Bash instead of Ubuntu `/bin/sh`, preventing `set: Illegal option -o pipefail` on servers.
+
 ## [0.1.20] - 2026-06-13
 
 ### Fixed

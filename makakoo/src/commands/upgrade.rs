@@ -134,16 +134,27 @@ pub async fn run(
         println!("    {}", daemon_restart_hint());
     }
 
-    // Optional re-infect.
+    // Optional re-infect. A fragment refresh must write the global slots, not
+    // only audit drift. v0.1.20 exposed this with tool-headroom: `infect
+    // --verify --repair` can return clean while the canonical bootstrap cache
+    // or host slots still need a real re-render.
     if reinfect && !dry_run {
         println!();
         println!("# re-infecting CLI hosts to refresh bootstrap fragments...");
         let status = Command::new("makakoo")
-            .args(["infect", "--verify", "--repair"])
+            .args(["infect", "--global"])
             .status()
-            .with_context(|| "spawning makakoo infect --verify --repair")?;
+            .with_context(|| "spawning makakoo infect --global")?;
         if !status.success() {
             eprintln!("⚠ re-infect step failed (exit {:?})", status.code());
+        } else {
+            let verify = Command::new("makakoo")
+                .args(["infect", "--verify"])
+                .status()
+                .with_context(|| "spawning makakoo infect --verify")?;
+            if !verify.success() {
+                eprintln!("⚠ post-reinfect verify failed (exit {:?})", verify.code());
+            }
         }
     }
 

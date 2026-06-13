@@ -2,10 +2,10 @@
 # Makakoo OS installer — macOS + Linux
 #
 # Usage:
-#   curl -sSL https://makakoo.com/install | sh
+#   curl -sSL https://makakoo.com/install | bash
 #
 # Or with flags (download then re-exec):
-#   curl -sSL https://makakoo.com/install | sh -s -- --version 0.1.0 --dry-run
+#   curl -sSL https://makakoo.com/install | bash -s -- --version 0.1.0 --dry-run
 #
 # After the binary is on disk, finish setup with:
 #   makakoo install

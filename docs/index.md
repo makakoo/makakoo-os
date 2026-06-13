@@ -139,7 +139,7 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 
 ```bash
 # Install — drops binaries, runs `makakoo install`, lands you in the wizard
-curl -fsSL https://makakoo.com/install.sh | sh
+curl -fsSL https://makakoo.com/install.sh | bash
 
 # Query your brain (the wizard already infected every detected CLI)
 makakoo query "what did I work on yesterday?"

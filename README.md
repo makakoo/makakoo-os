@@ -60,7 +60,7 @@ every step, and common-error fixes inline.
 **macOS / Linux** — one-liner. Drops pre-built binaries under `~/.local/bin/` and auto-execs `makakoo install`, which itself hands off to the interactive setup wizard. End state: every detected AI CLI infected, daemon running, you're inside the wizard.
 
 ```sh
-curl -fsSL https://makakoo.com/install.sh | sh
+curl -fsSL https://makakoo.com/install.sh | bash
 ```
 
 **macOS / Linux** — Homebrew alternative:
@@ -95,7 +95,7 @@ makakoo install    # distro + daemon + infect + health, then hands off to the wi
 ```sh
 makakoo upgrade            # cargo / brew / curl-pipe — picks the right path
 makakoo upgrade --dry-run  # preview without spawning
-makakoo upgrade --reinfect # also refresh CLI bootstrap fragments
+makakoo upgrade --reinfect # also rewrite + verify CLI bootstrap fragments
 ```
 
 See [`docs/upgrade.md`](docs/upgrade.md) for per-method details.

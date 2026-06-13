@@ -185,8 +185,14 @@ pub fn plan_upgrade(
             }
             Ok(vec![UpgradeAction {
                 label: format!("curl-pipe install from {install_script_url}"),
-                program: "sh".to_string(),
-                args: vec!["-c".into(), format!("curl -fsSL {install_script_url} | sh")],
+                program: "bash".to_string(),
+                args: vec![
+                    "-lc".into(),
+                    format!(
+                        "set -euo pipefail; curl -fsSL {} | bash",
+                        shell_quote(install_script_url)
+                    ),
+                ],
             }])
         }
     }
@@ -327,13 +333,14 @@ mod tests {
     }
 
     #[test]
-    fn curl_pipe_uses_sh_c() {
+    fn curl_pipe_uses_bash_with_pipefail() {
         let actions = plan_upgrade(&curl(), BinaryTarget::Both, None, url()).unwrap();
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].program, "sh");
-        assert_eq!(actions[0].args[0], "-c");
+        assert_eq!(actions[0].program, "bash");
+        assert_eq!(actions[0].args[0], "-lc");
+        assert!(actions[0].args[1].contains("set -euo pipefail"));
         assert!(actions[0].args[1].contains(url()));
-        assert!(actions[0].args[1].starts_with("curl -fsSL"));
+        assert!(actions[0].args[1].contains("| bash"));
     }
 
     #[test]

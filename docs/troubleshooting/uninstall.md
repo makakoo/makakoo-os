@@ -103,7 +103,7 @@ source ~/.bashrc   # or ~/.zshrc
 After uninstall, you can reinstall fresh:
 
 ```bash
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install | bash
 ```
 
 ## Troubleshooting
@@ -144,7 +144,7 @@ After complete uninstall, reinstall:
 
 ```bash
 # Fresh install
-curl -fsSL https://makakoo.com/install | sh
+curl -fsSL https://makakoo.com/install | bash
 
 # Or from source
 git clone https://github.com/makakoo/makakoo-os
