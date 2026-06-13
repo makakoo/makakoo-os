@@ -10,6 +10,11 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-06-13
+
+### Fixed
+- Added the missing troubleshooting index entry for the fresh-install `switchailocal` adapter bootstrap error so docs verification stays green.
+
 ## [0.1.22] - 2026-06-13
 
 ### Fixed

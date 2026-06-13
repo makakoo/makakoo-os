@@ -15,6 +15,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## B
 
 - **`blake3 mismatch`** — [Plugin install failed → blake3 mismatch](./tree.md#plugin-install-failed).
+- **``bundled adapter `switchailocal` not found``** — The release-bundled adapter catalog could not be located. Re-run `makakoo upgrade --method curl-pipe` or reinstall from `https://makakoo.com/install.sh`; if running from a source checkout, run commands from the repo root or set `MAKAKOO_BUNDLED_ADAPTERS=<repo>/plugins-core/adapters`.
 
 ## C
 
