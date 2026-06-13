@@ -49,6 +49,11 @@ makakoo adapter doctor switchailocal
 echo "ping" | makakoo adapter call switchailocal
 ```
 
+Bundled adapters come from the Makakoo release package itself, so the
+`--bundled` install path does not require an extra `--allow-unsigned`
+flag. External URL/git adapter installs still require signatures unless
+you explicitly pass `--allow-unsigned`.
+
 ### Scaffold a custom OpenAI-compatible adapter
 
 ```sh

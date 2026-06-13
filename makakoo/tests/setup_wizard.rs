@@ -10,7 +10,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use tempfile::TempDir;
 
@@ -212,4 +212,38 @@ fn setup_brain_detects_existing_multi_source_config() {
         stdout.contains("already-satisfied"),
         "expected already-satisfied when multi-source registered; got: {stdout}"
     );
+}
+
+#[test]
+fn setup_model_provider_bootstraps_switchailocal_on_fresh_home() {
+    let home = fresh_home();
+    let adapters = home.path().join("adapters");
+    let trust = home.path().join("trust");
+
+    let out = Command::new(binary_path())
+        .env("MAKAKOO_HOME", home.path())
+        .env("MAKAKOO_ADAPTERS_HOME", &adapters)
+        .env("MAKAKOO_TRUST_HOME", &trust)
+        .env("MAKAKOO_FORCE_TTY", "1")
+        .args(["setup", "model-provider"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn makakoo");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "expected setup model-provider to succeed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("registered switchailocal"),
+        "expected bundled adapter bootstrap; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("primary → switchailocal"),
+        "expected single adapter to become primary; got:\n{stdout}"
+    );
+    assert!(adapters.join("registered/switchailocal.toml").is_file());
+    assert!(home.path().join("primary_adapter.toml").is_file());
 }

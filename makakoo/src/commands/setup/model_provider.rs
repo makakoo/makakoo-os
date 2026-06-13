@@ -10,6 +10,7 @@
 use makakoo_core::adapter::registry::{
     load_primary_adapter, write_primary_adapter, AdapterRegistry,
 };
+use makakoo_core::adapter::{install_from_path, InstallOptions, InstallRoot};
 
 use super::harness::{Section, SectionOutcome, SectionStatus, Ui};
 
@@ -48,7 +49,7 @@ impl Section for ModelProviderSection {
     }
 
     fn run(&mut self, ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
-        let registry = match AdapterRegistry::load(AdapterRegistry::default_root()) {
+        let mut registry = match AdapterRegistry::load(AdapterRegistry::default_root()) {
             Ok(r) => r,
             Err(e) => {
                 ui.line(format!(
@@ -58,13 +59,58 @@ impl Section for ModelProviderSection {
             }
         };
 
-        let names: Vec<String> = registry.names().map(String::from).collect();
+        let mut names: Vec<String> = registry.names().map(String::from).collect();
+        if names.is_empty() {
+            ui.line("model-provider: no adapters registered yet.")?;
+            ui.line("model-provider: installing bundled switchailocal adapter as the default local gateway …")?;
+
+            match install_bundled_switchailocal() {
+                Ok(registered_path) => {
+                    ui.line(format!(
+                        "model-provider: registered switchailocal at {}",
+                        registered_path.display()
+                    ))?;
+                    registry = AdapterRegistry::load(AdapterRegistry::default_root())?;
+                    names = registry.names().map(String::from).collect();
+                }
+                Err(e) => {
+                    ui.line(format!(
+                        "model-provider: couldn't install bundled switchailocal adapter: {e}"
+                    ))?;
+                    ui.line("  Manual fallback: makakoo adapter install switchailocal --bundled --skip-health-check")?;
+                    return Ok(SectionOutcome::Failed(format!(
+                        "no registered adapters and bootstrap failed: {e}"
+                    )));
+                }
+            }
+        }
+
         if names.is_empty() {
             ui.line("model-provider: no adapters registered in ~/.makakoo/adapters/registered/.")?;
             ui.line("  Install one first: makakoo adapter install <source>")?;
             return Ok(SectionOutcome::Failed(
                 "no registered adapters to pick from".to_string(),
             ));
+        }
+
+        if names.len() == 1 && load_primary_adapter(&registry).is_none() {
+            let chosen = &names[0];
+            match write_primary_adapter(chosen, &registry) {
+                Ok(path) => {
+                    ui.line(format!(
+                        "model-provider: one adapter available, primary → {chosen}. Written to {}",
+                        path.display()
+                    ))?;
+                    ui.line("")?;
+                    ui.line("Next: run  makakoo secret set AIL_API_KEY  if switchAILocal needs an upstream key.")?;
+                    ui.line("Smoke-test: run  makakoo query 'hello'  in a new terminal.")?;
+                    return Ok(SectionOutcome::Installed);
+                }
+                Err(e) => {
+                    ui.line(format!("model-provider: write failed — {e}"))?;
+                    return Ok(SectionOutcome::Failed(e.to_string()));
+                }
+            }
         }
 
         if let Some(current) = load_primary_adapter(&registry) {
@@ -128,6 +174,22 @@ impl Section for ModelProviderSection {
             }
         }
     }
+}
+
+fn install_bundled_switchailocal() -> anyhow::Result<std::path::PathBuf> {
+    let source_dir = crate::commands::adapter::bundled_adapter_dir("switchailocal")
+        .ok_or_else(|| anyhow::anyhow!("bundled adapter `switchailocal` not found"))?;
+    let root = InstallRoot::default_from_env();
+    let report = install_from_path(
+        &source_dir,
+        &root,
+        InstallOptions {
+            allow_unsigned: true,
+            accept_re_trust: true,
+            skip_health_check: true,
+        },
+    )?;
+    Ok(report.registered_path)
 }
 
 #[cfg(test)]

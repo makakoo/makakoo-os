@@ -512,7 +512,14 @@ fn install(
 ) -> anyhow::Result<i32> {
     let root = InstallRoot::default_from_env();
     let opts = InstallOptions {
-        allow_unsigned,
+        // Bundled adapters are shipped inside the Makakoo release artifact,
+        // so installing one is a local install from trusted release content.
+        // Their manifests keep the upstream `install.source_type` metadata
+        // (`git`, `pypi`, …) for humans and updates; requiring
+        // `--allow-unsigned` for the bundled happy path made the documented
+        // `makakoo adapter install switchailocal --bundled` fail on fresh
+        // installs.
+        allow_unsigned: allow_unsigned || bundled,
         accept_re_trust,
         skip_health_check,
     };
@@ -1221,13 +1228,32 @@ fn short_hash(full: &str) -> String {
 fn _unused_hint(_: &Path) {} // silence import if Path goes unused
 
 /// Resolve the bundled reference adapters dir. First tries
-/// `$MAKAKOO_BUNDLED_ADAPTERS`, then the repo sibling of `CARGO_MANIFEST_DIR`,
-/// then the install-time path the `makakoo` binary was shipped with
-/// (`$MAKAKOO_HOME/plugins-core/adapters`). Missing dir = empty result.
-fn bundled_adapters_dir() -> Option<PathBuf> {
+/// `$MAKAKOO_BUNDLED_ADAPTERS`, then walks up from the current directory
+/// for a checkout `plugins-core/`, then the install-time share dir
+/// (`<exe>/../share/makakoo/plugins-core/adapters`), then the repo sibling
+/// of `CARGO_MANIFEST_DIR` for cargo-test/dev runs. Missing dir = empty
+/// result.
+pub(crate) fn bundled_adapters_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("MAKAKOO_BUNDLED_ADAPTERS") {
         return Some(PathBuf::from(p));
     }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(plugins_core) = crate::commands::plugin::walk_up_for(&cwd, "plugins-core") {
+            let candidate = plugins_core.join("adapters");
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    if let Some(share) = crate::commands::plugin::share_dir() {
+        let candidate = share.join("plugins-core").join("adapters");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+
     // When running from the repo (tests, `cargo run`), CARGO_MANIFEST_DIR is
     // .../makakoo-os/makakoo — its parent is the workspace root.
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
@@ -1236,6 +1262,11 @@ fn bundled_adapters_dir() -> Option<PathBuf> {
         return Some(candidate);
     }
     None
+}
+
+pub(crate) fn bundled_adapter_dir(name: &str) -> Option<PathBuf> {
+    let path = bundled_adapters_dir()?.join(name);
+    path.is_dir().then_some(path)
 }
 
 struct BundledAdapter {

@@ -26,6 +26,10 @@ version = "^0.1"
 "skill-system-persona-capture" = { version = "*" }
 "bootstrap-fragment-persona-registry" = { version = "*" }
 
+# Brain — multi-source Logseq/Obsidian/plain-markdown registry and SANCHO
+# ingest task. The setup wizard's `brain` section shells to this picker.
+"skill-brain-multi-source" = { version = "*" }
+
 # Browser — Chrome CDP harness for harvey_browse in every infected CLI.
 "agent-browser-harness" = { version = "*" }
 "bootstrap-fragment-browser-harness" = { version = "*" }
@@ -70,6 +74,7 @@ message = """
 Makakoo Core installed. Plugins registered:
   - skill-system-persona-capture — global user/persona/companion name registry
   - bootstrap-fragment-persona-registry — teaches infected CLIs to use it
+  - skill-brain-multi-source — Brain source picker + recurring ingest task
   - skill-meta-caveman-voice — terse internal voice for every infected CLI
   - tool-headroom            — Headroom MCP compression for bulky tool output
   - agent-browser-harness     — harvey_browse for every CLI (needs Chrome with CDP)

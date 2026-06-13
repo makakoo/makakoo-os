@@ -446,6 +446,10 @@ version = "^1.0"
             "core distro must infect every CLI with persona-registry rules"
         );
         assert!(
+            f.plugins.contains_key("skill-brain-multi-source"),
+            "core distro must install the Brain source picker used by setup"
+        );
+        assert!(
             f.plugins.contains_key("skill-meta-caveman-voice"),
             "core distro must install the caveman voice bootstrap plugin"
         );

@@ -10,6 +10,14 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-06-13
+
+### Fixed
+- Added `skill-brain-multi-source` to the core distro so fresh installs provide the Brain picker that `makakoo setup brain` launches.
+- Fixed bundled adapter discovery from release installs by checking `<prefix>/share/makakoo/plugins-core/adapters`, not only checkout paths.
+- Made `makakoo setup model-provider` bootstrap the bundled `switchailocal` adapter and set it as primary on fresh installs instead of ending with a failed setup section.
+- Allowed `makakoo adapter install <name> --bundled` to install release-bundled adapter manifests without requiring an extra `--allow-unsigned` flag.
+
 ## [0.1.21] - 2026-06-13
 
 ### Fixed

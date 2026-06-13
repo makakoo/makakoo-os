@@ -37,7 +37,7 @@ same effect can be forced with `--non-interactive`.
 | `brain`          | Shells to the existing `skill-brain-multi-source` picker to register vaults.  | `config/brain_sources.json` has ≥1 non-default source |
 | `cli-agent`      | Installs pi (`@mariozechner/pi-coding-agent`) via `npm install -g`.          | `pi` is on `$PATH`                                |
 | `terminal`       | Installs Ghostty via `brew install --cask ghostty`. **macOS only.**           | `brew list --cask ghostty` exits 0                |
-| `model-provider` | Writes `~/.makakoo/primary_adapter.toml` naming the default routing adapter. | file exists and points to a registered adapter    |
+| `model-provider` | Writes `~/.makakoo/primary_adapter.toml` naming the default routing adapter. If no adapters are registered yet, it installs the bundled `switchailocal` adapter and selects it as the fresh-install default. | file exists and points to a registered adapter    |
 | `infect`         | Thin wrapper over `makakoo infect` — writes the bootstrap block to every    | `makakoo infect --verify` exits 0                 |
 |                  | detected CLI host config (NOT your shell dotfiles).                         |                                                  |
 
@@ -100,3 +100,8 @@ of the flag.
   inside this dispatcher. Fresh core installs also seed
   `config/persona_registry.json` and `config/persona_context.md` so
   every infected CLI remembers user, companion, and channel names.
+- **Fresh installs get a model route.** The `model-provider` section
+  bootstraps the bundled `switchailocal` adapter when the registry is
+  empty, then writes it as the primary adapter. Users still need to set
+  any required upstream key, for example `makakoo secret set AIL_API_KEY`,
+  before LLM calls can succeed.
