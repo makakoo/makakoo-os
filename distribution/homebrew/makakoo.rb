@@ -14,7 +14,7 @@
 class Makakoo < Formula
   desc "Makakoo OS — autonomous cognitive extension for any AI CLI"
   homepage "https://makakoo.com"
-  version "0.1.19"
+  version "0.1.20"
   license "MIT"
 
   on_macos do
@@ -50,6 +50,6 @@ class Makakoo < Formula
   end
 
   test do
-    assert_match "makakoo 0.1.19", shell_output("#{bin}/makakoo --version")
+    assert_match "makakoo 0.1.20", shell_output("#{bin}/makakoo --version")
   end
 end

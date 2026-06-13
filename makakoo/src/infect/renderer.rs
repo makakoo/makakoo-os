@@ -1,17 +1,16 @@
 //! Bootstrap fragment renderer.
 //!
-//! Walks the PluginRegistry in load order, reads each bootstrap-fragment
-//! plugin's declared fragment files, and assembles them into the base
+//! Walks the PluginRegistry in load order, reads every plugin's declared
+//! infect fragment files, and assembles them into the base
 //! template at the `<!-- makakoo:fragments -->` insertion marker.
 //!
-//! Result is cached at `$MAKAKOO_HOME/config/bootstrap-cache.md`. The
-//! cache is invalidated when the registry changes (plugin install/uninstall).
+//! Result is written to `$MAKAKOO_HOME/config/bootstrap-cache.md` as a
+//! debugging artifact, but `makakoo infect` renders from the live registry.
 
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-use makakoo_core::plugin::manifest::PluginKind;
 use makakoo_core::plugin::PluginRegistry;
 
 /// The marker line where fragments are inserted in the base template.
@@ -34,9 +33,12 @@ pub fn render(
     let mut fragments = Vec::new();
 
     for plugin in registry.plugins() {
-        if plugin.manifest.plugin.kind != PluginKind::BootstrapFragment {
-            continue;
-        }
+        // Any plugin kind may contribute prompt/bootstrap instructions.
+        // Caveman is a bootstrap-fragment plugin; Headroom is an MCP tool
+        // that still needs a bootstrap fragment so agents know when to use
+        // the exposed MCP methods. The manifest validator already requires
+        // kind=bootstrap-fragment plugins to declare fragments; the renderer
+        // should consume fragments wherever they are declared.
         let frag_map = &plugin.manifest.infect.fragments;
         if frag_map.is_empty() {
             continue;
@@ -117,14 +119,11 @@ pub fn load_or_render(
     makakoo_home: &Path,
     host: Option<&str>,
 ) -> Result<String> {
-    let cache_path = makakoo_home.join("config/bootstrap-cache.md");
-    if cache_path.exists() {
-        if let Ok(cached) = std::fs::read_to_string(&cache_path) {
-            if !cached.is_empty() {
-                return Ok(cached);
-            }
-        }
-    }
+    // Rendering is cheap and fragment correctness matters more than a stale
+    // cache. v0.1.19 exposed the failure mode: installing a new fragment
+    // plugin left config/bootstrap-cache.md unchanged, so `makakoo infect`
+    // kept writing old instructions. Always render from the live registry,
+    // then overwrite the cache as a debugging artifact.
     render_and_cache(registry, makakoo_home, host)
 }
 
@@ -211,7 +210,10 @@ default = "fragments/default.md"
         // Spin up a scratch $MAKAKOO_HOME whose plugins/ mirrors just the
         // fragment plugin, so render() sees a registry of exactly 1.
         let tmp = TempDir::new().unwrap();
-        let home_plugins = tmp.path().join("plugins").join("bootstrap-fragment-browser-harness");
+        let home_plugins = tmp
+            .path()
+            .join("plugins")
+            .join("bootstrap-fragment-browser-harness");
         std::fs::create_dir_all(home_plugins.join("fragments")).unwrap();
         std::fs::copy(
             plugin_dir.join("plugin.toml"),
@@ -249,13 +251,56 @@ default = "fragments/default.md"
     fn cache_round_trip() {
         let tmp = TempDir::new().unwrap();
         let rendered = render_and_cache(&empty_registry(), tmp.path(), None).unwrap();
-        let cached = std::fs::read_to_string(tmp.path().join("config/bootstrap-cache.md"))
-            .unwrap();
+        let cached = std::fs::read_to_string(tmp.path().join("config/bootstrap-cache.md")).unwrap();
         assert_eq!(rendered, cached);
 
-        // load_or_render should return cached version.
+        // load_or_render refreshes from the live registry, then rewrites the cache.
         let loaded = load_or_render(&empty_registry(), tmp.path(), None).unwrap();
         assert_eq!(loaded, cached);
+    }
+
+    #[test]
+    fn real_plugins_core_tree_renders_headroom_fragment_for_mcp_tool() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("plugins-core");
+        let plugin_dir = plugins_core.join("tool-headroom");
+        assert!(
+            plugin_dir.join("plugin.toml").is_file(),
+            "tool-headroom plugin.toml missing at {}",
+            plugin_dir.display()
+        );
+        assert!(
+            plugin_dir.join("fragments/default.md").is_file(),
+            "Headroom bootstrap fragment file missing"
+        );
+
+        let home_plugins = tmp.path().join("plugins").join("tool-headroom");
+        std::fs::create_dir_all(home_plugins.join("fragments")).unwrap();
+        std::fs::copy(
+            plugin_dir.join("plugin.toml"),
+            home_plugins.join("plugin.toml"),
+        )
+        .unwrap();
+        std::fs::copy(
+            plugin_dir.join("fragments/default.md"),
+            home_plugins.join("fragments/default.md"),
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(tmp.path().join("plugins").as_path())
+            .expect("registry should load");
+        let rendered = render(&registry, tmp.path(), None).expect("render should work");
+        assert!(
+            rendered.contains("makakoo:fragment:headroom"),
+            "Headroom MCP tool fragment must be injected into global bootstrap"
+        );
+        assert!(
+            rendered.contains("headroom_compress"),
+            "Headroom fragment should teach agents the MCP tool names"
+        );
     }
 
     #[test]

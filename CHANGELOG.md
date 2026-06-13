@@ -10,6 +10,12 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-06-13
+
+### Fixed
+- Fixed bootstrap fragment rendering so non-`bootstrap-fragment` plugins with `[infect.fragments]`, including `tool-headroom`, actually inject their instructions into every infected CLI.
+- Made `makakoo infect` re-render the bootstrap from the live plugin registry instead of reusing a stale `config/bootstrap-cache.md`, so newly installed fragments activate immediately on existing machines.
+
 ## [0.1.19] - 2026-06-13
 
 ### Fixed
