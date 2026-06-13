@@ -7,6 +7,13 @@ description: Use Headroom context compression for large tool outputs, long logs,
 
 Headroom is Makakoo's default context compression layer for tool and MCP output.
 
+Fresh installs try the Python package first (`headroom-ai[mcp]>=0.25.0`), then fall back to Headroom's Docker-native wrapper when Python wheels/builds are unavailable.
+
+```bash
+headroom mcp status
+headroom mcp install --agent claude --proxy-url http://127.0.0.1:8787
+```
+
 ## Use it when
 
 - A tool returns a large log, JSON payload, directory listing, diff, grep result, test report, or copied web text.

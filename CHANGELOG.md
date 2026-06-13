@@ -10,6 +10,12 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-06-13
+
+### Fixed
+- Added Docker-native fallback to `tool-headroom` so fresh installs can still install Headroom on hosts where the Python package cannot build native dependencies.
+- Added a Docker-native Claude MCP stdio shim for Headroom so Claude can launch the MCP server from Docker-backed installs.
+
 ## [0.1.16] - 2026-06-13
 
 ### Added
