@@ -97,6 +97,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 - **`read trust file: <error>`** — Octopus couldn't read `~/MAKAKOO/config/peers/trusted.keys`. Usually permissions: `ls -la ~/MAKAKOO/config/peers/trusted.keys` should show `-rw------- user`.
 - **`reading <path>: <error>`** — Generic file-read failure; `ls -la <path>` and check perms / existence.
 - **`refusing to infect $HOME (<path>)`** — `makakoo infect` was asked to write into `$HOME` directly. Create or `cd` into a subdirectory first — `makakoo infect` is scoped to project dirs, not the whole home.
+- **`refusing to read keyring entry '{key}' from a non-interactive process because it may open an OS keychain prompt; export {key}=... or set {ALLOW_KEYCHAIN_PROMPT_ENV}=1 to allow the prompt explicitly`** — `makakoo secret get` was called from a background/non-TTY process. Export the same-named env var for automation, rerun interactively, or set `MAKAKOO_SECRET_ALLOW_KEYCHAIN_PROMPT=1` only when you deliberately accept an OS keychain prompt.
 - **`refusing to store empty value`** — You tried to `makakoo secret set <name>` with nothing piped / typed. Pass a non-empty value.
 - **`rendered manifest name '<got>' doesn't match requested '<want>'`** — `makakoo adapter gen` produced a manifest whose name field doesn't match what you asked for. File a bug; meanwhile, edit the generated `plugin.toml` to match.
 - **`resolve plugins-core: can't find plugins-core/`** — [Plugin install failed → can't find plugins-core](./tree.md#plugin-install-failed).
