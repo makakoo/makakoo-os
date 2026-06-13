@@ -13,6 +13,7 @@ proxy_url="${HEADROOM_PROXY_URL:-http://127.0.0.1:8787}"
 agent_filter="${MAKAKOO_HEADROOM_AGENT:-}"
 docker_install_url="${HEADROOM_DOCKER_INSTALL_URL:-https://raw.githubusercontent.com/chopratejas/headroom/main/scripts/install.sh}"
 headroom_docker_native=0
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 find_python() {
   for candidate in python3.12 python3.11 python3.10 python3; do
@@ -212,22 +213,35 @@ register_mcp() {
   [ "$want_mcp" = "0" ] && { log "MCP registration skipped by MAKAKOO_HEADROOM_MCP_INSTALL=0"; return 0; }
 
   if [ "${headroom_docker_native:-0}" = "1" ]; then
-    if [ -z "$agent_filter" ] || [ "$agent_filter" = "claude" ]; then
-      register_claude_docker_native_mcp || return 1
-      [ "$agent_filter" = "claude" ] && return 0
-      warn "Docker-native MCP fallback currently auto-registers Claude only."
-      return 0
-    fi
-    warn "Docker-native MCP fallback cannot auto-register agent '$agent_filter'."
-    return 1
+    headroom_cmd="$(write_docker_native_mcp_shim)"
+  else
+    headroom_cmd="$(command -v headroom)"
   fi
 
-  if [ -n "$agent_filter" ]; then
-    log "registering Headroom MCP for agent '$agent_filter' at $proxy_url"
-    headroom mcp install --agent "$agent_filter" --proxy-url "$proxy_url" || return 1
+  if [ -x "$script_dir/scripts/register_mcp.py" ]; then
+    if [ -n "$agent_filter" ]; then
+      log "registering Headroom MCP for Makakoo agent '$agent_filter' at $proxy_url"
+      python3 "$script_dir/scripts/register_mcp.py" \
+        --home "$HOME" \
+        --command "$headroom_cmd" \
+        --proxy-url "$proxy_url" \
+        --agent "$agent_filter" || return 1
+    else
+      log "registering Headroom MCP for every detected Makakoo CLI at $proxy_url"
+      python3 "$script_dir/scripts/register_mcp.py" \
+        --home "$HOME" \
+        --command "$headroom_cmd" \
+        --proxy-url "$proxy_url" || return 1
+    fi
   else
-    log "registering Headroom MCP for every detected agent at $proxy_url"
-    headroom mcp install --proxy-url "$proxy_url" || return 1
+    warn "Makakoo Headroom registrar missing at $script_dir/scripts/register_mcp.py; falling back to upstream installer"
+    if [ "${headroom_docker_native:-0}" = "1" ]; then
+      register_claude_docker_native_mcp || return 1
+    elif [ -n "$agent_filter" ]; then
+      headroom mcp install --agent "$agent_filter" --proxy-url "$proxy_url" || return 1
+    else
+      headroom mcp install --proxy-url "$proxy_url" || return 1
+    fi
   fi
 }
 

@@ -10,6 +10,11 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-06-13
+
+### Fixed
+- Expanded `tool-headroom` MCP registration beyond upstream Claude-only install support. Fresh Makakoo installs now register the Headroom MCP server for detected Claude, Gemini, Codex, OpenCode, Vibe, Qwen, and Cursor hosts using each host's native config shape.
+
 ## [0.1.18] - 2026-06-13
 
 ### Fixed

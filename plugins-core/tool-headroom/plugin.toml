@@ -1,6 +1,6 @@
 [plugin]
 name = "tool-headroom"
-version = "0.1.0"
+version = "0.1.1"
 kind = "mcp-tool"
 language = "python"
 summary = "Headroom context compression for tool outputs and MCP clients. Installs headroom-ai[mcp] and registers the Headroom MCP server for detected agent hosts."
