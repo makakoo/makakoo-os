@@ -50,6 +50,6 @@ class Makakoo < Formula
   end
 
   test do
-    assert_match "makakoo 0.1.24", shell_output("#{bin}/makakoo --version")
+    assert_match "makakoo 0.1.25", shell_output("#{bin}/makakoo --version")
   end
 end

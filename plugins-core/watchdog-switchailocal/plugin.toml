@@ -23,6 +23,9 @@ grants = [
   "brain/write",
   "net/http:http://127.0.0.1:18080/*",
   "exec/binary:python3",
+  "exec/binary:launchctl",
+  "exec/binary:systemctl",
+  "exec/binary:pgrep",
 ]
 
 [sancho]

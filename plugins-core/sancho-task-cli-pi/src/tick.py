@@ -2,11 +2,11 @@
 """
 SANCHO task: auto-update pi-coding-agent npm global package.
 
-Checks npm for a newer version of @mariozechner/pi-coding-agent,
+Checks npm for a newer version of @earendil-works/pi-coding-agent,
 updates if found, logs to Brain journal.
 
 Interval: 24h. Config via env:
-  PI_PACKAGE  — override package name (default: @mariozechner/pi-coding-agent)
+  PI_PACKAGE  — override package name (default: @earendil-works/pi-coding-agent)
   PI_NPM_BIN  — path to npm binary (default: search PATH)
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-PACKAGE = os.environ.get("PI_PACKAGE", "@mariozechner/pi-coding-agent")
+PACKAGE = os.environ.get("PI_PACKAGE", "@earendil-works/pi-coding-agent")
 TASK_NAME = "cli_pi_update"
 STATE_NAME = "sancho-task-cli-pi"
 

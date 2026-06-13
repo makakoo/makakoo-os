@@ -10,6 +10,12 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.25] - 2026-06-13
+
+### Fixed
+- Fixed Linux `switchailocal_watchdog` SANCHO ticks by removing unconditional macOS `launchctl` calls and using platform-specific service/process diagnostics.
+- Fixed the pi auto-update task to track the installed `@earendil-works/pi-coding-agent` npm package instead of the stale `@mariozechner/pi-coding-agent` name.
+
 ## [0.1.24] - 2026-06-13
 
 ### Fixed
