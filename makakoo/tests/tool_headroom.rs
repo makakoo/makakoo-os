@@ -43,6 +43,7 @@ fn plugin_toml_parses_as_mcp_tool_with_bootstrap_fragment() {
 }
 
 #[test]
+#[cfg(unix)]
 fn install_script_is_syntax_valid_bash() {
     let status = std::process::Command::new("bash")
         .arg("-n")
