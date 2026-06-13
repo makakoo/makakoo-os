@@ -10,6 +10,11 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-06-13
+
+### Fixed
+- Prevented `makakoo secret get` from opening OS keychain GUI prompts in non-interactive/background agent shells. The command now reads a same-named env var first, fails fast when a prompt would be unsafe, and only allows automation prompts through explicit `MAKAKOO_SECRET_ALLOW_KEYCHAIN_PROMPT=1`.
+
 ## [0.1.17] - 2026-06-13
 
 ### Fixed

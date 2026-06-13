@@ -17,11 +17,14 @@
 // in over the next wave.
 #![allow(dead_code)]
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use keyring::Entry;
 
 /// Service name used for every keyring entry written by makakoo.
 pub const SERVICE: &str = "makakoo";
+
+/// Escape hatch for automation that explicitly accepts an OS keychain prompt.
+pub const ALLOW_KEYCHAIN_PROMPT_ENV: &str = "MAKAKOO_SECRET_ALLOW_KEYCHAIN_PROMPT";
 
 /// Thin facade around the `keyring` crate — all methods are static and
 /// the struct exists purely as a namespace. `SecretsStore::set` /
@@ -43,6 +46,48 @@ impl SecretsStore {
     pub fn get(key: &str) -> Result<String> {
         let entry = Entry::new(SERVICE, key)?;
         Ok(entry.get_password()?)
+    }
+
+    /// Return a non-empty environment value for the same name as `key`.
+    ///
+    /// `makakoo secret get AIL_API_KEY` is commonly used inside shell
+    /// automation. If that automation already exported `AIL_API_KEY`, do not
+    /// touch the OS keyring at all. This avoids macOS Keychain prompt storms
+    /// from background agents.
+    pub fn env_value(key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|v| !v.is_empty())
+    }
+
+    /// CLI-safe getter for `makakoo secret get`.
+    ///
+    /// Reads the matching environment variable first. If no env value exists,
+    /// only touches the OS keyring when the caller is allowed to show an OS GUI
+    /// prompt. Background agent shells must fail fast instead of spawning
+    /// unbounded macOS Keychain dialogs.
+    pub fn get_cli(key: &str, allow_keychain_prompt: bool) -> Result<String> {
+        if let Some(v) = Self::env_value(key) {
+            return Ok(v);
+        }
+
+        if !allow_keychain_prompt {
+            bail!(
+                "refusing to read keyring entry '{key}' from a non-interactive process because it may open an OS keychain prompt; export {key}=... or set {ALLOW_KEYCHAIN_PROMPT_ENV}=1 to allow the prompt explicitly"
+            );
+        }
+
+        Self::get(key)
+    }
+
+    /// Whether automation explicitly opted into OS keychain prompts.
+    pub fn keychain_prompt_explicitly_allowed() -> bool {
+        std::env::var(ALLOW_KEYCHAIN_PROMPT_ENV)
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false)
     }
 
     /// Delete a secret from the OS keyring. Returns Ok(()) if the entry was
@@ -125,6 +170,33 @@ mod tests {
         std::env::remove_var(env_name);
         let v = SecretsStore::resolve("ALSO_NOT_IN_KEYRING_9f8a7b", env_name);
         assert_eq!(v, None);
+    }
+
+    #[test]
+    fn get_cli_prefers_env_without_keyring_prompt() {
+        let key = "MAKAKOO_SECRET_GET_CLI_ENV_TEST";
+        std::env::set_var(key, "from-env");
+        let v = SecretsStore::get_cli(key, false).unwrap();
+        std::env::remove_var(key);
+        assert_eq!(v, "from-env");
+    }
+
+    #[test]
+    fn get_cli_blocks_noninteractive_keyring_prompt() {
+        let key = "MAKAKOO_SECRET_GET_CLI_BLOCKED_TEST";
+        std::env::remove_var(key);
+        let err = SecretsStore::get_cli(key, false).unwrap_err().to_string();
+        assert!(err.contains("refusing to read keyring entry"));
+        assert!(err.contains("non-interactive process"));
+    }
+
+    #[test]
+    fn keychain_prompt_allow_env_accepts_true_values() {
+        std::env::set_var(ALLOW_KEYCHAIN_PROMPT_ENV, "yes");
+        assert!(SecretsStore::keychain_prompt_explicitly_allowed());
+        std::env::set_var(ALLOW_KEYCHAIN_PROMPT_ENV, "0");
+        assert!(!SecretsStore::keychain_prompt_explicitly_allowed());
+        std::env::remove_var(ALLOW_KEYCHAIN_PROMPT_ENV);
     }
 
     #[test]

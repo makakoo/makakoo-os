@@ -224,7 +224,10 @@ fn dispatch_secret(cmd: crate::cli::SecretCmd) -> anyhow::Result<i32> {
             Ok(0)
         }
         SecretCmd::Get { key } => {
-            let v = SecretsStore::get(&key)?;
+            let v = SecretsStore::get_cli(
+                &key,
+                keychain_prompt_allowed_for_cli_get(),
+            )?;
             println!("{v}");
             Ok(0)
         }
@@ -234,4 +237,13 @@ fn dispatch_secret(cmd: crate::cli::SecretCmd) -> anyhow::Result<i32> {
             Ok(0)
         }
     }
+}
+
+fn keychain_prompt_allowed_for_cli_get() -> bool {
+    if crate::secrets::SecretsStore::keychain_prompt_explicitly_allowed() {
+        return true;
+    }
+
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }

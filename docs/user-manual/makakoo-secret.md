@@ -12,7 +12,7 @@ daemon can read them directly without needing the env var to be exported.
 | Subcommand | Purpose |
 |---|---|
 | `secret set <KEY>` | Read a value from stdin (never echoed) and store it under `KEY`. |
-| `secret get <KEY>` | Retrieve and print a stored secret to stdout. |
+| `secret get <KEY>` | Retrieve and print a secret. Reads a same-named env var first, then the OS keyring when an interactive prompt is safe. |
 | `secret delete <KEY>` | Remove a stored secret from the keyring. |
 
 Note: there is no `secret list` subcommand — the OS keyring does not expose
@@ -40,6 +40,25 @@ secret_ref = "AIL_API_KEY"
 # The daemon resolves this via the keyring at call time — no env var needed.
 ```
 
+### Use from automation without GUI prompt storms
+
+`makakoo secret get <KEY>` checks the environment variable `<KEY>` first. If
+the env var is set and non-empty, Makakoo prints that value and never touches
+the OS keyring.
+
+When no env value exists, background/non-interactive callers fail fast instead
+of opening macOS Keychain / desktop keyring prompts. This protects agent shells,
+CI jobs, and daemon hooks from spawning repeated GUI password dialogs.
+
+```sh
+# Preferred in automation:
+export AIL_API_KEY=...
+makakoo secret get AIL_API_KEY
+
+# Only for automation that explicitly accepts an OS GUI prompt:
+MAKAKOO_SECRET_ALLOW_KEYCHAIN_PROMPT=1 makakoo secret get AIL_API_KEY
+```
+
 ### Rotate a key
 
 ```sh
@@ -58,6 +77,9 @@ makakoo secret delete OLD_PROVIDER_API_KEY
 
 - The value is read via a non-echoing stdin prompt — it never appears in
   your terminal scroll-back or shell history.
+- `secret get <KEY>` reads env `<KEY>` before the keyring. Non-interactive
+  callers must either provide that env var or explicitly set
+  `MAKAKOO_SECRET_ALLOW_KEYCHAIN_PROMPT=1`.
 - The keyring service (Keychain / Secret Service / Credential Manager) is
   unlocked by your OS session. Keys are not accessible while the machine is
   locked or in a headless SSH session without the keyring daemon running.
