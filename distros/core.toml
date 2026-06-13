@@ -1,15 +1,13 @@
 # distros/core.toml
 #
 # The default install for most users. Layers on top of minimal with the
-# four in-tree plugins-core manifests: three watchdogs and the Mascot GYM.
-# When makakoo-arbitrage, harveychat, brain, and friends ship as external
-# plugins we grow this list.
+# default in-tree core plugins: identity, browser, compression, watchdogs, Mascot GYM, and shared storage.
 
 [distro]
 name = "core"
 display_name = "Makakoo Core"
 version = "0.1.0"
-description = "Essential plugins for a usable Harvey, including shared S3 storage (garage-store, soft-fails when garagetytus binary absent). The default install."
+description = "Essential plugins for a usable Harvey, including caveman voice, Headroom MCP compression, browser automation, LLM gateway, watchdogs, and shared S3 storage. The default install."
 license = "MIT"
 
 include = ["minimal.toml"]
@@ -31,6 +29,10 @@ version = "^0.1"
 # Browser — Chrome CDP harness for harvey_browse in every infected CLI.
 "agent-browser-harness" = { version = "*" }
 "bootstrap-fragment-browser-harness" = { version = "*" }
+
+# Compression defaults — caveman for voice, Headroom for bulky tool/MCP output.
+"skill-meta-caveman-voice" = { version = "*" }
+"tool-headroom" = { version = "*" }
 
 # CLI auto-update — default CLIs on fresh Makakoo OS.
 "sancho-task-plugin-update-check" = { version = "*" }
@@ -68,6 +70,8 @@ message = """
 Makakoo Core installed. Plugins registered:
   - skill-system-persona-capture — global user/persona/companion name registry
   - bootstrap-fragment-persona-registry — teaches infected CLIs to use it
+  - skill-meta-caveman-voice — terse internal voice for every infected CLI
+  - tool-headroom            — Headroom MCP compression for bulky tool output
   - agent-browser-harness     — harvey_browse for every CLI (needs Chrome with CDP)
   - agent-switchailocal       — LLM gateway on :18080 (all platforms)
   - watchdog-switchailocal   (300s interval)
@@ -86,5 +90,6 @@ Next:
   3. makakoo agent start agent-switchailocal
   4. makakoo daemon install     — launchd/systemd agent for the tick loop
   5. makakoo secret set AIL_API_KEY — so the LLM gateway can answer
-  6. makakoo sancho status      — verify all tasks are registered
+  6. headroom mcp status       — verify Headroom MCP registration
+  7. makakoo sancho status      — verify all tasks are registered
 """

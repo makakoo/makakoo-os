@@ -1,0 +1,43 @@
+[plugin]
+name = "tool-headroom"
+version = "0.1.0"
+kind = "mcp-tool"
+language = "python"
+summary = "Headroom context compression for tool outputs and MCP clients. Installs headroom-ai[mcp] and registers the Headroom MCP server for detected agent hosts."
+authors = ["Chopra Tejas (upstream)", "Makakoo OS contributors (integration)"]
+license = "Apache-2.0"
+homepage = "https://github.com/chopratejas/headroom"
+
+[source]
+path = "plugins-core/tool-headroom"
+
+[abi]
+"mcp-tool" = "^1.0"
+"bootstrap-fragment" = "^1.0"
+
+[depends]
+python = ">=3.10"
+system = ["python3"]
+
+[depends.packages]
+python = ["headroom-ai[mcp]>=0.25.0"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[capabilities]
+grants = [
+    "exec/shell",
+    "net/http:https://pypi.org/*",
+    "net/http:https://files.pythonhosted.org/*",
+    "mcp/register:headroom",
+    "state/plugin",
+]
+
+[state]
+dir = "$MAKAKOO_HOME/state/tool-headroom"
+retention = "purge_on_uninstall"
+
+[infect.fragments]
+default = "fragments/default.md"

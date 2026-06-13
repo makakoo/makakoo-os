@@ -10,6 +10,15 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-06-13
+
+### Added
+- Bundled `tool-headroom` in the core distro so fresh installs get Headroom MCP context compression for large tool outputs.
+- Added a Headroom bootstrap fragment and skill guidance for safe compress/retrieve behavior across infected CLIs.
+
+### Fixed
+- Included `skill-meta-caveman-voice` in the core distro plugin set so the `voice = "caveman"` default is backed by an installed plugin on fresh systems.
+
 ## [0.1.15] - 2026-06-12
 
 ### Fixed

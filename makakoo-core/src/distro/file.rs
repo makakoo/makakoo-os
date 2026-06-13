@@ -445,6 +445,14 @@ version = "^1.0"
                 .contains_key("bootstrap-fragment-persona-registry"),
             "core distro must infect every CLI with persona-registry rules"
         );
+        assert!(
+            f.plugins.contains_key("skill-meta-caveman-voice"),
+            "core distro must install the caveman voice bootstrap plugin"
+        );
+        assert!(
+            f.plugins.contains_key("tool-headroom"),
+            "core distro must install Headroom MCP compression tools"
+        );
     }
 
     #[test]
