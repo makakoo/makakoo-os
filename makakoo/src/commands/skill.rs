@@ -12,16 +12,14 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use makakoo_core::capability::{
-    build_plugin_handler, socket_path, AuditLog, CapabilityServer,
-};
+use makakoo_core::capability::{AuditLog, CapabilityServer, build_plugin_handler, socket_path};
 use makakoo_core::gym::{ErrorCapture, ErrorEntry, ErrorSource};
 use makakoo_core::platform::makakoo_home;
 use makakoo_core::plugin::PluginRegistry;
 
 use crate::context::CliContext;
 use crate::output;
-use crate::skill_runner::{build_skill_env, SkillRunner};
+use crate::skill_runner::{SkillRunner, build_skill_env};
 
 /// Canonical env var name for the per-plugin capability socket path.
 /// Read by `makakoo-client` (Rust) and `makakoo-client-py` (Python),
@@ -41,14 +39,18 @@ pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Resul
         eprintln!("      To list installed skills, run:");
         eprintln!("        makakoo plugin list");
         eprintln!("      To list Python skill registry:");
-        eprintln!("        python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --list");
+        eprintln!(
+            "        python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --list"
+        );
         return Ok(1);
     }
     if name == "info" {
         let skill_name = args.first().map(|s| s.as_str()).unwrap_or("<skill>");
         eprintln!("hint: `makakoo skill info` is not a valid subcommand.");
         eprintln!("      To run a skill, use:  makakoo skill {skill_name}");
-        eprintln!("      To see skill details: python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --match {skill_name}");
+        eprintln!(
+            "      To see skill details: python3 $MAKAKOO_HOME/plugins/lib-harvey-core/src/core/registry/skill_registry.py --match {skill_name}"
+        );
         return Ok(1);
     }
     if name == "audit" {
@@ -64,31 +66,27 @@ pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Resul
         if let Some(run_cmd) = &plugin.manifest.entrypoint.run {
             let library_paths = registry.get_library_paths();
             let mut env = build_skill_env(&home, &library_paths);
+            if let Ok(exe) = std::env::current_exe() {
+                env.insert("MAKAKOO_BIN".into(), exe.to_string_lossy().into_owned());
+            }
 
             // Build capability handler + grant table for this plugin.
             let store = ctx.store()?;
             let llm = ctx.llm();
             let emb = ctx.embeddings();
-            let (handler, grants) =
-                build_plugin_handler(&plugin.manifest, &home, store, llm, emb)?;
+            let (handler, grants) = build_plugin_handler(&plugin.manifest, &home, store, llm, emb)?;
 
             // Create per-invocation socket (PID suffix prevents parallel collisions).
-            let sock = socket_path(&home, &format!(
-                "{}-{}",
-                plugin.manifest.plugin.name,
-                std::process::id()
-            ));
+            let sock = socket_path(
+                &home,
+                &format!("{}-{}", plugin.manifest.plugin.name, std::process::id()),
+            );
             if let Some(parent) = sock.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
 
             let audit = Arc::new(AuditLog::open_default(&home)?);
-            let server = CapabilityServer::new(
-                sock.clone(),
-                grants,
-                audit,
-                handler,
-            );
+            let server = CapabilityServer::new(sock.clone(), grants, audit, handler);
             let handle = server.serve().await?;
 
             // Tell the plugin where to connect — read by every

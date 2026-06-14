@@ -23,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Make plugins-core/lib-harvey-core/src importable as a package root so
 # `core.mcp.http_shim` resolves during the test without requiring an
@@ -56,6 +57,24 @@ class NonceRoundtripTest(unittest.TestCase):
         from core.brain_tail import extract_nonce
         self.assertIsNone(extract_nonce("- just a human-written line"))
         self.assertIsNone(extract_nonce("- {nonce=} trailing empty"))  # no id
+
+
+class MakakooMcpBinResolutionTest(unittest.TestCase):
+    def test_default_prefers_release_local_bin_before_cargo_bin(self):
+        from core.mcp import http_shim
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_home = Path(tmp)
+            local_bin = tmp_home / ".local" / "bin" / "makakoo-mcp"
+            cargo_bin = tmp_home / ".cargo" / "bin" / "makakoo-mcp"
+            local_bin.parent.mkdir(parents=True)
+            cargo_bin.parent.mkdir(parents=True)
+            local_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            cargo_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"HOME": str(tmp_home), "PATH": ""}):
+                with mock.patch("core.mcp.http_shim.shutil.which", return_value=None):
+                    self.assertEqual(http_shim._default_makakoo_mcp_bin(), str(local_bin))
 
 
 # ────────────────────────── flock concurrency ────────────────────────

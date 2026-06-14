@@ -44,9 +44,56 @@ LISTENER_ERR="${LOG_DIR}/listener-stderr.log"
 
 MAKAKOO_MCP_HTTP_PORT="${MAKAKOO_MCP_HTTP_PORT:-8765}"
 MAKAKOO_MCP_HTTP_BIND="${MAKAKOO_MCP_HTTP_BIND:-127.0.0.1}"
-SHIM_PYTHONPATH="${MAKAKOO_HOME}/plugins/lib-harvey-core/src"
-SHIM_ENTRY="${MAKAKOO_HOME}/plugins/lib-harvey-core/src/core/mcp/http_shim.py"
-LISTENER_ENTRY="${MAKAKOO_HOME}/plugins/lib-harvey-core/src/core/harvey-listen.js"
+LIB_HARVEY_CORE_DIR="${MAKAKOO_HOME}/plugins/lib-harvey-core"
+LIB_HARVEY_CORE_VENV_PYTHON="${LIB_HARVEY_CORE_DIR}/.venv/bin/python"
+SHIM_PYTHONPATH="${LIB_HARVEY_CORE_DIR}/src"
+SHIM_ENTRY="${LIB_HARVEY_CORE_DIR}/src/core/mcp/http_shim.py"
+LISTENER_ENTRY="${LIB_HARVEY_CORE_DIR}/src/core/harvey-listen.js"
+
+_resolve_shim_python() {
+    if [[ -n "${MAKAKOO_MCP_PYTHON:-}" ]]; then
+        echo "${MAKAKOO_MCP_PYTHON}"
+        return 0
+    fi
+    if [[ -x "${LIB_HARVEY_CORE_VENV_PYTHON}" ]]; then
+        echo "${LIB_HARVEY_CORE_VENV_PYTHON}"
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        command -v python3
+        return 0
+    fi
+    echo "/usr/bin/python3"
+}
+
+SHIM_PYTHON="$(_resolve_shim_python)"
+
+_resolve_makakoo_mcp_bin() {
+    if [[ -n "${MAKAKOO_MCP_BIN:-}" ]]; then
+        echo "${MAKAKOO_MCP_BIN}"
+        return 0
+    fi
+    if command -v makakoo-mcp >/dev/null 2>&1; then
+        command -v makakoo-mcp
+        return 0
+    fi
+    local candidate
+    for candidate in \
+        "${HOME}/.local/bin/makakoo-mcp" \
+        "${HOME}/.cargo/bin/makakoo-mcp" \
+        "/opt/homebrew/bin/makakoo-mcp" \
+        "/usr/local/bin/makakoo-mcp"; do
+        if [[ -x "${candidate}" ]]; then
+            echo "${candidate}"
+            return 0
+        fi
+    done
+    # Curl-pipe release installs land here. Let health/start logs expose the
+    # missing binary if the user has not installed Makakoo yet.
+    echo "${HOME}/.local/bin/makakoo-mcp"
+}
+
+MAKAKOO_MCP_BIN="$(_resolve_makakoo_mcp_bin)"
 
 # launchd / systemd IDs
 PLIST_NAME="com.makakoo.mcp.http"
@@ -55,6 +102,22 @@ SYSTEMD_NAME="makakoo-mcp-http.service"
 SYSTEMD_PATH="${STATE_DIR}/${SYSTEMD_NAME}"
 
 mkdir -p "${STATE_DIR}" "${LOG_DIR}"
+
+
+_ensure_lib_harvey_core_venv() {
+    if [[ ! -d "${LIB_HARVEY_CORE_DIR}" ]]; then
+        echo "WARNING: lib-harvey-core not installed at ${LIB_HARVEY_CORE_DIR}; Octopus Python dependencies may be missing"
+        return 0
+    fi
+    local bootstrap="${LIB_HARVEY_CORE_DIR}/bin/makakoo-venv-bootstrap"
+    if [[ ! -x "${bootstrap}" ]]; then
+        echo "WARNING: makakoo-venv-bootstrap missing at ${bootstrap}; Octopus Python dependencies may be missing"
+        return 0
+    fi
+    echo "[agent-octopus-peer] ensuring lib-harvey-core Python deps (cryptography) ..."
+    MAKAKOO_PLUGIN_DIR="${LIB_HARVEY_CORE_DIR}" "${bootstrap}" pip "cryptography>=41,<46"
+    SHIM_PYTHON="$(_resolve_shim_python)"
+}
 
 # ── platform detection ──────────────────────────────────────────
 
@@ -174,7 +237,7 @@ _install_launchd() {
     <key>Label</key><string>${PLIST_NAME}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>${SHIM_PYTHON}</string>
         <string>-u</string>
         <string>${SHIM_ENTRY}</string>
     </array>
@@ -182,6 +245,7 @@ _install_launchd() {
     <dict>
         <key>MAKAKOO_HOME</key><string>${MAKAKOO_HOME}</string>
         <key>PYTHONPATH</key><string>${SHIM_PYTHONPATH}</string>
+        <key>MAKAKOO_MCP_BIN</key><string>${MAKAKOO_MCP_BIN}</string>
         <key>MAKAKOO_MCP_HTTP_BIND</key><string>${MAKAKOO_MCP_HTTP_BIND}</string>
         <key>MAKAKOO_MCP_HTTP_PORT</key><string>${MAKAKOO_MCP_HTTP_PORT}</string>
     </dict>
@@ -205,9 +269,10 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -u ${SHIM_ENTRY}
+ExecStart=${SHIM_PYTHON} -u ${SHIM_ENTRY}
 Environment="MAKAKOO_HOME=${MAKAKOO_HOME}"
 Environment="PYTHONPATH=${SHIM_PYTHONPATH}"
+Environment="MAKAKOO_MCP_BIN=${MAKAKOO_MCP_BIN}"
 Environment="MAKAKOO_MCP_HTTP_BIND=${MAKAKOO_MCP_HTTP_BIND}"
 Environment="MAKAKOO_MCP_HTTP_PORT=${MAKAKOO_MCP_HTTP_PORT}"
 Restart=always
@@ -230,10 +295,10 @@ _shim_start() {
         echo "[agent-octopus-peer] HTTP shim already running"
         return 0
     fi
-    if [[ ! -f "${PLIST_PATH}" ]] && [[ ! -f "${SYSTEMD_PATH}" ]]; then
-        echo "[agent-octopus-peer] shim unit not installed — running install first"
-        _install_shim
-    fi
+    # Always refresh the unit before start. `makakoo network activate` can
+    # rewrite bind/port/MCP binary settings, and stale launchd/systemd units
+    # are worse than reinstalling a tiny descriptor.
+    _install_shim
 
     if _is_macos; then
         if [[ -f "${PLIST_PATH}" ]]; then
@@ -274,6 +339,7 @@ _shim_stop() {
 
 do_install() {
     echo "[agent-octopus-peer] installing Octopus peer stack ..."
+    _ensure_lib_harvey_core_venv
     _install_shim
     echo "✓ agent-octopus-peer installed."
     echo ""
@@ -289,6 +355,7 @@ do_install() {
 
 do_start() {
     echo "[agent-octopus-peer] starting Octopus peer stack ..."
+    _ensure_lib_harvey_core_venv
     _shim_start
     _listener_start
     echo "[agent-octopus-peer] ✓ all components started"
@@ -336,13 +403,7 @@ case "${CMD}" in
         "do_${CMD}"
         ;;
     "")
-        echo "Usage: $0 {install|start|stop|restart|health}"
-        echo ""
-        echo "First run:  $0 install   — write launchd/systemd unit"
-        echo "Run:        $0 start     — start shim + listener"
-        echo "Stop:       $0 stop     — stop both"
-        echo "Check:      $0 health    — exit 0 if healthy"
-        exit 0
+        do_install
         ;;
     *)
         echo "Unknown command: ${CMD}"

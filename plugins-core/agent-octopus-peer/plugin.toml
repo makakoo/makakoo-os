@@ -16,15 +16,16 @@ agent = "^1.0"
 [depends]
 python = ">=3.9"
 binaries = ["node"]
+plugins = ["lib-harvey-core"]
 
 [install]
 unix = "install.sh"
 windows = "install.ps1"
 
 [entrypoint]
-start = "install.sh start"
-stop = "install.sh stop"
-health = "install.sh health"
+start = "./install.sh start"
+stop = "./install.sh stop"
+health = "./install.sh health"
 
 [capabilities]
 grants = [

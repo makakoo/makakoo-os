@@ -113,6 +113,9 @@ def audit(event: str, **payload: Any) -> None:
 
 
 def makakoo_bin() -> str:
+    explicit = os.environ.get("MAKAKOO_BIN")
+    if explicit:
+        return explicit
     found = shutil.which("makakoo")
     if found:
         return found
@@ -283,6 +286,10 @@ def cmd_activate(args: argparse.Namespace) -> int:
     print(f"brain-network enabled: {cfg['node_name']} on {bind_host}:{port} ({bind_mode})")
     print(f"env: {env_path()}")
     if not args.no_start:
+        # Restart, not start-only. Existing launchd/systemd descriptors may
+        # have been generated with a previous bind/port before this env file
+        # was written.
+        run_makakoo(["agent", "stop", "agent-octopus-peer"], check=False)
         run_makakoo(["agent", "start", "agent-octopus-peer"], check=True)
     print("next: makakoo network doctor")
     return 0

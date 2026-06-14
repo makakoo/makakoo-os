@@ -10,6 +10,22 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-06-14
+
+### Added
+- Added the opt-in `federation` distro so users can install Brain Network on any Makakoo node with `makakoo distro install federation`.
+- Added `makakoo network` as the safe Brain federation control plane for activating Octopus peers, registering endpoints, exchanging trust, and running origin-tagged remote Brain searches.
+- Added Brain Network user-manual and walkthrough docs for Harvey laptop, Donna VPS, Tytus pods, and future Makakoo-to-Makakoo setups.
+
+### Changed
+- Made `agent-octopus-peer` default to loopback instead of public bind, and made Brain Network activation write persistent listener env before restarting the agent.
+
+### Fixed
+- Fixed manual plugin installs when SkillSpector writes a valid high-risk report but exits nonzero: Makakoo now parses the report and shows the policy block instead of a scanner infrastructure error.
+- Fixed `agent-octopus-peer` release installs by resolving `makakoo-mcp` from `~/.local/bin` as well as cargo/Homebrew paths and passing that path into launchd/systemd.
+- Fixed `agent-octopus-peer` lifecycle entrypoints so `makakoo agent start|stop|health agent-octopus-peer` runs from installed plugin directories.
+- Fixed fresh Brain Network installs by bootstrapping Octopus' `cryptography` dependency into `lib-harvey-core`'s venv and routing Octopus/Brain Network commands through that venv.
+
 ## [0.1.25] - 2026-06-13
 
 ### Fixed
