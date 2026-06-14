@@ -19,6 +19,16 @@ fn write_mock_skillspector(
     json_report: &str,
     args_log: Option<&Path>,
 ) -> PathBuf {
+    write_mock_skillspector_with_exit(tmp, stem, json_report, args_log, 0)
+}
+
+fn write_mock_skillspector_with_exit(
+    tmp: &TempDir,
+    stem: &str,
+    json_report: &str,
+    args_log: Option<&Path>,
+    exit_code: i32,
+) -> PathBuf {
     let py_path = tmp.path().join(format!("{stem}.py"));
     let wrapper_path = if cfg!(windows) {
         tmp.path().join(format!("{stem}.cmd"))
@@ -61,6 +71,7 @@ if fmt == "json":
     Path(out).write_text(report, encoding="utf-8")
 elif fmt == "sarif":
     Path(out).write_text('{{"runs":[]}}', encoding="utf-8")
+sys.exit({exit_code})
 "#
     );
     fs::write(&py_path, py).unwrap();
@@ -222,6 +233,63 @@ fn plugin_install_high_risk_blocked_by_default() {
 }
 
 #[test]
+fn plugin_install_nonzero_report_is_risk_block_not_scan_error() {
+    let home = fresh_home();
+    let tmp = TempDir::new().unwrap();
+    let plugin_src = tmp.path().join("risky-plugin");
+    fs::create_dir_all(&plugin_src).unwrap();
+    write_manifest(&plugin_src, "risky-plugin");
+
+    // Real SkillSpector can exit non-zero when it has produced a valid
+    // DO_NOT_INSTALL report. That must flow into the risk policy gate, not
+    // become an infrastructure "scan error" that hides the report.
+    let mock_bin = write_mock_skillspector_with_exit(
+        &tmp,
+        "mock_skillspector_nonzero",
+        r#"{
+  "risk_assessment": {
+    "score": 100,
+    "severity": "CRITICAL",
+    "recommendation": "DO_NOT_INSTALL"
+  },
+  "issues": [
+    {
+      "id": "PE3",
+      "severity": "CRITICAL",
+      "category": "Credential Access",
+      "location": "main.py:5"
+    }
+  ]
+}"#,
+        None,
+        1,
+    );
+
+    let out = run(
+        &home,
+        &["plugin", "install", &plugin_src.to_string_lossy()],
+        &[("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin.to_string_lossy())],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "expected risk block, got success\nstderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("SkillSpector flagged this plugin: CRITICAL 100/100"),
+        "expected risk policy block in stderr, got: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("SkillSpector scan error"),
+        "valid nonzero report should not be classified as scan infra error: {}",
+        stderr
+    );
+}
+
+#[test]
 fn plugin_install_high_risk_with_override_succeeds() {
     let home = fresh_home();
     let tmp = TempDir::new().unwrap();
@@ -263,8 +331,10 @@ fn plugin_install_high_risk_with_override_succeeds() {
         &[("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin.to_string_lossy())],
     );
     assert!(!out_no_ack.status.success());
-    assert!(String::from_utf8_lossy(&out_no_ack.stderr)
-        .contains("--allow-risk requires a non-empty --risk-ack explanation"));
+    assert!(
+        String::from_utf8_lossy(&out_no_ack.stderr)
+            .contains("--allow-risk requires a non-empty --risk-ack explanation")
+    );
 
     // 2) Test allow_risk with risk_ack -> succeeds
     let out = run(
@@ -344,8 +414,10 @@ fn plugin_install_no_skill_scan_policy() {
         &[],
     );
     assert!(!out_git.status.success());
-    assert!(String::from_utf8_lossy(&out_git.stderr)
-        .contains("--no-skill-scan is only allowed for local path installs"));
+    assert!(
+        String::from_utf8_lossy(&out_git.stderr)
+            .contains("--no-skill-scan is only allowed for local path installs")
+    );
 }
 
 #[test]

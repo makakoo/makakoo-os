@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Run skill-brain-network under lib-harvey-core's venv when available.
+# Octopus identity/signing needs cryptography; fresh federation installs
+# bootstrap it via agent-octopus-peer, but this wrapper also repairs older
+# installs on first use.
+set -euo pipefail
+
+PLUGIN_ROOT="${MAKAKOO_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+MAKAKOO_HOME="${MAKAKOO_HOME:-$HOME/MAKAKOO}"
+LIB_HARVEY_CORE_DIR="${MAKAKOO_HOME}/plugins/lib-harvey-core"
+VENV_PYTHON="${LIB_HARVEY_CORE_DIR}/.venv/bin/python"
+BOOTSTRAP="${LIB_HARVEY_CORE_DIR}/bin/makakoo-venv-bootstrap"
+
+if [[ ! -x "${VENV_PYTHON}" && -x "${BOOTSTRAP}" ]]; then
+    echo "[brain-network] preparing Octopus Python deps (cryptography) ..." >&2
+    MAKAKOO_PLUGIN_DIR="${LIB_HARVEY_CORE_DIR}" "${BOOTSTRAP}" pip "cryptography>=41,<46" >&2 || true
+fi
+
+if [[ -x "${VENV_PYTHON}" ]]; then
+    exec "${VENV_PYTHON}" -u "${PLUGIN_ROOT}/src/brain_network.py" "$@"
+fi
+
+exec "${MAKAKOO_PYTHON:-python3}" -u "${PLUGIN_ROOT}/src/brain_network.py" "$@"

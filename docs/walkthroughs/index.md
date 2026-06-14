@@ -2,7 +2,7 @@
 
 Step-by-step guides that take you from a clean install to every major feature Makakoo ships. Each walkthrough is **copy-paste runnable** — every command was executed on a live install before it was documented.
 
-The first thirteen are a **linear tour** (read 01→13 in order on your first time). The per-transport recipes at the bottom are **standalone**: dip into the one that matches the channel you want to wire up.
+The first fourteen are a **linear tour** (read 01→14 in order on your first time). The per-transport recipes at the bottom are **standalone**: dip into the one that matches the channel you want to wire up.
 
 ## Order + dependencies
 
@@ -39,13 +39,18 @@ The first thirteen are a **linear tour** (read 01→13 in order on your first ti
 └───────────────┘   └────────────────┘
 
 ┌────────────────────────────────────────────────┐
-│  12 — Octopus federation (stub — pending       │
-│       octopus-generalize sprint merge)         │
+│  12 — Octopus signed peer trust                │
+│       identity, invite, join, trust grants     │
 └────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────┐
 │  13 — Shared S3 storage (garagetytus)          │
 │       laptop daemon OR Tytus shared service    │
+└────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────┐
+│  14 — Brain Network (Harvey ↔ Donna)           │
+│       signed remote Brain search               │
 └────────────────────────────────────────────────┘
 ```
 
@@ -67,8 +72,9 @@ The first thirteen are a **linear tour** (read 01→13 in order on your first ti
 | [09](./09-ingest-document.md) | Teach Harvey about a document | Feed a PDF through `harvey_knowledge_ingest`, retrieve it later by content. | ~5 min |
 | [10](./10-mascot-mission.md) | Meet the mascots, fire one mission | `nursery list`, `sancho tick`, read the `[[Mascot]] …` journal breadcrumb. | ~4 min |
 | [11](./11-connect-tytus.md) | Connect a Tytus private pod | Route LLM calls through your own WireGuard-tunneled pod. | ~6 min |
-| [12](./12-octopus-federation.md) | **STUB** — Octopus federation | Coming when the `octopus-generalize` sprint Phase 1 merges publicly. | — |
+| [12](./12-octopus-federation.md) | Octopus federation | Bootstrap signed MCP identity, invites, joins, trust grants, and peer health. | ~10 min |
 | [13](./13-shared-storage-garagetytus.md) | Shared S3 storage with garagetytus | Put a file into a bucket and read it back from another machine. Two flavors: laptop daemon or `garagetytus.traylinx.com`. | ~8 min |
+| [14](./14-brain-network.md) | Brain Network: Harvey ↔ Donna | Install the federation distro, activate Octopus safely, pair trust, register endpoints, and run signed remote Brain search. | ~12 min |
 
 ## Multi-bot subagents — per-transport recipes (v2.0)
 

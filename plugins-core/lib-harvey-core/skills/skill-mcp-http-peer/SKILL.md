@@ -103,7 +103,7 @@ Human-authored lines (Logseq, direct edits) have no nonce; they return
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `MAKAKOO_MCP_HTTP_BIND` | `0.0.0.0` | Listen address. Use `127.0.0.1` for loopback-only. |
+| `MAKAKOO_MCP_HTTP_BIND` | `127.0.0.1` | Listen address. Use `127.0.0.1` for loopback-only. |
 | `MAKAKOO_MCP_HTTP_PORT` | `8765`    | Port. |
 | `MAKAKOO_MCP_POOL_SIZE` | `2`       | macOS stdio pool size. Benchmark before raising on Linux. |
 | `MAKAKOO_MCP_BIN`       | `~/.cargo/bin/makakoo-mcp` | Path to the Rust MCP binary. |
@@ -128,7 +128,7 @@ python3 plugins-core/lib-harvey-core/src/core/mcp/tests/test_http_shim_concurren
 Start the peer stack:
 
 ```bash
-makakoo agent start octopus-peer
+makakoo agent start agent-octopus-peer
 ```
 
 The agent manages the shim's launchd/systemd unit and the listener

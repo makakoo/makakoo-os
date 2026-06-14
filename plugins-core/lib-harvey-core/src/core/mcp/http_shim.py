@@ -62,6 +62,7 @@ import json
 import logging
 import os
 import queue
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -87,15 +88,35 @@ except ImportError:
 
 # ────────────────────────── config ──────────────────────────────────
 
-BIND_HOST = os.environ.get("MAKAKOO_MCP_HTTP_BIND", "0.0.0.0")
+BIND_HOST = os.environ.get("MAKAKOO_MCP_HTTP_BIND", "127.0.0.1")
 BIND_PORT = int(os.environ.get("MAKAKOO_MCP_HTTP_PORT", "8765"))
 DRIFT_WINDOW_MS = 60_000  # matches makakoo_core::adapter::peer::DRIFT_WINDOW_MS
 SIG_PREFIX = "ed25519="
 MAKAKOO_HOME = os.environ.get("MAKAKOO_HOME", os.path.expanduser("~/MAKAKOO"))
 TRUST_FILE = os.path.join(MAKAKOO_HOME, "config", "peers", "trusted.keys")
-MAKAKOO_MCP_BIN = os.environ.get(
-    "MAKAKOO_MCP_BIN", os.path.expanduser("~/.cargo/bin/makakoo-mcp")
-)
+def _default_makakoo_mcp_bin() -> str:
+    """Find the sibling `makakoo-mcp` binary across install methods.
+
+    Release tarballs and curl-pipe installs use `~/.local/bin`; developer
+    cargo installs usually use `~/.cargo/bin`. Prefer PATH first so test
+    harnesses and custom deployments can override without setting env.
+    """
+    found = shutil.which("makakoo-mcp")
+    if found:
+        return found
+    for candidate in (
+        "~/.local/bin/makakoo-mcp",
+        "~/.cargo/bin/makakoo-mcp",
+        "/opt/homebrew/bin/makakoo-mcp",
+        "/usr/local/bin/makakoo-mcp",
+    ):
+        path = os.path.expanduser(candidate)
+        if os.path.exists(path):
+            return path
+    return os.path.expanduser("~/.local/bin/makakoo-mcp")
+
+
+MAKAKOO_MCP_BIN = os.environ.get("MAKAKOO_MCP_BIN", _default_makakoo_mcp_bin())
 POOL_SIZE = max(1, int(os.environ.get("MAKAKOO_MCP_POOL_SIZE", "2")))
 POOL_ACQUIRE_TIMEOUT_S = float(os.environ.get("MAKAKOO_MCP_POOL_ACQUIRE_TIMEOUT_S", "30"))
 # N=2 is the macOS sweet spot (see benchmark in test_http_shim_concurrency).

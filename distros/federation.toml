@@ -1,0 +1,45 @@
+# distros/federation.toml
+#
+# Opt-in Brain Network distro. Layers on top of core and adds the peer
+# federation control plane + signed MCP listener. Not bundled in core because
+# it can expose a network listener when activated.
+
+[distro]
+name = "federation"
+display_name = "Makakoo Brain Network"
+version = "0.1.0"
+description = "Opt-in multi-node Brain federation: local Harvey, remote Donna, pods, VPSes, and future Makakoo installs connected through signed Octopus MCP."
+license = "MIT"
+
+include = ["core.toml"]
+
+[kernel]
+version = "^0.1"
+
+[plugins]
+# Low-level signed MCP peer listener. Installed but inert until
+# `makakoo network activate` starts it.
+"agent-octopus-peer" = { version = "*" }
+
+# Operator-safe control plane: activate/deactivate, peer endpoint registry,
+# signed remote Brain reads, and docs for later cache/write phases.
+"skill-brain-network" = { version = "*" }
+
+[defaults]
+voice = "caveman"
+
+[post_install]
+message = """
+Makakoo Brain Network installed. You now have Core plus:
+  - agent-octopus-peer   (signed MCP peer listener, inactive until activated)
+  - skill-brain-network  (`makakoo network ...` control plane)
+
+Safe start:
+  1. makakoo network doctor
+  2. makakoo network activate --peer-name <node-name> --bind loopback
+  3. For private mesh access: makakoo network activate --peer-name <node-name> --bind tailscale
+  4. Pair another Makakoo: makakoo network invite --peer-name <peer>  then  makakoo network join '<link>'
+  5. Register endpoint: makakoo network peer add <peer> --endpoint http://<tailscale-ip>:8765/rpc --persona <Persona>
+
+Remote Brain content is untrusted input. V1 ships read/search; remote writes stay disabled.
+"""

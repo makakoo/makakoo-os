@@ -29,6 +29,7 @@ pub mod lifecycle;
 pub mod mcp;
 pub mod memory;
 pub mod migrate;
+pub mod network;
 pub mod nursery;
 pub mod octopus;
 pub mod perms;
@@ -186,6 +187,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Session { cmd } => session::run(ctx, cmd).await,
         Commands::Adapter { cmd } => adapter::run(ctx, cmd).await,
         Commands::Octopus { args } => octopus::run(args),
+        Commands::Network { args } => network::run(args, ctx).await,
         Commands::Agent { cmd } => agent::run(ctx, cmd),
         Commands::AgentSession { cmd } => agent_session::run(ctx, cmd),
         Commands::Handle { cmd } => handle::run(ctx, cmd),

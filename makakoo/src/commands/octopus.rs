@@ -24,7 +24,7 @@ use makakoo_core::platform::makakoo_home;
 /// Returns the child process's exit code.
 pub fn run(args: Vec<String>) -> Result<i32> {
     let src_dir = resolve_lib_harvey_core_src()?;
-    let python = python_binary();
+    let python = python_binary(&src_dir);
 
     let mut cmd = Command::new(&python);
     cmd.arg("-m").arg("core.octopus.bootstrap_wizard");
@@ -41,9 +41,12 @@ pub fn run(args: Vec<String>) -> Result<i32> {
     // (env pointing at a tmpdir) we want the subprocess to see the same.
     cmd.env("MAKAKOO_HOME", makakoo_home());
 
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to spawn {} -m core.octopus.bootstrap_wizard", python))?;
+    let status = cmd.status().with_context(|| {
+        format!(
+            "failed to spawn {} -m core.octopus.bootstrap_wizard",
+            python
+        )
+    })?;
     Ok(status.code().unwrap_or(1))
 }
 
@@ -69,17 +72,17 @@ fn resolve_lib_harvey_core_src() -> Result<PathBuf> {
             return Ok(candidate);
         }
     }
-    let home_plugins = makakoo_home().join("plugins").join("lib-harvey-core").join("src");
+    let home_plugins = makakoo_home()
+        .join("plugins")
+        .join("lib-harvey-core")
+        .join("src");
     if home_plugins.is_dir() {
         return Ok(home_plugins);
     }
     if let Ok(exe) = std::env::current_exe() {
         let mut cur: Option<&std::path::Path> = Some(exe.as_path());
         while let Some(p) = cur {
-            let candidate = p
-                .join("plugins-core")
-                .join("lib-harvey-core")
-                .join("src");
+            let candidate = p.join("plugins-core").join("lib-harvey-core").join("src");
             if candidate.is_dir() {
                 return Ok(candidate);
             }
@@ -94,13 +97,35 @@ fn resolve_lib_harvey_core_src() -> Result<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn python_binary() -> String {
-    std::env::var("MAKAKOO_PYTHON").unwrap_or_else(|_| "python3".to_string())
+fn python_binary(src_dir: &std::path::Path) -> String {
+    if let Ok(p) = std::env::var("MAKAKOO_PYTHON") {
+        if !p.trim().is_empty() {
+            return p;
+        }
+    }
+    if let Some(root) = src_dir.parent() {
+        let candidate = root.join(".venv").join("bin").join("python");
+        if candidate.is_file() {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    "python3".to_string()
 }
 
 #[cfg(windows)]
-fn python_binary() -> String {
-    std::env::var("MAKAKOO_PYTHON").unwrap_or_else(|_| "python".to_string())
+fn python_binary(src_dir: &std::path::Path) -> String {
+    if let Ok(p) = std::env::var("MAKAKOO_PYTHON") {
+        if !p.trim().is_empty() {
+            return p;
+        }
+    }
+    if let Some(root) = src_dir.parent() {
+        let candidate = root.join(".venv").join("Scripts").join("python.exe");
+        if candidate.is_file() {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    "python".to_string()
 }
 
 fn prepend_pythonpath(src_dir: &std::path::Path, prev: &OsString) -> OsString {
@@ -136,5 +161,26 @@ mod tests {
         let prev = OsString::new();
         let out = prepend_pythonpath(p, &prev);
         assert_eq!(out.to_string_lossy(), "/tmp/src");
+    }
+
+    #[test]
+    fn python_prefers_lib_harvey_core_venv_when_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let python = if cfg!(windows) {
+            temp.path().join(".venv").join("Scripts").join("python.exe")
+        } else {
+            temp.path().join(".venv").join("bin").join("python")
+        };
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, "").unwrap();
+
+        let prior = std::env::var("MAKAKOO_PYTHON").ok();
+        std::env::remove_var("MAKAKOO_PYTHON");
+        assert_eq!(python_binary(&src), python.to_string_lossy());
+        if let Some(v) = prior {
+            std::env::set_var("MAKAKOO_PYTHON", v);
+        }
     }
 }

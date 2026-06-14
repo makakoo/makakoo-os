@@ -17,6 +17,7 @@ for "I want to X" recipes.
 | [Handle reads (`makakoo handle`)](makakoo-handle.md) | Bounded reads from durable Makakoo handles such as `agent-artifact://...`. |
 | [Skill security & auditing](makakoo-skill-security.md) | Plugin preflight security scans, overrides, and manual SkillSpector audits. |
 | [HarveyChat Cortex Memory](../agents/harveychat-cortex-memory.md) | Configure long-term memory and cross-channel aliases for HarveyChat. |
+| [Brain Network (`makakoo network`)](makakoo-network.md) | Opt-in Makakoo-to-Makakoo Brain federation via Octopus signed MCP. |
 
 *(More task-oriented chapters coming — brain sources, adapter
 selection, plugin authoring. Until those land, look up the individual
@@ -54,6 +55,7 @@ makakoo <command> [options] [arguments]
 | [agent](agent.md) | Multi-bot subagents — slot lifecycle + transports (v2.0) |
 | [agent-session](makakoo-agent-session.md) | Durable child-agent sessions — open/eval/read/gate without flooding parent context |
 | [handle](makakoo-handle.md) | Bounded reads from Makakoo handles such as `agent-artifact://...` |
+| [network](makakoo-network.md) | Opt-in Brain Network federation across Makakoo installs |
 
 ## Global Options
 

@@ -450,6 +450,20 @@ pub enum Commands {
         args: Vec<String>,
     },
 
+    /// Opt-in Brain Network federation across Makakoo installs.
+    ///
+    /// Thin wrapper around the `skill-brain-network` plugin. Keeps the
+    /// core Brain ignorant of peers while giving operators a stable UX:
+    ///   makakoo network doctor
+    ///   makakoo network activate --peer-name donna-vps --bind tailscale
+    ///   makakoo network peer add donna-vps --endpoint http://100.x.y.z:8765/rpc
+    ///   makakoo network search donna-vps "query"
+    Network {
+        /// Arguments forwarded verbatim to the brain-network plugin.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// Emit a shell completion script for the chosen shell.
     ///
     /// Write the output to the shell's completion path to enable
@@ -1862,6 +1876,28 @@ mod tests {
             assert_eq!(limit, 5);
         } else {
             panic!("expected Search");
+        }
+    }
+
+    #[test]
+    fn parse_network_passthrough_args() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "network",
+            "activate",
+            "--peer-name",
+            "donna-vps",
+            "--bind",
+            "tailscale",
+        ])
+        .unwrap();
+        if let Commands::Network { args } = cli.command.unwrap() {
+            assert_eq!(
+                args,
+                ["activate", "--peer-name", "donna-vps", "--bind", "tailscale"]
+            );
+        } else {
+            panic!("expected Network");
         }
     }
 
