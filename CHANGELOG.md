@@ -10,6 +10,12 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-06-14
+
+### Changed
+- Improved Brain Network discoverability in the top-level docs and getting-started/use-case guides.
+- Taught the Brain Network skill and user manual to route plain-language requests like “connect my Mac Brain with my VPS Brain” into safe `makakoo network` flows.
+
 ## [0.1.27] - 2026-06-14
 
 ### Fixed
