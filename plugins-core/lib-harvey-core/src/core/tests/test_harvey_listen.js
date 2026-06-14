@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /*
  * test_harvey_listen.js — fast unit tests for the nonce-aware LRU and the
- * extractNonce/mintNonce helpers. No network, no subprocess.
+ * extractNonce/mintNonce helpers. No network; one subprocess smoke test covers
+ * dormant startup before identity files exist.
  *
- * To run the listener itself requires env fixtures (endpoint.txt,
+ * To run the active polling listener requires env fixtures (endpoint.txt,
  * peer-name.txt, pod.pem) — that's covered by the integration test
  * under plugins-core/lib-harvey-core/src/core/mcp/tests/ which runs
- * against a live shim. This file exercises only the pure-JS pieces.
+ * against a live shim.
  *
  * Run:
  *   node plugins-core/lib-harvey-core/src/core/tests/test_harvey_listen.js
@@ -17,9 +18,9 @@
 const assert = require('assert');
 const path = require('path');
 
-// The listener bails at `readOrDie` if OCTOPUS_KEY_DIR isn't a full
-// identity bundle. Point it at this test dir and stub the missing files
-// before requiring, so the module's top-level import doesn't fatal.
+// Point OCTOPUS_KEY_DIR at a fixture bundle for pure helper imports.
+// Identity material is now lazy-loaded only when the daemon is actually
+// started, but keeping fixtures here proves the old path still works.
 const os = require('os');
 const fs = require('fs');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'octopus-listen-test-'));
@@ -48,6 +49,20 @@ function test(name, fn) {
     process.exitCode = 1;
   }
 }
+
+// ───── startup / opt-in behavior ───────────────────────────────────
+
+test('script exits dormant without listener-enabled or identity files', () => {
+  const { spawnSync } = require('child_process');
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'octopus-listen-empty-'));
+  const proc = spawnSync(process.execPath, [path.join(__dirname, '..', 'harvey-listen.js')], {
+    env: { ...process.env, OCTOPUS_KEY_DIR: empty },
+    encoding: 'utf8',
+  });
+  assert.strictEqual(proc.status, 0, `stdout=${proc.stdout}
+stderr=${proc.stderr}`);
+  assert.match(proc.stdout, /listener-enabled flag absent/);
+});
 
 // ───── NonceLRU ────────────────────────────────────────────────────
 

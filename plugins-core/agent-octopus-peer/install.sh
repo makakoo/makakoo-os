@@ -49,6 +49,8 @@ LIB_HARVEY_CORE_VENV_PYTHON="${LIB_HARVEY_CORE_DIR}/.venv/bin/python"
 SHIM_PYTHONPATH="${LIB_HARVEY_CORE_DIR}/src"
 SHIM_ENTRY="${LIB_HARVEY_CORE_DIR}/src/core/mcp/http_shim.py"
 LISTENER_ENTRY="${LIB_HARVEY_CORE_DIR}/src/core/harvey-listen.js"
+LISTENER_KEY_DIR="${OCTOPUS_KEY_DIR:-$([[ -d /app/workspace/.mcp-keys ]] && echo /app/workspace/.mcp-keys || echo ${HOME}/.makakoo/keys)}"
+LISTENER_ENABLE_FLAG="${LISTENER_KEY_DIR}/listener-enabled"
 
 _resolve_shim_python() {
     if [[ -n "${MAKAKOO_MCP_PYTHON:-}" ]]; then
@@ -151,6 +153,10 @@ _listener_running() {
 _listener_start() {
     if _listener_running; then
         echo "[agent-octopus-peer] listener already running (pid=$(cat "${LISTENER_PID_FILE}"))"
+        return 0
+    fi
+    if [[ ! -f "${LISTENER_ENABLE_FLAG}" ]]; then
+        echo "[agent-octopus-peer] harvey-listen.js dormant (opt in with: touch ${LISTENER_ENABLE_FLAG})"
         return 0
     fi
     if [[ ! -f "${LISTENER_ENTRY}" ]]; then
@@ -386,6 +392,8 @@ do_health() {
 
     if _listener_running; then
         echo "OK  harvey-listen.js running (pid=$(cat "${LISTENER_PID_FILE}"))"
+    elif [[ ! -f "${LISTENER_ENABLE_FLAG}" ]]; then
+        echo "OK  harvey-listen.js dormant (opt-in flag absent)"
     else
         echo "DOWN  harvey-listen.js not running"
         ok=1

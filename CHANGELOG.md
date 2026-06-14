@@ -10,6 +10,11 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.27] - 2026-06-14
+
+### Fixed
+- Fixed fresh Brain Network activation so the legacy `harvey-listen.js` sidecar stays dormant unless explicitly enabled, while the signed MCP HTTP shim starts and reports healthy for remote Brain reads.
+
 ## [0.1.26] - 2026-06-14
 
 ### Added

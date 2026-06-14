@@ -132,3 +132,21 @@ fn brain_network_entrypoint_uses_wrapper_with_octopus_venv() {
     assert!(wrapper.contains("cryptography>=41,<46"));
     assert!(wrapper.contains("src/brain_network.py"));
 }
+
+#[test]
+fn listener_is_optional_until_explicitly_enabled() {
+    let body = std::fs::read_to_string(plugin_dir().join("install.sh")).unwrap();
+
+    assert!(
+        body.contains("LISTENER_ENABLE_FLAG"),
+        "install.sh must gate the legacy harvey-listen sidecar behind an opt-in flag"
+    );
+    assert!(
+        body.contains("harvey-listen.js dormant"),
+        "fresh Brain Network activation should not fail when listener credentials are absent"
+    );
+    assert!(
+        body.contains("OK  harvey-listen.js dormant (opt-in flag absent)"),
+        "agent health should be green when only the HTTP shim is enabled"
+    );
+}

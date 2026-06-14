@@ -66,14 +66,23 @@ function readOrDie(p) {
   catch (e) { logLine('FATAL', `${p} unreadable: ${e.code}`); process.exit(4); }
 }
 
-// Bootstrapped once — endpoint and peer name don't change across a run.
-const ENDPOINT = readOrDie(path.join(KEY_DIR, 'harvey-endpoint.txt')).trim();
-const PEER = readOrDie(path.join(KEY_DIR, 'peer-name.txt')).trim();
-const PRIVATE_KEY = crypto.createPrivateKey({
-  key: readOrDie(path.join(KEY_DIR, 'pod.pem')),
-  format: 'pem',
-});
-const PATTERN = process.env.HARVEY_LISTEN_PATTERN || `@${PEER}`;
+// Bootstrapped once in main after the opt-in flag is verified. Keep these
+// lazy so a fresh Makakoo node without listener credentials exits dormant
+// instead of failing before it can see that listener-enabled is absent.
+let ENDPOINT = null;
+let PEER = null;
+let PRIVATE_KEY = null;
+let PATTERN = null;
+
+function loadIdentityMaterial() {
+  ENDPOINT = readOrDie(path.join(KEY_DIR, 'harvey-endpoint.txt')).trim();
+  PEER = readOrDie(path.join(KEY_DIR, 'peer-name.txt')).trim();
+  PRIVATE_KEY = crypto.createPrivateKey({
+    key: readOrDie(path.join(KEY_DIR, 'pod.pem')),
+    format: 'pem',
+  });
+  PATTERN = process.env.HARVEY_LISTEN_PATTERN || `@${PEER}`;
+}
 
 
 // ────────────────────────── nonce-aware LRU ────────────────────────
@@ -265,6 +274,7 @@ async function main() {
     logLine('INFO', `listener-enabled flag absent at ${enableFlag} — exiting (run "touch ${enableFlag}" to opt in)`);
     process.exit(0);
   }
+  loadIdentityMaterial();
   logLine('INFO', `harvey-listen starting — endpoint=${ENDPOINT} peer=${PEER} pattern="${PATTERN}" interval=${INTERVAL_S}s lru=${NONCE_LRU_SIZE}`);
 
   let consecutiveErrors = 0;
