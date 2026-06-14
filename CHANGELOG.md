@@ -10,6 +10,22 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.29] - 2026-06-14
+
+### Added
+- Added `agent-harveychat` to the federation distro so remote Makakoo nodes can run Telegram/HarveyChat bodies like Donna once tokens and allowlists are configured.
+- Added an install bootstrap for `agent-harveychat` that creates a plugin-local Python venv and installs pinned Telegram/chat dependencies on fresh installs.
+
+### Changed
+- Promoted HarveyChat to a persona-aware gateway: channel personas such as Donna now override the global Harvey bootstrap, status/start/access messages use the configured persona, and Cortex Memory can inject a larger bounded memory block for long-context chats.
+- Kept experimental chat workflows opt-in via `HARVEYCHAT_WORKFLOWS=1` so Telegram answers direct questions with Brain/tools instead of false-positive “working on it” workflow acknowledgements.
+- Plugin installs now skip common non-runtime artifact directories such as `tests/`, `node_modules/`, and `target/` before SkillSpector scans and promotion.
+
+### Fixed
+- Fixed HarveyChat release installs on Python 3.12 Linux hosts by removing the stale `python3.11` entrypoint assumption and adding installed-layout imports for `lib-harvey-core`/`lib-hte`.
+- Fixed HTTP client logging so Telegram Bot API URLs containing bot tokens are not emitted at normal gateway INFO level.
+- Fixed Superbrain FTS queries for hyphenated terms like `makakoo-vps`; hyphens are now treated as separators so prefix matches no longer trigger FTS5 `no such column` errors.
+
 ## [0.1.28] - 2026-06-14
 
 ### Changed

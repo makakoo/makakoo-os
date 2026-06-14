@@ -55,6 +55,10 @@ class BridgeConfig:
     # System prompt context
     max_history_messages: int = 20
     max_tokens: int = 4096
+    # Bounded Cortex memory block injected into the system prompt. This is
+    # mirrored from CortexConfig.max_prompt_memory_chars after env overrides,
+    # so operators configure it in one place (`cortex.max_prompt_memory_chars`).
+    max_prompt_memory_chars: int = 1200
 
 
 @dataclass
@@ -148,6 +152,7 @@ def load_config() -> ChatConfig:
         ]
 
     cfg.cortex.apply_env()
+    cfg.bridge.max_prompt_memory_chars = cfg.cortex.max_prompt_memory_chars
 
     return cfg
 
@@ -178,6 +183,7 @@ def save_config(cfg: ChatConfig):
             "anthropic_model": cfg.bridge.anthropic_model,
             "max_history_messages": cfg.bridge.max_history_messages,
             "max_tokens": cfg.bridge.max_tokens,
+            "max_prompt_memory_chars": cfg.bridge.max_prompt_memory_chars,
         },
         "cortex": {
             "enabled": cfg.cortex.enabled,

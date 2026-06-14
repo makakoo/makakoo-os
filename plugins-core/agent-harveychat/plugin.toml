@@ -1,6 +1,6 @@
 [plugin]
 name = "agent-harveychat"
-version = "1.0.0"
+version = "1.0.1"
 kind = "agent"
 language = "python"
 summary = "Harvey's external messaging gateway — Telegram, (future) WhatsApp, Slack"
@@ -14,12 +14,16 @@ path = "plugins-core/agent-harveychat"
 agent = "^1.0"
 
 [depends]
+plugins = ["lib-harvey-core *", "lib-hte *"]
 python = ">=3.9"
 
+[install]
+unix = "install.sh"
+
 [entrypoint]
-start = "python3.11 -u src/agent.py start --daemon"
-stop = "pkill -f agent.py"
-health = "true"
+start = ".venv/bin/python -u src/agent.py start --daemon"
+stop = ".venv/bin/python -u src/agent.py stop"
+health = ".venv/bin/python -u src/agent.py status"
 
 [capabilities]
 grants = ["llm/chat"]

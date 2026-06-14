@@ -47,6 +47,10 @@ else:
     _DISCORD_IMPORT_ERROR = None
 from core.chat.task_queue import TaskQueue, TaskState
 from core.chat.conversation import ConversationManager
+try:
+    from core.config.persona import load as load_persona
+except Exception:  # pragma: no cover - partial installs
+    load_persona = None
 
 log = logging.getLogger("harveychat.gateway")
 
@@ -56,6 +60,11 @@ SHORT_MESSAGE_THRESHOLD = 8
 
 # ── Intents that trigger background workflows instead of single-shot bridge
 WORKFLOW_INTENTS = {"research", "image", "archive"}
+
+# Background chat workflows are powerful but still experimental. Keep the
+# default Telegram path conversational and tool-aware; operators can opt in
+# once a channel has explicit progress/result UX around long jobs.
+WORKFLOWS_ENABLED = os.environ.get("HARVEYCHAT_WORKFLOWS", "0") == "1"
 
 # Feature flag: when set to "1", enable the cognitive core path
 # (TaskStore + agent checkpointing + durable task tree). When "0" or
@@ -95,28 +104,33 @@ class HarveyChat:
         self._running = False
         self._start_time = 0
 
-        # Smart routing: intent classification + workflow dispatch
+        # Smart routing: intent classification + workflow dispatch. Disabled by
+        # default because false-positive research/archive classifications make
+        # a Telegram bot feel evasive ("Working on it") instead of answering.
         self._router = None
         self._workflow_engine = None
         self._dag_executor = None
         self._active_workflows: Dict[str, asyncio.Task] = {}  # key: "channel:user_id"
-        try:
-            from core.orchestration.intelligent_router import IntelligentRouter
-            self._router = IntelligentRouter()
-            log.info("[gateway] IntelligentRouter loaded — smart routing enabled")
-        except Exception as e:
-            log.warning(f"[gateway] IntelligentRouter unavailable, using bridge-only: {e}")
-
-        if self._router:
+        if WORKFLOWS_ENABLED:
             try:
-                from core.workflow.engine import WorkflowEngine
-                from core.workflow.async_dag_executor import AsyncDAGExecutor
-                self._workflow_engine = WorkflowEngine()
-                self._dag_executor = AsyncDAGExecutor()
-                log.info("[gateway] WorkflowEngine + AsyncDAGExecutor loaded")
+                from core.orchestration.intelligent_router import IntelligentRouter
+                self._router = IntelligentRouter()
+                log.info("[gateway] IntelligentRouter loaded — smart routing enabled")
             except Exception as e:
-                log.warning(f"[gateway] Workflow system unavailable: {e}")
-                self._router = None  # Can't route without workflow engine
+                log.warning(f"[gateway] IntelligentRouter unavailable, using bridge-only: {e}")
+
+            if self._router:
+                try:
+                    from core.workflow.engine import WorkflowEngine
+                    from core.workflow.async_dag_executor import AsyncDAGExecutor
+                    self._workflow_engine = WorkflowEngine()
+                    self._dag_executor = AsyncDAGExecutor()
+                    log.info("[gateway] WorkflowEngine + AsyncDAGExecutor loaded")
+                except Exception as e:
+                    log.warning(f"[gateway] Workflow system unavailable: {e}")
+                    self._router = None  # Can't route without workflow engine
+        else:
+            log.info("[gateway] chat workflows disabled (HARVEYCHAT_WORKFLOWS=0)")
 
         # Health monitor state
         self._switchai_healthy = True
@@ -693,14 +707,21 @@ class HarveyChat:
 
         channels_active = [ch.name for ch in self.channels if ch.is_configured()]
         cortex_state = "enabled" if self.cortex else "disabled"
+        persona_name = "Harvey"
+        if load_persona is not None:
+            try:
+                persona_name = getattr(load_persona(), "name", None) or persona_name
+            except Exception:
+                pass
 
         return (
-            f"Harvey Chat Gateway\n"
+            f"{persona_name} Chat Gateway\n"
             f"Uptime: {hours}h {minutes}m\n"
             f"Messages: {stats['total_messages']}\n"
             f"Sessions: {stats['total_sessions']}\n"
-            f"Channels: {', '.join(channels_active)}\n"
+            f"Channels: {', '.join(channels_active) or 'none'}\n"
             f"Cortex Memory: {cortex_state}\n"
+            f"Chat workflows: {'enabled' if WORKFLOWS_ENABLED else 'disabled'}\n"
             f"switchAILocal: {'online' if self._switchai_healthy else 'OFFLINE'}"
             f"{'' if self._switchai_healthy else f' (fails: {self._switchai_fail_count})'}\n"
             f"Brain sync: {'on' if self.config.log_to_brain else 'off'}"

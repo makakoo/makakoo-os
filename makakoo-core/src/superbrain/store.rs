@@ -171,13 +171,13 @@ fn is_stop(w: &str) -> bool {
 /// Convert a natural-language query into an FTS5 MATCH expression.
 /// Direct port of `store.py::_to_fts5_query`.
 pub fn to_fts5_query(query: &str) -> String {
-    // Strip everything that isn't alphanumeric, whitespace, `-`, `_`, or
-    // `"`. Python uses `[^\w\s"-]` which matches `\w = [A-Za-z0-9_]` in
-    // the default locale.
+    // Strip everything that isn't alphanumeric, whitespace, `_`, or `"`.
+    // Hyphens must become separators: unquoted `foo-bar*` is parsed by FTS5
+    // as `foo` minus column/term `bar`, which breaks queries like makakoo-vps.
     let cleaned: String = query
         .chars()
         .map(|c| {
-            if c.is_alphanumeric() || c.is_whitespace() || c == '-' || c == '_' || c == '"' {
+            if c.is_alphanumeric() || c.is_whitespace() || c == '_' || c == '"' {
                 c
             } else {
                 ' '
@@ -240,7 +240,9 @@ const TEMPORAL_WORDS: &[&str] = &[
 
 fn is_temporal_query(query: &str) -> bool {
     let lowered = query.to_ascii_lowercase();
-    lowered.split_whitespace().any(|w| TEMPORAL_WORDS.contains(&w))
+    lowered
+        .split_whitespace()
+        .any(|w| TEMPORAL_WORDS.contains(&w))
 }
 
 /// Apply journal recency boost. Mirrors `store.py::search` lines 729–754.
@@ -259,7 +261,10 @@ fn apply_recency_boost(
     if name.len() < 10 {
         return score;
     }
-    let date_part: String = name[..10].chars().map(|c| if c == '_' { '-' } else { c }).collect();
+    let date_part: String = name[..10]
+        .chars()
+        .map(|c| if c == '_' { '-' } else { c })
+        .collect();
     let parsed = match NaiveDate::parse_from_str(&date_part, "%Y-%m-%d") {
         Ok(d) => d,
         Err(_) => return score,
@@ -533,7 +538,11 @@ impl SuperbrainStore {
                 metadata,
             });
         }
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(limit);
         Ok(hits)
     }
@@ -578,9 +587,8 @@ impl SuperbrainStore {
                 |row| row.get::<_, i64>(0),
             )
             .optional()?;
-        let id = row_id.ok_or_else(|| {
-            MakakooError::NotFound(format!("brain_docs row for doc_id={doc_id}"))
-        })?;
+        let id = row_id
+            .ok_or_else(|| MakakooError::NotFound(format!("brain_docs row for doc_id={doc_id}")))?;
         let blob = pack_vector(vec);
         let dim = vec.len() as i64;
         conn.execute(
@@ -711,7 +719,9 @@ fn extract_wikilinks(content: &str) -> Vec<String> {
             if let Some(end) = content[i + 2..].find("]]") {
                 let start = i + 2;
                 let candidate = &content[start..start + end];
-                if !candidate.is_empty() && !candidate.contains(']') && !out.contains(&candidate.to_string())
+                if !candidate.is_empty()
+                    && !candidate.contains(']')
+                    && !out.contains(&candidate.to_string())
                 {
                     out.push(candidate.to_string());
                 }
@@ -895,7 +905,10 @@ mod tests {
         let hits = store.search("polymarket", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].doc_id, "pages/polymarket.md");
-        assert!(hits[0].score > 0.0, "BM25 score must be positive after flip");
+        assert!(
+            hits[0].score > 0.0,
+            "BM25 score must be positive after flip"
+        );
     }
 
     #[test]
@@ -937,7 +950,10 @@ mod tests {
         store.store_vector("a", &[1.0, 0.1, 0.0]).unwrap();
         store.store_vector("b", &[1.0, 0.0, 0.0]).unwrap();
         let hits = store.vector_search(&[0.1, 1.0, 0.0], 10).unwrap();
-        assert!(hits.is_empty(), "expected floor to drop both hits, got {hits:?}");
+        assert!(
+            hits.is_empty(),
+            "expected floor to drop both hits, got {hits:?}"
+        );
 
         // Add one obviously similar vector.
         store
@@ -972,7 +988,9 @@ mod tests {
         let now = Utc::now();
         let today = now.format("%Y_%m_%d").to_string();
         // A 45-day-old journal date stem.
-        let old_date = (now - chrono::Duration::days(45)).format("%Y_%m_%d").to_string();
+        let old_date = (now - chrono::Duration::days(45))
+            .format("%Y_%m_%d")
+            .to_string();
 
         // Same baseline score, journal doc_type, query is temporal-neutral.
         // The recent one gets the standard (1 + 0.3 * (1 - days/7)) boost,
@@ -993,7 +1011,10 @@ mod tests {
         let now = Utc::now();
         let today = now.format("%Y_%m_%d").to_string();
         let boosted = apply_recency_boost(4.0, "journal", &today, "what happened today", now);
-        assert!((boosted - 12.0).abs() < 1e-4, "today + temporal → ×3.0, got {boosted}");
+        assert!(
+            (boosted - 12.0).abs() < 1e-4,
+            "today + temporal → ×3.0, got {boosted}"
+        );
     }
 
     #[test]
@@ -1086,6 +1107,14 @@ mod tests {
     fn to_fts5_query_empty_when_all_short() {
         let q = to_fts5_query("a an");
         assert_eq!(q, "");
+    }
+
+    #[test]
+    fn to_fts5_query_splits_hyphenated_terms_for_prefix_safety() {
+        let q = to_fts5_query("Donna Telegram bot makakoo-vps");
+        assert!(q.contains("\"makakoo\""), "got: {q}");
+        assert!(q.contains("\"vps\""), "got: {q}");
+        assert!(!q.contains("makakoo-vps*"), "got: {q}");
     }
 
     #[test]

@@ -24,6 +24,7 @@ Not needed for in-terminal usage — that's what the infected AI CLIs cover.
 Managed by the daemon:
 
 ```sh
+makakoo plugin install --core agent-harveychat
 makakoo plugin info agent-harveychat
 makakoo plugin disable agent-harveychat
 makakoo plugin enable agent-harveychat
@@ -34,8 +35,23 @@ Manual control:
 
 ```sh
 cd ~/MAKAKOO/plugins/agent-harveychat
-python3.11 -u src/agent.py start --daemon
-python3.11 -u src/agent.py stop
+.venv/bin/python -u src/agent.py start --daemon
+.venv/bin/python -u src/agent.py stop
+```
+
+For a VPS/systemd deployment, run the gateway in the foreground under a
+systemd service instead of `--daemon`:
+
+```ini
+Environment=MAKAKOO_HOME=/home/makakoo/MAKAKOO
+Environment=HARVEY_HOME=/home/makakoo/MAKAKOO
+Environment=PYTHONPATH=/home/makakoo/MAKAKOO/plugins/lib-harvey-core/src:/home/makakoo/MAKAKOO/plugins/lib-hte/src
+Environment=SWITCHAI_MODEL=ail-compound
+Environment=HARVEYCHAT_WORKFLOWS=0
+Environment=SWITCHAI_KEY=<switchAILocal API key>
+Environment=TELEGRAM_ALLOWED_USERS=<telegram-user-id>
+Environment=TELEGRAM_BOT_TOKEN=<bot-token>
+ExecStart=/home/makakoo/MAKAKOO/plugins/agent-harveychat/.venv/bin/python -u /home/makakoo/MAKAKOO/plugins/agent-harveychat/src/agent.py start
 ```
 
 ## Cortex Memory
@@ -43,6 +59,39 @@ python3.11 -u src/agent.py stop
 HarveyChat can run with native Cortex Memory enabled. Cortex stores durable, PII-scrubbed chat memories in the local HarveyChat SQLite database and retrieves relevant memories before each assistant turn. It also supports explicit Telegram/Discord aliases for cross-channel recall.
 
 See [HarveyChat Cortex Memory](./harveychat-cortex-memory.md) for setup, alias commands, inspection, and rollback.
+
+Recommended long-context Telegram config in `~/MAKAKOO/data/chat/config.json`:
+
+```json
+{
+  "bridge": {
+    "switchai_url": "http://localhost:18080/v1",
+    "switchai_model": "ail-compound",
+    "max_history_messages": 80,
+    "max_tokens": 8192
+  },
+  "cortex": {
+    "enabled": true,
+    "memory_limit": 12,
+    "min_confidence": 0.7,
+    "min_importance": 0.4,
+    "pii_scrubbing": true,
+    "max_memory_chars": 1000,
+    "max_prompt_memory_chars": 8000,
+    "max_memory_age_days": 365,
+    "app_id": "makakoo-harveychat"
+  }
+}
+```
+
+By default, Telegram uses the direct conversational/tool path; set `HARVEYCHAT_WORKFLOWS=1` only if you want experimental background research/image/archive workflows.
+
+This gives HarveyChat three memory layers: recent chat history, Cortex
+long-term chat memory, and Brain tool access via `brain_search` /
+`brain_write`. If a bot uses a non-default persona (for example Donna on a
+VPS), set `$MAKAKOO_HOME/config/persona.json`; HarveyChat injects that persona
+after the global bootstrap so the channel does not regress to the factory
+`Harvey` identity.
 
 ## Remote operator gates
 
@@ -70,14 +119,14 @@ and can be revoked from the CLI with `makakoo perms revoke <grant-id>`.
 ## Where it writes
 
 - **State:** `~/MAKAKOO/state/agent-harveychat/` — last-seen message offsets, per-chat seen-set.
-- **Data:** `~/MAKAKOO/data/harveychat/` — message archive (per-chat JSONL).
-- **Logs:** `~/MAKAKOO/data/logs/agent-harveychat.{out,err}.log`
+- **Data:** `~/MAKAKOO/data/chat/` — config, PID, logs, `conversations.db`.
+- **Logs:** `~/MAKAKOO/data/chat/harveychat.log`
 
 ## Health signals
 
 - `ps -ef | grep harveychat` — one running process.
-- Recent `stdout.log` entries showing `polled` or `pushed` lines.
-- Sending `/ping` to the bot returns a reply within a few seconds.
+- Recent `harveychat.log` entries showing Telegram polling.
+- Sending `/status` to the bot returns gateway health within a few seconds.
 
 ## Common failures
 
@@ -95,7 +144,7 @@ and can be revoked from the CLI with `makakoo perms revoke <grant-id>`.
 - `net/http:api.telegram.org` — Telegram bot API.
 - `secret/read:telegram.*` — read the bot token.
 - `fs/read:$MAKAKOO_HOME/plugins/agent-harveychat`
-- `fs/write:$MAKAKOO_HOME/data/harveychat`
+- `fs/write:$MAKAKOO_HOME/data/chat`
 - `llm/chat` — answer synthesis.
 - `action:shell/run:<hash>` — optional exact remote-operator shell actions,
   only after explicit user grant.

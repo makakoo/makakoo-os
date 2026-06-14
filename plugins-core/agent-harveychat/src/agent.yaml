@@ -5,7 +5,7 @@ type: body-adapter
 status: active
 
 runtime:
-  command: /usr/local/bin/python3.11
+  command: python3
   entrypoint: agent.py
   workdir: agents/harveychat
   args: ["start", "--daemon"]

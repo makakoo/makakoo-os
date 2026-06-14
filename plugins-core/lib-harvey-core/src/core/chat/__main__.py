@@ -42,6 +42,11 @@ def setup_logging(daemon: bool = False):
         datefmt="%H:%M:%S",
         handlers=handlers,
     )
+    # python-telegram-bot uses httpx underneath; INFO request logs include the
+    # full Bot API URL, which contains the Telegram token. Keep gateway logs at
+    # INFO, but silence HTTP client request lines unless they are warnings.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def cmd_start(args):

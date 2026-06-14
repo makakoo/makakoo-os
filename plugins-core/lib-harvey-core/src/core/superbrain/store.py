@@ -793,7 +793,7 @@ class SuperbrainStore:
         - Single word: exact match OR prefix match (catches plurals, compounds)
         - Multi-word: exact phrase (highest priority) OR NEAR OR individual OR terms
         """
-        cleaned = re.sub(r'[^\w\s"-]', ' ', query)
+        cleaned = re.sub(r'[^\w\s"]', ' ', query)
         words = [w for w in cleaned.split()
                  if len(w) > 2 and w.lower() not in self._STOP_WORDS]
 

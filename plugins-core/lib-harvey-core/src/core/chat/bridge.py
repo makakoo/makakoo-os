@@ -24,6 +24,10 @@ HARVEY_HOME = os.environ.get("HARVEY_HOME", os.path.expanduser("~/MAKAKOO"))
 
 from core.chat.config import BridgeConfig
 from core.agent.harvey_agent import HarveyAgent
+try:
+    from core.config.persona import load as load_persona
+except Exception:  # pragma: no cover - degraded imports in partial installs
+    load_persona = None
 
 log = logging.getLogger("harveychat.bridge")
 
@@ -76,21 +80,22 @@ def _is_retryable_status(status_code: int) -> bool:
     return status_code in _RETRYABLE_STATUS_CODES
 
 # Tool-aware system prompt — the agent has tools, no need to paste context
-HARVEY_SYSTEM_PROMPT = """You are Harvey, Sebastian Schkudlara's autonomous cognitive extension.
+HARVEY_SYSTEM_PROMPT = """You are {persona_name}, {user_name}'s autonomous cognitive extension.
 Responding via {channel} (mobile messaging).
 
 ## Identity
 - Zero sycophancy. Skip preamble — just execute.
 - Radical competence. Return with solutions, not questions.
 - Tone: Sharp, concise, hyper-competent, slightly blunt.
-- You are Sebastian's trusted partner — a decade of working together.
+- Pronouns: {pronouns}. Platform: Makakoo OS.
+- You are {user_name}'s trusted partner — a decade of working together.
 
 ## Tools
 You have actual tools. USE THEM. After getting tool results, incorporate them into your answer.
 NEVER say "I can't do X" if you have a tool for X. Use the tool first.
 
 ## Complete Tool List
-- `brain_search(query)` — Search Harvey's Brain for projects, people, decisions
+- `brain_search(query)` — Search the Makakoo Brain for projects, people, decisions
 - `brain_write(content)` — Append a line to today's journal (outliner format)
 - `write_file(path, content)` — Write a text file inside the sandbox
   (~/MAKAKOO/data/reports/, ~/MAKAKOO/data/drafts/, ~/MAKAKOO/tmp/, /tmp)
@@ -236,7 +241,7 @@ User: "Attach me my CV"
 - Run safe read-only shell commands (ls, ps, crontab -l, git status, uptime, df, etc.)
 - Browse any public URL for current information
 - **Generate images** — use `generate_image("prompt", "save_path.png", "16:9")`
-- Discover relevant skills from Harvey's 170+ skill library
+- Discover relevant skills from Makakoo's skill library
 - Log notes and decisions to Brain journal
 - Draft messages, emails, responses
 - Help think through decisions and strategy
@@ -290,9 +295,13 @@ def render_system_prompt(
             bullets.append(f"  - `{r}{trailing}`  — baseline")
     allowed_paths = "\n".join(bullets) if bullets else "  (no writable paths configured)"
 
+    persona_name, user_name, pronouns = _current_persona()
     base_prompt = HARVEY_SYSTEM_PROMPT.format(
         channel=channel,
         allowed_paths=allowed_paths,
+        persona_name=persona_name,
+        user_name=user_name,
+        pronouns=pronouns,
     )
 
     # v12 pointer pattern: append the canonical Makakoo bootstrap so
@@ -305,7 +314,7 @@ def render_system_prompt(
     try:
         with open(canonical, "r", encoding="utf-8") as f:
             bootstrap = f.read()
-        return (
+        prompt = (
             f"{base_prompt}\n\n"
             f"---\n"
             f"# Canonical Makakoo bootstrap (single source of truth)\n"
@@ -314,11 +323,35 @@ def render_system_prompt(
         )
     except OSError as e:
         log.warning("render_system_prompt: canonical bootstrap unreachable (%s) — using embedded only", e)
-        return base_prompt
+        prompt = base_prompt
+
+    # Dynamic persona injection must come AFTER the canonical bootstrap.
+    # The bootstrap can still contain Sebastian's default Harvey identity,
+    # while channel installs (e.g. Donna on a VPS) override via persona.json.
+    try:
+        from core.agent.persona_injector import inject
+        prompt = inject(prompt, include_olibia=False)
+    except Exception as e:
+        log.warning("render_system_prompt: persona injection failed (%s)", e)
+    return prompt
 
 
 # Minimal system prompt for Anthropic fallback (no tools)
-ANTHROPIC_FALLBACK_PROMPT = """You are Harvey, Sebastian Schkudlara's autonomous cognitive extension.
+def _current_persona() -> tuple[str, str, str]:
+    if load_persona is None:
+        return ("Harvey", "Sebastian", "he/him")
+    try:
+        p = load_persona()
+        return (
+            getattr(p, "name", None) or "Harvey",
+            getattr(p, "user", None) or "Sebastian",
+            getattr(p, "pronouns", None) or "he/him",
+        )
+    except Exception:
+        return ("Harvey", "Sebastian", "he/him")
+
+
+ANTHROPIC_FALLBACK_PROMPT = """You are {persona_name}, {user_name}'s autonomous cognitive extension.
 Responding via {channel} (mobile messaging).
 
 ## Identity
@@ -753,8 +786,9 @@ class HarveyBridge:
                         f"Direct LLM error (attempt {attempt + 1}/{RETRY_MAX_ATTEMPTS}, giving up): {e}"
                     )
 
+        persona_name, _, _ = _current_persona()
         return (
-            "Harvey is having trouble connecting. "
+            f"{persona_name} is having trouble connecting. "
             "Try again — if it keeps failing, check if switchAILocal is running."
         )
 

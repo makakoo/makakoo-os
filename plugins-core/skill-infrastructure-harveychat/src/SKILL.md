@@ -6,17 +6,18 @@
 
 ## What
 
-External messaging gateway that lets Sebastian talk to Harvey from any device via Telegram.
-Fully agentic — Harvey has 7 tools available including voice transcription, vision analysis,
-shell commands, email, calendar, Brain search, and more.
+External messaging gateway that lets Sebastian talk to the configured Makakoo
+persona from any device via Telegram. Fully agentic: the bot has Brain search,
+Brain write, skill discovery, file/report helpers, safe diagnostics, browser
+read gates, email/calendar hooks, image/video/document understanding, and
+Cortex long-term chat memory.
 
 ## Architecture
 
 ```
-Phone/Desktop → Telegram Bot → HarveyChat Gateway → switchAILocal → LLM
-                                     ↕                      ↕
-                               SQLite Store           Brain Sync
-                             (conversations)        (Brain journals)
+Phone/Desktop → Telegram Bot → HarveyChat Gateway → switchAILocal → LLM/tools
+                                     ↕                 ↕
+                       SQLite Store + Cortex      Brain search/write
 ```
 
 ## Components
@@ -29,7 +30,7 @@ Phone/Desktop → Telegram Bot → HarveyChat Gateway → switchAILocal → LLM
 | Store | `core/chat/store.py` | SQLite conversation persistence |
 | Brain Sync | `core/chat/brain_sync.py` | Logs significant chats to Brain |
 | Config | `core/chat/config.py` | Settings from file + env vars |
-| Telegram | `core/chat/channels/telegram.py` | Telegram bot (async polling) |
+| Telegram | `core/chat/channels/telegram/channel.py` | Telegram bot (async polling) |
 | Audio | `core/chat/audio.py` | Voice transcription + TTS output |
 | Media | `core/chat/media.py` | Image vision + document extraction |
 | CLI | `core/chat/__main__.py` | start/stop/status/setup commands |
@@ -59,7 +60,7 @@ Allowed: `ps aux`, `uptime`, `who`, `hostname`, `df -h`, `free`, `top`,
 |------|-----------|
 | Voice message | ffmpeg convert → faster-whisper (local) → transcribed |
 | Photo | Downloaded → base64 → MiniMax image-01 → vision description |
-| PDF | pdftotext/PyPDF2 → text extracted → LLM summary |
+| PDF | pdftotext/pypdf → text extracted → LLM summary |
 | Word doc | python-docx → text extracted → LLM summary |
 | Plain text | .txt, .md, .py, .json, etc. → directly read and analyzed |
 | Video | Acknowledged (future: frame extraction) |
@@ -67,19 +68,22 @@ Allowed: `ps aux`, `uptime`, `who`, `hostname`, `df -h`, `free`, `top`,
 ## Quick Start
 
 ```bash
-# 1. Install all dependencies
-pip install -r ~/MAKAKOO/harvey-os/core/chat/requirements.txt
-brew install ffmpeg tesseract poppler
+# 1. Install the plugin. This creates its own .venv.
+makakoo plugin install --core agent-harveychat
 
-# 2. Run setup wizard (auto-installs dependencies)
-cd ~/MAKAKOO/harvey-os
-python3 -m core.chat setup
+# 2. Configure secrets/env.
+makakoo secret set telegram.bot_token
+export TELEGRAM_BOT_TOKEN=...
+export TELEGRAM_ALLOWED_USERS=746496145
+export SWITCHAI_KEY=...
+export SWITCHAI_MODEL=ail-compound
 
-# 3. Start
-python3 -m core.chat start --daemon
+# 3. Start.
+cd ~/MAKAKOO/plugins/agent-harveychat
+.venv/bin/python -u src/agent.py start --daemon
 
 # Check status
-python3 -m core.chat status
+.venv/bin/python -u src/agent.py status
 ```
 
 ## Configuration
@@ -87,8 +91,9 @@ python3 -m core.chat status
 Environment variables (override config file):
 - `TELEGRAM_BOT_TOKEN` — Bot token from @BotFather
 - `TELEGRAM_ALLOWED_USERS` — Comma-separated Telegram user IDs (empty = allow all)
-- `SWITCHAI_KEY` — switchAILocal API key (default: `sk-test-123`)
-- `SWITCHAI_MODEL` — Model (default: `minimax:MiniMax-M2.7`)
+- `SWITCHAI_KEY` — switchAILocal API key
+- `SWITCHAI_MODEL` — model alias (VPS default: `ail-compound`)
+- `HARVEYCHAT_WORKFLOWS` — set `1` to opt into experimental background research/image/archive workflows; default `0` keeps Telegram conversational.
 
 ## Data
 
@@ -102,12 +107,11 @@ Environment variables (override config file):
 
 ### Python (pip install)
 ```
-faster-whisper>=1.0.0
-python-telegram-bot>=20.0
-requests>=2.31.0
-PyPDF2>=3.0.0
-python-docx>=1.0.0
-httpx>=0.27.0
+python-telegram-bot==22.5
+requests==2.32.5
+httpx==0.28.1
+pypdf==6.13.2
+python-docx==1.2.0
 ```
 
 ### System (brew install)
@@ -117,9 +121,22 @@ ffmpeg tesseract poppler
 
 ## Cortex Memory
 
-HarveyChat supports native Cortex Memory in `core/cortex/`. When `cortex.enabled` is true, the gateway extracts PII-scrubbed durable memories into local SQLite, retrieves relevant memories before each LLM turn, and injects them as bounded context. `/status` reports `Cortex Memory: enabled|disabled`.
+HarveyChat supports native Cortex Memory in `core/cortex/`. When
+`cortex.enabled` is true, the gateway extracts PII-scrubbed durable memories
+into local SQLite, retrieves relevant memories before each LLM turn, and
+injects them as bounded context. `/status` reports `Cortex Memory:
+enabled|disabled`.
 
 Config lives in `~/MAKAKOO/data/chat/config.json` under the `cortex` key. Full manual: `docs/agents/harveychat-cortex-memory.md`.
+
+Recommended long-context bot settings:
+
+```json
+{
+  "bridge": {"max_history_messages": 80, "max_tokens": 8192, "switchai_model": "ail-compound"},
+  "cortex": {"enabled": true, "memory_limit": 12, "max_memory_chars": 1000, "max_prompt_memory_chars": 8000}
+}
+```
 
 ## Security
 

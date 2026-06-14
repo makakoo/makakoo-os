@@ -23,8 +23,21 @@ from telegram.ext import (
 
 from core.chat.channels.base import BaseChannel
 from core.chat.config import TelegramConfig
+try:
+    from core.config.persona import load as load_persona
+except Exception:  # pragma: no cover - partial installs
+    load_persona = None
 
 log = logging.getLogger("harveychat.telegram")
+
+
+def _persona_name(default: str = "Harvey") -> str:
+    if load_persona is None:
+        return default
+    try:
+        return getattr(load_persona(), "name", None) or default
+    except Exception:
+        return default
 
 
 class TelegramChannel(BaseChannel):
@@ -284,7 +297,7 @@ class TelegramChannel(BaseChannel):
             )
             if is_private:
                 await update.message.reply_text(
-                    "Access denied. You are not authorized to talk to Harvey."
+                    f"Access denied. You are not authorized to talk to {_persona_name()}."
                 )
             log.warning(
                 f"Unauthorized access attempt from user {user.id} "
@@ -759,7 +772,7 @@ class TelegramChannel(BaseChannel):
             return
 
         await update.message.reply_text(
-            "Harvey online. Talk to me like you would in the CLI.\n\n"
+            f"{_persona_name()} online. Talk to me like you would in the CLI.\n\n"
             "Commands:\n"
             "/status — Check my status\n"
             "/clear — Clear conversation history"

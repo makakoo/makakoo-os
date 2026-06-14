@@ -869,6 +869,10 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), InstallError> {
             source,
         })?;
         let from = entry.path();
+        if should_skip_copy_entry(&from, &ty) {
+            debug!("skipping non-runtime plugin artifact {}", from.display());
+            continue;
+        }
         let to = dst.join(entry.file_name());
         if ty.is_dir() {
             copy_dir(&from, &to)?;
@@ -881,6 +885,28 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), InstallError> {
         // Symlinks silently skipped — keeps the staged tree hermetic.
     }
     Ok(())
+}
+
+fn should_skip_copy_entry(path: &Path, ty: &fs::FileType) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+
+    if ty.is_dir() {
+        return matches!(
+            name,
+            ".git"
+                | ".mypy_cache"
+                | ".pytest_cache"
+                | "__pycache__"
+                | "node_modules"
+                | "target"
+                | "test"
+                | "tests"
+        );
+    }
+
+    ty.is_file() && matches!(name, ".DS_Store")
 }
 
 #[cfg(test)]
@@ -910,6 +936,27 @@ run = "true"
 "#
         );
         fs::write(dir.join("plugin.toml"), body).unwrap();
+    }
+
+    #[test]
+    fn copy_dir_skips_non_runtime_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        fs::create_dir_all(src.join("tests")).unwrap();
+        fs::create_dir_all(src.join("node_modules")).unwrap();
+        fs::create_dir_all(src.join("src")).unwrap();
+        fs::write(src.join("plugin.toml"), "[plugin]\n").unwrap();
+        fs::write(src.join("tests").join("fixture.txt"), "/etc/passwd").unwrap();
+        fs::write(src.join("node_modules").join("dep.txt"), "vendor").unwrap();
+        fs::write(src.join("src").join("agent.py"), "print(1)\n").unwrap();
+
+        copy_dir(&src, &dst).unwrap();
+
+        assert!(dst.join("plugin.toml").exists());
+        assert!(dst.join("src").join("agent.py").exists());
+        assert!(!dst.join("tests").exists());
+        assert!(!dst.join("node_modules").exists());
     }
 
     fn seed_source(root: &Path, name: &str) -> PathBuf {

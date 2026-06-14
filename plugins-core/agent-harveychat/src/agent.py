@@ -57,7 +57,14 @@ def _bootstrap_harvey_home() -> str:
         os.environ["HARVEY_HOME"] = harvey_home
         os.environ.setdefault("MAKAKOO_HOME", harvey_home)
 
-    for rel in ("plugins-core/lib-harvey-core/src", "plugins-core/lib-hte/src"):
+    for rel in (
+        # Installed plugin layout.
+        "plugins/lib-harvey-core/src",
+        "plugins/lib-hte/src",
+        # Source-tree / development layout.
+        "plugins-core/lib-harvey-core/src",
+        "plugins-core/lib-hte/src",
+    ):
         p = os.path.join(harvey_home, rel)
         if os.path.isdir(p) and p not in sys.path:
             sys.path.insert(0, p)

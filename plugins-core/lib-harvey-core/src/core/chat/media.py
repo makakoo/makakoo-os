@@ -256,7 +256,7 @@ def extract_text_from_file(file_path: str, mime_type: str = "") -> str:
 
 
 def _extract_pdf(pdf_path: str) -> str:
-    """Extract text from PDF using pdftotext (poppler) or PyPDF2."""
+    """Extract text from PDF using pdftotext (poppler), pypdf, or PyPDF2."""
     import subprocess
 
     # Try pdftotext (fast, accurate)
@@ -276,24 +276,30 @@ def _extract_pdf(pdf_path: str) -> str:
     except Exception as e:
         log.warning(f"pdftotext failed: {e}")
 
-    # Fallback: PyPDF2
+    # Fallback: pypdf (preferred) or legacy PyPDF2.
     try:
-        import PyPDF2
+        try:
+            from pypdf import PdfReader
+            provider = "pypdf"
+        except ImportError:
+            import PyPDF2
+            PdfReader = PyPDF2.PdfReader
+            provider = "PyPDF2"
 
         with open(pdf_path, "rb") as f:
-            reader = PyPDF2.PdfReader(f)
+            reader = PdfReader(f)
             parts = []
             for page in reader.pages:
                 text = page.extract_text()
                 if text:
                     parts.append(text)
             result = "\n\n".join(parts)
-            log.info(f"PDF extracted via PyPDF2: {len(result)} chars")
+            log.info(f"PDF extracted via {provider}: {len(result)} chars")
             return result
     except ImportError:
-        log.warning("PyPDF2 not installed — cannot extract PDF text")
+        log.warning("pypdf/PyPDF2 not installed — cannot extract PDF text")
     except Exception as e:
-        log.warning(f"PyPDF2 failed: {e}")
+        log.warning(f"PDF Python extractor failed: {e}")
 
     return ""
 

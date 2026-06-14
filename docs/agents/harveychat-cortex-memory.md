@@ -34,17 +34,20 @@ Edit `~/MAKAKOO/data/chat/config.json`:
 {
   "cortex": {
     "enabled": true,
-    "memory_limit": 5,
+    "memory_limit": 12,
     "min_confidence": 0.7,
     "min_importance": 0.4,
     "pii_scrubbing": true,
-    "max_memory_chars": 500,
-    "max_prompt_memory_chars": 1200,
+    "max_memory_chars": 1000,
+    "max_prompt_memory_chars": 8000,
     "max_memory_age_days": 365,
     "app_id": "makakoo-harveychat"
   }
 }
 ```
+
+`bridge.max_history_messages` controls recent turn replay. For long Telegram
+conversations use 60-100; Cortex handles older facts.
 
 Environment overrides:
 

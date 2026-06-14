@@ -21,6 +21,10 @@ version = "^0.1"
 # `makakoo network activate` starts it.
 "agent-octopus-peer" = { version = "*" }
 
+# External chat body. Installed but inert until a Telegram token and
+# allowlist are configured; useful for remote Donna/VPS nodes.
+"agent-harveychat" = { version = "*" }
+
 # Operator-safe control plane: activate/deactivate, peer endpoint registry,
 # signed remote Brain reads, and docs for later cache/write phases.
 "skill-brain-network" = { version = "*" }
@@ -32,6 +36,7 @@ voice = "caveman"
 message = """
 Makakoo Brain Network installed. You now have Core plus:
   - agent-octopus-peer   (signed MCP peer listener, inactive until activated)
+  - agent-harveychat     (Telegram chat body with Cortex memory; inactive until configured)
   - skill-brain-network  (`makakoo network ...` control plane)
 
 Safe start:
