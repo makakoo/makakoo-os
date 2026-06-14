@@ -296,6 +296,7 @@ Where to go next depends on what you want to do:
 | Understand the setup wizard's 6 sections | [Setup wizard](user-manual/setup-wizard.md) |
 | Add pi (blessed CLI coding agent) or Ghostty (blessed terminal) | `makakoo setup cli-agent` / `makakoo setup terminal` |
 | Pick which LLM Makakoo routes through | [Model providers](user-manual/adapters.md) |
+| Connect this Brain to another Makakoo install | [Brain Network](user-manual/makakoo-network.md) / [Walkthrough 14](walkthroughs/14-brain-network.md) |
 | Install a new plugin | [Plugins](plugins/index.md) |
 | Fix something that broke | [Troubleshooting](troubleshooting/index.md) |
 | Uninstall Makakoo cleanly | [Uninstall](troubleshooting/uninstall.md) |

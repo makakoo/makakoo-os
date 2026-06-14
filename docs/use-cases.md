@@ -225,7 +225,50 @@ Full reference: [Setup wizard](user-manual/setup-wizard.md).
 
 ---
 
-## 11. Uninstall
+## 11. Connect multiple Makakoo Brains
+
+**Goal:** make two or more Makakoo installs searchable across machines
+without merging their files. Typical setups: laptop Harvey ↔ VPS Donna,
+desktop ↔ laptop, or local machine ↔ Tytus pod.
+
+Brain Network is opt-in. Fresh `core` installs do **not** expose a peer
+listener until you install the optional federation distro and activate it.
+
+Run on every node you want to connect:
+
+```sh
+makakoo distro install federation
+makakoo network activate --peer-name <node-name> --bind tailscale
+makakoo network doctor
+```
+
+Pair trust between two nodes:
+
+```sh
+# on node A
+makakoo network invite --peer-name <node-b>
+
+# paste the returned makakoo://join link on node B
+makakoo network join '<makakoo://join?...>'
+```
+
+Register the reachable endpoint, then search:
+
+```sh
+makakoo network peer add donna-vps --endpoint http://100.x.y.z:8765/rpc --persona Donna
+makakoo network search donna-vps "what does that Brain know about Project X?" --limit 5
+```
+
+Prefer Tailscale or an SSH tunnel. Do not expose port `8765` publicly unless
+you understand the risk and have firewall rules around it. Remote Brain content
+is evidence to cite, not instructions to execute.
+
+Full walkthrough: [Brain Network: Harvey laptop + Donna VPS](walkthroughs/14-brain-network.md).
+Command manual: [user-manual/makakoo-network.md](user-manual/makakoo-network.md).
+
+---
+
+## 12. Uninstall
 
 **Clean removal:**
 
@@ -239,7 +282,7 @@ Full guide: [Uninstall](troubleshooting/uninstall.md).
 
 ---
 
-## 12. Get help from any AI CLI about Makakoo itself
+## 13. Get help from any AI CLI about Makakoo itself
 
 Once infected, every AI CLI knows how Makakoo works. You can just
 ask it in plain language:

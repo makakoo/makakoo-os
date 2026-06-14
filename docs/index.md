@@ -25,7 +25,8 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 │   └── concepts/shared-storage.md  ✅ Shared S3 (garagetytus)
 │
 ├── 🧠💾 Brain
-│   └── brain/index.md            ✅ Memory system guide
+│   ├── brain/index.md            ✅ Memory system guide
+│   └── user-manual/makakoo-network.md ✅ Opt-in multi-machine Brain Network
 │
 ├── 💻 User Manual
 │   └── user-manual/index.md      ✅ All CLI commands, including agent sessions
@@ -86,8 +87,9 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 ### Using Daily?
 1. [CLI Reference](user-manual/index.md) → All commands
 2. [Brain Guide](brain/index.md) → Memory system
-3. [HarveyChat Cortex Memory](agents/harveychat-cortex-memory.md) → Chat long-term recall
-3. [SANCHO Guide](concepts/sancho.md) → Proactive tasks
+3. [Brain Network](user-manual/makakoo-network.md) → Connect multiple Makakoo installs
+4. [HarveyChat Cortex Memory](agents/harveychat-cortex-memory.md) → Chat long-term recall
+5. [SANCHO Guide](concepts/sancho.md) → Proactive tasks
 
 ### Extending?
 1. [Plugin Guide](plugins/index.md) → Using plugins
@@ -130,6 +132,7 @@ Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same 
 | **Brain** | Persistent journals + pages |
 | **Superbrain** | FTS5 + vector search + LLM |
 | **SANCHO** | Proactive tasks while you sleep |
+| **Brain Network** | Opt-in signed remote Brain search across Makakoo installs |
 | **Plugins** | 38 built-in, extensible |
 | **Agent Sessions** | Durable child-agent sessions with compact result/log handles |
 | **Capabilities** | Security sandboxing |
@@ -154,6 +157,7 @@ Choose your setup:
 | minimal | 5 | Beginners |
 | core | 15 | Most users |
 | sebastian | 25 | Power users |
+| federation | core + 2 | Multi-machine Brain Network |
 | creator | 20 | Writers/creators |
 | trader | 20 | Traders |
 
