@@ -19,6 +19,22 @@ makakoo plugin install --core skill-brain-network
 makakoo plugin install --core agent-octopus-peer
 ```
 
+
+## Natural-language use from an infected CLI
+
+Users do not need to memorize the commands. In any Makakoo-infected coding
+agent, plain requests should route to this skill. Examples:
+
+- "Connect this Mac Brain to my VPS Brain."
+- "Let Donna search Harvey's Brain."
+- "Search the VPS Brain for PinWall."
+- "Check if Brain Network is healthy."
+- "Disable Brain Network on this machine."
+
+The agent should translate the request into `makakoo network ...`, explain the
+next irreversible/security-relevant step, and verify with a signed remote search
+when setup is complete.
+
 ## Commands
 
 ```bash
