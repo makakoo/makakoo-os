@@ -41,7 +41,34 @@ Out of scope:
 
 ## Verifying installs
 
-Each release publishes `SHA256SUMS` alongside the tarballs at
-[github.com/makakoo/makakoo-os/releases](https://github.com/makakoo/makakoo-os/releases).
+Every release publishes, alongside each tarball/zip at
+[github.com/makakoo/makakoo-os/releases](https://github.com/makakoo/makakoo-os/releases):
+
+- a per-artifact `<file>.sha256` sidecar, and
+- a single combined `SHA256SUMS` manifest covering every artifact.
+
+Verify a download against either one:
+
+```sh
+# one artifact against its sidecar
+shasum -a 256 -c makakoo-aarch64-apple-darwin.tar.gz.sha256
+
+# or everything at once against the manifest
+shasum -a 256 -c SHA256SUMS        # sha256sum -c SHA256SUMS on Linux
+```
+
+The install scripts (`install.sh` / `install.ps1`) run this check
+automatically before unpacking and **abort on mismatch**. Set
+`MAKAKOO_SKIP_CHECKSUM=1` only if you are deliberately installing an
+unpublished build.
+
+Each release artifact also carries **Sigstore build provenance**, so you
+can confirm it was built by this repo's CI from this source — not
+re-packaged by someone in between:
+
+```sh
+gh attestation verify makakoo-aarch64-apple-darwin.tar.gz --repo makakoo/makakoo-os
+```
+
 The Homebrew formula at [traylinx/homebrew-tap](https://github.com/traylinx/homebrew-tap)
 pins exact SHA-256 hashes per platform.
