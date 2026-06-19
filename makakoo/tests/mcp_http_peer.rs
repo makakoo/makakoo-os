@@ -30,29 +30,32 @@ fn pick_free_port() -> u16 {
 }
 
 fn makakoo_mcp_bin() -> PathBuf {
-    // Prefer target/debug/makakoo-mcp built by the test's own crate.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidates = [
-        manifest_dir.parent().unwrap().join("target/debug/makakoo-mcp"),
-        manifest_dir.parent().unwrap().join("target/release/makakoo-mcp"),
-    ];
-    for c in &candidates {
-        if c.is_file() {
-            return c.clone();
-        }
+    // Locate the makakoo-mcp binary built alongside this test. Deriving the
+    // directory from the test executable (current_exe) honors CARGO_TARGET_DIR
+    // and the active profile, instead of assuming <workspace>/target/debug.
+    // makakoo-mcp is a sibling crate, so CARGO_BIN_EXE_* is not set here.
+    let exe_name = format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX);
+    // <target>/<profile>/deps/<test-exe> -> <target>/<profile>/makakoo-mcp
+    let beside_test = || -> Option<PathBuf> {
+        let test_exe = std::env::current_exe().ok()?;
+        let profile = test_exe.parent()?.parent()?;
+        let bin = profile.join(&exe_name);
+        bin.is_file().then_some(bin)
+    };
+    if let Some(bin) = beside_test() {
+        return bin;
     }
-    // Fallback: `cargo build` the binary into target/debug so the test
-    // is self-bootstrapping when invoked cold.
-    let workspace = manifest_dir.parent().unwrap();
+    // Cold start: build makakoo-mcp (cargo honors CARGO_TARGET_DIR), re-check.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let status = Command::new("cargo")
-        .current_dir(workspace)
+        .current_dir(manifest_dir.parent().unwrap())
         .args(["build", "--bin", "makakoo-mcp"])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
         .expect("cargo build");
     assert!(status.success(), "cargo build makakoo-mcp failed");
-    workspace.join("target/debug/makakoo-mcp")
+    beside_test().expect("makakoo-mcp binary present after cargo build")
 }
 
 struct Peer {
