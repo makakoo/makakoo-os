@@ -167,11 +167,8 @@ async fn local_tarball_end_to_end() {
 /// The target triple install.sh derives from `uname` on this host —
 /// mirrors the case arms in the script.
 fn current_target() -> String {
-    let arch = match std::env::consts::ARCH {
-        "aarch64" => "aarch64",
-        "x86_64" => "x86_64",
-        other => other,
-    };
+    // ARCH already matches the triple's first component (aarch64 / x86_64).
+    let arch = std::env::consts::ARCH;
     let os = match std::env::consts::OS {
         "macos" => "apple-darwin",
         "linux" => "unknown-linux-gnu",
