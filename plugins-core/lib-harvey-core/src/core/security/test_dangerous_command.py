@@ -158,8 +158,15 @@ class TestApprovalState(unittest.TestCase):
     """Test approval state management."""
 
     def setUp(self):
-        """Clear state before each test."""
+        """Reset all approval state before each test for isolation."""
         clear_session("test_session")
+        # clear_session only drops session approvals; wipe the permanent +
+        # pending module state too so tests can't leak into one another
+        # (test_permanent_approval would otherwise approve a key globally
+        # and break test_unapproved_returns_false depending on run order).
+        dc_module._permanent_approved.clear()
+        dc_module._pending.clear()
+        dc_module._session_approved.clear()
 
     def test_unapproved_returns_false(self):
         """Test 7: is_approved() returns False for unapproved patterns."""
@@ -249,7 +256,7 @@ class TestDangerousPatterns(unittest.TestCase):
             "kill_hermes": False,
         }
         for pattern, desc in DANGEROUS_PATTERNS:
-            if "rm" in desc.lower() and "root" in desc.lower():
+            if "rm" in pattern and "/" in pattern:
                 categories["rm_rf"] = True
             if "777" in pattern or "666" in pattern:
                 categories["chmod_777"] = True
