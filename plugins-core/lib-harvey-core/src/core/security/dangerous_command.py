@@ -183,17 +183,33 @@ def _approval_key_aliases(pattern_key: str) -> set[str]:
 def _normalize_command_for_detection(command: str) -> str:
     """Normalize a command string before dangerous-pattern matching.
 
-    Strips ANSI escape sequences (full ECMA-48 via strip_ansi),
-    null bytes, and normalizes Unicode fullwidth characters so that
-    obfuscation techniques cannot bypass the pattern-based detection.
+    Defeats obfuscation that tries to slip a dangerous token past the
+    pattern matcher:
+
+    * Strips ANSI escape sequences (full ECMA-48 via strip_ansi) and null
+      bytes.
+    * Applies NFKC so fullwidth/compatibility forms fold to ASCII
+      (e.g. fullwidth ``ｒｍ`` -> ``rm``).
+    * Replaces Unicode *format* characters (category ``Cf`` — zero-width
+      space/joiner, BOM, bidi controls) with a plain space, since they can
+      act as invisible separators an attacker inserts mid-token.
+    * Drops any remaining non-ASCII, non-whitespace character that NFKC did
+      not fold to ASCII, so a decorative glyph wedged into ``rm<x> -rf /``
+      cannot break the token. This only ever makes detection *more*
+      sensitive — the dangerous ASCII verb always survives — which is the
+      right bias for an advisory (approval-gated) check.
     """
-    # Strip all ANSI escape sequences (CSI, OSC, DCS, 8-bit C1, etc.)
     command = strip_ansi(command)
-    # Strip null bytes
     command = command.replace("\x00", "")
-    # Normalize Unicode (fullwidth Latin, halfwidth Katakana, etc.)
     command = unicodedata.normalize("NFKC", command)
-    return command
+    out = []
+    for ch in command:
+        if unicodedata.category(ch) == "Cf":
+            out.append(" ")
+        elif ord(ch) < 128 or ch.isspace():
+            out.append(ch)
+        # else: drop the inserted non-ASCII glyph
+    return "".join(out)
 
 
 def detect_dangerous_command(command: str) -> tuple:
