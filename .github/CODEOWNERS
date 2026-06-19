@@ -1,0 +1,32 @@
+# CODEOWNERS — every PR opened against this repo automatically requests a
+# review from the owner(s) of the files it touches. The human behind the
+# handle, areas of responsibility, and the escalation path are documented
+# in docs/MAINTAINERS.md.
+#
+# Syntax reference: https://docs.github.com/articles/about-code-owners
+# Last matching pattern wins, so the security-critical overrides sit at
+# the bottom of the file.
+
+# ─── Default owner ───────────────────────────────────────────────────────
+# Everything in the tree, unless a more specific rule below overrides it.
+*                                                    @rschumann
+
+# ─── Security-critical surfaces ──────────────────────────────────────────
+# Called out explicitly so the review request stays unambiguous as the
+# owner list grows beyond one person.
+/SECURITY.md                                         @rschumann
+/.github/                                             @rschumann
+/.gitleaks.toml                                      @rschumann
+
+# ─── Install + release path ──────────────────────────────────────────────
+# Anything a user curl-pipes, plus the workflow that produces and signs
+# release artifacts.
+/install/                                            @rschumann
+/distribution/                                       @rschumann
+/.github/workflows/release.yml                       @rschumann
+
+# ─── Command execution + dangerous-command gates ─────────────────────────
+# The highest-blast-radius code in the tree: it decides which shell
+# commands an agent may run. Changes here always want a maintainer's eyes.
+/plugins-core/lib-harvey-core/src/core/agent/        @rschumann
+/plugins-core/lib-harvey-core/src/core/security/     @rschumann
