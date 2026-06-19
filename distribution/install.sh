@@ -38,6 +38,45 @@ echo "→ installing makakoo ($VERSION) for $TARGET into $PREFIX/bin"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# ─── integrity verification ──────────────────────────────────────────
+# sha256 of a file → lowercase hex on stdout; nonzero if no tool found.
+_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | awk '{print $NF}'
+  else return 1
+  fi
+}
+
+# Verify $1 (downloaded file) against the .sha256 sidecar at $2.sha256.
+# Fails closed: a missing tool, a missing sidecar, or a mismatch all abort.
+verify_checksum() {
+  if [ "${MAKAKOO_SKIP_CHECKSUM:-0}" = "1" ]; then
+    echo "warning: MAKAKOO_SKIP_CHECKSUM=1 — skipping integrity verification" >&2
+    return 0
+  fi
+  local actual expected
+  actual="$(_sha256 "$1")" || {
+    echo "error: no sha256 tool (need sha256sum, shasum, or openssl); cannot verify." >&2
+    echo "       set MAKAKOO_SKIP_CHECKSUM=1 to install without verification." >&2
+    exit 1
+  }
+  if ! curl -fsSL "$2.sha256" -o "$1.sha256"; then
+    echo "error: could not download checksum $2.sha256 — refusing to install unverified bytes" >&2
+    echo "       (set MAKAKOO_SKIP_CHECKSUM=1 to override)." >&2
+    exit 1
+  fi
+  expected="$(awk '{print tolower($1); exit}' "$1.sha256")"
+  actual="$(printf '%s' "$actual" | tr 'A-F' 'a-f')"
+  if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+    echo "error: checksum mismatch — refusing to install." >&2
+    echo "  expected: ${expected:-<empty>}" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  fi
+  echo "✓ sha256 verified"
+}
+
 # Smoke-test bypass: if a local tarball path is given, copy it into
 # place and skip the GitHub download. The rest of the script (untar +
 # install + permissions) runs unchanged so the install code path is
@@ -60,6 +99,7 @@ else
     echo "error: download failed — check version tag and network" >&2
     exit 1
   fi
+  verify_checksum "$TMP/makakoo.tar.gz" "$URL"
 fi
 
 tar -xzf "$TMP/makakoo.tar.gz" -C "$TMP"
