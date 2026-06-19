@@ -141,7 +141,7 @@ pub fn load_bootstrap() -> Result<String> {
     }
 
     // Last resort: use the compiled-in base template without fragments.
-    Ok(renderer::render(&registry, &home, None)?)
+    renderer::render(&registry, &home, None)
 }
 
 /// Run infect across every built-in slot. `global` is reserved for a

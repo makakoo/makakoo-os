@@ -150,16 +150,13 @@ pub enum PluginLanguage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum StateRetention {
+    #[default]
     Keep,
     PurgeOnUninstall,
 }
 
-impl Default for StateRetention {
-    fn default() -> Self {
-        StateRetention::Keep
-    }
-}
 
 /// `[plugin]` identity table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -472,20 +469,17 @@ pub struct EmbeddingTable {
 /// service runner when a started service exits before `stop` is called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum RestartPolicy {
     /// Always restart, regardless of exit code.
     Always,
     /// Restart only on non-zero exit. Default for service plugins.
+    #[default]
     OnFailure,
     /// Never restart automatically — supervisor is external (e.g. launchd).
     Never,
 }
 
-impl Default for RestartPolicy {
-    fn default() -> Self {
-        RestartPolicy::OnFailure
-    }
-}
 
 fn default_health_interval_sec() -> u32 {
     60
@@ -922,14 +916,13 @@ fn validate_grant(grant: &str, path: &Path) -> Result<(), ManifestError> {
         }
     }
     // Explicit rejection: secrets/read:* is too broad (spec §1.7).
-    if verb == "secrets/read" || verb == "secrets/write" {
-        if scope == Some("*") {
+    if (verb == "secrets/read" || verb == "secrets/write")
+        && scope == Some("*") {
             return Err(ManifestError::invalid(
                 path,
                 format!("verb {verb:?} with scope '*' rejected: too broad"),
             ));
         }
-    }
     Ok(())
 }
 

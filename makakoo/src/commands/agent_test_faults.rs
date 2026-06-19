@@ -55,8 +55,8 @@ fn parse_scenario(name: &str) -> anyhow::Result<FaultScenario> {
 
 fn render(outcomes: &[FaultOutcome]) {
     println!(
-        "{:<28} {:<5} {:>8}  {}",
-        "scenario", "pass", "elapsed", "note"
+        "{:<28} {:<5} {:>8}  note",
+        "scenario", "pass", "elapsed"
     );
     println!("{}", "-".repeat(100));
     for o in outcomes {

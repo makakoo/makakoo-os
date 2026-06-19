@@ -110,6 +110,7 @@ impl InstallRoot {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[derive(Default)]
 pub struct InstallOptions {
     pub allow_unsigned: bool,
     /// When true, a capability/security diff on update is accepted without
@@ -119,15 +120,6 @@ pub struct InstallOptions {
     pub skip_health_check: bool,
 }
 
-impl Default for InstallOptions {
-    fn default() -> Self {
-        Self {
-            allow_unsigned: false,
-            accept_re_trust: false,
-            skip_health_check: false,
-        }
-    }
-}
 
 /// Returned by every install path on success.
 #[derive(Debug, Clone)]
@@ -358,7 +350,7 @@ pub fn install_from_tarball_bytes(
     // Extract into a temp staging dir, then delegate to install_from_path.
     let tmp = tempfile::tempdir().map_err(|e| InstallError::Staging(e.to_string()))?;
     source_fetch::extract_tarball(tarball, tmp.path())
-        .map_err(|e| InstallError::Staging(e))?;
+        .map_err(InstallError::Staging)?;
     // Walk to the top-level dir containing adapter.toml (many tarballs
     // wrap their content in a single subdir).
     let source_dir = locate_manifest_dir(tmp.path())?;

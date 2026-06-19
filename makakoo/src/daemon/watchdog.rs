@@ -119,7 +119,7 @@ fn maybe_compact(path: &PathBuf) {
     };
     let lines: Vec<String> = BufReader::new(file)
         .lines()
-        .filter_map(|l| l.ok())
+        .map_while(Result::ok)
         .collect();
     if lines.len() < 2 {
         return;
@@ -225,7 +225,7 @@ mod tests {
         let f = File::open(&path).expect("heartbeat file exists");
         let lines: Vec<String> = std::io::BufReader::new(f)
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .collect();
         assert!(
             lines.len() >= 3,

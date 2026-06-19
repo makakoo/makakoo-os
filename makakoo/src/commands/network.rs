@@ -20,8 +20,7 @@ pub async fn run(args: Vec<String>, ctx: &CliContext) -> anyhow::Result<i32> {
                 "makakoo distro install federation\n",
                 "  or: makakoo plugin install --core skill-brain-network && ",
                 "makakoo plugin install --core agent-octopus-peer"
-            )
-            .to_string(),
+            ),
         );
         return Ok(1);
     }

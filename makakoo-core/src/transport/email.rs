@@ -107,7 +107,7 @@ impl Transport for EmailAdapter {
             ))
         })?;
 
-        let mut builder = Message::builder()
+        let builder = Message::builder()
             .from(from)
             .to(to)
             .header(ContentType::TEXT_PLAIN);

@@ -206,7 +206,7 @@ pub fn register_plugin_sancho_tasks(reg: &mut SanchoRegistry, plugins: &PluginRe
             // the installer (hand-copied into $MAKAKOO_HOME/plugins/).
             // Skipping preserves the native handler; the warning makes
             // the situation visible in logs without crashing the boot.
-            if NATIVE_TASK_NAMES.iter().any(|n| *n == task.name.as_str()) {
+            if NATIVE_TASK_NAMES.contains(&task.name.as_str()) {
                 tracing::warn!(
                     plugin = %plugin.manifest.plugin.name,
                     task = %task.name,
@@ -451,7 +451,7 @@ tasks = [{ name = "watchdog_infect", interval = "21600s" }]
             "expected watchdog_infect in registered tasks; got {names:?}"
         );
         assert!(
-            reg.len() >= NATIVE_TASK_COUNT + 1,
+            reg.len() > NATIVE_TASK_COUNT,
             "native + at least 1 plugin task expected, got {}",
             reg.len()
         );

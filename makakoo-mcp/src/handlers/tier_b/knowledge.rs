@@ -219,11 +219,11 @@ impl ToolHandler for HarveyKnowledgeIngestHandler {
 
         let output = timeout(INGEST_TIMEOUT, cmd.output())
             .await
-            .map_err(|_| RpcError::internal(&format!(
+            .map_err(|_| RpcError::internal(format!(
                 "ingest timed out after {}s",
                 INGEST_TIMEOUT.as_secs()
             )))?
-            .map_err(|e| RpcError::internal(&format!("failed to spawn {python}: {e}")))?;
+            .map_err(|e| RpcError::internal(format!("failed to spawn {python}: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -241,7 +241,7 @@ impl ToolHandler for HarveyKnowledgeIngestHandler {
                 let t = l.trim();
                 t.starts_with('{') && t.ends_with('}')
             })
-            .last()
+            .next_back()
             .unwrap_or("");
 
         let parsed: Value = serde_json::from_str(json_line).unwrap_or_else(|_| json!({

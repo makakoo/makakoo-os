@@ -948,7 +948,7 @@ mod tests {
             .collect()
     }
 
-    fn last_denial<'a>(entries: &'a [Value]) -> Option<&'a Value> {
+    fn last_denial(entries: &[Value]) -> Option<&Value> {
         entries
             .iter()
             .rev()
@@ -1302,7 +1302,7 @@ mod tests {
             .unwrap();
         assert!(v.get("reply").is_some());
         assert!(v.get("baseline").is_some());
-        assert!(v.get("active").and_then(Value::as_array).map_or(false, |a| a.len() == 1));
+        assert!(v.get("active").and_then(Value::as_array).is_some_and(|a| a.len() == 1));
         assert_eq!(v.get("expired_today_count").and_then(Value::as_u64), Some(0));
     }
 }

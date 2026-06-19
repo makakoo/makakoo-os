@@ -22,7 +22,6 @@
 //!   - Auth token doubles as the basic-auth password for recording
 //!     fetches.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;

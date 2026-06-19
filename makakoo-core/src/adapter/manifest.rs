@@ -143,20 +143,17 @@ pub enum SourceType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum SandboxProfile {
     None,
     #[serde(rename = "network-io")]
+    #[default]
     NetworkIo,
     #[serde(rename = "fs-read")]
     FsRead,
     Isolated,
 }
 
-impl Default for SandboxProfile {
-    fn default() -> Self {
-        SandboxProfile::NetworkIo
-    }
-}
 
 /// Role the adapter is willing to serve. Subset of
 /// `{validator, delegate, swarm_member}`.

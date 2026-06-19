@@ -369,7 +369,7 @@ mod tests {
         let report = run(&spec).expect("gen ok");
         let manifest = Manifest::load(report.registered_path.unwrap()).unwrap();
         assert_eq!(manifest.transport.command.len(), 3);
-        assert_eq!(manifest.transport.stdin, true);
+        assert!(manifest.transport.stdin);
     }
 
     #[test]

@@ -330,7 +330,7 @@ pub mod mock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::supervisor::{handle, GatewayLaunchSpec, SupervisorState};
+    use crate::agents::supervisor::{handle, SupervisorState};
     use mock::MockGateway;
     use tempfile::TempDir;
 

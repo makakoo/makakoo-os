@@ -278,11 +278,10 @@ fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         let ft = entry.file_type()?;
         if ft.is_dir() {
             collect_md_files(&path, out)?;
-        } else if ft.is_file() {
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
+        } else if ft.is_file()
+            && path.extension().and_then(|s| s.to_str()) == Some("md") {
                 out.push(path);
             }
-        }
     }
     Ok(())
 }

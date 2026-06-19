@@ -86,7 +86,7 @@ fn discord_channel_kind(t: Option<u8>) -> ChannelKind {
         2 => ChannelKind::Channel,            // GUILD_VOICE — treat as channel
         3 => ChannelKind::Group,              // GROUP_DM
         4 => ChannelKind::Channel,            // GUILD_CATEGORY
-        10 | 11 | 12 => ChannelKind::Thread, // PUBLIC_THREAD / PRIVATE_THREAD / NEWS_THREAD
+        10..=12 => ChannelKind::Thread, // PUBLIC_THREAD / PRIVATE_THREAD / NEWS_THREAD
         _ => ChannelKind::Channel,
     }
 }

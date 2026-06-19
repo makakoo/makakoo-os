@@ -863,7 +863,7 @@ async fn doctor(name: &str, as_json: bool) -> anyhow::Result<i32> {
                     detail: if present {
                         "set".into()
                     } else {
-                        format!("unset — required by auth.key_env")
+                        "unset — required by auth.key_env".to_string()
                     },
                 });
             }
@@ -880,7 +880,7 @@ async fn doctor(name: &str, as_json: bool) -> anyhow::Result<i32> {
                     detail: if present {
                         "set".into()
                     } else {
-                        format!("unset — required by basic auth")
+                        "unset — required by basic auth".to_string()
                     },
                 });
             }

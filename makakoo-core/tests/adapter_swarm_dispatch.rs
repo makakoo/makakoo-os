@@ -4,6 +4,13 @@
 //! artifacts in the standard shape, and surfaces adapter INFRA_ERROR
 //! without crashing the dispatch pipeline.
 
+// These integration tests serialize on a process-global env mutex
+// (`env_guard`); the guard is intentionally held across the test's await
+// points so concurrently-running tests can't clobber shared env/process
+// state. That deliberate, test-only pattern is exactly what
+// `await_holding_lock` flags, so it is allowed for this file only.
+#![allow(clippy::await_holding_lock)]
+
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use makakoo_core::db::{open_db, run_migrations};

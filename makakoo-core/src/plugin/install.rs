@@ -300,13 +300,10 @@ pub struct UpstreamProbe {
 /// `UpdateWrongSource` — callers use the legacy reinstall flow for those.
 pub fn probe_upstream(entry: &LockEntry) -> Result<UpstreamProbe, InstallError> {
     let plugin_source = parse_lock_source(&entry.name, &entry.source)?;
-    match &plugin_source {
-        PluginSource::Path(_) => {
-            return Err(InstallError::UpdateWrongSource {
-                plugin: entry.name.clone(),
-            })
-        }
-        _ => {}
+    if let PluginSource::Path(_) = &plugin_source {
+        return Err(InstallError::UpdateWrongSource {
+            plugin: entry.name.clone(),
+        })
     }
     let spec = match &plugin_source {
         PluginSource::Git {
@@ -522,9 +519,7 @@ fn install_staged(
     // handlers. Done before staging so a bad manifest never touches
     // $MAKAKOO_HOME/plugins/.
     for task in &manifest.sancho.tasks {
-        if crate::sancho::NATIVE_TASK_NAMES
-            .iter()
-            .any(|n| *n == task.name.as_str())
+        if crate::sancho::NATIVE_TASK_NAMES.contains(&task.name.as_str())
         {
             return Err(InstallError::NativeTaskCollision {
                 plugin: name,

@@ -206,8 +206,7 @@ fn collect_files(base: &Path, cur: &Path, out: &mut Vec<PathBuf>) -> Result<(), 
                 .strip_prefix(base)
                 .map_err(|_| StagingError::Io {
                     path: path.clone(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    source: std::io::Error::other(
                         "path escaped base",
                     ),
                 })?

@@ -469,7 +469,7 @@ fn skill_audit_all_scans_fleet() {
         .env("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin)
         .env("MAKAKOO_TEST_NO_USER_SKILL_ROOTS", "1")
         .current_dir(path)
-        .args(&["skill", "audit", "--all", "--limit", "5"]);
+        .args(["skill", "audit", "--all", "--limit", "5"]);
 
     let out = cmd.output().expect("spawn makakoo");
 
