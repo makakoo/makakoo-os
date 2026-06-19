@@ -1,0 +1,78 @@
+# gitleaks configuration for makakoo-os
+#
+# We extend gitleaks' DEFAULT ruleset (every real detector stays on) and
+# add a narrow allowlist for the handful of paths and token shapes that
+# are documentation examples or test fixtures — never live secrets.
+#
+# Provenance: every entry below was confirmed by manual triage of a full
+# `gitleaks detect` run on 2026-06-19 against the tracked tree (2,240
+# files). That run produced 639 findings; triage found ZERO live
+# credentials. 621 were in vendored third-party LLM reference docs and
+# the remainder were intentionally-fake fixtures — several of which exist
+# precisely to test Makakoo's own secret scrubber.
+#
+# Maintenance rule: when you add a fixture that trips a detector, extend
+# the lists below with the narrowest pattern that covers it. NEVER disable
+# a rule wholesale, and NEVER allowlist a path just to silence a real
+# secret — rotate the secret instead. Re-audit with:
+#
+#     git archive HEAD | tar -x -C /tmp/gl && \
+#       gitleaks detect --no-git --source /tmp/gl --config .gitleaks.toml
+
+title = "makakoo-os gitleaks config"
+
+[extend]
+useDefault = true
+
+# ─── Path allowlist: vendored docs + fixtures ────────────────────────────
+[[allowlists]]
+description = "Third-party reference docs and secret-scrubber test fixtures"
+paths = [
+    # Vendored Unsloth LLM reference docs (llms.txt / llms-full.txt).
+    # 621 of 639 findings live here — third-party documentation prose
+    # with example API keys, not Makakoo credentials.
+    '''plugins-core/skill-ai-ml-unsloth/src/references/.*''',
+
+    # Our own secret-scrubber + memory-store test fixtures. These files
+    # deliberately embed fake `sk-test-…` tokens to assert that the
+    # scrubber redacts them before anything is persisted.
+    '''plugins-core/lib-harvey-core/src/core/cortex/tests/test_extractor_scrubber\.py''',
+    '''plugins-core/lib-harvey-core/src/core/cortex/tests/test_memory_store\.py''',
+
+    # Browser-QA storage test: asserts a fake JWT / GitHub PAT stored
+    # under an innocuous key name is surfaced by the read command.
+    '''plugins-core/skill-browser-qa-browse/src/test/commands\.test\.ts''',
+
+    # Walkthrough + SKILL docs showing curl examples with placeholder keys.
+    '''docs/walkthroughs/13-shared-storage-garagetytus\.md''',
+    '''docs/walkthroughs/voice-quickstart\.md''',
+    '''plugins-core/skill-ai-ml-switchailocal/src/SKILL\.md''',
+
+    # Archived sprint planning notes with example tokens.
+    '''development/sprints/done/SPRINT-CORTEX-MEMORY-MAKAKOO-2026-04-30/06-TESTING-QA\.md''',
+    '''development/sprints/done/SPRINT-CORTEX-MEMORY-MAKAKOO-2026-04-30/SPRINT\.md''',
+]
+
+# ─── Token-shape allowlist: match anywhere on the offending line ─────────
+[[allowlists]]
+description = "Known-fake fixture tokens and public identifiers"
+regexTarget = "line"
+regexes = [
+    # Fake fixture tokens used across tests + docs.
+    '''sk-test-1234567890abcdef''',
+    '''ghp_abc123def456''',
+
+    # ElevenLabs *voice IDs* are public identifiers, not secrets
+    # (telephony.py default voice config).
+    '''cjVigY5qzO86Huf0OWal''',
+
+    # Garage local-S3 SAMPLE credential blocks in makakoo/src/commands/s3.rs
+    # — synthetic parser test fixtures (`#[cfg(test)] mod tests`) for
+    # `makakoo bucket` key output. Garage binds to 127.0.0.1 only; these are
+    # ephemeral localhost dev keys, never a cloud credential. Two sample
+    # shapes are exercised (Garage v2 format + alt-label format).
+    '''GK0a47d4f88a5b843b1c321ef4''',
+    '''d6f6acf6d15072ed3e57a129f9adc2af57cbc4fc022e2b279727805272ccd285''',
+    '''GK1234567890abcdef''',
+    '''deadbeefcafe1234''',
+]

@@ -1,0 +1,70 @@
+name: gitleaks
+
+# Secret-scanning gate. Runs the pinned gitleaks binary against the
+# checked-out tree on every push + PR and fails if it finds a credential
+# that isn't covered by .gitleaks.toml's audited allowlist.
+#
+# We self-install the binary (with checksum verification) instead of using
+# gitleaks-action so the job needs no GITLEAKS_LICENSE — the action
+# requires one for organization accounts; a direct binary does not.
+#
+# Third-party actions are pinned to a commit SHA, not a tag.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: scan for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install gitleaks (pinned + checksum-verified)
+        env:
+          GITLEAKS_VERSION: "8.30.0"
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          # Save the tarball under its real asset name so the checksum line
+          # (`<hash>  <asset>`) resolves to a file that exists on disk.
+          curl -fsSL -o "$asset"      "${base}/${asset}"
+          curl -fsSL -o checksums.txt "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          # Verify the tarball against gitleaks' published checksums before
+          # trusting a single byte of it. Fail closed on any mismatch.
+          awk -v f="$asset" '$2 == f' checksums.txt | sha256sum -c -
+          tar -xzf "$asset" gitleaks
+          install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run gitleaks
+        # --no-git scans the checked-out working tree (no target/ in a clean
+        # CI checkout, so this is exactly the tracked files). --redact keeps
+        # any unexpected hit out of the public CI log. Non-zero exit on
+        # findings fails the job.
+        run: |
+          gitleaks detect \
+            --no-git \
+            --source . \
+            --config .gitleaks.toml \
+            --redact \
+            --no-banner \
+            --exit-code 1 \
+            --report-format sarif \
+            --report-path gitleaks.sarif
+
+      - name: Upload gitleaks report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gitleaks-sarif
+          path: gitleaks.sarif
+          if-no-files-found: ignore
+          retention-days: 7

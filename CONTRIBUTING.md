@@ -9,7 +9,7 @@ Thanks for showing up. This doc covers how to get a change landed — from "I fo
 3. **Atomic commits.** One logical change per commit. Bug fix, test, refactor — separate commits.
 4. **Tests required for new logic.** A PR that adds behaviour without adding at least one test gets a "please add a test" reply, not a merge. Regression guards are welcome for every bug you fix.
 5. **Cross-platform by default.** Anything new that touches filesystem paths, subprocesses, or environment variables gets cfg-gated (`#[cfg(unix)]` / `#[cfg(windows)]`) before the first push. The CI matrix runs macOS + Linux + Windows on every commit — if the Windows column flips red, fix that before asking for review.
-6. **Security: report privately first.** Use `security@makakoo.com` (or open a private GitHub security advisory) for vulnerabilities; don't post them in public issues.
+6. **Security: report privately first.** Follow [`SECURITY.md`](SECURITY.md) — a private [GitHub security advisory](https://github.com/makakoo/makakoo-os/security/advisories/new) is the preferred channel. Never disclose a vulnerability in a public issue or PR before it's fixed.
 
 ## The smallest change
 
