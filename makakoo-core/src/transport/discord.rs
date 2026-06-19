@@ -149,8 +149,12 @@ pub(crate) struct DiscordUser {
     pub id: String,
     #[serde(default)]
     pub username: Option<String>,
+    // deserialized from Discord payload; retained for completeness
+    #[allow(dead_code)]
     #[serde(default)]
     pub bot: bool,
+    // deserialized from Discord payload; retained for completeness
+    #[allow(dead_code)]
     #[serde(default)]
     pub discriminator: Option<String>,
     #[serde(default)]
@@ -259,7 +263,7 @@ impl DiscordAdapter {
     /// Map a Discord MESSAGE_CREATE event to a Makakoo inbound frame.
     /// Returns `None` when the message must be dropped (self-loop,
     /// non-allowlisted guild, non-allowlisted user, missing author).
-    pub async fn build_inbound_frame(&self, msg: DiscordMessage) -> Option<MakakooInboundFrame> {
+    pub(crate) async fn build_inbound_frame(&self, msg: DiscordMessage) -> Option<MakakooInboundFrame> {
         let identity = self.identity.lock().await.clone()?;
         let author = msg.author?;
 
@@ -421,7 +425,7 @@ impl Gateway for DiscordAdapter {
             match read {
                 Err(_) => {
                     // Heartbeat tick.
-                    if heartbeat_interval_ms.is_some() {
+                    if let Some(interval_ms) = heartbeat_interval_ms {
                         let payload = HeartbeatPayload { op: 1, d: last_seq };
                         let body = serde_json::to_string(&payload).unwrap();
                         if let Err(e) = ws_stream.send(Message::Text(body)).await {
@@ -430,8 +434,7 @@ impl Gateway for DiscordAdapter {
                             )));
                         }
                         next_heartbeat = Some(
-                            std::time::Instant::now()
-                                + Duration::from_millis(heartbeat_interval_ms.unwrap()),
+                            std::time::Instant::now() + Duration::from_millis(interval_ms),
                         );
                     }
                 }
@@ -498,21 +501,18 @@ impl Gateway for DiscordAdapter {
                         11 => {
                             // HEARTBEAT_ACK — ignore.
                         }
-                        0 => {
-                            // DISPATCH — handle MESSAGE_CREATE.
-                            if dispatch.t.as_deref() == Some("MESSAGE_CREATE") {
-                                if let Some(d) = dispatch.d {
-                                    if let Ok(msg) =
-                                        serde_json::from_value::<DiscordMessage>(d.clone())
-                                    {
-                                        if let Some(frame) = self.build_inbound_frame(msg).await {
-                                            // Sink-closed = supervisor
-                                            // shutting down; bail out
-                                            // cleanly so the task can
-                                            // unwind.
-                                            if sink.send(frame).await.is_err() {
-                                                return Ok(());
-                                            }
+                        // DISPATCH — handle MESSAGE_CREATE.
+                        0 if dispatch.t.as_deref() == Some("MESSAGE_CREATE") => {
+                            if let Some(d) = dispatch.d {
+                                if let Ok(msg) = serde_json::from_value::<DiscordMessage>(d.clone())
+                                {
+                                    if let Some(frame) = self.build_inbound_frame(msg).await {
+                                        // Sink-closed = supervisor
+                                        // shutting down; bail out
+                                        // cleanly so the task can
+                                        // unwind.
+                                        if sink.send(frame).await.is_err() {
+                                            return Ok(());
                                         }
                                     }
                                 }

@@ -22,7 +22,6 @@
 //!   - Auth token doubles as the basic-auth password for recording
 //!     fetches.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -88,6 +87,8 @@ struct TwilioAccountInfo {
     sid: String,
     #[serde(default)]
     friendly_name: Option<String>,
+    // deserialized from Twilio payload; retained for completeness
+    #[allow(dead_code)]
     #[serde(default)]
     status: Option<String>,
 }

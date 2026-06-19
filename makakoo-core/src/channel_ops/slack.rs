@@ -56,6 +56,8 @@ struct SlackChannel {
     is_im: bool,
     #[serde(default)]
     is_group: bool,
+    // deserialized from Slack conversations.list payload; retained for completeness
+    #[allow(dead_code)]
     #[serde(default)]
     is_channel: bool,
     #[serde(default)]
@@ -68,8 +70,6 @@ impl SlackChannel {
             ChannelKind::Dm
         } else if self.is_group {
             ChannelKind::Group
-        } else if self.is_channel {
-            ChannelKind::Channel
         } else {
             ChannelKind::Channel
         };

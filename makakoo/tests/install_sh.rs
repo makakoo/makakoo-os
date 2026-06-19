@@ -105,19 +105,10 @@ async fn local_tarball_end_to_end() {
     let install_dir = tmp.path().join("bin");
     std::fs::create_dir_all(&pack).unwrap();
 
-    // Use the release build if it exists — test is idempotent either way.
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let repo_root = std::path::Path::new(manifest_dir).parent().unwrap();
-    let bin_rel = repo_root.join("target/release/makakoo");
-    let bin_debug = repo_root.join("target/debug/makakoo");
-    let bin = if bin_rel.exists() {
-        bin_rel
-    } else if bin_debug.exists() {
-        bin_debug
-    } else {
-        eprintln!("skipping local_tarball_end_to_end: no makakoo binary built");
-        return;
-    };
+    // The makakoo binary built for this test run. CARGO_BIN_EXE_<name> is set
+    // by Cargo for integration tests and honors CARGO_TARGET_DIR + the active
+    // profile, so it resolves correctly under an external target directory.
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_makakoo"));
     std::fs::copy(&bin, pack.join("makakoo")).unwrap();
 
     let tarball = tmp.path().join("makakoo.tar.gz");

@@ -106,16 +106,16 @@ pub async fn call_transport(
 ) -> Result<TransportResponse, TransportError> {
     match manifest.transport.kind {
         TransportKind::OpenAiCompatible => {
-            HttpTransport::default().call(manifest, prompt, ctx).await
+            HttpTransport.call(manifest, prompt, ctx).await
         }
         TransportKind::Subprocess => {
-            SubprocessTransport::default().call(manifest, prompt, ctx).await
+            SubprocessTransport.call(manifest, prompt, ctx).await
         }
-        TransportKind::McpHttp => McpHttpTransport::default().call(manifest, prompt, ctx).await,
+        TransportKind::McpHttp => McpHttpTransport.call(manifest, prompt, ctx).await,
         TransportKind::McpHttpSigned => {
-            McpHttpSignedTransport::default().call(manifest, prompt, ctx).await
+            McpHttpSignedTransport.call(manifest, prompt, ctx).await
         }
-        TransportKind::McpStdio => McpStdioTransport::default().call(manifest, prompt, ctx).await,
+        TransportKind::McpStdio => McpStdioTransport.call(manifest, prompt, ctx).await,
     }
 }
 

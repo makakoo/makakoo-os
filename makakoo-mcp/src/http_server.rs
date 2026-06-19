@@ -193,6 +193,8 @@ async fn handle_rpc(
     }
 }
 
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 fn header_str(headers: &HeaderMap, name: &'static str) -> Result<String, Response> {
     match headers.get(name) {
         Some(v) => match v.to_str() {

@@ -10,8 +10,8 @@
 //!   1. Chrome running with `--remote-debugging-port=9222` + a separate
 //!      `--user-data-dir` (so the CDP profile doesn't clash with your
 //!      daily browser). The sprint doc ships a one-liner:
-//!        `open -na "Google Chrome" --args --remote-debugging-port=9222 \
-//!         --user-data-dir=/tmp/chrome-cdp`
+//!      `open -na "Google Chrome" --args --remote-debugging-port=9222 \
+//!      --user-data-dir=/tmp/chrome-cdp`
 //!   2. The `agent-browser-harness` plugin installed via
 //!      `MAKAKOO_VENV_PYTHON=python3.13 makakoo plugin install --core \
 //!       agent-browser-harness`.
@@ -38,24 +38,25 @@ const HANDSHAKE: &str = concat!(
 );
 
 fn locate_mcp_binary() -> Option<std::path::PathBuf> {
-    // Prefer the workspace-local debug build so `cargo test` picks up
-    // fresh changes without requiring a `cargo install`. Fall back to
-    // `makakoo-mcp` on PATH so the test also works against an installed
-    // binary (what Sebastian actually dogfoods).
-    let cargo_manifest_dir: std::path::PathBuf =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = cargo_manifest_dir
-        .parent()
-        .expect("makakoo/ is inside workspace root");
-    for rel in ["target/debug/makakoo-mcp", "target/release/makakoo-mcp"] {
-        let p = workspace_root.join(rel);
-        if p.is_file() {
-            return Some(p);
+    // Prefer the binary built alongside this test. Deriving the directory from
+    // the test executable (current_exe) honors CARGO_TARGET_DIR and the active
+    // profile instead of assuming <workspace>/target/debug; makakoo-mcp is a
+    // sibling crate, so CARGO_BIN_EXE_* is not available here. Fall back to
+    // `makakoo-mcp` on PATH so the test also works against an installed binary
+    // (what Sebastian actually dogfoods).
+    let exe_name = format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX);
+    if let Ok(test_exe) = std::env::current_exe() {
+        // <target>/<profile>/deps/<test-exe> -> <target>/<profile>/makakoo-mcp
+        if let Some(profile) = test_exe.parent().and_then(|deps| deps.parent()) {
+            let p = profile.join(&exe_name);
+            if p.is_file() {
+                return Some(p);
+            }
         }
     }
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|p| p.join("makakoo-mcp"))
+        .map(|p| p.join(&exe_name))
         .find(|p| p.is_file())
 }
 

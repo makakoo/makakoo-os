@@ -114,11 +114,10 @@ jobs:
         continue-on-error: true
         run: cargo check --target x86_64-unknown-redox -p makakoo-core
 
-  # Clippy — warnings surfaced for review but non-fatal. The workspace
-  # has pre-Phase-B clippy debt; a dedicated cleanup sprint will flip
-  # this to -D warnings later. Phase B's hard gate is `cargo test
-  # --workspace` green, not zero clippy warnings. Scoped-strict clippy
-  # runs only on the Phase B deliverable (makakoo-platform).
+  # Clippy — enforced workspace-wide. The cleanup sprint cleared the
+  # backlog, so `-D warnings` is now a hard gate across every crate and
+  # target. Any new lint fails CI; suppressions must be an explicit
+  # `#[allow(...)]` with a justifying comment in the source.
   clippy:
     name: clippy (${{ matrix.os }})
     strategy:
@@ -130,7 +129,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned to a specific stable, NOT @stable. A `-D warnings` gate on a
+        # floating toolchain turns every ~6-week Rust release into a surprise
+        # CI break the moment clippy ships a new lint. Bump this pin
+        # deliberately — in its own PR, fixing any new lints alongside it.
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy
 
@@ -151,11 +154,5 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
             ${{ runner.os }}-cargo-
 
-      - name: cargo clippy (workspace, informational)
-        continue-on-error: true
-        run: cargo clippy --workspace --all-targets --locked
-
-      # Strict lint gate for the Phase B deliverable. New code must be
-      # clippy-clean even while older crates carry debt.
-      - name: cargo clippy (makakoo-platform, strict)
-        run: cargo clippy -p makakoo-platform --all-targets --locked -- -D warnings
+      - name: cargo clippy (workspace, strict)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings

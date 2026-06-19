@@ -130,6 +130,7 @@ pub struct MakakooOutboundFrame {
     ///   - Telegram: parse as integer; if parse fails → drop with WARN
     ///   - Slack: pass through as `thread_ts` float-string; if string
     ///     doesn't look like a Slack timestamp → drop with WARN
+    ///
     /// Mismatched format never crashes — the message still sends,
     /// just without the thread anchor.
     pub reply_to_message_id: Option<String>,

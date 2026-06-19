@@ -194,7 +194,7 @@ impl CapabilityHandler for StateHandler {
                     });
                 }
                 out.sort_by(|a, b| a.name.cmp(&b.name));
-                Ok(serde_json::to_value(&serde_json::json!({ "entries": out }))
+                Ok(serde_json::to_value(serde_json::json!({ "entries": out }))
                     .unwrap())
             }
             "state.delete" => {

@@ -16,8 +16,10 @@ use super::detect::{CargoSource, InstallMethod};
 /// `makakoo` and `makakoo-mcp` together by default — they're the two
 /// halves of the same parasite OS and ship in lockstep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum BinaryTarget {
     /// Both `makakoo` and `makakoo-mcp` (default).
+    #[default]
     Both,
     /// `makakoo` only — rare, mostly for dev iteration.
     KernelOnly,
@@ -25,11 +27,6 @@ pub enum BinaryTarget {
     McpOnly,
 }
 
-impl Default for BinaryTarget {
-    fn default() -> Self {
-        BinaryTarget::Both
-    }
-}
 
 impl BinaryTarget {
     pub fn includes_kernel(self) -> bool {

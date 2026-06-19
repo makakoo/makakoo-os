@@ -46,7 +46,7 @@ pub fn list(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
         println!("No agent slots configured. Run `makakoo agent create <slot>` to add one.");
         return Ok(0);
     }
-    println!("{:<24}{:<24}{:<14}{}", "SLOT", "NAME", "STATUS", "TRANSPORTS");
+    println!("{:<24}{:<24}{:<14}TRANSPORTS", "SLOT", "NAME", "STATUS");
     for slot in &registry.slots {
         let status = if slot.is_configured() {
             "OK"
@@ -273,7 +273,7 @@ pub fn inventory(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
         println!("No legacy agent-* plugins installed.");
         return Ok(0);
     }
-    println!("{:<32}{:<24}{}", "PLUGIN", "SLOT_ID_GUESS", "STATUS");
+    println!("{:<32}{:<24}STATUS", "PLUGIN", "SLOT_ID_GUESS");
     for (plugin, slot, status) in &agent_plugins {
         println!("{:<32}{:<24}{}", plugin, slot, status);
     }
@@ -517,7 +517,7 @@ pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
         } => {
             if backfilled_artifacts.is_empty() {
                 output::print_info(
-                    "harveychat already migrated — nothing to do (re-run safe)".to_string(),
+                    "harveychat already migrated — nothing to do (re-run safe)",
                 );
             } else {
                 output::print_info(format!(
@@ -532,7 +532,7 @@ pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
         }
         MigrationOutcome::NothingToMigrate => {
             output::print_warn(
-                "no legacy data/chat/config.json found — nothing to migrate".to_string(),
+                "no legacy data/chat/config.json found — nothing to migrate",
             );
             Ok(0)
         }

@@ -380,8 +380,8 @@ tasks = [
         );
         let t = resolve_grants(&m, Path::new("/var/m")).unwrap();
         let scopes = t.scopes_for("sancho/register").unwrap();
-        assert!(scopes.iter().any(|s| *s == "morning_brief"));
-        assert!(scopes.iter().any(|s| *s == "evening_recap"));
+        assert!(scopes.contains(&"morning_brief"));
+        assert!(scopes.contains(&"evening_recap"));
     }
 
     #[test]

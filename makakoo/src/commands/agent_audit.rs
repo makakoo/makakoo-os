@@ -47,7 +47,7 @@ fn render_table(events: &[AuditEvent], home: &Path) {
         println!("(no audit events at {})", home.join("data/audit/agents.jsonl").display());
         return;
     }
-    println!("{:<25} {:<24} {:<14} {:<10} {:<24} {}", "ts", "kind", "slot", "outcome", "actor", "target");
+    println!("{:<25} {:<24} {:<14} {:<10} {:<24} target", "ts", "kind", "slot", "outcome", "actor");
     println!("{}", "-".repeat(120));
     for e in events {
         let kind_s = serde_json::to_string(&e.kind).unwrap_or_default();

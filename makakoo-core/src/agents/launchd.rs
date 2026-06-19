@@ -187,15 +187,16 @@ impl BootstrapError {
 /// Render the LaunchAgent plist XML. Locked schema:
 ///
 /// * `KeepAlive=true`   — launchd auto-restarts on crash (the
-///                        user-space restart budget short-circuits
-///                        before this kicks in for normal cases).
+///   user-space restart budget short-circuits
+///   before this kicks in for normal cases).
 /// * `RunAtLoad=true`   — start immediately on bootstrap.
 /// * `ProcessType=Interactive` — gives us reasonable scheduling
-///                        priority for foreground UX (Telegram
-///                        long-poll, Slack WS).
+///   priority for foreground UX (Telegram
+///   long-poll, Slack WS).
 /// * `ThrottleInterval=10` — minimum interval between launchd
-///                        respawns; keeps a wedged supervisor from
-///                        burning the CPU.
+///   respawns; keeps a wedged supervisor from
+///   burning the CPU.
+///
 /// XML-escape a string for safe embedding inside a plist `<string>`.
 /// Only `&`, `<`, `>`, `"`, `'` need escaping in PLIST element bodies.
 fn xml_escape(s: &str) -> String {

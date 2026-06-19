@@ -106,7 +106,7 @@ fn walk(dir: &Path, hits: &mut Vec<(PathBuf, u32)>) {
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
-            if p.file_name().and_then(|n| n.to_str()).map_or(false, |n| {
+            if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
                 n == "target" || n == "node_modules" || n.starts_with('.')
             }) {
                 continue;

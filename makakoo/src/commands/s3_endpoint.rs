@@ -261,8 +261,8 @@ fn list(ctx: &CliContext, as_json: bool) -> Result<i32> {
     }
     let default = reg.default.as_deref().unwrap_or("");
     println!(
-        "{:1}  {:14} {:8} {:14} {}",
-        "*", "NAME", "REGION", "KIND", "URL"
+        "{:1}  {:14} {:8} {:14} URL",
+        "*", "NAME", "REGION", "KIND"
     );
     for (name, spec) in &reg.endpoints {
         let marker = if name == default { "*" } else { " " };

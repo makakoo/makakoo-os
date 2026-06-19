@@ -309,10 +309,7 @@ impl SessionTree {
             entries.iter().map(|e| (e.id(), e)).collect();
         let mut chain: Vec<Entry> = Vec::new();
         let mut cursor = target_id.to_string();
-        loop {
-            let Some(&entry) = by_id.get(cursor.as_str()) else {
-                break;
-            };
+        while let Some(&entry) = by_id.get(cursor.as_str()) {
             chain.push(entry.clone());
             match entry.parent_id() {
                 Some(p) => cursor = p.to_string(),

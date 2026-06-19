@@ -182,7 +182,7 @@ impl ToolHandler for HarveyInfectLocalHandler {
         if let Some(r) = rules {
             if !dry_run {
                 apply_rules_to_context(&project_path, r).map_err(|e| {
-                    RpcError::internal(&format!(
+                    RpcError::internal(format!(
                         "failed to write .harvey/context.md: {e}"
                     ))
                 })?;
@@ -207,7 +207,7 @@ impl ToolHandler for HarveyInfectLocalHandler {
         }
 
         let output = cmd.output().await.map_err(|e| {
-            RpcError::internal(&format!("failed to spawn makakoo: {e}"))
+            RpcError::internal(format!("failed to spawn makakoo: {e}"))
         })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();

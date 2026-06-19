@@ -127,7 +127,7 @@ impl OlibiaSubagent {
         tracing::info!(target: "makakoo.olibia", topic = %ev.topic, "{line}");
         // Every 7th reaction, attempt a gimmick frame — cooldown-gated
         // inside render_gimmick so this is safe to call on every call.
-        if n % 7 == 0 {
+        if n.is_multiple_of(7) {
             match gimmicks::render_gimmick(&ev.topic, false) {
                 Ok(Some(frame)) => {
                     tracing::debug!(

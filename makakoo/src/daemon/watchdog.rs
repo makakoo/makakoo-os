@@ -19,7 +19,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -64,7 +64,7 @@ fn hostname() -> String {
         })
 }
 
-fn heartbeat_path(home: &PathBuf) -> PathBuf {
+fn heartbeat_path(home: &Path) -> PathBuf {
     home.join("data").join(".sancho_heartbeat.jsonl")
 }
 
@@ -119,7 +119,7 @@ fn maybe_compact(path: &PathBuf) {
     };
     let lines: Vec<String> = BufReader::new(file)
         .lines()
-        .filter_map(|l| l.ok())
+        .map_while(Result::ok)
         .collect();
     if lines.len() < 2 {
         return;
@@ -225,7 +225,7 @@ mod tests {
         let f = File::open(&path).expect("heartbeat file exists");
         let lines: Vec<String> = std::io::BufReader::new(f)
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .collect();
         assert!(
             lines.len() >= 3,

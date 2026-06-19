@@ -205,7 +205,7 @@ pub fn run_scenario(s: FaultScenario) -> FaultOutcome {
             }
             if admits == 60 && denies == 140 {
                 FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    format!("burst of 200: 60 admitted, 140 denied (locked 60/window cap)"))
+                    "burst of 200: 60 admitted, 140 denied (locked 60/window cap)".to_string())
             } else {
                 FaultOutcome::fail(s, start.elapsed().as_millis(),
                     format!("rate-limit burst yielded {admits} admits + {denies} denies; expected 60/140"))

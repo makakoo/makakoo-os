@@ -79,13 +79,13 @@ fn install_pi(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
     if !binary_on_path("npm") {
         ui.line("cli-agent: npm not on PATH.")?;
         ui.line("  Install Node.js (ships with npm) from https://nodejs.org, then re-run")?;
-        ui.line(&format!("  `makakoo setup cli-agent` — or run `npm install -g {PI_PACKAGE}` by hand."))?;
+        ui.line(format!("  `makakoo setup cli-agent` — or run `npm install -g {PI_PACKAGE}` by hand."))?;
         return Ok(SectionOutcome::Failed(
             "npm not found on PATH — install Node.js first".to_string(),
         ));
     }
 
-    ui.line(&format!("cli-agent: running npm install -g {PI_PACKAGE} …"))?;
+    ui.line(format!("cli-agent: running npm install -g {PI_PACKAGE} …"))?;
     ui.stdout().flush()?;
 
     let mut cmd = Command::new("npm");
@@ -111,7 +111,7 @@ fn install_pi(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
         ));
     }
     let version = pi_version().unwrap_or_else(|| "unknown version".to_string());
-    ui.line(&format!("cli-agent: installed. pi {version} is on PATH."))?;
+    ui.line(format!("cli-agent: installed. pi {version} is on PATH."))?;
     Ok(SectionOutcome::Installed)
 }
 

@@ -433,8 +433,8 @@ fn grant(
     //    `*`). Glob patterns like `~/foo/**` defer to match-time.
     let scope_str = expanded.to_string_lossy().to_string();
     let looks_like_glob = scope_str.contains('*');
-    if !looks_like_glob {
-        if !expanded.exists() {
+    if !looks_like_glob
+        && !expanded.exists() {
             if !mkdir {
                 bail!(
                     "target {} does not exist — pass --mkdir to create it",
@@ -444,7 +444,6 @@ fn grant(
             fs::create_dir_all(&expanded)
                 .with_context(|| format!("creating {}", expanded.display()))?;
         }
-    }
 
     // 4. Build the on-disk scope string. Baseline shape is
     //    `fs/write:<absolute>`. If the user didn't pass a glob, we

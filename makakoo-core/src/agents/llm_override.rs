@@ -26,8 +26,10 @@ use serde::{Deserialize, Serialize};
 /// Reasoning-effort knob — three locked tiers per the v2 spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ReasoningEffort {
     Low,
+    #[default]
     Medium,
     High,
 }
@@ -75,11 +77,6 @@ pub struct LlmDefaults {
     pub top_p: f32,
 }
 
-impl Default for ReasoningEffort {
-    fn default() -> Self {
-        ReasoningEffort::Medium
-    }
-}
 
 impl LlmDefaults {
     /// The makakoo built-in fallback when no system config is set.

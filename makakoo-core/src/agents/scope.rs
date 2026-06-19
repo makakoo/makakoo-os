@@ -4,12 +4,12 @@
 //! 3 criteria:
 //!
 //!   1. `allowed_paths`  — must contain the candidate (prefix
-//!                          match against the canonicalised path)
+//!      match against the canonicalised path)
 //!   2. `forbidden_paths` — overrides; veto wins over allow
 //!   3. `bound_to_agent`  — runtime grant filtering happens at the
-//!                          grant-store layer (see
-//!                          `agents::grants` and the
-//!                          `garagetytus-grants` crate)
+//!      grant-store layer (see
+//!      `agents::grants` and the
+//!      `garagetytus-grants` crate)
 //!
 //! Tool dispatch is simpler: the candidate must appear in the
 //! slot's `tools` whitelist.  Empty whitelist combined with

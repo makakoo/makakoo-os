@@ -150,16 +150,13 @@ pub enum PluginLanguage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum StateRetention {
+    #[default]
     Keep,
     PurgeOnUninstall,
 }
 
-impl Default for StateRetention {
-    fn default() -> Self {
-        StateRetention::Keep
-    }
-}
 
 /// `[plugin]` identity table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -389,6 +386,7 @@ pub struct PatternTable {
     ///   * `external` or `polished` — opts the pattern OUT of the MCP
     ///     caveman default. Use for patterns that produce contracts,
     ///     emails, posts, or any prose where voice and rhythm matter.
+    ///
     /// All other tag values are free-form and surface in `plugin list`.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -472,20 +470,17 @@ pub struct EmbeddingTable {
 /// service runner when a started service exits before `stop` is called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum RestartPolicy {
     /// Always restart, regardless of exit code.
     Always,
     /// Restart only on non-zero exit. Default for service plugins.
+    #[default]
     OnFailure,
     /// Never restart automatically — supervisor is external (e.g. launchd).
     Never,
 }
 
-impl Default for RestartPolicy {
-    fn default() -> Self {
-        RestartPolicy::OnFailure
-    }
-}
 
 fn default_health_interval_sec() -> u32 {
     60
@@ -711,21 +706,17 @@ impl Manifest {
 
         // Kind-specific extras.
         match self.plugin.kind {
-            PluginKind::Mascot => {
-                if self.mascot.is_none() {
-                    return Err(ManifestError::invalid(
-                        path,
-                        "[mascot] table required when plugin.kind = mascot",
-                    ));
-                }
+            PluginKind::Mascot if self.mascot.is_none() => {
+                return Err(ManifestError::invalid(
+                    path,
+                    "[mascot] table required when plugin.kind = mascot",
+                ));
             }
-            PluginKind::BootstrapFragment => {
-                if self.infect.fragments.is_empty() {
-                    return Err(ManifestError::invalid(
-                        path,
-                        "kind = bootstrap-fragment requires [infect.fragments]",
-                    ));
-                }
+            PluginKind::BootstrapFragment if self.infect.fragments.is_empty() => {
+                return Err(ManifestError::invalid(
+                    path,
+                    "kind = bootstrap-fragment requires [infect.fragments]",
+                ));
             }
             PluginKind::Pattern => {
                 if self.pattern.is_none() {
@@ -922,14 +913,13 @@ fn validate_grant(grant: &str, path: &Path) -> Result<(), ManifestError> {
         }
     }
     // Explicit rejection: secrets/read:* is too broad (spec §1.7).
-    if verb == "secrets/read" || verb == "secrets/write" {
-        if scope == Some("*") {
+    if (verb == "secrets/read" || verb == "secrets/write")
+        && scope == Some("*") {
             return Err(ManifestError::invalid(
                 path,
                 format!("verb {verb:?} with scope '*' rejected: too broad"),
             ));
         }
-    }
     Ok(())
 }
 
@@ -1624,7 +1614,7 @@ command = ".venv/bin/pytest"
     #[test]
     fn parse_never_panics_on_random_bodies() {
         // Deterministic seed so a CI failure is reproducible by line number.
-        let mut rng = PseudoRng(0xC0FFEE_DEAD_BEEF);
+        let mut rng = PseudoRng(0x00C0_FFEE_DEAD_BEEF);
         let origin = p();
         for i in 0..10_000 {
             let body = random_body(&mut rng);

@@ -157,7 +157,7 @@ fn print_fleet_terminal_summary(
     println!();
 
     let mut sorted_targets = summary.targets.clone();
-    sorted_targets.sort_by(|a, b| b.score.cmp(&a.score));
+    sorted_targets.sort_by_key(|b| std::cmp::Reverse(b.score));
 
     if let Some(worst) = sorted_targets.first() {
         if worst.score > 0 {

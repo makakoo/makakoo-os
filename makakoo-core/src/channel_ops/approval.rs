@@ -231,7 +231,8 @@ mod tests {
         let c = ApprovalCenter::new();
         let key = ApprovalKey::new("s", "t", "C1");
         c.drop_pending(&key);
-        let _ = c.register(key.clone());
+        // registers; receiver intentionally discarded
+        drop(c.register(key.clone()));
         c.drop_pending(&key);
         c.drop_pending(&key);
         assert_eq!(c.pending_len(), 0);

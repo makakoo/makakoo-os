@@ -256,7 +256,7 @@ fn check_uniqueness(
 ) -> Result<(), RegistryError> {
     let mut sancho_owner: HashMap<String, String> = HashMap::new();
     let mut mcp_owner: HashMap<String, String> = HashMap::new();
-    let mut fragment_owner: HashMap<String, String> = HashMap::new();
+    let fragment_owner: HashMap<String, String> = HashMap::new();
     let _: BTreeSet<&str> = BTreeSet::new(); // reserved for future hooks
 
     for (m, _, _) in manifests {

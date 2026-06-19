@@ -36,6 +36,8 @@ use crate::source_fetch::{self, FetchError, SourceSpec};
 const REGISTERED_DIRNAME: &str = "registered";
 const STAGING_DIRNAME: &str = "staging";
 
+// variant size disparity accepted; boxing is a tracked follow-up
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum InstallError {
     #[error("source path {path} does not exist or is not readable")]
@@ -110,6 +112,7 @@ impl InstallRoot {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[derive(Default)]
 pub struct InstallOptions {
     pub allow_unsigned: bool,
     /// When true, a capability/security diff on update is accepted without
@@ -119,15 +122,6 @@ pub struct InstallOptions {
     pub skip_health_check: bool,
 }
 
-impl Default for InstallOptions {
-    fn default() -> Self {
-        Self {
-            allow_unsigned: false,
-            accept_re_trust: false,
-            skip_health_check: false,
-        }
-    }
-}
 
 /// Returned by every install path on success.
 #[derive(Debug, Clone)]
@@ -226,6 +220,8 @@ impl From<ManifestDiff> for DiffSummary {
 /// Install an adapter from a directory on the local filesystem. This is
 /// the Phase-C MVP path — git / tarball / pypi / npm dispatch lands in
 /// Phase D after these primitives are proven.
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 pub fn install_from_path(
     source_dir: impl AsRef<Path>,
     root: &InstallRoot,
@@ -341,6 +337,8 @@ pub fn install_from_path(
 /// Install from an `https-tarball` URL with an already-fetched body.
 /// Separated so tests can feed synthetic tarball bytes without hitting
 /// the network.
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 pub fn install_from_tarball_bytes(
     tarball: &[u8],
     declared_sha256: &str,
@@ -358,7 +356,7 @@ pub fn install_from_tarball_bytes(
     // Extract into a temp staging dir, then delegate to install_from_path.
     let tmp = tempfile::tempdir().map_err(|e| InstallError::Staging(e.to_string()))?;
     source_fetch::extract_tarball(tarball, tmp.path())
-        .map_err(|e| InstallError::Staging(e))?;
+        .map_err(InstallError::Staging)?;
     // Walk to the top-level dir containing adapter.toml (many tarballs
     // wrap their content in a single subdir).
     let source_dir = locate_manifest_dir(tmp.path())?;
@@ -373,6 +371,8 @@ pub fn install_from_tarball_bytes(
 /// Returns the usual `InstallReport` with `.canonical_hash` set to the
 /// manifest hash (not the git SHA — the git SHA lives in the trust ledger
 /// source field for audit).
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 pub fn install_from_git(
     url: &str,
     ref_: &str,
@@ -396,6 +396,8 @@ pub fn install_from_git(
 
 /// Install an adapter from an HTTPS tarball URL. Downloads, verifies
 /// sha256, extracts, promotes through `install_from_path`.
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 pub fn install_from_tarball_url(
     url: &str,
     sha256: &str,
@@ -415,6 +417,8 @@ pub fn install_from_tarball_url(
 /// Remove a registered adapter. `purge=true` deletes both the manifest
 /// and the adapter's state dir (not yet allocated in Phase C, but we
 /// leave the hook in place for D).
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 pub fn uninstall(
     name: &str,
     root: &InstallRoot,
@@ -458,6 +462,8 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 fn locate_manifest_dir(root: &Path) -> Result<PathBuf, InstallError> {
     // Direct hit — tarball root has adapter.toml.
     if root.join("adapter.toml").is_file() {

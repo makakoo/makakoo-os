@@ -112,8 +112,7 @@ fn run(args: &[&str]) -> Result<SystemctlOutput> {
 /// * `Type=simple`              — supervisor stays in foreground.
 /// * `Restart=on-failure`       — restart only on non-zero exit.
 /// * `RestartSec=10`            — 10s minimum between systemd restarts;
-///                                user-space backoff handles finer
-///                                granularity inside this window.
+///   user-space backoff handles finer granularity inside this window.
 /// * `Environment=...`          — propagates MAKAKOO_AGENT_SLOT.
 /// * `StandardOutput=append:`   — log to `$MAKAKOO_HOME/data/log/agent-<slot>.out.log`.
 ///

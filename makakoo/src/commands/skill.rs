@@ -188,33 +188,6 @@ pub async fn run(name: &str, args: &[String], ctx: &CliContext) -> anyhow::Resul
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Gate-4 regression. Every plugin process spawned by
-    /// `makakoo skill <name>` discovers its capability socket by
-    /// reading `$MAKAKOO_SOCKET_PATH`. The Rust client
-    /// (`makakoo-client` → `Client::connect_from_env`), the Python
-    /// client (`makakoo-client-py` → `Client.connect_from_env`), and
-    /// the ABI docs under `spec/ABI_SKILL.md` + `spec/ABI_MCP_TOOL.md`
-    /// + `spec/CAPABILITIES.md` all hardcode that exact name.
-    ///
-    /// Renaming `PLUGIN_SOCKET_ENV` in a future refactor silently
-    /// breaks every plugin's ability to dial the kernel — the kernel
-    /// keeps exporting a variable with the wrong name, the client
-    /// keeps checking the wrong slot, and no test failure points at
-    /// the rename. Live-caught 2026-04-20 when the earlier draft used
-    /// `MAKAKOO_PLUGIN_SOCKET`. This test locks the contract.
-    #[test]
-    fn plugin_socket_env_var_matches_client_contract() {
-        assert_eq!(
-            PLUGIN_SOCKET_ENV, "MAKAKOO_SOCKET_PATH",
-            "renaming breaks every makakoo-client{{,-py}} build + every ABI doc"
-        );
-    }
-}
-
 /// Find a plugin matching the given skill name.
 fn find_plugin<'a>(
     registry: &'a PluginRegistry,
@@ -244,4 +217,31 @@ fn find_plugin<'a>(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gate-4 regression. Every plugin process spawned by
+    /// `makakoo skill <name>` discovers its capability socket by
+    /// reading `$MAKAKOO_SOCKET_PATH`. The Rust client
+    /// (`makakoo-client` → `Client::connect_from_env`), the Python
+    /// client (`makakoo-client-py` → `Client.connect_from_env`), and
+    /// the ABI docs under `spec/ABI_SKILL.md` + `spec/ABI_MCP_TOOL.md`
+    /// + `spec/CAPABILITIES.md` all hardcode that exact name.
+    ///
+    /// Renaming `PLUGIN_SOCKET_ENV` in a future refactor silently
+    /// breaks every plugin's ability to dial the kernel — the kernel
+    /// keeps exporting a variable with the wrong name, the client
+    /// keeps checking the wrong slot, and no test failure points at
+    /// the rename. Live-caught 2026-04-20 when the earlier draft used
+    /// `MAKAKOO_PLUGIN_SOCKET`. This test locks the contract.
+    #[test]
+    fn plugin_socket_env_var_matches_client_contract() {
+        assert_eq!(
+            PLUGIN_SOCKET_ENV, "MAKAKOO_SOCKET_PATH",
+            "renaming breaks every makakoo-client{{,-py}} build + every ABI doc"
+        );
+    }
 }

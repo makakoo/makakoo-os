@@ -240,10 +240,7 @@ fn print_summary(detected: &[DetectedHost]) {
         println!("    {}", names.join(", "));
     }
     println!(
-        "\n  next steps:\n    - {}\n    - {}\n    - {}",
-        "makakoo sancho status     # see the registered tick tasks",
-        "makakoo plugin list       # see what's installed",
-        "makakoo secret set AIL_API_KEY  # wire up the LLM gateway"
+        "\n  next steps:\n    - makakoo sancho status     # see the registered tick tasks\n    - makakoo plugin list       # see what's installed\n    - makakoo secret set AIL_API_KEY  # wire up the LLM gateway"
     );
 }
 

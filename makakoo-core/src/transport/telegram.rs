@@ -151,6 +151,8 @@ pub(crate) struct TelegramMessage {
 #[derive(Debug, Deserialize)]
 pub(crate) struct TelegramChat {
     pub id: i64,
+    // deserialized from Telegram payload; retained for completeness
+    #[allow(dead_code)]
     #[serde(rename = "type")]
     #[serde(default)]
     pub kind: String,

@@ -349,7 +349,7 @@ pub fn get_skillspector_bin(no_cache: bool) -> anyhow::Result<PathBuf> {
 
 fn slugify(target: &str) -> String {
     let cleaned = target.trim_end_matches('/');
-    let last_part = cleaned.split('/').last().unwrap_or("unknown");
+    let last_part = cleaned.split('/').next_back().unwrap_or("unknown");
     let mut slug = String::new();
     for c in last_part.chars() {
         if c.is_alphanumeric() {
@@ -601,7 +601,7 @@ impl FleetSummary {
         md.push_str(&format!("  - **Low:** {}\n\n", self.severity_counts.low));
 
         let mut sorted_targets = self.targets.clone();
-        sorted_targets.sort_by(|a, b| b.score.cmp(&a.score));
+        sorted_targets.sort_by_key(|t| std::cmp::Reverse(t.score));
 
         if let Some(worst) = sorted_targets.first() {
             if worst.score > 0 {
@@ -655,12 +655,10 @@ pub fn discover_skill_roots(start_dir: &Path) -> Vec<PathBuf> {
         }
 
         if let Ok(entries) = fs::read_dir(&dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        dirs_to_visit.push(path);
-                    }
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs_to_visit.push(path);
                 }
             }
         }

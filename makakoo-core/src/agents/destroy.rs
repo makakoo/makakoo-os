@@ -27,7 +27,6 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::slot::slot_path;
-use crate::error::{MakakooError, Result};
 
 /// Locked archive root (under `$MAKAKOO_HOME`, NOT `~/.makakoo`).
 pub fn archive_root(makakoo_home: &Path) -> PathBuf {
@@ -198,7 +197,7 @@ pub fn scan_secret_refs(toml_body: &str) -> Vec<String> {
         }
         for key in &known_keys {
             // Match `key = "..."` or `key="..."` (any whitespace).
-            let needle = format!("{key}");
+            let needle = key.to_string();
             if let Some(pos) = trimmed.find(&needle) {
                 // Left of pos must be empty or whitespace (so we
                 // don't match `inline_secret_ref` against

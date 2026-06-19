@@ -85,7 +85,7 @@ fn install_ghostty(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
     if !binary_on_path("brew") {
         ui.line("terminal: Homebrew (`brew`) not on PATH.")?;
         ui.line("  Install Homebrew from https://brew.sh, then re-run")?;
-        ui.line(&format!(
+        ui.line(format!(
             "  `makakoo setup terminal` — or run `brew install --cask {GHOSTTY_CASK}` by hand."
         ))?;
         return Ok(SectionOutcome::Failed(
@@ -93,7 +93,7 @@ fn install_ghostty(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
         ));
     }
 
-    ui.line(&format!(
+    ui.line(format!(
         "terminal: running brew install --cask {GHOSTTY_CASK} …"
     ))?;
     ui.stdout().flush()?;
