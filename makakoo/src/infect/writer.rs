@@ -582,7 +582,7 @@ fn opencode_entry_version(entry: &str) -> Option<String> {
 /// when missing). Robust against partial / malformed YAML — returns
 /// empty string for any unexpected shape so the caller can write a
 /// fresh value without throwing.
-fn kimi_role_additional(doc: &serde_yml::Value) -> String {
+fn kimi_role_additional(doc: &serde_yaml_ng::Value) -> String {
     doc.get("agent")
         .and_then(|a| a.get("system_prompt_args"))
         .and_then(|s| s.get("ROLE_ADDITIONAL"))
@@ -595,8 +595,8 @@ fn kimi_role_additional(doc: &serde_yml::Value) -> String {
 /// into a parsed Kimi yaml document. Creates the
 /// `version` / `agent` / `system_prompt_args` scaffolding on first
 /// install. Preserves any other `agent.*` keys the user has set.
-fn kimi_set_role_additional(doc: &mut serde_yml::Value, value: String) {
-    use serde_yml::{Mapping, Value};
+fn kimi_set_role_additional(doc: &mut serde_yaml_ng::Value, value: String) {
+    use serde_yaml_ng::{Mapping, Value};
 
     if !doc.is_mapping() {
         *doc = Value::Mapping(Mapping::new());
@@ -643,9 +643,9 @@ fn write_kimi_yaml(
     // Load existing doc (or empty mapping if file missing). A parse
     // error is fatal — refuse to clobber a malformed file the user
     // might be debugging.
-    let mut doc: serde_yml::Value = if path.exists() {
+    let mut doc: serde_yaml_ng::Value = if path.exists() {
         match std::fs::read_to_string(path) {
-            Ok(s) if !s.trim().is_empty() => match serde_yml::from_str(&s) {
+            Ok(s) if !s.trim().is_empty() => match serde_yaml_ng::from_str(&s) {
                 Ok(v) => v,
                 Err(e) => {
                     return SlotWriteResult {
@@ -656,10 +656,10 @@ fn write_kimi_yaml(
                     }
                 }
             },
-            _ => serde_yml::Value::Mapping(serde_yml::Mapping::new()),
+            _ => serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new()),
         }
     } else {
-        serde_yml::Value::Mapping(serde_yml::Mapping::new())
+        serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new())
     };
 
     let existing_role = kimi_role_additional(&doc);
@@ -685,7 +685,7 @@ fn write_kimi_yaml(
 
     kimi_set_role_additional(&mut doc, new_role);
 
-    let serialized = match serde_yml::to_string(&doc) {
+    let serialized = match serde_yaml_ng::to_string(&doc) {
         Ok(s) => s,
         Err(e) => {
             return SlotWriteResult {
@@ -733,7 +733,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
             }
         }
     };
-    let mut doc: serde_yml::Value = if existing.trim().is_empty() {
+    let mut doc: serde_yaml_ng::Value = if existing.trim().is_empty() {
         return SlotWriteResult {
             slot_name: slot.name,
             path: path.to_path_buf(),
@@ -741,7 +741,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
             prior_version: None,
         };
     } else {
-        match serde_yml::from_str(&existing) {
+        match serde_yaml_ng::from_str(&existing) {
             Ok(v) => v,
             Err(e) => {
                 return SlotWriteResult {
@@ -794,7 +794,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
         };
     }
     kimi_set_role_additional(&mut doc, new_role);
-    let serialized = match serde_yml::to_string(&doc) {
+    let serialized = match serde_yaml_ng::to_string(&doc) {
         Ok(s) => s,
         Err(e) => {
             return SlotWriteResult {
@@ -1136,7 +1136,7 @@ mod tests {
         assert!(raw.contains(BLOCK_END));
         assert!(raw.contains(BODY));
 
-        let parsed: serde_yml::Value = serde_yml::from_str(&raw).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).unwrap();
         assert_eq!(parsed.get("agent").and_then(|a| a.get("name")).and_then(|v| v.as_str()), Some("Harvey"));
         assert_eq!(parsed.get("agent").and_then(|a| a.get("extend")).and_then(|v| v.as_str()), Some("default"));
     }
@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(result.status, SlotStatus::Installed);
 
         let raw = std::fs::read_to_string(&path).unwrap();
-        let parsed: serde_yml::Value = serde_yml::from_str(&raw).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).unwrap();
         assert_eq!(parsed.get("agent").and_then(|a| a.get("name")).and_then(|v| v.as_str()), Some("Custom Name"));
         assert_eq!(parsed.get("agent").and_then(|a| a.get("model")).and_then(|v| v.as_str()), Some("kimi-k2.5"));
         assert_eq!(parsed.get("agent").and_then(|a| a.get("when_to_use")).and_then(|v| v.as_str()), Some("coding"));
@@ -1221,11 +1221,11 @@ mod tests {
         write_bootstrap_to_slot(&slot, BODY, tmp.path(), false);
         let path = slot.absolute(tmp.path());
         let raw = std::fs::read_to_string(&path).unwrap();
-        let mut doc: serde_yml::Value = serde_yml::from_str(&raw).unwrap();
+        let mut doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).unwrap();
         let role = kimi_role_additional(&doc);
         let mixed = format!("user-prose-line\n\n{}", role);
         kimi_set_role_additional(&mut doc, mixed);
-        std::fs::write(&path, serde_yml::to_string(&doc).unwrap()).unwrap();
+        std::fs::write(&path, serde_yaml_ng::to_string(&doc).unwrap()).unwrap();
 
         let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
         assert_eq!(result.status, SlotStatus::Updated);
@@ -1242,5 +1242,58 @@ mod tests {
         let slot = kimi_test_slot();
         let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
         assert_eq!(result.status, SlotStatus::Unchanged);
+    }
+
+    // ── Hostile / adversarial YAML fixtures (serde_yaml_ng swap, F4) ──
+    // These guard the maintained-codec swap: malformed shapes must not panic
+    // and round-trips must be lossless, which is exactly what an unsound
+    // serializer (the reason serde_yml/libyml were dropped) could break.
+
+    #[test]
+    fn kimi_role_additional_robust_to_non_mapping_top_level() {
+        // A top-level sequence, bare scalar, number, or null must not panic;
+        // the resolver returns empty so the caller writes fresh scaffolding.
+        for raw in ["- a\n- b\n", "just a scalar\n", "42\n", "null\n"] {
+            let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(raw).unwrap();
+            assert_eq!(kimi_role_additional(&doc), "", "raw = {raw:?}");
+        }
+    }
+
+    #[test]
+    fn kimi_set_role_additional_replaces_non_mapping_doc() {
+        // Setting into a non-mapping document rebuilds a clean mapping and
+        // round-trips through the codec without loss.
+        let mut doc: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("- not\n- a\n- map\n").unwrap();
+        kimi_set_role_additional(&mut doc, "hello".to_string());
+        let s = serde_yaml_ng::to_string(&doc).unwrap();
+        let reparsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&s).unwrap();
+        assert_eq!(kimi_role_additional(&reparsed), "hello");
+    }
+
+    #[test]
+    fn role_additional_survives_special_char_round_trip() {
+        // A value packed with YAML-significant characters must survive a
+        // set → serialize → parse → extract round-trip byte-for-byte.
+        let hostile = "colon: x # hash \"dq\" 'sq' \\ bslash café 日本語 🦉 | > % @ `tick`";
+        let mut doc =
+            serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new());
+        kimi_set_role_additional(&mut doc, hostile.to_string());
+        let s = serde_yaml_ng::to_string(&doc).unwrap();
+        let reparsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&s).unwrap();
+        assert_eq!(kimi_role_additional(&reparsed), hostile);
+    }
+
+    #[test]
+    fn kimi_yaml_anchors_and_aliases_parse_without_panic() {
+        // Bounded anchors/aliases must resolve cleanly (no expansion bomb).
+        let raw = "version: 1\nagent: &a\n  name: Harvey\n  extend: default\nmirror: *a\n";
+        let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(raw).unwrap();
+        assert_eq!(
+            doc.get("mirror")
+                .and_then(|m| m.get("name"))
+                .and_then(|v| v.as_str()),
+            Some("Harvey")
+        );
     }
 }

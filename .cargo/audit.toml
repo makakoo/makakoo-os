@@ -1,0 +1,28 @@
+# cargo-audit configuration — https://github.com/rustsec/rustsec/tree/main/cargo-audit
+#
+# Every advisory ignored below is an "unmaintained" warning (NOT a
+# vulnerability and NOT an unsoundness) on a build-time and/or
+# platform-gated transitive dependency. None has a patched release; each is
+# removable only by a higher-risk major upgrade of a direct dependency,
+# tracked separately. `cargo audit` still fails on any vulnerability or
+# unsound advisory — this file only acknowledges these specific crates so the
+# audit is intentional and stays green under `--deny unmaintained`.
+
+[advisories]
+ignore = [
+    # derivative (build-time proc-macro)
+    #   <- zbus <- secret-service <- keyring 2.3 (Linux secret-store backend only).
+    # No patched release; removable only by upgrading to keyring 3.x (breaking API).
+    "RUSTSEC-2024-0388",
+
+    # instant
+    #   <- fastrand 1.x <- futures-lite 1.x <- async-io/async-fs <- zbus
+    #   <- secret-service <- keyring 2.3 (Linux-only). No patched release; same
+    #   keyring 3.x upgrade path as above.
+    "RUSTSEC-2024-0384",
+
+    # proc-macro-error2 (build-time)
+    #   <- aquamarine (doc-diagram proc-macro) <- teloxide 0.17.
+    # No runtime exposure; no maintained upstream successor available.
+    "RUSTSEC-2026-0173",
+]
