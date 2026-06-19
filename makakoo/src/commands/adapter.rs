@@ -244,7 +244,7 @@ fn trust_cmd(cmd: AdapterTrustCmd) -> anyhow::Result<i32> {
                 t.set_header(vec!["peer", "fingerprint"]);
             }
             let mut rows: Vec<_> = trusted.iter().collect();
-            rows.sort_by(|(a, _), (b, _)| a.cmp(b));
+            rows.sort_by_key(|(a, _)| *a);
             for (name, key) in rows {
                 let fp = peer::fingerprint(key);
                 if with_keys {

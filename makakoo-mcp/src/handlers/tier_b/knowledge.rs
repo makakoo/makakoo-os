@@ -237,11 +237,10 @@ impl ToolHandler for HarveyKnowledgeIngestHandler {
         // depending on Python deprecation noise routing).
         let json_line = stdout
             .lines()
-            .filter(|l| {
+            .rfind(|l| {
                 let t = l.trim();
                 t.starts_with('{') && t.ends_with('}')
             })
-            .next_back()
             .unwrap_or("");
 
         let parsed: Value = serde_json::from_str(json_line).unwrap_or_else(|_| json!({
