@@ -12,14 +12,14 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use makakoo_core::capability::{AuditLog, CapabilityServer, build_plugin_handler, socket_path};
+use makakoo_core::capability::{build_plugin_handler, socket_path, AuditLog, CapabilityServer};
 use makakoo_core::gym::{ErrorCapture, ErrorEntry, ErrorSource};
 use makakoo_core::platform::makakoo_home;
 use makakoo_core::plugin::PluginRegistry;
 
 use crate::context::CliContext;
 use crate::output;
-use crate::skill_runner::{SkillRunner, build_skill_env};
+use crate::skill_runner::{build_skill_env, SkillRunner};
 
 /// Canonical env var name for the per-plugin capability socket path.
 /// Read by `makakoo-client` (Rust) and `makakoo-client-py` (Python),

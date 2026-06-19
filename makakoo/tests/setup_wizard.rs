@@ -39,11 +39,21 @@ fn setup_help_lists_section_positional_and_flags() {
     let home = fresh_home();
     let out = run(&home, &["setup", "--help"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "--help must exit 0; got {:?}", out.status);
-    assert!(stdout.contains("SECTION"), "help should mention positional SECTION");
+    assert!(
+        out.status.success(),
+        "--help must exit 0; got {:?}",
+        out.status
+    );
+    assert!(
+        stdout.contains("SECTION"),
+        "help should mention positional SECTION"
+    );
     assert!(stdout.contains("--only"), "help should mention --only");
     assert!(stdout.contains("--skip"), "help should mention --skip");
-    assert!(stdout.contains("--non-interactive"), "help should mention --non-interactive");
+    assert!(
+        stdout.contains("--non-interactive"),
+        "help should mention --non-interactive"
+    );
     assert!(stdout.contains("--reset"), "help should mention --reset");
     assert!(stdout.contains("--force"), "help should mention --force");
 }
@@ -52,7 +62,11 @@ fn setup_help_lists_section_positional_and_flags() {
 fn setup_non_interactive_on_fresh_home_reports_persona_not_started() {
     let home = fresh_home();
     let out = run(&home, &["setup", "--non-interactive"]);
-    assert!(out.status.success(), "expected exit 0, got {:?}", out.status);
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}",
+        out.status
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("persona") && stdout.contains("not-started"),
@@ -64,7 +78,11 @@ fn setup_non_interactive_on_fresh_home_reports_persona_not_started() {
 fn setup_without_tty_and_without_flag_hints_user() {
     let home = fresh_home();
     let out = run(&home, &["setup"]);
-    assert!(out.status.success(), "expected exit 0, got {:?}", out.status);
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}",
+        out.status
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("not running on a live terminal"),
@@ -78,7 +96,10 @@ fn setup_unknown_positional_exits_nonzero() {
     let out = run(&home, &["setup", "ghost"]);
     assert!(!out.status.success(), "unknown section must exit nonzero");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("unknown section"), "stderr should explain; got: {stderr}");
+    assert!(
+        stderr.contains("unknown section"),
+        "stderr should explain; got: {stderr}"
+    );
 }
 
 #[test]
@@ -124,10 +145,20 @@ fn setup_only_filters_to_single_section() {
 fn setup_skip_single_section_leaves_remaining() {
     let home = fresh_home();
     let out = run(&home, &["setup", "--skip", "persona", "--non-interactive"]);
-    assert!(out.status.success(), "expected exit 0, got {:?}", out.status);
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}",
+        out.status
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("brain"), "brain should still run; got: {stdout}");
-    assert!(!stdout.contains("persona"), "persona should be filtered out; got: {stdout}");
+    assert!(
+        stdout.contains("brain"),
+        "brain should still run; got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("persona"),
+        "persona should be filtered out; got: {stdout}"
+    );
 }
 
 #[test]
@@ -155,7 +186,11 @@ fn setup_terminal_section_is_reachable() {
     // Either way, `setup terminal --non-interactive` must exit 0 and not crash.
     let home = fresh_home();
     let out = run(&home, &["setup", "terminal", "--non-interactive"]);
-    assert!(out.status.success(), "expected exit 0, got {:?}", out.status);
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}",
+        out.status
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("terminal"));
 }

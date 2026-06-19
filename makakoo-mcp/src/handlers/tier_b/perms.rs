@@ -27,8 +27,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 
 use makakoo_core::capability::{
-    is_conversational_channel, rate_limit, user_grants::UserGrant, AuditEntry,
-    AuditLog, AuditResult, UserGrants, MAX_ACTIVE_GRANTS,
+    is_conversational_channel, rate_limit, user_grants::UserGrant, AuditEntry, AuditLog,
+    AuditResult, UserGrants, MAX_ACTIVE_GRANTS,
 };
 
 use crate::dispatch::{ToolContext, ToolHandler};
@@ -60,8 +60,7 @@ fn validate_and_expand_scope(raw: &str) -> Result<String, RpcError> {
     expanded = expanded.replace("$MAKAKOO_HOME", &mk);
     expanded = expanded.replace("$HOME", &home);
     if !std::path::Path::new(&expanded).is_absolute() {
-        let cwd = std::env::current_dir()
-            .map_err(|e| RpcError::internal(format!("cwd: {e}")))?;
+        let cwd = std::env::current_dir().map_err(|e| RpcError::internal(format!("cwd: {e}")))?;
         expanded = cwd.join(&expanded).to_string_lossy().to_string();
     }
     if expanded == "/" || expanded == "/**" {
@@ -182,12 +181,7 @@ fn emit_perms_audit_with_correlation(
 /// `_audit_grant_denial` helper in `perms_core.py`. The `path_for_audit`
 /// is the user-supplied raw path (not the expanded one) so the audit
 /// line shows exactly what was asked for.
-fn audit_grant_denial(
-    ctx: &ToolContext,
-    path_for_audit: &str,
-    plugin: &str,
-    correlation_id: &str,
-) {
+fn audit_grant_denial(ctx: &ToolContext, path_for_audit: &str, plugin: &str, correlation_id: &str) {
     emit_perms_audit_with_correlation(
         ctx,
         "perms/grant",
@@ -211,10 +205,7 @@ fn grant_success_msg(g: &UserGrant) -> String {
         }
         None => "permanent".to_string(),
     };
-    let scope_glob = g
-        .scope
-        .strip_prefix("fs/write:")
-        .unwrap_or(&g.scope);
+    let scope_glob = g.scope.strip_prefix("fs/write:").unwrap_or(&g.scope);
     format!(
         "Granted. {scope_glob} writable {expires}. Revoke: makakoo perms revoke {id}",
         id = g.id,
@@ -322,10 +313,7 @@ impl ToolHandler for GrantWriteAccessHandler {
             .and_then(|v| v.as_str())
             .unwrap_or("1h");
         let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
-        let confirm = params
-            .get("confirm")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let confirm = params.get("confirm").and_then(|v| v.as_str()).unwrap_or("");
         let user_turn_id = params
             .get("user_turn_id")
             .and_then(|v| v.as_str())
@@ -340,12 +328,7 @@ impl ToolHandler for GrantWriteAccessHandler {
         // `perms_core.do_grant`. CLI + sancho-native + unknown plugins
         // bypass by design — they don't carry a human turn.
         if is_conversational_channel(&plugin) && user_turn_id.is_empty() {
-            audit_grant_denial(
-                &self.ctx,
-                path,
-                &plugin,
-                "reason:missing_origin_turn_id",
-            );
+            audit_grant_denial(&self.ctx, path, &plugin, "reason:missing_origin_turn_id");
             return Err(RpcError::invalid_params(format!(
                 "origin_turn_id required on conversational channels \
                  (plugin={plugin}); this grant call appears to be \
@@ -363,12 +346,7 @@ impl ToolHandler for GrantWriteAccessHandler {
         let dur = match parse_duration_str(duration) {
             Ok(d) => d,
             Err(e) => {
-                audit_grant_denial(
-                    &self.ctx,
-                    path,
-                    &plugin,
-                    "reason:bad_duration",
-                );
+                audit_grant_denial(&self.ctx, path, &plugin, "reason:bad_duration");
                 return Err(e);
             }
         };
@@ -495,9 +473,7 @@ impl ToolHandler for RevokeWriteAccessHandler {
             .map(str::to_string);
 
         if grant_id.is_none() && path.is_none() {
-            return Err(RpcError::invalid_params(
-                "provide either grant_id or path",
-            ));
+            return Err(RpcError::invalid_params("provide either grant_id or path"));
         }
 
         let mut grants = UserGrants::load(&self.ctx.home);
@@ -519,9 +495,7 @@ impl ToolHandler for RevokeWriteAccessHandler {
                     .iter()
                     .max_by_key(|g| g.created_at)
                     .copied()
-                    .ok_or_else(|| {
-                        RpcError::invalid_params("no active grants to revoke")
-                    })?;
+                    .ok_or_else(|| RpcError::invalid_params("no active grants to revoke"))?;
                 newest.id.clone()
             } else {
                 let abs = validate_and_expand_scope(&p)?;
@@ -713,8 +687,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    const FIXTURE_JSON: &str =
-        include_str!("../../../../tests/fixtures/grant_tool_vectors.json");
+    const FIXTURE_JSON: &str = include_str!("../../../../tests/fixtures/grant_tool_vectors.json");
 
     struct Harness {
         _tmp: TempDir,
@@ -779,9 +752,7 @@ mod tests {
                 }
                 Value::Object(out)
             }
-            Value::Array(a) => {
-                Value::Array(a.iter().map(|x| substitute_home(x, home)).collect())
-            }
+            Value::Array(a) => Value::Array(a.iter().map(|x| substitute_home(x, home)).collect()),
             other => other.clone(),
         }
     }
@@ -839,7 +810,10 @@ mod tests {
                 }
             }
             // mkdir_target path handling
-            let mkdir = obj.get("mkdir_target").and_then(Value::as_bool).unwrap_or(false);
+            let mkdir = obj
+                .get("mkdir_target")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if mkdir {
                 if let Some(path) = obj.get("path").and_then(Value::as_str) {
                     let _ = std::fs::create_dir_all(path);
@@ -850,32 +824,28 @@ mod tests {
 
         let tool = sc["tool"].as_str().unwrap_or_default();
         let result = match tool {
-            "grant_write_access" => {
-                GrantWriteAccessHandler::new(h.ctx.clone()).call(args).await
-            }
+            "grant_write_access" => GrantWriteAccessHandler::new(h.ctx.clone()).call(args).await,
             "revoke_write_access" => {
-                RevokeWriteAccessHandler::new(h.ctx.clone()).call(args).await
+                RevokeWriteAccessHandler::new(h.ctx.clone())
+                    .call(args)
+                    .await
             }
-            "list_write_grants" => {
-                ListWriteGrantsHandler::new(h.ctx.clone()).call(args).await
-            }
+            "list_write_grants" => ListWriteGrantsHandler::new(h.ctx.clone()).call(args).await,
             other => return format!("{name}: unknown tool {other}"),
         };
 
         let expect_ok = sc["expect"]["ok"].as_bool().unwrap_or(false);
         let (ok, reply_text) = match &result {
-            Ok(v) => (
-                true,
-                reply_of(v).map(str::to_string).unwrap_or_default(),
-            ),
+            Ok(v) => (true, reply_of(v).map(str::to_string).unwrap_or_default()),
             Err(e) => (false, format!("{e:?}")),
         };
         if ok != expect_ok {
-            return format!(
-                "{name}: expected ok={expect_ok}, got ok={ok}; reply={reply_text:?}"
-            );
+            return format!("{name}: expected ok={expect_ok}, got ok={ok}; reply={reply_text:?}");
         }
-        let contains = sc["expect"]["reply_contains"].as_array().cloned().unwrap_or_default();
+        let contains = sc["expect"]["reply_contains"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         for c in contains {
             let s = c.as_str().unwrap_or_default();
             if !reply_text.contains(s) {
@@ -998,8 +968,7 @@ mod tests {
     async fn phase_b_permanent_outside_home_denial_audited() {
         let h = Harness::new();
         // tmpdir outside the isolated HOME — `/tmp/phase-b-perm-<pid>`
-        let outside = std::env::temp_dir()
-            .join(format!("phase-b-perm-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("phase-b-perm-{}", std::process::id()));
         std::fs::create_dir_all(&outside).unwrap();
         let outside_str = outside.to_string_lossy().to_string();
 
@@ -1164,10 +1133,7 @@ mod tests {
             .call(json!({"grant_id": id}))
             .await
             .unwrap_err();
-        assert!(
-            format!("{err:?}").contains("revoke refused"),
-            "{err:?}"
-        );
+        assert!(format!("{err:?}").contains("revoke refused"), "{err:?}");
         let entries = read_audit(&h.home);
         let d = last_denial(&entries).expect("denial entry");
         assert_eq!(d["verb"].as_str(), Some("perms/revoke"));
@@ -1211,13 +1177,11 @@ mod tests {
         let fixture_bytes = include_bytes!(
             "../../../../plugins-core/lib-harvey-core/tests/fixtures/grant_ownership_vectors.json"
         );
-        let fixture: Value =
-            serde_json::from_slice(fixture_bytes).expect("valid fixture");
+        let fixture: Value = serde_json::from_slice(fixture_bytes).expect("valid fixture");
         for case in fixture["cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap().to_string();
             let owner = case["grant_owner"].as_str().unwrap().to_string();
-            let caller =
-                case["revoke_caller_plugin"].as_str().unwrap().to_string();
+            let caller = case["revoke_caller_plugin"].as_str().unwrap().to_string();
             let expected = case["expected"].as_str().unwrap().to_string();
 
             let h = Harness::new();
@@ -1236,10 +1200,7 @@ mod tests {
                     );
                 }
                 ("allow", Err(e)) => panic!("{name}: expected allow, got {e:?}"),
-                ("reject", Ok(v)) => panic!(
-                    "{name}: expected reject, got success: {}",
-                    v
-                ),
+                ("reject", Ok(v)) => panic!("{name}: expected reject, got success: {}", v),
                 (other, _) => panic!("{name}: unknown expected {other:?}"),
             }
         }
@@ -1265,7 +1226,8 @@ mod tests {
         let rust_set: std::collections::BTreeSet<&str> =
             CONVERSATIONAL_CHANNELS.iter().copied().collect();
         assert_eq!(
-            fixture_set, rust_set,
+            fixture_set,
+            rust_set,
             "Rust CONVERSATIONAL_CHANNELS diverged from shared fixture.\n\
              Only in fixture: {:?}\nOnly in Rust: {:?}",
             fixture_set.difference(&rust_set).collect::<Vec<_>>(),
@@ -1302,7 +1264,13 @@ mod tests {
             .unwrap();
         assert!(v.get("reply").is_some());
         assert!(v.get("baseline").is_some());
-        assert!(v.get("active").and_then(Value::as_array).is_some_and(|a| a.len() == 1));
-        assert_eq!(v.get("expired_today_count").and_then(Value::as_u64), Some(0));
+        assert!(v
+            .get("active")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.len() == 1));
+        assert_eq!(
+            v.get("expired_today_count").and_then(Value::as_u64),
+            Some(0)
+        );
     }
 }

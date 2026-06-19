@@ -3,7 +3,7 @@
 //! Handles bootstrapping NVIDIA SkillSpector under $MAKAKOO_HOME/state/skillspector-venv/,
 //! scanning targets, parsing findings, and enforcing risk policy.
 
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use chrono::Utc;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};

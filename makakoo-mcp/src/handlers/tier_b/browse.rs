@@ -189,17 +189,18 @@ mod tests {
         let schema = h.input_schema();
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["code"].is_object());
-        assert!(schema["required"].as_array().unwrap().iter().any(|v| v == "code"));
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "code"));
     }
 
     #[tokio::test]
     async fn missing_plugin_returns_clear_rpc_error() {
         let tmp = tempdir().unwrap();
         let h = HarveyBrowseHandler::new(ctx_with_home(tmp.path().to_path_buf()));
-        let err = h
-            .call(json!({ "code": "print('hi')" }))
-            .await
-            .unwrap_err();
+        let err = h.call(json!({ "code": "print('hi')" })).await.unwrap_err();
         let msg = format!("{err:?}");
         assert!(
             msg.contains("agent-browser-harness"),

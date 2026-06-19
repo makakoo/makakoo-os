@@ -207,10 +207,9 @@ mod tests {
     #[tokio::test]
     async fn initialize_handshake_matches_python() {
         let s = empty_server();
-        let req: Request = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
-        )
-        .unwrap();
+        let req: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+                .unwrap();
         let resp = s.handle(req).await.unwrap();
         let result = resp.result.unwrap();
         assert_eq!(result["protocolVersion"], "2024-11-05");
@@ -221,10 +220,9 @@ mod tests {
     #[tokio::test]
     async fn notifications_initialized_returns_none() {
         let s = empty_server();
-        let req: Request = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-        )
-        .unwrap();
+        let req: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+                .unwrap();
         assert!(s.handle(req).await.is_none());
     }
 

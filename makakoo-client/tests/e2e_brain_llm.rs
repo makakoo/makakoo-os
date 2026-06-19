@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use makakoo_client::{Client, ClientError};
 use makakoo_core::capability::{
     service::{BrainHandler, CompositeHandler, LlmHandler},
     socket::CapabilityServer,
@@ -22,7 +23,6 @@ use makakoo_core::capability::{
 use makakoo_core::embeddings::EmbeddingClient;
 use makakoo_core::llm::LlmClient;
 use makakoo_core::superbrain::store::SuperbrainStore;
-use makakoo_client::{Client, ClientError};
 
 fn grants() -> Arc<GrantTable> {
     let mut t = GrantTable::new("brain-llm-plugin", "1.0.0");
@@ -51,9 +51,7 @@ async fn brain_write_journal_then_read_back_via_client() {
     let home = tmp.path();
     let audit = Arc::new(AuditLog::open_default(home).unwrap());
 
-    let store = Arc::new(
-        SuperbrainStore::open(&home.join("data/superbrain.db")).unwrap(),
-    );
+    let store = Arc::new(SuperbrainStore::open(&home.join("data/superbrain.db")).unwrap());
     let brain_root = home.join("data/Brain");
     let brain = Arc::new(BrainHandler::new(Arc::clone(&store), brain_root.clone()));
 
@@ -93,9 +91,7 @@ async fn brain_read_of_missing_doc_returns_none() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
     let audit = Arc::new(AuditLog::open_default(home).unwrap());
-    let store = Arc::new(
-        SuperbrainStore::open(&home.join("data/superbrain.db")).unwrap(),
-    );
+    let store = Arc::new(SuperbrainStore::open(&home.join("data/superbrain.db")).unwrap());
     let brain = Arc::new(BrainHandler::new(store, home.join("data/Brain")));
     let composite: Arc<dyn CapabilityHandler> =
         Arc::new(CompositeHandler::new().register("brain", brain));
@@ -140,10 +136,7 @@ async fn llm_chat_routes_through_socket_to_mock_gateway() {
 
     let client = Client::connect(&socket).await.unwrap();
     let reply = client
-        .llm_chat(
-            "minimax/ail-compound",
-            &[("user", "what's the weather")],
-        )
+        .llm_chat("minimax/ail-compound", &[("user", "what's the weather")])
         .await
         .unwrap();
     assert_eq!(reply, "hello from mock gateway");

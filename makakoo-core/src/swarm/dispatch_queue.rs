@@ -83,7 +83,7 @@ fn mint_id() -> String {
     // Time-ordered id with a random tail so two enqueues in the same
     // nanosecond still differ. Avoids the uuid dep for a single use
     // — chrono + thread_rng is already in the tree.
-    use rand::{Rng, thread_rng};
+    use rand::{thread_rng, Rng};
     let ts = Utc::now().format("%Y%m%dT%H%M%S%.6f").to_string();
     let tail: u32 = thread_rng().gen();
     format!("q-{ts}-{tail:08x}")
@@ -91,9 +91,8 @@ fn mint_id() -> String {
 
 fn append_line(path: &Path, line: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            MakakooError::internal(format!("mkdir {}: {e}", parent.display()))
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| MakakooError::internal(format!("mkdir {}: {e}", parent.display())))?;
     }
     let mut f = OpenOptions::new()
         .create(true)
@@ -124,11 +123,7 @@ fn read_lines<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
             continue;
         }
         let parsed: T = serde_json::from_str(&line).map_err(|e| {
-            MakakooError::internal(format!(
-                "parse {} line {}: {e}",
-                path.display(),
-                ix
-            ))
+            MakakooError::internal(format!("parse {} line {}: {e}", path.display(), ix))
         })?;
         out.push(parsed);
     }
@@ -189,9 +184,11 @@ pub fn write_receipt(home: &Path, receipt: &Receipt) -> Result<()> {
 pub fn pending(home: &Path) -> Result<Vec<QueueEntry>> {
     let queue = load_queue(home)?;
     let receipts = load_receipts(home)?;
-    let done: std::collections::HashSet<String> =
-        receipts.into_iter().map(|r| r.id).collect();
-    Ok(queue.into_iter().filter(|e| !done.contains(e.id())).collect())
+    let done: std::collections::HashSet<String> = receipts.into_iter().map(|r| r.id).collect();
+    Ok(queue
+        .into_iter()
+        .filter(|e| !done.contains(e.id()))
+        .collect())
 }
 
 #[cfg(test)]

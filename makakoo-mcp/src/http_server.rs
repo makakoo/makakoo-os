@@ -108,7 +108,6 @@ pub async fn serve(bind: SocketAddr, state: Arc<HttpState>) -> anyhow::Result<()
     Ok(())
 }
 
-
 async fn handle_rpc(
     State(state): State<Arc<HttpState>>,
     headers: HeaderMap,
@@ -172,19 +171,13 @@ async fn handle_rpc(
     // 4. Dispatch through the same server code that handles stdio,
     //    scoped inside the AGENT_ID task-local so handlers can
     //    attribute the call to the right subagent (Phase 3).
-    let dispatched =
-        crate::dispatch::AGENT_ID
-            .scope(agent_id.clone(), state.server.handle(req))
-            .await;
+    let dispatched = crate::dispatch::AGENT_ID
+        .scope(agent_id.clone(), state.server.handle(req))
+        .await;
     match dispatched {
         Some(resp) => {
             let body = serde_json::to_vec(&resp).unwrap_or_default();
-            (
-                StatusCode::OK,
-                [("Content-Type", "application/json")],
-                body,
-            )
-                .into_response()
+            (StatusCode::OK, [("Content-Type", "application/json")], body).into_response()
         }
         None => {
             // Notification → 204 No Content.
@@ -283,7 +276,10 @@ mod tests {
         vec![
             (PEER_HEADER.to_string(), peer.to_string()),
             (TS_HEADER.to_string(), ts.to_string()),
-            (SIG_HEADER.to_string(), format!("{}{}", peer::SIG_PREFIX, sig)),
+            (
+                SIG_HEADER.to_string(),
+                format!("{}{}", peer::SIG_PREFIX, sig),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
         ]
     }

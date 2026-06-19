@@ -81,9 +81,7 @@ impl PluginRegistry {
     }
 
     pub fn get(&self, name: &str) -> Option<&LoadedPlugin> {
-        self.plugins
-            .iter()
-            .find(|p| p.manifest.plugin.name == name)
+        self.plugins.iter().find(|p| p.manifest.plugin.name == name)
     }
 
     /// Return filesystem paths for all installed `kind = "library"` plugins.
@@ -160,10 +158,7 @@ impl PluginRegistry {
             }
             let manifest_path = path.join("plugin.toml");
             if !manifest_path.exists() {
-                warn!(
-                    "skipping {} — no plugin.toml",
-                    path.display()
-                );
+                warn!("skipping {} — no plugin.toml", path.display());
                 continue;
             }
             // Graceful degrade (v0.2 A.1): one malformed plugin.toml used to
@@ -186,9 +181,7 @@ impl PluginRegistry {
             // require a sibling system.md (the prompt body). Reject the
             // plugin (graceful skip + warn) if missing — better than
             // failing at first dispatch.
-            if manifest.plugin.kind == PluginKind::Pattern
-                && !path.join("system.md").exists()
-            {
+            if manifest.plugin.kind == PluginKind::Pattern && !path.join("system.md").exists() {
                 warn!(
                     plugin = %manifest.plugin.name,
                     plugin_path = %path.display(),
@@ -222,8 +215,7 @@ impl PluginRegistry {
         check_uniqueness(&manifests)?;
 
         // Resolver: ABI + deps + topological sort.
-        let just_manifests: Vec<Manifest> =
-            manifests.iter().map(|(m, _, _)| m.clone()).collect();
+        let just_manifests: Vec<Manifest> = manifests.iter().map(|(m, _, _)| m.clone()).collect();
         let ordered = resolve_load_order(&just_manifests)?;
 
         // Zip the sorted manifests back with their roots + warnings.
@@ -251,9 +243,7 @@ impl PluginRegistry {
     }
 }
 
-fn check_uniqueness(
-    manifests: &[(Manifest, PathBuf, ParseWarnings)],
-) -> Result<(), RegistryError> {
+fn check_uniqueness(manifests: &[(Manifest, PathBuf, ParseWarnings)]) -> Result<(), RegistryError> {
     let mut sancho_owner: HashMap<String, String> = HashMap::new();
     let mut mcp_owner: HashMap<String, String> = HashMap::new();
     let fragment_owner: HashMap<String, String> = HashMap::new();
@@ -312,10 +302,7 @@ mod tests {
         let dep_line = if deps.is_empty() {
             String::new()
         } else {
-            let items: Vec<String> = deps
-                .iter()
-                .map(|(n, c)| format!("\"{n} {c}\""))
-                .collect();
+            let items: Vec<String> = deps.iter().map(|(n, c)| format!("\"{n} {c}\"")).collect();
             format!("\n[depends]\nplugins = [{}]", items.join(", "))
         };
         format!(
@@ -434,7 +421,11 @@ required = true
         let plugins = tmp.path().join("plugins");
         std::fs::create_dir_all(&plugins).unwrap();
         seed(&plugins, "alpha", &skill("alpha", "1.0.0", &[]));
-        seed(&plugins, "beta", &skill("beta", "1.0.0", &[("alpha", "^1")]));
+        seed(
+            &plugins,
+            "beta",
+            &skill("beta", "1.0.0", &[("alpha", "^1")]),
+        );
 
         let reg = PluginRegistry::load_default(tmp.path()).unwrap();
         assert_eq!(reg.len(), 2);

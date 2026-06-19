@@ -431,8 +431,7 @@ mod tests {
     fn list_active_excludes_retired() {
         let (_d, reg) = tmp_registry();
         reg.set_status("Cinder", MascotStatus::Retired).unwrap();
-        let active_names: Vec<String> =
-            reg.list_active().into_iter().map(|m| m.name).collect();
+        let active_names: Vec<String> = reg.list_active().into_iter().map(|m| m.name).collect();
         assert!(!active_names.contains(&"Cinder".to_string()));
         assert_eq!(reg.list_active().len(), 4);
     }

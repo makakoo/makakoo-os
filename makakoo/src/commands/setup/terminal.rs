@@ -144,8 +144,8 @@ fn ghostty_installed() -> bool {
 // On Windows the test module is excluded entirely.
 #[cfg(all(test, unix))]
 mod tests {
-    use super::*;
     use super::super::test_support::{shim, shim_args, PathGuard};
+    use super::*;
     use std::io::Cursor;
     use tempfile::TempDir;
 
@@ -188,7 +188,9 @@ mod tests {
         // install --cask ghostty appears.
         let joined = args.join(" ");
         assert!(
-            joined.contains("install") && joined.contains("--cask") && joined.contains(GHOSTTY_CASK),
+            joined.contains("install")
+                && joined.contains("--cask")
+                && joined.contains(GHOSTTY_CASK),
             "expected install+--cask+ghostty in args: {joined}"
         );
     }

@@ -244,8 +244,8 @@ impl Transport for SlackAdapter {
                 resp.error.unwrap_or_else(|| "unknown".into())
             )));
         }
-        let auth: SlackAuthTest =
-            serde_json::from_value(serde_json::Value::Object(resp.rest)).map_err(|e| {
+        let auth: SlackAuthTest = serde_json::from_value(serde_json::Value::Object(resp.rest))
+            .map_err(|e| {
                 MakakooError::Internal(format!("slack auth.test response parse: {}", e))
             })?;
         if auth.team_id != self.config.team_id {
@@ -461,8 +461,9 @@ impl SlackAdapter {
             )));
         }
         let parsed: AppsConnectionsOpenResp =
-            serde_json::from_value(serde_json::Value::Object(resp.rest))
-                .map_err(|e| MakakooError::Internal(format!("apps.connections.open parse: {}", e)))?;
+            serde_json::from_value(serde_json::Value::Object(resp.rest)).map_err(|e| {
+                MakakooError::Internal(format!("apps.connections.open parse: {}", e))
+            })?;
         Ok(parsed.url)
     }
 
@@ -601,9 +602,7 @@ impl SlackAdapter {
 
         // Per-transport allowlist (Q7 simplified). Empty list =
         // least-privilege deny-all.
-        if self.allowed_users.is_empty()
-            || !self.allowed_users.iter().any(|u| u == &user)
-        {
+        if self.allowed_users.is_empty() || !self.allowed_users.iter().any(|u| u == &user) {
             tracing::debug!(
                 target: "makakoo_core::transport::slack",
                 transport_id = self.ctx.transport_id,
@@ -620,9 +619,7 @@ impl SlackAdapter {
             }
         } else {
             // dm_only: drop channel events (channel ids start with C).
-            if msg.channel_type.as_deref() != Some("im")
-                && !msg.channel.starts_with('D')
-            {
+            if msg.channel_type.as_deref() != Some("im") && !msg.channel.starts_with('D') {
                 return None;
             }
         }
@@ -798,13 +795,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_non_allowlisted_slack_sender() {
-        let adapter = primed_adapter(
-            config(),
-            "T0123ABCD",
-            "U0123BOT",
-            vec!["U_ALLOWED".into()],
-        )
-        .await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "U0123BOT", vec!["U_ALLOWED".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -820,8 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_when_slack_allowlist_empty() {
-        let adapter =
-            primed_adapter(config(), "T0123ABCD", "U0123BOT", vec![]).await;
+        let adapter = primed_adapter(config(), "T0123ABCD", "U0123BOT", vec![]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -973,7 +964,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_dm() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -1014,7 +1006,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_bot_echoes() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -1030,7 +1023,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_self_loop() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "U0123BOT", vec!["U0123USER".into()]).await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "U0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -1046,7 +1040,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_subtype() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "D0123ABCD",
@@ -1062,7 +1057,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_drops_unexpected_team() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T9999OTHER",
             "D0123ABCD",
@@ -1080,7 +1076,8 @@ mod tests {
     async fn build_inbound_frame_drops_channel_event_in_dm_only() {
         // dm_only=true; a channel event (channel id starts with C)
         // must be dropped.
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env = envelope(
             "T0123ABCD",
             "C0123DEFG",
@@ -1096,7 +1093,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_dedups_within_window() {
-        let adapter = primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
+        let adapter =
+            primed_adapter(config(), "T0123ABCD", "B0123BOT", vec!["U0123USER".into()]).await;
         let env1 = envelope(
             "T0123ABCD",
             "D0123ABCD",

@@ -114,8 +114,7 @@ pub fn load_bootstrap() -> Result<String> {
     let home = makakoo_core::platform::makakoo_home();
 
     // Try dynamic rendering from plugin registry.
-    let registry = makakoo_core::plugin::PluginRegistry::load_default(&home)
-        .unwrap_or_default();
+    let registry = makakoo_core::plugin::PluginRegistry::load_default(&home).unwrap_or_default();
     if !registry.is_empty() {
         match renderer::load_or_render(&registry, &home, None) {
             Ok(body) => return Ok(body),
@@ -147,8 +146,17 @@ pub fn load_bootstrap() -> Result<String> {
 /// Run infect across every built-in slot. `global` is reserved for a
 /// future `--local` mode that targets per-project `.harvey/context.md`
 /// instead; the 2026-04-14 cutover always operates globally.
-pub async fn run(_global: bool, dry_run: bool, target_filter: Option<&[String]>) -> Result<InfectReport> {
-    run_with_home(&dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?, dry_run, target_filter).await
+pub async fn run(
+    _global: bool,
+    dry_run: bool,
+    target_filter: Option<&[String]>,
+) -> Result<InfectReport> {
+    run_with_home(
+        &dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?,
+        dry_run,
+        target_filter,
+    )
+    .await
 }
 
 /// Build the structured JSON payload emitted by `infect --verify --json`.
@@ -305,12 +313,18 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
             }
         }
 
-        let deep_dirty = deep_report.as_ref().map(|d| d.total_issue_count()).unwrap_or(0);
+        let deep_dirty = deep_report
+            .as_ref()
+            .map(|d| d.total_issue_count())
+            .unwrap_or(0);
 
         if json {
             println!(
                 "{}",
-                serde_json::to_string(&format_verify_json_with_deep(&drifts, deep_report.as_ref()))?
+                serde_json::to_string(&format_verify_json_with_deep(
+                    &drifts,
+                    deep_report.as_ref()
+                ))?
             );
         } else {
             println!("makakoo infect --verify (full drift scan) — 7 target(s)");
@@ -320,17 +334,11 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
                 if issues.is_empty() {
                     println!("  {:<10} clean", target.short_name());
                 } else {
-                    println!(
-                        "  {:<10} drift: {}",
-                        target.short_name(),
-                        issues.join(", ")
-                    );
+                    println!("  {:<10} drift: {}", target.short_name(), issues.join(", "));
                 }
             }
             if let Some(report) = deep_report.as_ref() {
-                println!(
-                    "\nmakakoo infect --verify --deep (project + workspace + worktree)"
-                );
+                println!("\nmakakoo infect --verify --deep (project + workspace + worktree)");
                 if report.is_clean() {
                     println!("  deep scan: clean");
                 } else {
@@ -383,7 +391,13 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
     // 2. MCP sync (always runs unless `--verify`). Spec home is
     //    $MAKAKOO_HOME (where data + plugins live), CLI dotdirs
     //    are under $HOME — pass both correctly.
-    let mcp_report = mcp::sync_all(&home, &makakoo_home, mcp_binary.as_deref(), dry_run, target_filter);
+    let mcp_report = mcp::sync_all(
+        &home,
+        &makakoo_home,
+        mcp_binary.as_deref(),
+        dry_run,
+        target_filter,
+    );
     print!("{}", mcp_report.human_summary());
     let mcp_failed = mcp_report.errors() > 0;
 
@@ -437,8 +451,7 @@ async fn dispatch_local_cli(args: InfectArgs) -> Result<i32> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?;
     let start_dir = match args.dir {
         Some(p) => p,
-        None => std::env::current_dir()
-            .map_err(|e| anyhow!("no current dir available: {e}"))?,
+        None => std::env::current_dir().map_err(|e| anyhow!("no current dir available: {e}"))?,
     };
     let opts = local::LocalOptions {
         detect_installed_only: args.detect_installed_only,
@@ -450,7 +463,11 @@ async fn dispatch_local_cli(args: InfectArgs) -> Result<i32> {
         // silent no-op under --local — the dispatch ignored the field
         // and every run wrote all 6 derivatives regardless. Reported by
         // the user 2026-04-25 right after the grandma-docs sprint shipped.
-        target_filter: if args.target.is_empty() { None } else { Some(args.target.clone()) },
+        target_filter: if args.target.is_empty() {
+            None
+        } else {
+            Some(args.target.clone())
+        },
     };
     match local::dispatch_local(&start_dir, &home, opts) {
         Ok(report) => {
@@ -467,7 +484,11 @@ async fn dispatch_local_cli(args: InfectArgs) -> Result<i32> {
 /// Same as [`run`] but lets callers (tests, daemons) override the home
 /// directory where slots are written. The bootstrap body is still
 /// loaded from the real `$MAKAKOO_HOME/global_bootstrap.md`.
-pub async fn run_with_home(home: &Path, dry_run: bool, target_filter: Option<&[String]>) -> Result<InfectReport> {
+pub async fn run_with_home(
+    home: &Path,
+    dry_run: bool,
+    target_filter: Option<&[String]>,
+) -> Result<InfectReport> {
     let body = load_bootstrap()?;
     run_with_home_and_body(home, &body, dry_run, target_filter).await
 }
@@ -606,7 +627,11 @@ fn ensure_canonical_bootstrap(home: &Path, body: &str, dry_run: bool) -> Result<
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            anyhow!("failed to create canonical bootstrap dir {}: {}", parent.display(), e)
+            anyhow!(
+                "failed to create canonical bootstrap dir {}: {}",
+                parent.display(),
+                e
+            )
         })?;
     }
     let normalized = if body.ends_with('\n') {
@@ -619,8 +644,13 @@ fn ensure_canonical_bootstrap(home: &Path, body: &str, dry_run: bool) -> Result<
         Err(_) => true,
     };
     if needs_write {
-        writer::atomic_write(&path, &normalized)
-            .map_err(|e| anyhow!("failed to write canonical bootstrap {}: {}", path.display(), e))?;
+        writer::atomic_write(&path, &normalized).map_err(|e| {
+            anyhow!(
+                "failed to write canonical bootstrap {}: {}",
+                path.display(),
+                e
+            )
+        })?;
     }
     Ok(path)
 }
@@ -770,12 +800,7 @@ pub async fn uninfect_global_with_home(
             SlotStatus::Error(_) => "error",
             SlotStatus::Installed => "installed", // unreachable on uninfect path
         };
-        println!(
-            "  {:<12} {:<14} {}",
-            r.slot_name,
-            tag,
-            r.path.display()
-        );
+        println!("  {:<12} {:<14} {}", r.slot_name, tag, r.path.display());
         if let SlotStatus::Error(e) = &r.status {
             println!("    ! {e}");
             errors += 1;
@@ -804,7 +829,12 @@ mod tests {
         // Verify each slot exists on disk.
         for slot in SLOTS {
             let p = slot.absolute(tmp.path());
-            assert!(p.exists(), "slot {} should exist at {}", slot.name, p.display());
+            assert!(
+                p.exists(),
+                "slot {} should exist at {}",
+                slot.name,
+                p.display()
+            );
         }
     }
 
@@ -883,9 +913,15 @@ mod tests {
         assert!(matches!(report.results[0].status, SlotStatus::Installed));
         // Other slots must NOT exist on disk.
         for slot in SLOTS {
-            if slot.name == "claude" { continue; }
+            if slot.name == "claude" {
+                continue;
+            }
             let p = slot.absolute(tmp.path());
-            assert!(!p.exists(), "slot {} should not exist when filtered out", slot.name);
+            assert!(
+                !p.exists(),
+                "slot {} should not exist when filtered out",
+                slot.name
+            );
         }
     }
 
@@ -1023,7 +1059,10 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(code, 2, "dispatch should return 2 for --local with --global");
+        assert_eq!(
+            code, 2,
+            "dispatch should return 2 for --local with --global"
+        );
     }
 
     #[tokio::test]

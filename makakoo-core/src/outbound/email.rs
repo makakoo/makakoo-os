@@ -88,7 +88,8 @@ impl EmailAdapter {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(MakakooError::internal(format!(
                 "email: gmail-send exited {}: {}",
-                out.status, stderr.trim()
+                out.status,
+                stderr.trim()
             )));
         }
         // Parse success payload — the plugin should emit {"ok": true, ...}.

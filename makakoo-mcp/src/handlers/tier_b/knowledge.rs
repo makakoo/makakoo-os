@@ -192,14 +192,11 @@ impl ToolHandler for HarveyKnowledgeIngestHandler {
         let title = params.get("title").and_then(|v| v.as_str());
         let note = params.get("note").and_then(|v| v.as_str());
 
-        let script = resolve_ingest_script()
-            .map_err(|e| RpcError::internal(&e))?;
+        let script = resolve_ingest_script().map_err(|e| RpcError::internal(&e))?;
         let python = resolve_python();
 
         let mut cmd = Command::new(&python);
-        cmd.arg(&script)
-            .arg("--source").arg(&source)
-            .arg("--json");
+        cmd.arg(&script).arg("--source").arg(&source).arg("--json");
         if let Some(k) = &kind {
             cmd.arg("--kind").arg(k);
         }
@@ -219,10 +216,12 @@ impl ToolHandler for HarveyKnowledgeIngestHandler {
 
         let output = timeout(INGEST_TIMEOUT, cmd.output())
             .await
-            .map_err(|_| RpcError::internal(format!(
-                "ingest timed out after {}s",
-                INGEST_TIMEOUT.as_secs()
-            )))?
+            .map_err(|_| {
+                RpcError::internal(format!(
+                    "ingest timed out after {}s",
+                    INGEST_TIMEOUT.as_secs()
+                ))
+            })?
             .map_err(|e| RpcError::internal(format!("failed to spawn {python}: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();

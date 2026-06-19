@@ -26,11 +26,7 @@ impl MacOsPlatform {
         Ok(home.join("Library/LaunchAgents").join(PLIST_FILENAME))
     }
 
-    pub fn render_plist(
-        exe: &Path,
-        log_dir: &Path,
-        home: &Path,
-    ) -> String {
+    pub fn render_plist(exe: &Path, log_dir: &Path, home: &Path) -> String {
         // ProgramArguments wraps the binary in `sh -c` so the shell can
         // `source ~/.env` before exec'ing makakoo. launchd does NOT
         // inherit the interactive shell's environment, which means
@@ -279,6 +275,9 @@ mod tests {
 
         MacOsPlatform.symlink_dir(&target, &link).unwrap();
         assert!(link.exists());
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }

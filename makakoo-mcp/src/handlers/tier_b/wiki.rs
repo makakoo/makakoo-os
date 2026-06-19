@@ -72,10 +72,7 @@ impl ToolHandler for WikiCompileHandler {
 
         let path = PathBuf::from(source_path);
         let body = std::fs::read_to_string(&path).map_err(|e| {
-            RpcError::internal(format!(
-                "wiki_compile: read {} failed: {e}",
-                path.display()
-            ))
+            RpcError::internal(format!("wiki_compile: read {} failed: {e}", path.display()))
         })?;
 
         let opts = CompileOptions {
@@ -138,8 +135,7 @@ impl ToolHandler for WikiSaveHandler {
             .ok_or_else(|| RpcError::invalid_params("missing 'content'"))?;
 
         let path = PathBuf::from(path_s);
-        wiki::save(&path, content)
-            .map_err(|e| RpcError::internal(format!("wiki_save: {e}")))?;
+        wiki::save(&path, content).map_err(|e| RpcError::internal(format!("wiki_save: {e}")))?;
 
         Ok(json!({
             "ok": true,

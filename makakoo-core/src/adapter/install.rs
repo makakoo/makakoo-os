@@ -28,9 +28,7 @@ use thiserror::Error;
 use super::manifest::{Manifest, SourceType};
 use super::sandbox::{self, ProfileSpec, SandboxBackend};
 use super::sign::{verify_manifest_bytes, SignError};
-use super::trust::{
-    diff_manifest, trust_entry_from_manifest, ManifestDiff, TrustLedger,
-};
+use super::trust::{diff_manifest, trust_entry_from_manifest, ManifestDiff, TrustLedger};
 use crate::source_fetch::{self, FetchError, SourceSpec};
 
 const REGISTERED_DIRNAME: &str = "registered";
@@ -111,8 +109,7 @@ impl InstallRoot {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct InstallOptions {
     pub allow_unsigned: bool,
     /// When true, a capability/security diff on update is accepted without
@@ -121,7 +118,6 @@ pub struct InstallOptions {
     /// Skip the sandboxed health check (dev loop only).
     pub skip_health_check: bool,
 }
-
 
 /// Returned by every install path on success.
 #[derive(Debug, Clone)]
@@ -162,10 +158,7 @@ impl From<ManifestDiff> for DiffSummary {
             bits.push(format!("-feature {}", d.features_removed.join(",")));
         }
         if !d.allowed_hosts_added.is_empty() {
-            bits.push(format!(
-                "+allowed_host {}",
-                d.allowed_hosts_added.join(",")
-            ));
+            bits.push(format!("+allowed_host {}", d.allowed_hosts_added.join(",")));
         }
         if !d.allowed_hosts_removed.is_empty() {
             bits.push(format!(
@@ -180,20 +173,17 @@ impl From<ManifestDiff> for DiffSummary {
             bits.push(format!("requires_network {old} → {new}"));
         }
         if !d.requires_filesystem_added.is_empty() {
-            bits.push(format!(
-                "+fs {}",
-                d.requires_filesystem_added.join(",")
-            ));
+            bits.push(format!("+fs {}", d.requires_filesystem_added.join(",")));
         }
         if !d.requires_filesystem_removed.is_empty() {
-            bits.push(format!(
-                "-fs {}",
-                d.requires_filesystem_removed.join(",")
-            ));
+            bits.push(format!("-fs {}", d.requires_filesystem_removed.join(",")));
         }
-        if let Some((old, new)) = &d.supports_roles_added.first().map(|_| ())
-            .map(|_| (d.supports_roles_added.clone(), d.supports_roles_removed.clone()))
-        {
+        if let Some((old, new)) = &d.supports_roles_added.first().map(|_| ()).map(|_| {
+            (
+                d.supports_roles_added.clone(),
+                d.supports_roles_removed.clone(),
+            )
+        }) {
             if !old.is_empty() {
                 bits.push(format!("+role {}", old.join(",")));
             }
@@ -240,9 +230,10 @@ pub fn install_from_path(
         });
     }
     let manifest_bytes = fs::read(&manifest_path)?;
-    let manifest = Manifest::parse_str(std::str::from_utf8(&manifest_bytes).map_err(|e| {
-        InstallError::Staging(format!("manifest is not UTF-8: {e}"))
-    })?)?;
+    let manifest = Manifest::parse_str(
+        std::str::from_utf8(&manifest_bytes)
+            .map_err(|e| InstallError::Staging(format!("manifest is not UTF-8: {e}")))?,
+    )?;
 
     // ── 2. signature ─────────────────────────────────────────────────
     let sig_path = source_dir.join("adapter.toml.sig");
@@ -355,8 +346,7 @@ pub fn install_from_tarball_bytes(
     }
     // Extract into a temp staging dir, then delegate to install_from_path.
     let tmp = tempfile::tempdir().map_err(|e| InstallError::Staging(e.to_string()))?;
-    source_fetch::extract_tarball(tarball, tmp.path())
-        .map_err(InstallError::Staging)?;
+    source_fetch::extract_tarball(tarball, tmp.path()).map_err(InstallError::Staging)?;
     // Walk to the top-level dir containing adapter.toml (many tarballs
     // wrap their content in a single subdir).
     let source_dir = locate_manifest_dir(tmp.path())?;
@@ -419,11 +409,7 @@ pub fn install_from_tarball_url(
 /// leave the hook in place for D).
 // error type is a deliberately rich enum; boxing all Results is a tracked follow-up
 #[allow(clippy::result_large_err)]
-pub fn uninstall(
-    name: &str,
-    root: &InstallRoot,
-    purge: bool,
-) -> Result<(), InstallError> {
+pub fn uninstall(name: &str, root: &InstallRoot, purge: bool) -> Result<(), InstallError> {
     let registered = root.registered_dir().join(format!("{name}.toml"));
     if registered.exists() {
         fs::remove_file(&registered)?;
@@ -523,9 +509,8 @@ async fn maybe_health_check(manifest: &Manifest, install_dir: &Path) -> Result<b
             .bytes()
             .await
             .map_err(|e| InstallError::HealthCheck(e.to_string()))?;
-        let json: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-            InstallError::HealthCheck(format!("health response is not JSON: {e}"))
-        })?;
+        let json: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| InstallError::HealthCheck(format!("health response is not JSON: {e}")))?;
         if extract_dot_path(&json, field).is_none() {
             return Err(InstallError::HealthCheck(format!(
                 "field `{field}` missing in health response"
@@ -665,12 +650,8 @@ allowed_hosts = ["127.0.0.1"]
     fn install_from_nonexistent_path_errors_cleanly() {
         let tmp = tempfile::tempdir().unwrap();
         let (root, _) = scratch(tmp.path());
-        let err = install_from_path(
-            tmp.path().join("does-not-exist"),
-            &root,
-            default_opts(),
-        )
-        .unwrap_err();
+        let err = install_from_path(tmp.path().join("does-not-exist"), &root, default_opts())
+            .unwrap_err();
         assert!(matches!(err, InstallError::SourceMissing { .. }));
     }
 
@@ -736,23 +717,21 @@ ref = "v0.1.0""#,
         use super::super::sign;
         let tmp = tempfile::tempdir().unwrap();
         let (root, source) = scratch(tmp.path());
-        let body = MANIFEST_BODY.replace(
-            r#"source_type = "local""#,
-            r#"source_type = "git"
+        let body = MANIFEST_BODY
+            .replace(
+                r#"source_type = "local""#,
+                r#"source_type = "git"
 source = "https://github.com/x/y.git"
 ref = "v0.1.0""#,
-        ).replace(
-            r#"sandbox_profile = "network-io""#,
-            r#"sandbox_profile = "network-io"
+            )
+            .replace(
+                r#"sandbox_profile = "network-io""#,
+                r#"sandbox_profile = "network-io"
 signed_by = "unit-test""#,
-        );
+            );
         fs::write(source.join("adapter.toml"), &body).unwrap();
 
-        let _sig_path = sign::testing_sign_manifest(
-            &root.trust_root,
-            "unit-test",
-            body.as_bytes(),
-        );
+        let _sig_path = sign::testing_sign_manifest(&root.trust_root, "unit-test", body.as_bytes());
         // Move the sig file into the source dir (testing helper writes
         // into trust_root by default).
         fs::rename(
@@ -776,22 +755,20 @@ signed_by = "unit-test""#,
         use super::super::sign;
         let tmp = tempfile::tempdir().unwrap();
         let (root, source) = scratch(tmp.path());
-        let body = MANIFEST_BODY.replace(
-            r#"source_type = "local""#,
-            r#"source_type = "git"
+        let body = MANIFEST_BODY
+            .replace(
+                r#"source_type = "local""#,
+                r#"source_type = "git"
 source = "https://github.com/x/y.git"
 ref = "v0.1.0""#,
-        ).replace(
-            r#"sandbox_profile = "network-io""#,
-            r#"sandbox_profile = "network-io"
+            )
+            .replace(
+                r#"sandbox_profile = "network-io""#,
+                r#"sandbox_profile = "network-io"
 signed_by = "unit-test""#,
-        );
+            );
         // Sign one body, write a DIFFERENT body — verify must fail.
-        let _sig_path = sign::testing_sign_manifest(
-            &root.trust_root,
-            "unit-test",
-            body.as_bytes(),
-        );
+        let _sig_path = sign::testing_sign_manifest(&root.trust_root, "unit-test", body.as_bytes());
         fs::rename(
             root.trust_root.join("adapter.toml.sig"),
             source.join("adapter.toml.sig"),
@@ -818,8 +795,8 @@ signed_by = "unit-test""#,
         let (root, _) = scratch(tmp.path());
         let bogus_bytes = b"not-a-real-tarball";
         let wrong_sha = "0".repeat(64);
-        let err = install_from_tarball_bytes(bogus_bytes, &wrong_sha, &root, default_opts())
-            .unwrap_err();
+        let err =
+            install_from_tarball_bytes(bogus_bytes, &wrong_sha, &root, default_opts()).unwrap_err();
         assert!(matches!(err, InstallError::Sha256Mismatch { .. }));
     }
 

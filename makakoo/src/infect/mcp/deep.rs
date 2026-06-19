@@ -137,7 +137,10 @@ impl DeepDriftReport {
     }
 
     pub fn total_issue_count(&self) -> usize {
-        self.claude_projects.iter().filter(|p| !p.is_clean()).count()
+        self.claude_projects
+            .iter()
+            .filter(|p| !p.is_clean())
+            .count()
             + self.workspaces.iter().filter(|w| !w.is_clean()).count()
             + self.prunable_worktrees.len()
     }
@@ -185,12 +188,7 @@ pub fn audit_claude_projects(claude_json: &Path, spec: &McpServerSpec) -> Vec<Pr
         let Some(harvey) = mcp.get("harvey").and_then(|v| v.as_object()) else {
             continue;
         };
-        let drift = diff_against_spec_json(
-            key.clone(),
-            claude_json.to_path_buf(),
-            harvey,
-            spec,
-        );
+        let drift = diff_against_spec_json(key.clone(), claude_json.to_path_buf(), harvey, spec);
         if !drift.is_clean() {
             out.push(drift);
         }
@@ -217,7 +215,10 @@ pub fn repair_claude_projects(
     };
     let mut actions = Vec::new();
     for drift in drifts {
-        let Some(cfg) = projects.get_mut(&drift.project_key).and_then(|v| v.as_object_mut()) else {
+        let Some(cfg) = projects
+            .get_mut(&drift.project_key)
+            .and_then(|v| v.as_object_mut())
+        else {
             continue;
         };
         let Some(mcp) = cfg.get_mut("mcpServers").and_then(|v| v.as_object_mut()) else {
@@ -328,7 +329,10 @@ pub fn repair_prunable_worktrees(prunable: &[PrunableWorktree]) -> Vec<String> {
             .status();
         match status {
             Ok(s) if s.success() => {
-                actions.push(format!("pruned stale worktree records in {}", p.repo.display()));
+                actions.push(format!(
+                    "pruned stale worktree records in {}",
+                    p.repo.display()
+                ));
             }
             Ok(s) => {
                 actions.push(format!(
@@ -338,7 +342,11 @@ pub fn repair_prunable_worktrees(prunable: &[PrunableWorktree]) -> Vec<String> {
                 ));
             }
             Err(e) => {
-                actions.push(format!("FAILED to prune worktree in {}: {}", p.repo.display(), e));
+                actions.push(format!(
+                    "FAILED to prune worktree in {}: {}",
+                    p.repo.display(),
+                    e
+                ));
             }
         }
     }
@@ -346,11 +354,7 @@ pub fn repair_prunable_worktrees(prunable: &[PrunableWorktree]) -> Vec<String> {
 }
 
 /// One-shot deep repair — fix every zombie the audit found.
-pub fn repair_deep(
-    home: &Path,
-    spec: &McpServerSpec,
-    report: &DeepDriftReport,
-) -> Vec<String> {
+pub fn repair_deep(home: &Path, spec: &McpServerSpec, report: &DeepDriftReport) -> Vec<String> {
     let mut actions = Vec::new();
     let claude_json = home.join(".claude.json");
     if let Ok(a) = repair_claude_projects(&claude_json, spec, &report.claude_projects) {
@@ -451,7 +455,10 @@ fn audit_one_workspace_mcp(path: &Path, spec: &McpServerSpec) -> Option<Workspac
 /// canonical spec no longer emits it (v0.1-public drops harvey-os),
 /// but we still surface legacy harvey-os / HARVEY-home references as
 /// zombies so `infect --verify` flags them for cleanup.
-fn zombie_env_keys(actual: &Map<String, Value>, canonical: &BTreeMap<String, String>) -> Vec<String> {
+fn zombie_env_keys(
+    actual: &Map<String, Value>,
+    canonical: &BTreeMap<String, String>,
+) -> Vec<String> {
     let mut out = Vec::new();
 
     // Canonical-key divergence check. PYTHONPATH is not canonical anymore.
@@ -720,7 +727,9 @@ mod tests {
         assert_eq!(drifts[0].project_key, "/Users/sebastian/HARVEY");
         assert!(drifts[0].command_stale);
         assert!(drifts[0].args_stale);
-        assert!(drifts[0].zombie_env_keys.contains(&"HARVEY_HOME".to_string()));
+        assert!(drifts[0]
+            .zombie_env_keys
+            .contains(&"HARVEY_HOME".to_string()));
     }
 
     #[test]
@@ -764,12 +773,14 @@ mod tests {
         assert!(after.is_empty(), "post-repair drift: {:?}", after);
 
         // Other-server preserved, harvey canonicalized.
-        let after_json: Value = serde_json::from_str(&fs::read_to_string(&claude_json).unwrap()).unwrap();
+        let after_json: Value =
+            serde_json::from_str(&fs::read_to_string(&claude_json).unwrap()).unwrap();
         let harvey = &after_json["projects"]["/Users/sebastian/HARVEY"]["mcpServers"]["harvey"];
         assert_eq!(harvey["command"], spec.command);
         assert_eq!(harvey["args"].as_array().unwrap().len(), 0);
         assert_eq!(harvey["env"]["MAKAKOO_HOME"], spec.env["MAKAKOO_HOME"]);
-        let other = &after_json["projects"]["/Users/sebastian/HARVEY"]["mcpServers"]["other-server"];
+        let other =
+            &after_json["projects"]["/Users/sebastian/HARVEY"]["mcpServers"]["other-server"];
         assert_eq!(other["command"], "keep-me");
     }
 

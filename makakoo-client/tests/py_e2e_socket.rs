@@ -86,8 +86,7 @@ async fn python_client_round_trip_against_rust_server() {
     let audit = Arc::new(AuditLog::open_default(home).unwrap());
     let grant_table = grants();
 
-    let secret_backend =
-        Arc::new(InMemorySecretBackend::new().with("AIL_API_KEY", "sk-py-secret"));
+    let secret_backend = Arc::new(InMemorySecretBackend::new().with("AIL_API_KEY", "sk-py-secret"));
     let composite: Arc<dyn CapabilityHandler> = Arc::new(
         CompositeHandler::new()
             .register("state", Arc::new(StateHandler::new(state_dir.clone())))
@@ -95,12 +94,7 @@ async fn python_client_round_trip_against_rust_server() {
     );
 
     let socket_path = home.join("run/plugins/py-plugin.sock");
-    let server = CapabilityServer::new(
-        socket_path.clone(),
-        grant_table,
-        audit.clone(),
-        composite,
-    );
+    let server = CapabilityServer::new(socket_path.clone(), grant_table, audit.clone(), composite);
     let handle = server.serve().await.unwrap();
 
     let py_src = python_client_src_dir();

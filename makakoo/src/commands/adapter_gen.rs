@@ -140,7 +140,7 @@ pub fn run(spec: &GenSpec) -> anyhow::Result<GenReport> {
         .clone()
         .unwrap_or_else(InstallRoot::default_from_env);
     let options = InstallOptions {
-        allow_unsigned: true, // local-path installs always allowed
+        allow_unsigned: true,  // local-path installs always allowed
         accept_re_trust: true, // freshly-generated manifest, no diff to approve
         skip_health_check: spec.skip_health_check,
     };
@@ -157,12 +157,17 @@ pub fn run(spec: &GenSpec) -> anyhow::Result<GenReport> {
 
 fn render_template(spec: &GenSpec) -> anyhow::Result<String> {
     let mut body = spec.template.body().to_string();
-    let description = spec.description.clone().unwrap_or_else(|| match spec.template {
-        GenTemplate::OpenAiCompat => format!("OpenAI-compatible endpoint `{}`", spec.name),
-        GenTemplate::Subprocess => format!("Subprocess adapter for `{}`", spec.name),
-        GenTemplate::McpStdio => format!("MCP stdio server wrapped as adapter: `{}`", spec.name),
-        GenTemplate::PeerMakakoo => format!("Peer Makakoo install `{}`", spec.name),
-    });
+    let description = spec
+        .description
+        .clone()
+        .unwrap_or_else(|| match spec.template {
+            GenTemplate::OpenAiCompat => format!("OpenAI-compatible endpoint `{}`", spec.name),
+            GenTemplate::Subprocess => format!("Subprocess adapter for `{}`", spec.name),
+            GenTemplate::McpStdio => {
+                format!("MCP stdio server wrapped as adapter: `{}`", spec.name)
+            }
+            GenTemplate::PeerMakakoo => format!("Peer Makakoo install `{}`", spec.name),
+        });
     let roles_toml = roles_to_toml(&spec.roles);
 
     body = body.replace("{{name}}", &spec.name);
@@ -171,9 +176,10 @@ fn render_template(spec: &GenSpec) -> anyhow::Result<String> {
 
     match spec.template {
         GenTemplate::OpenAiCompat => {
-            let url = spec.url.as_deref().ok_or_else(|| anyhow::anyhow!(
-                "openai-compat template requires --url"
-            ))?;
+            let url = spec
+                .url
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("openai-compat template requires --url"))?;
             let key_env = spec.key_env.clone().unwrap_or_else(|| {
                 format!("{}_API_KEY", spec.name.to_uppercase().replace('-', "_"))
             });
@@ -200,9 +206,9 @@ fn render_template(spec: &GenSpec) -> anyhow::Result<String> {
             body = body.replace("{{command_argv}}", &argv);
         }
         GenTemplate::PeerMakakoo => {
-            let url = spec.url.as_deref().ok_or_else(|| anyhow::anyhow!(
-                "peer-makakoo template requires --url <http://peer-host:port>"
-            ))?;
+            let url = spec.url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("peer-makakoo template requires --url <http://peer-host:port>")
+            })?;
             let peer_name = spec.peer_name.as_deref().ok_or_else(|| anyhow::anyhow!(
                 "peer-makakoo template requires --peer-name (the name the remote install knows you by)"
             ))?;
@@ -218,11 +224,11 @@ fn render_template(spec: &GenSpec) -> anyhow::Result<String> {
 
     // Last-pass validation: refuse leftover placeholders.
     if let Some(idx) = body.find("{{") {
-        let end = body[idx..].find("}}").map(|e| idx + e + 2).unwrap_or(body.len());
-        anyhow::bail!(
-            "template placeholder left unfilled: `{}`",
-            &body[idx..end]
-        );
+        let end = body[idx..]
+            .find("}}")
+            .map(|e| idx + e + 2)
+            .unwrap_or(body.len());
+        anyhow::bail!("template placeholder left unfilled: `{}`", &body[idx..end]);
     }
 
     Ok(body)
@@ -394,7 +400,10 @@ mod tests {
         };
         let report = run(&spec).expect("gen ok");
         let manifest = Manifest::load(report.registered_path.unwrap()).unwrap();
-        assert_eq!(manifest.transport.command, vec!["my-mcp-server".to_string()]);
+        assert_eq!(
+            manifest.transport.command,
+            vec!["my-mcp-server".to_string()]
+        );
         assert_eq!(
             manifest.output.verdict_field.as_deref(),
             Some("result.content.0.text")
@@ -498,7 +507,10 @@ mod tests {
 
     #[test]
     fn extract_host_strips_scheme_and_port_and_path() {
-        assert_eq!(extract_host("https://api.example.com/v1/chat"), "api.example.com");
+        assert_eq!(
+            extract_host("https://api.example.com/v1/chat"),
+            "api.example.com"
+        );
         assert_eq!(extract_host("http://127.0.0.1:8080/rpc"), "127.0.0.1");
         assert_eq!(extract_host("https://foo.bar:443"), "foo.bar");
     }

@@ -518,9 +518,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    async fn build_gateway(
-        mock: &MockServer,
-    ) -> (tempfile::TempDir, Arc<SwarmGateway>) {
+    async fn build_gateway(mock: &MockServer) -> (tempfile::TempDir, Arc<SwarmGateway>) {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("swarm.db");
         let conn = open_db(&db_path).unwrap();
@@ -673,8 +671,8 @@ mod tests {
         }
         let arts = gw.artifacts.by_run(&resp.run_id).unwrap();
         assert!(
-            arts.iter().any(|a| a.kind == ArtifactKind::Plan
-                && a.agent == "team::research_team"),
+            arts.iter()
+                .any(|a| a.kind == ArtifactKind::Plan && a.agent == "team::research_team"),
             "missing team-level Plan artifact",
         );
     }

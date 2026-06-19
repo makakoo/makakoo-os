@@ -102,9 +102,7 @@ impl WikiLinter {
                         line: 0,
                         column: None,
                         rule: LintRule::JournalDate,
-                        message: format!(
-                            "journal filename '{stem}' does not parse as YYYY_MM_DD"
-                        ),
+                        message: format!("journal filename '{stem}' does not parse as YYYY_MM_DD"),
                     });
                 }
             }
@@ -217,9 +215,7 @@ impl WikiLinter {
 /// (`#`), Logseq page properties (`key:: value`), and fenced code
 /// block delimiters (` ``` `).
 fn is_allowed_non_bullet(body: &str) -> bool {
-    body.starts_with('#')
-        || body.starts_with("```")
-        || is_property_line(body)
+    body.starts_with('#') || body.starts_with("```") || is_property_line(body)
 }
 
 fn is_property_line(body: &str) -> bool {
@@ -269,13 +265,10 @@ fn find_unbalanced_wikilink(line: &str) -> Option<usize> {
 fn looks_like_journal_stem(stem: &str) -> bool {
     // YYYY_MM_DD or YYYY-MM-DD — 10 chars, digits + separator.
     stem.len() == 10
-        && stem
-            .chars()
-            .enumerate()
-            .all(|(idx, c)| match idx {
-                4 | 7 => c == '_' || c == '-',
-                _ => c.is_ascii_digit(),
-            })
+        && stem.chars().enumerate().all(|(idx, c)| match idx {
+            4 | 7 => c == '_' || c == '-',
+            _ => c.is_ascii_digit(),
+        })
 }
 
 fn is_valid_journal_stem(stem: &str) -> bool {

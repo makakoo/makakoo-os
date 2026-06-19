@@ -25,20 +25,13 @@ pub enum AdapterCallError {
 /// problem becomes a [`ValidatorResult`] with `INFRA_ERROR` status.
 ///
 /// `timeout_seconds = None` uses the default 60s.
-pub async fn call_adapter(
-    manifest: &Manifest,
-    prompt: &str,
-    ctx: CallContext,
-) -> ValidatorResult {
+pub async fn call_adapter(manifest: &Manifest, prompt: &str, ctx: CallContext) -> ValidatorResult {
     let adapter_name = manifest.adapter.name.as_str();
     let transport_result = call_transport(manifest, prompt, &ctx).await;
     let response = match transport_result {
         Ok(r) => r,
         Err(e) => {
-            return ValidatorResult::infra_error(
-                adapter_name,
-                format!("transport: {e}"),
-            );
+            return ValidatorResult::infra_error(adapter_name, format!("transport: {e}"));
         }
     };
 

@@ -35,7 +35,11 @@ pub struct TeamMember {
 }
 
 impl TeamMember {
-    pub fn new(agent: impl Into<String>, action: impl Into<String>, role: impl Into<String>) -> Self {
+    pub fn new(
+        agent: impl Into<String>,
+        action: impl Into<String>,
+        role: impl Into<String>,
+    ) -> Self {
         Self {
             agent: agent.into(),
             action: action.into(),
@@ -106,8 +110,7 @@ impl TeamComposition {
                     .with_count(parallelism),
                 TeamMember::new("synthesizer", "combine", "synthesizer")
                     .depends_on(&["parallel_researcher"]),
-                TeamMember::new("storage", "save_to_brain", "storage")
-                    .depends_on(&["synthesizer"]),
+                TeamMember::new("storage", "save_to_brain", "storage").depends_on(&["synthesizer"]),
             ],
             default_parallelism: parallelism,
         }
@@ -121,8 +124,7 @@ impl TeamComposition {
             description: "researcher → storage (no synthesis)".into(),
             members: vec![
                 TeamMember::new("researcher", "search_all", "researcher"),
-                TeamMember::new("storage", "save_to_brain", "storage")
-                    .depends_on(&["researcher"]),
+                TeamMember::new("storage", "save_to_brain", "storage").depends_on(&["researcher"]),
             ],
             default_parallelism: 1,
         }

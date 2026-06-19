@@ -33,13 +33,11 @@ pub use audit::{AuditEntry, AuditLog, AuditResult, RotationError};
 pub use audit_escape::escape_audit_field;
 pub use grants::{resolve_grants, GrantCheck, GrantTable, ResolveError};
 pub use purge_idempotency::{
-    check_and_record as purge_check_and_record, PurgeCheck,
-    PURGE_COOLDOWN_SECONDS,
+    check_and_record as purge_check_and_record, PurgeCheck, PURGE_COOLDOWN_SECONDS,
 };
 pub use rate_limit::{
-    check_and_increment as rate_limit_check_and_increment,
-    decrement as rate_limit_decrement, RateLimitError, MAX_ACTIVE_GRANTS,
-    MAX_CREATES_PER_HOUR,
+    check_and_increment as rate_limit_check_and_increment, decrement as rate_limit_decrement,
+    RateLimitError, MAX_ACTIVE_GRANTS, MAX_CREATES_PER_HOUR,
 };
 
 /// Plugin identifiers that represent a live human conversational turn.
@@ -82,20 +80,19 @@ pub fn is_conversational_channel(plugin: &str) -> bool {
     CONVERSATIONAL_CHANNELS.contains(&plugin)
 }
 pub use service::{
-    CompositeHandler, EnvSecretBackend, InMemorySecretBackend, SecretBackend,
-    SecretError, SecretHandler, StateError, StateHandler,
+    CompositeHandler, EnvSecretBackend, InMemorySecretBackend, SecretBackend, SecretError,
+    SecretHandler, StateError, StateHandler,
 };
 pub use socket::{
-    socket_path, CapabilityError, CapabilityHandler, CapabilityRequest,
-    CapabilityResponse, CapabilityServer, EchoHandler, ServerHandle, SocketError,
+    socket_path, CapabilityError, CapabilityHandler, CapabilityRequest, CapabilityResponse,
+    CapabilityServer, EchoHandler, ServerHandle, SocketError,
 };
 pub use user_grants::{
-    glob_match as user_grant_glob_match, new_grant_id, UserGrant, UserGrants,
-    UserGrantsError, SCHEMA_VERSION,
+    glob_match as user_grant_glob_match, new_grant_id, UserGrant, UserGrants, UserGrantsError,
+    SCHEMA_VERSION,
 };
 pub use verb::{
-    normalize_grant, parse_grant, scope_matches, Verb, VerbError, KNOWN_VERBS,
-    SCOPE_REQUIRED_VERBS,
+    normalize_grant, parse_grant, scope_matches, Verb, VerbError, KNOWN_VERBS, SCOPE_REQUIRED_VERBS,
 };
 
 use std::path::Path;
@@ -121,8 +118,7 @@ pub fn build_plugin_handler(
     // Secret backend reads from env — plugins get whatever the kernel
     // process has. Scope enforcement happens at the grant layer, not
     // the backend.
-    let secret_backend: Arc<dyn SecretBackend> =
-        Arc::new(service::secrets::EnvSecretBackend);
+    let secret_backend: Arc<dyn SecretBackend> = Arc::new(service::secrets::EnvSecretBackend);
 
     let composite: Arc<dyn CapabilityHandler> = Arc::new(
         CompositeHandler::new()
@@ -135,10 +131,7 @@ pub fn build_plugin_handler(
                     home.join("data/Brain"),
                 )),
             )
-            .register(
-                "llm",
-                Arc::new(service::llm::LlmHandler::new(llm, emb)),
-            ),
+            .register("llm", Arc::new(service::llm::LlmHandler::new(llm, emb))),
     );
 
     Ok((composite, grant_table))

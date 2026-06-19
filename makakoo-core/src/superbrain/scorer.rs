@@ -31,11 +31,7 @@ pub const W_FREQUENCY: f32 = 0.15;
 /// age grows. Ported from `memory_scorer._recency_decay` + Python promoter
 /// `_recency` (both use `exp(-(ln2/T) * age)` which is mathematically
 /// identical to `0.5^(age/T)`).
-pub fn recency_score(
-    last_hit: DateTime<Utc>,
-    now: DateTime<Utc>,
-    half_life_days: f32,
-) -> f32 {
+pub fn recency_score(last_hit: DateTime<Utc>, now: DateTime<Utc>, half_life_days: f32) -> f32 {
     let age_seconds = (now - last_hit).num_seconds() as f32;
     if age_seconds <= 0.0 {
         return 1.0;

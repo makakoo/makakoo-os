@@ -170,7 +170,10 @@ mod tests {
         assert_eq!(out["species"], json!("fox"));
         assert_eq!(out["patrol_interval_hours"], json!(3));
         assert_eq!(out["status"], json!("hatching"));
-        assert_eq!(ctx.nursery.as_ref().unwrap().get("Sparky").unwrap().name, "Sparky");
+        assert_eq!(
+            ctx.nursery.as_ref().unwrap().get("Sparky").unwrap().name,
+            "Sparky"
+        );
     }
 
     #[tokio::test]

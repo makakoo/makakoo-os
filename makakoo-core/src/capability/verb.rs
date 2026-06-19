@@ -107,8 +107,7 @@ pub fn parse_grant(raw: &str) -> Result<Verb, VerbError> {
         });
     }
     // §1.7 — secrets scopes must not be `*` (too broad).
-    if (v.verb == "secrets/read" || v.verb == "secrets/write")
-        && v.scopes.iter().any(|s| s == "*")
+    if (v.verb == "secrets/read" || v.verb == "secrets/write") && v.scopes.iter().any(|s| s == "*")
     {
         return Err(VerbError::BadScope {
             verb: v.verb.clone(),
@@ -169,7 +168,9 @@ fn glob_match(pattern: &str, s: &str) -> bool {
     // Convert the glob into a plain regex. This keeps the semantics
     // identical across OSes without pulling in the `glob` crate.
     let re = glob_to_regex(pattern);
-    regex::Regex::new(&re).map(|r| r.is_match(s)).unwrap_or(false)
+    regex::Regex::new(&re)
+        .map(|r| r.is_match(s))
+        .unwrap_or(false)
 }
 
 fn glob_to_regex(pattern: &str) -> String {
@@ -196,8 +197,7 @@ fn glob_to_regex(pattern: &str) -> String {
                 }
             }
             b'?' => out.push('.'),
-            b'.' | b'+' | b'(' | b')' | b'|' | b'^' | b'$' | b'{' | b'}'
-            | b'[' | b']' | b'\\' => {
+            b'.' | b'+' | b'(' | b')' | b'|' | b'^' | b'$' | b'{' | b'}' | b'[' | b']' | b'\\' => {
                 out.push('\\');
                 out.push(c as char);
             }
@@ -242,8 +242,7 @@ mod tests {
 
     #[test]
     fn parse_multi_scope_dedup_and_sort() {
-        let v = parse_grant("net/http:https://b.com/*,https://a.com/*,https://a.com/*")
-            .unwrap();
+        let v = parse_grant("net/http:https://b.com/*,https://a.com/*,https://a.com/*").unwrap();
         assert_eq!(v.verb, "net/http");
         assert_eq!(v.scopes.len(), 2);
         assert_eq!(v.scopes[0], "https://a.com/*");

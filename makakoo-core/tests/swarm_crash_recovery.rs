@@ -17,15 +17,15 @@
 use std::sync::{Arc, Mutex};
 
 use makakoo_core::db::{open_db, run_migrations};
+use makakoo_core::embeddings::EmbeddingClient;
 use makakoo_core::event_bus::PersistentEventBus;
 use makakoo_core::llm::LlmClient;
 use makakoo_core::sancho::{SanchoContext, SanchoHandler, SwarmDispatchHandler};
+use makakoo_core::superbrain::store::SuperbrainStore;
 use makakoo_core::swarm::{
     enqueue_team, load_queue, load_receipts, AgentCoordinator, ArtifactStore, SwarmGateway,
     TeamDispatchRequest,
 };
-use makakoo_core::embeddings::EmbeddingClient;
-use makakoo_core::superbrain::store::SuperbrainStore;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -92,8 +92,8 @@ async fn drain_with_local_gateway(
     gateway: Arc<SwarmGateway>,
     max: usize,
 ) -> (usize, Vec<String>) {
-    use makakoo_core::swarm::{QueueEntry, Receipt, TeamComposition};
     use makakoo_core::swarm::dispatch_queue::write_receipt;
+    use makakoo_core::swarm::{QueueEntry, Receipt, TeamComposition};
 
     let queue = load_queue(&ctx.home).unwrap_or_default();
     let receipts = load_receipts(&ctx.home).unwrap_or_default();
@@ -109,8 +109,7 @@ async fn drain_with_local_gateway(
         let id = entry.id().to_string();
         let run_id = match entry {
             QueueEntry::Team { req, .. } => {
-                let roster =
-                    TeamComposition::by_name(&req.team, req.parallelism).expect("team");
+                let roster = TeamComposition::by_name(&req.team, req.parallelism).expect("team");
                 let resp = gateway.dispatch_team(&roster, req).await.unwrap();
                 resp.run_id
             }
@@ -176,8 +175,7 @@ async fn receipts_prevent_redispatch_after_process_boundary() {
     // Second tick: MUST NOT redispatch anything. The global gateway is
     // not installed, so the real handler would short-circuit — verify
     // we produce zero new receipts with the direct drain path too.
-    let (second_batch, _) =
-        drain_with_local_gateway(&new_ctx, Arc::clone(&h.gateway), 10).await;
+    let (second_batch, _) = drain_with_local_gateway(&new_ctx, Arc::clone(&h.gateway), 10).await;
     assert_eq!(second_batch, 0, "second tick must not redispatch");
 
     let receipts = load_receipts(&new_ctx.home).unwrap();
@@ -196,8 +194,7 @@ async fn receipts_prevent_redispatch_after_process_boundary() {
     // OnceCell), the handler falls into the "gateway not installed"
     // branch which also ok-reports with no dispatches.
     assert!(
-        report.message.contains("queue empty")
-            || report.message.contains("gateway not installed"),
+        report.message.contains("queue empty") || report.message.contains("gateway not installed"),
         "unexpected report: {}",
         report.message
     );

@@ -236,7 +236,14 @@ fn info(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
     }
     println!("  kind:     {:?}", m.plugin.kind);
     println!("  language: {:?}", m.plugin.language);
-    println!("  enabled:  {}", if plugin.enabled { "yes" } else { "no (soft-disabled)" });
+    println!(
+        "  enabled:  {}",
+        if plugin.enabled {
+            "yes"
+        } else {
+            "no (soft-disabled)"
+        }
+    );
     println!("  root:     {}", plugin.root.display());
     if let Some(ref lic) = m.plugin.license {
         println!("  license:  {lic}");
@@ -261,8 +268,7 @@ fn info(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
                     if scopes.iter().all(|s| s.is_empty()) {
                         println!("    - {verb}");
                     } else {
-                        let rendered: Vec<&str> =
-                            scopes.iter().map(|s| s.as_str()).collect();
+                        let rendered: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
                         println!("    - {verb}:{}", rendered.join(","));
                     }
                 }
@@ -273,11 +279,7 @@ fn info(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
     if !m.sancho.tasks.is_empty() {
         println!("\n  sancho tasks:");
         for task in &m.sancho.tasks {
-            println!(
-                "    - {} (interval: {})",
-                task.name,
-                task.interval
-            );
+            println!("    - {} (interval: {})", task.name, task.interval);
         }
     }
     if !m.mcp.tools.is_empty() {
@@ -410,10 +412,7 @@ fn parse_install_source(
         // on SSH-style `git@host:...` authority (which shouldn't appear
         // after `git+` but keep the parser defensive).
         let (url, ref_) = match rest.rfind('@') {
-            Some(i) if i > "https://".len() => (
-                rest[..i].to_string(),
-                rest[i + 1..].to_string(),
-            ),
+            Some(i) if i > "https://".len() => (rest[..i].to_string(), rest[i + 1..].to_string()),
             _ => (rest.to_string(), "HEAD".to_string()),
         };
         return Ok(PluginSource::Git {
@@ -771,10 +770,7 @@ fn sync(ctx: &CliContext, dry_run: bool, force: bool) -> anyhow::Result<i32> {
             continue;
         }
 
-        let prior_enabled = prior_lock
-            .get(&name)
-            .map(|e| e.enabled)
-            .unwrap_or(true);
+        let prior_enabled = prior_lock.get(&name).map(|e| e.enabled).unwrap_or(true);
 
         let req = InstallRequest {
             source: PluginSource::Path(src.clone()),
@@ -1249,7 +1245,10 @@ mod tests {
             .expect("empty legacy lock file must be treated as stale");
 
         let body = std::fs::read_to_string(&lock_path).unwrap();
-        assert!(!body.is_empty(), "reaped lock must be replaced with real metadata");
+        assert!(
+            !body.is_empty(),
+            "reaped lock must be replaced with real metadata"
+        );
 
         drop(guard);
     }

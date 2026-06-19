@@ -65,14 +65,7 @@ impl ToolHandler for SkillDiscoverHandler {
     }
 }
 
-fn walk(
-    root: &Path,
-    dir: &Path,
-    depth: usize,
-    query: &str,
-    out: &mut Vec<Value>,
-    limit: usize,
-) {
+fn walk(root: &Path, dir: &Path, depth: usize, query: &str, out: &mut Vec<Value>, limit: usize) {
     if out.len() >= limit || depth > MAX_SKILL_DEPTH {
         return;
     }

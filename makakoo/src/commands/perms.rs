@@ -18,8 +18,7 @@ use anyhow::{bail, Context};
 use chrono::{DateTime, Datelike, Duration, Utc};
 
 use makakoo_core::capability::{
-    rate_limit, user_grants::UserGrant, AuditEntry, AuditLog, AuditResult,
-    UserGrants,
+    rate_limit, user_grants::UserGrant, AuditEntry, AuditLog, AuditResult, UserGrants,
 };
 
 use crate::cli::PermsCmd;
@@ -72,9 +71,7 @@ pub async fn run(ctx: &CliContext, cmd: PermsCmd) -> anyhow::Result<i32> {
 pub fn parse_duration(s: &str) -> anyhow::Result<Option<Duration>> {
     let raw = s.trim();
     if raw.is_empty() {
-        bail!(
-            "empty duration; use one of: 30m, 1h, 24h, 7d, permanent"
-        );
+        bail!("empty duration; use one of: 30m, 1h, 24h, 7d, permanent");
     }
     if raw.eq_ignore_ascii_case("permanent") {
         return Ok(None);
@@ -85,19 +82,13 @@ pub fn parse_duration(s: &str) -> anyhow::Result<Option<Duration>> {
     let last = *bytes.last().unwrap() as char;
     let (num_part, unit) = match last {
         'm' | 'h' | 'd' => (&raw[..raw.len() - 1], last),
-        _ => bail!(
-            "unsupported duration {raw:?}; use 30m | 1h | 24h | 7d | permanent"
-        ),
+        _ => bail!("unsupported duration {raw:?}; use 30m | 1h | 24h | 7d | permanent"),
     };
     let n: i64 = num_part.parse().with_context(|| {
-        format!(
-            "unsupported duration {raw:?}; use 30m | 1h | 24h | 7d | permanent"
-        )
+        format!("unsupported duration {raw:?}; use 30m | 1h | 24h | 7d | permanent")
     })?;
     if n <= 0 {
-        bail!(
-            "non-positive duration {raw:?}; use 30m | 1h | 24h | 7d | permanent"
-        );
+        bail!("non-positive duration {raw:?}; use 30m | 1h | 24h | 7d | permanent");
     }
 
     let dur = match unit {
@@ -107,9 +98,7 @@ pub fn parse_duration(s: &str) -> anyhow::Result<Option<Duration>> {
         _ => unreachable!(),
     };
     if dur > Duration::days(365) {
-        bail!(
-            "duration {raw:?} exceeds 365 days — shorten or split into multiple grants"
-        );
+        bail!("duration {raw:?} exceeds 365 days — shorten or split into multiple grants");
     }
     Ok(Some(dur))
 }
@@ -135,9 +124,7 @@ pub fn validate_and_expand_scope(raw: &str) -> anyhow::Result<PathBuf> {
     // Refuse bare wildcards and home markers before expansion.
     let bare_reject: &[&str] = &["/", "~", "~/", "$HOME", "*", "**", ".", "./"];
     if bare_reject.contains(&trimmed) {
-        bail!(
-            "scope {trimmed:?} is too broad — grant a specific subdirectory"
-        );
+        bail!("scope {trimmed:?} is too broad — grant a specific subdirectory");
     }
     // `$HOME/` alone (or with `**` directly appended) is also too broad.
     if trimmed == "$HOME/" || trimmed == "$HOME/**" || trimmed == "~/**" {
@@ -166,9 +153,7 @@ pub fn validate_and_expand_scope(raw: &str) -> anyhow::Result<PathBuf> {
     // silently granted home-wide write access.
     let abs_str = abs.to_string_lossy().to_string();
     if abs_str == "/" || abs_str == "/**" {
-        bail!(
-            "expanded scope resolves to root — refuse to grant filesystem-wide write"
-        );
+        bail!("expanded scope resolves to root — refuse to grant filesystem-wide write");
     }
     let home = std::env::var("HOME").unwrap_or_default();
     let mk_home = std::env::var("MAKAKOO_HOME").unwrap_or_else(|_| home.clone());
@@ -210,9 +195,7 @@ fn looks_like_path(s: &str) -> bool {
     if s.starts_with("g_") && s.len() >= 11 {
         // Grant id shape: `g_YYYYMMDD_*`
         let after = &s[2..];
-        if after.chars().take(8).all(|c| c.is_ascii_digit())
-            && after.chars().nth(8) == Some('_')
-        {
+        if after.chars().take(8).all(|c| c.is_ascii_digit()) && after.chars().nth(8) == Some('_') {
             return false;
         }
     }
@@ -300,7 +283,11 @@ fn render_grants_table(grants: &[&UserGrant], now: DateTime<Utc>) -> String {
                 } else if remaining < Duration::minutes(10) {
                     format!("in {}m (soon)", remaining.num_minutes())
                 } else if remaining < Duration::hours(24) {
-                    format!("in {}h{}m", remaining.num_hours(), remaining.num_minutes() % 60)
+                    format!(
+                        "in {}h{}m",
+                        remaining.num_hours(),
+                        remaining.num_minutes() % 60
+                    )
                 } else {
                     format!("in {}d", remaining.num_days())
                 }
@@ -346,11 +333,7 @@ fn list(ctx: &CliContext, json: bool, all: bool) -> anyhow::Result<i32> {
         // already returns. Callers get one stable schema across
         // surfaces.
         let baseline = baseline_roots_for(ctx.home());
-        let expired_today = if all {
-            0
-        } else {
-            count_expired_today(&u, now)
-        };
+        let expired_today = if all { 0 } else { count_expired_today(&u, now) };
         println!(
             "{}",
             render_grants_json(&shown, &baseline, expired_today, all)?
@@ -375,10 +358,7 @@ fn baseline_roots_for(home: &std::path::Path) -> Vec<String> {
     ]
 }
 
-fn count_expired_today(
-    u: &UserGrants,
-    now: DateTime<Utc>,
-) -> usize {
+fn count_expired_today(u: &UserGrants, now: DateTime<Utc>) -> usize {
     let today_midnight = DateTime::<Utc>::from_naive_utc_and_offset(
         chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), now.day())
             .unwrap()
@@ -415,8 +395,7 @@ fn grant(
     if expires_at.is_none() {
         let home = ctx.home().to_path_buf();
         let makakoo_home_real = fs::canonicalize(&home).unwrap_or(home.clone());
-        let abs_real =
-            fs::canonicalize(&expanded).unwrap_or_else(|_| expanded.clone());
+        let abs_real = fs::canonicalize(&expanded).unwrap_or_else(|_| expanded.clone());
         let inside_home = abs_real.starts_with(&makakoo_home_real);
         if !inside_home && !yes_really {
             bail!(
@@ -433,17 +412,16 @@ fn grant(
     //    `*`). Glob patterns like `~/foo/**` defer to match-time.
     let scope_str = expanded.to_string_lossy().to_string();
     let looks_like_glob = scope_str.contains('*');
-    if !looks_like_glob
-        && !expanded.exists() {
-            if !mkdir {
-                bail!(
-                    "target {} does not exist — pass --mkdir to create it",
-                    expanded.display()
-                );
-            }
-            fs::create_dir_all(&expanded)
-                .with_context(|| format!("creating {}", expanded.display()))?;
+    if !looks_like_glob && !expanded.exists() {
+        if !mkdir {
+            bail!(
+                "target {} does not exist — pass --mkdir to create it",
+                expanded.display()
+            );
         }
+        fs::create_dir_all(&expanded)
+            .with_context(|| format!("creating {}", expanded.display()))?;
+    }
 
     // 4. Build the on-disk scope string. Baseline shape is
     //    `fs/write:<absolute>`. If the user didn't pass a glob, we
@@ -460,18 +438,13 @@ fn grant(
     // 5. Rate-limit check (caps active + per-hour creates, LD#14).
     let mut u = UserGrants::load(ctx.home());
     let active_count = u.active_grants(now).len();
-    if let Err(e) =
-        rate_limit::check_and_increment(active_count, ctx.home(), now)
-    {
+    if let Err(e) = rate_limit::check_and_increment(active_count, ctx.home(), now) {
         bail!("{}", e);
     }
 
     // 6. Construct + append the grant.
     let label_text =
-        makakoo_core::capability::escape_audit_field(
-            label.as_deref().unwrap_or(""),
-            80,
-        );
+        makakoo_core::capability::escape_audit_field(label.as_deref().unwrap_or(""), 80);
     let new_grant = UserGrant {
         id: makakoo_core::capability::new_grant_id(now),
         scope: stored_scope.clone(),
@@ -564,9 +537,11 @@ fn revoke(
         let matches: Vec<&UserGrant> = u
             .grants
             .iter()
-            .filter(|g| g.scope == prefix
-                || g.scope == format!("{}/**", prefix)
-                || g.scope == format!("{}**", prefix))
+            .filter(|g| {
+                g.scope == prefix
+                    || g.scope == format!("{}/**", prefix)
+                    || g.scope == format!("{}**", prefix)
+            })
             .collect();
         match matches.len() {
             0 => bail!("no grant matches path {}", expanded.display()),
@@ -822,7 +797,9 @@ mod tests {
 
     #[test]
     fn validate_scope_refuses_bare_wildcards() {
-        for bad in ["/", "~", "~/", "$HOME", "*", "**", ".", "./", "$HOME/", "~/**", "$HOME/**"] {
+        for bad in [
+            "/", "~", "~/", "$HOME", "*", "**", ".", "./", "$HOME/", "~/**", "$HOME/**",
+        ] {
             assert!(
                 validate_and_expand_scope(bad).is_err(),
                 "scope {bad:?} should be refused"

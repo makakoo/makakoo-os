@@ -67,9 +67,7 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 hook(ctx, &name, Hook::Start)
             }
         }
-        AgentCmd::Supervisor { slot } => {
-            agent_lifecycle::run_supervisor_command(ctx, &slot)
-        }
+        AgentCmd::Supervisor { slot } => agent_lifecycle::run_supervisor_command(ctx, &slot),
         AgentCmd::Health { name } => hook(ctx, &name, Hook::Health),
 
         // Phase 2 multi-bot subagent registry.
@@ -111,9 +109,7 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 skip_credential_check,
             },
         ),
-        AgentCmd::MigrateHarveychat => {
-            crate::commands::agent_slot::migrate_harveychat(ctx)
-        }
+        AgentCmd::MigrateHarveychat => crate::commands::agent_slot::migrate_harveychat(ctx),
         AgentCmd::Destroy {
             slot,
             yes,

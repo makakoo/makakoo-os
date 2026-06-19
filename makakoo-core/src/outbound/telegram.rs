@@ -198,10 +198,7 @@ mod tests {
     #[test]
     fn normalize_chat_id_adds_minus100_prefix_for_bare_supergroup_ids() {
         // `3746642416` → `-1003746642416`
-        assert_eq!(
-            normalize_chat_id("3746642416").unwrap(),
-            -1_003_746_642_416,
-        );
+        assert_eq!(normalize_chat_id("3746642416").unwrap(), -1_003_746_642_416,);
     }
 
     #[test]
@@ -244,9 +241,7 @@ mod tests {
     #[tokio::test]
     async fn send_approved_refuses_unapproved_draft() {
         let (_dir, queue) = open_queue();
-        let id = queue
-            .draft("telegram", "-100123", None, "nope")
-            .unwrap();
+        let id = queue.draft("telegram", "-100123", None, "nope").unwrap();
         let draft = queue.get(id).unwrap().unwrap();
         let adapter = TelegramAdapter::new("FAKE");
         let err = adapter.send_approved(&queue, &draft).await.unwrap_err();

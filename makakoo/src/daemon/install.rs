@@ -12,6 +12,9 @@ pub async fn run() -> Result<()> {
         "installed makakoo daemon service descriptor at {}",
         path.display()
     );
-    println!("(best-effort lifecycle: {} will start the service)", platform.name());
+    println!(
+        "(best-effort lifecycle: {} will start the service)",
+        platform.name()
+    );
     Ok(())
 }

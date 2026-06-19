@@ -55,12 +55,7 @@ async fn build_fixture(llm_base: &str) -> Fixture {
     let coordinator = Arc::new(AgentCoordinator::new());
     let llm = Arc::new(LlmClient::with_base_url(llm_base.to_string()));
     let bus = PersistentEventBus::open(&home.path().join("bus.db")).unwrap();
-    let gateway = SwarmGateway::new(
-        Arc::clone(&coordinator),
-        Arc::clone(&artifacts),
-        llm,
-        bus,
-    );
+    let gateway = SwarmGateway::new(Arc::clone(&coordinator), Arc::clone(&artifacts), llm, bus);
     Fixture {
         _home: home,
         gateway,
@@ -162,14 +157,8 @@ async fn swarm_dispatch_with_adapter_writes_result_artifact() {
         "got {:?}",
         result_art.content
     );
-    assert_eq!(
-        result_art.metadata["adapter"].as_str(),
-        Some("openclaw")
-    );
-    assert_eq!(
-        result_art.metadata["status"].as_str(),
-        Some("PASS")
-    );
+    assert_eq!(result_art.metadata["adapter"].as_str(), Some("openclaw"));
+    assert_eq!(result_art.metadata["status"].as_str(), Some("PASS"));
 }
 
 #[tokio::test]

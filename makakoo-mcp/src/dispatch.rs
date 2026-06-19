@@ -96,10 +96,7 @@ tokio::task_local! {
 /// `None` outside an `AGENT_ID::scope` (e.g. unit tests or stdio
 /// without `MAKAKOO_AGENT_SLOT`).
 pub fn current_agent_id() -> Option<String> {
-    AGENT_ID
-        .try_with(|v| v.clone())
-        .ok()
-        .flatten()
+    AGENT_ID.try_with(|v| v.clone()).ok().flatten()
 }
 
 /// Shared, read-mostly context handed to every tool handler at

@@ -23,12 +23,8 @@ use crate::channel_ops::approval::{
 use crate::channel_ops::directory::{
     ChannelDirectoryAdapter, ChannelKind, ChannelOpError, ChannelSummary, UserSummary,
 };
-use crate::channel_ops::messaging::{
-    BroadcastResult, ChannelMessagingAdapter, MessageRef,
-};
-use crate::channel_ops::threading::{
-    ChannelThreadingAdapter, ThreadParent, ThreadSummary,
-};
+use crate::channel_ops::messaging::{BroadcastResult, ChannelMessagingAdapter, MessageRef};
+use crate::channel_ops::threading::{ChannelThreadingAdapter, ThreadParent, ThreadSummary};
 use crate::transport::telegram::TelegramAdapter;
 
 const KIND: &str = "telegram";
@@ -37,17 +33,12 @@ const KIND: &str = "telegram";
 /// integers — supergroups are negative.
 fn parse_chat_id(s: &str) -> Result<i64, ChannelOpError> {
     s.parse::<i64>().map_err(|_| {
-        ChannelOpError::InvalidInput(format!(
-            "telegram chat_id '{s}' is not a numeric id"
-        ))
+        ChannelOpError::InvalidInput(format!("telegram chat_id '{s}' is not a numeric id"))
     })
 }
 
 fn telegram_url(adapter: &TelegramAdapter, method: &str) -> String {
-    format!(
-        "{}/bot{}/{}",
-        adapter.api_base, adapter.bot_token, method
-    )
+    format!("{}/bot{}/{}", adapter.api_base, adapter.bot_token, method)
 }
 
 #[derive(Deserialize)]
@@ -155,21 +146,19 @@ impl ChannelDirectoryAdapter for TelegramDirectory {
         })
     }
 
-    async fn lookup_user(
-        &self,
-        query: &str,
-    ) -> Result<Option<UserSummary>, ChannelOpError> {
+    async fn lookup_user(&self, query: &str) -> Result<Option<UserSummary>, ChannelOpError> {
         // Format: "<chat_id>:<user_id>" — both numeric. Anything else
         // is rejected because Telegram has no global user lookup API.
-        let (chat_str, user_str) = query.split_once(':').ok_or_else(|| {
-            ChannelOpError::Unsupported {
-                kind: KIND,
-                op: "lookup_user",
-                reason: "telegram lookup_user requires query in the form \
+        let (chat_str, user_str) =
+            query
+                .split_once(':')
+                .ok_or_else(|| ChannelOpError::Unsupported {
+                    kind: KIND,
+                    op: "lookup_user",
+                    reason: "telegram lookup_user requires query in the form \
                          '<chat_id>:<user_id>' — both numeric"
-                    .into(),
-            }
-        })?;
+                        .into(),
+                })?;
         let chat_id = parse_chat_id(chat_str)?;
         let user_id = user_str.parse::<i64>().map_err(|_| {
             ChannelOpError::InvalidInput(format!(
@@ -241,11 +230,7 @@ impl TelegramMessaging {
         Self { inner }
     }
 
-    async fn raw_send(
-        &self,
-        chat_id_str: &str,
-        text: &str,
-    ) -> Result<MessageRef, ChannelOpError> {
+    async fn raw_send(&self, chat_id_str: &str, text: &str) -> Result<MessageRef, ChannelOpError> {
         let chat_id = parse_chat_id(chat_id_str)?;
         let url = telegram_url(&self.inner, "sendMessage");
         let resp = self
@@ -312,17 +297,10 @@ impl ChannelMessagingAdapter for TelegramMessaging {
         self.raw_send(channel_id, text).await
     }
 
-    async fn broadcast(
-        &self,
-        channel_ids: &[String],
-        text: &str,
-    ) -> Vec<BroadcastResult> {
+    async fn broadcast(&self, channel_ids: &[String], text: &str) -> Vec<BroadcastResult> {
         let mut out = Vec::with_capacity(channel_ids.len());
         for cid in channel_ids {
-            let outcome = self
-                .raw_send(cid, text)
-                .await
-                .map_err(|e| e.to_string());
+            let outcome = self.raw_send(cid, text).await.map_err(|e| e.to_string());
             out.push(BroadcastResult {
                 channel_id: cid.clone(),
                 outcome,
@@ -412,10 +390,7 @@ impl ChannelThreadingAdapter for TelegramThreading {
             .to_string())
     }
 
-    async fn list_threads(
-        &self,
-        _channel_id: &str,
-    ) -> Result<Vec<ThreadSummary>, ChannelOpError> {
+    async fn list_threads(&self, _channel_id: &str) -> Result<Vec<ThreadSummary>, ChannelOpError> {
         Err(ChannelOpError::Unsupported {
             kind: KIND,
             op: "list_threads",
@@ -583,7 +558,13 @@ mod tests {
     async fn directory_list_users_is_unsupported() {
         let dir = TelegramDirectory::new(adapter("http://unused.invalid".into()));
         let err = dir.list_users().await.unwrap_err();
-        assert!(matches!(err, ChannelOpError::Unsupported { op: "list_users", .. }));
+        assert!(matches!(
+            err,
+            ChannelOpError::Unsupported {
+                op: "list_users",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -723,8 +704,7 @@ mod tests {
             .mount(&server)
             .await;
         let center = Arc::new(ApprovalCenter::new());
-        let approval =
-            TelegramApproval::new(adapter(server.uri()), center.clone(), "secretary");
+        let approval = TelegramApproval::new(adapter(server.uri()), center.clone(), "secretary");
 
         let key = ApprovalKey::new("secretary", "telegram-main", "123");
         let center_clone = center.clone();

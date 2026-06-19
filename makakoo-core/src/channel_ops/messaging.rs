@@ -41,9 +41,5 @@ pub trait ChannelMessagingAdapter: Send + Sync {
     /// `BroadcastResult` per input id, preserving order. Errors on
     /// individual sends are captured per-channel — the function
     /// itself never short-circuits on partial failure.
-    async fn broadcast(
-        &self,
-        channel_ids: &[String],
-        text: &str,
-    ) -> Vec<BroadcastResult>;
+    async fn broadcast(&self, channel_ids: &[String], text: &str) -> Vec<BroadcastResult>;
 }

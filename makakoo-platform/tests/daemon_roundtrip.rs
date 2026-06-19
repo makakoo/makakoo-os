@@ -65,14 +65,20 @@ fn daemon_install_status_uninstall_round_trip() {
     let descriptor = platform
         .daemon_install()
         .expect("daemon_install under tempdir $HOME");
-    assert!(descriptor.exists(), "descriptor path must exist post-install");
+    assert!(
+        descriptor.exists(),
+        "descriptor path must exist post-install"
+    );
     assert!(
         descriptor.starts_with(dir.path()),
         "descriptor {} must be under tempdir {}",
         descriptor.display(),
         dir.path().display()
     );
-    assert!(platform.daemon_is_installed(), "is_installed must report true");
+    assert!(
+        platform.daemon_is_installed(),
+        "is_installed must report true"
+    );
 
     // Uninstall.
     platform.daemon_uninstall().expect("daemon_uninstall");
@@ -108,7 +114,10 @@ fn symlink_dir_works_under_tempdir() {
     let link = dir.path().join("link");
 
     let platform = CurrentPlatform::default();
-    assert!(platform.can_symlink(), "macOS + Linux always allow symlinks");
+    assert!(
+        platform.can_symlink(),
+        "macOS + Linux always allow symlinks"
+    );
     platform
         .symlink_dir(&target, &link)
         .expect("symlink_dir on a fresh tempdir");

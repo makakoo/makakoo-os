@@ -46,11 +46,7 @@ pub struct VoiceTwilioAdapter {
 }
 
 impl VoiceTwilioAdapter {
-    pub fn new(
-        ctx: TransportContext,
-        config: VoiceTwilioConfig,
-        auth_token: String,
-    ) -> Self {
+    pub fn new(ctx: TransportContext, config: VoiceTwilioConfig, auth_token: String) -> Self {
         Self::with_api_base(ctx, config, auth_token, TWILIO_API_BASE.into())
     }
 
@@ -162,7 +158,12 @@ impl Gateway for VoiceTwilioAdapter {
 /// Build the recording-callback URL Twilio POSTs after the recording
 /// finishes uploading. Locked Q9: CallSid embedded in the path so
 /// the second webhook is correlated to the first call.
-pub fn recording_callback_url(public_base: &str, slot_uuid: &str, transport_uuid: &str, call_sid: &str) -> String {
+pub fn recording_callback_url(
+    public_base: &str,
+    slot_uuid: &str,
+    transport_uuid: &str,
+    call_sid: &str,
+) -> String {
     format!(
         "{public_base}/transport/{slot_uuid}/{transport_uuid}/webhook?CallSid={call_sid}&phase=recording"
     )
@@ -186,8 +187,18 @@ pub fn xml_escape(s: &str) -> String {
 
 /// Generate the welcome TwiML returned on the FIRST inbound webhook.
 /// Includes a `<Record>` whose action embeds CallSid.
-pub fn welcome_twiml(public_base: &str, slot_uuid: &str, transport_uuid: &str, call_sid: &str) -> String {
-    let action = xml_escape(&recording_callback_url(public_base, slot_uuid, transport_uuid, call_sid));
+pub fn welcome_twiml(
+    public_base: &str,
+    slot_uuid: &str,
+    transport_uuid: &str,
+    call_sid: &str,
+) -> String {
+    let action = xml_escape(&recording_callback_url(
+        public_base,
+        slot_uuid,
+        transport_uuid,
+        call_sid,
+    ));
     format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -221,7 +232,11 @@ pub fn ack_with_audio_twiml(audio_url: Option<&str>, say_fallback_text: &str) ->
 ///
 /// Twilio's signature is base64(HMAC-SHA1(authToken,
 /// `<full_url>` + concat(sorted_form_params: "<key><value>"))).
-pub fn compute_twilio_signature(auth_token: &str, full_url: &str, form: &[(String, String)]) -> String {
+pub fn compute_twilio_signature(
+    auth_token: &str,
+    full_url: &str,
+    form: &[(String, String)],
+) -> String {
     use hmac::{Hmac, Mac};
     use sha1::Sha1;
 
@@ -418,34 +433,22 @@ mod tests {
         let a = compute_twilio_signature(
             "tok",
             "https://e.com/x",
-            &[
-                ("Body".into(), "x".into()),
-                ("From".into(), "+1".into()),
-            ],
+            &[("Body".into(), "x".into()), ("From".into(), "+1".into())],
         );
         let b = compute_twilio_signature(
             "tok",
             "https://e.com/x",
-            &[
-                ("From".into(), "+1".into()),
-                ("Body".into(), "x".into()),
-            ],
+            &[("From".into(), "+1".into()), ("Body".into(), "x".into())],
         );
         assert_eq!(a, b);
     }
 
     #[test]
     fn compute_twilio_signature_changes_with_body() {
-        let a = compute_twilio_signature(
-            "tok",
-            "https://e.com/x",
-            &[("Body".into(), "one".into())],
-        );
-        let b = compute_twilio_signature(
-            "tok",
-            "https://e.com/x",
-            &[("Body".into(), "two".into())],
-        );
+        let a =
+            compute_twilio_signature("tok", "https://e.com/x", &[("Body".into(), "one".into())]);
+        let b =
+            compute_twilio_signature("tok", "https://e.com/x", &[("Body".into(), "two".into())]);
         assert_ne!(a, b);
     }
 

@@ -87,12 +87,7 @@ enum UpsertOutcome {
 
 /// Insert/replace `name → desired` inside `root[parent_key]`. Creates
 /// the parent object if absent. Returns whether a write is needed.
-fn upsert_server(
-    root: &mut Value,
-    parent_key: &str,
-    name: &str,
-    desired: Value,
-) -> UpsertOutcome {
+fn upsert_server(root: &mut Value, parent_key: &str, name: &str, desired: Value) -> UpsertOutcome {
     if !root.is_object() {
         // Hostile config that isn't a JSON object — treat as fresh.
         *root = Value::Object(Map::new());
@@ -289,7 +284,10 @@ mod tests {
         let outcome = sync(&McpTarget::Gemini, &path, &spec(), false, false);
         assert_eq!(outcome, SyncOutcome::Updated);
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v["mcpServers"]["harvey"]["command"], "/opt/cargo/bin/makakoo-mcp");
+        assert_eq!(
+            v["mcpServers"]["harvey"]["command"],
+            "/opt/cargo/bin/makakoo-mcp"
+        );
     }
 
     #[test]
@@ -297,7 +295,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
         let outcome = sync(&McpTarget::Gemini, &path, &spec(), true, false);
-        assert_eq!(outcome, SyncOutcome::WouldChange { kind: ChangeKind::Add });
+        assert_eq!(
+            outcome,
+            SyncOutcome::WouldChange {
+                kind: ChangeKind::Add
+            }
+        );
         assert!(!path.exists());
     }
 
@@ -403,11 +406,7 @@ mod tests {
     fn unknown_top_level_keys_round_trip_intact() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        fs::write(
-            &path,
-            r#"{"editor":{"theme":"dark"},"mcpServers":{}}"#,
-        )
-        .unwrap();
+        fs::write(&path, r#"{"editor":{"theme":"dark"},"mcpServers":{}}"#).unwrap();
         let _ = sync(&McpTarget::Gemini, &path, &spec(), false, false);
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["editor"]["theme"], "dark");

@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{MakakooError, Result};
 
 pub use compositor::{
-    all_recipes, all_species, compose, compose_for_mascot, compose_random,
-    ACCESSORIES, BODIES, EYES, FEET, FLOATS, HEADS, RECIPES,
+    all_recipes, all_species, compose, compose_for_mascot, compose_random, ACCESSORIES, BODIES,
+    EYES, FEET, FLOATS, HEADS, RECIPES,
 };
 
 /// Cooldown between renders (per process) when not forced. 5 minutes matches
@@ -417,11 +417,7 @@ impl GimmickRegistry {
     /// Render using an explicit species + recipe pair. Unknown species or
     /// recipe yields `NotFound`. Bypasses the cooldown (used by tests and by
     /// direct `compose()` callers who already know their ids).
-    pub fn render_species_recipe(
-        &self,
-        species: &str,
-        recipe: &str,
-    ) -> Result<RenderedGimmick> {
+    pub fn render_species_recipe(&self, species: &str, recipe: &str) -> Result<RenderedGimmick> {
         self.require_species(species)?;
         self.require_recipe(recipe)?;
 

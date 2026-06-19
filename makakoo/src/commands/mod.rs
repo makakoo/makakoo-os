@@ -9,21 +9,21 @@
 pub mod adapter;
 pub mod adapter_gen;
 pub mod agent;
-pub mod agent_session;
-pub mod handle;
-pub mod docs;
-pub mod docs_mcp;
 pub mod agent_audit;
 pub mod agent_destroy;
 pub mod agent_lifecycle;
+pub mod agent_session;
 pub mod agent_slot;
 pub mod agent_test_faults;
-pub mod default_banner;
 pub mod bucket;
 pub mod buddy;
+pub mod default_banner;
 pub mod distro;
+pub mod docs;
+pub mod docs_mcp;
 pub mod dream;
 pub mod flag;
+pub mod handle;
 pub mod install;
 pub mod lifecycle;
 pub mod mcp;
@@ -38,15 +38,15 @@ pub mod promotions;
 pub mod query;
 pub mod run;
 pub mod s3;
-pub mod upgrade;
 pub mod s3_endpoint;
 pub mod sancho;
 pub mod search;
 pub mod session;
 pub mod setup;
-pub mod sync;
 pub mod skill;
 pub mod skill_security;
+pub mod sync;
+pub mod upgrade;
 pub mod version;
 
 use crate::cli::Commands;
@@ -79,9 +79,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             file,
         } => sync::run(ctx, force, embed, no_auto_memory, embed_limit, file).await,
         Commands::Memory { cmd } => memory::run(ctx, cmd).await,
-        Commands::Promotions { threshold, limit } => {
-            promotions::run(ctx, threshold, limit)
-        }
+        Commands::Promotions { threshold, limit } => promotions::run(ctx, threshold, limit),
         Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,
         Commands::Upgrade {
             dry_run,
@@ -226,10 +224,7 @@ fn dispatch_secret(cmd: crate::cli::SecretCmd) -> anyhow::Result<i32> {
             Ok(0)
         }
         SecretCmd::Get { key } => {
-            let v = SecretsStore::get_cli(
-                &key,
-                keychain_prompt_allowed_for_cli_get(),
-            )?;
+            let v = SecretsStore::get_cli(&key, keychain_prompt_allowed_for_cli_get())?;
             println!("{v}");
             Ok(0)
         }

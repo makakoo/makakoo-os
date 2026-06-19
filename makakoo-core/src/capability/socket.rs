@@ -140,10 +140,7 @@ pub enum SocketError {
         source: std::io::Error,
     },
     #[error("pid verification failed: expected {expected}, peer reported {peer:?}")]
-    PidMismatch {
-        expected: u32,
-        peer: Option<u32>,
-    },
+    PidMismatch { expected: u32, peer: Option<u32> },
     #[error("capability sockets are not supported on this platform in v0.1")]
     NotSupported,
 }
@@ -326,10 +323,7 @@ impl CapabilityServer {
             // Pre-create the first server instance. On Windows a server
             // is single-use: after a client connects, we create a new
             // server instance for the next client.
-            let mut server = match ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(&pipe)
-            {
+            let mut server = match ServerOptions::new().first_pipe_instance(true).create(&pipe) {
                 Ok(s) => s,
                 Err(e) => {
                     warn!("failed to create named pipe {pipe}: {e}");
@@ -762,10 +756,7 @@ mod tests {
         Arc::new(t)
     }
 
-    async fn send_request(
-        socket: &Path,
-        req: &CapabilityRequest,
-    ) -> CapabilityResponse {
+    async fn send_request(socket: &Path, req: &CapabilityRequest) -> CapabilityResponse {
         let stream = tokio::net::UnixStream::connect(socket).await.unwrap();
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -787,12 +778,8 @@ mod tests {
         let grants = grants_with(&[("brain/read", vec![])], "test-plugin");
         let sock = socket_path(home, "test-plugin");
 
-        let server = CapabilityServer::new(
-            sock.clone(),
-            grants,
-            audit.clone(),
-            Arc::new(EchoHandler),
-        );
+        let server =
+            CapabilityServer::new(sock.clone(), grants, audit.clone(), Arc::new(EchoHandler));
         let handle = server.serve().await.unwrap();
 
         let req = CapabilityRequest {
@@ -825,12 +812,8 @@ mod tests {
         let grants = grants_with(&[("brain/read", vec![])], "test-plugin");
         let sock = socket_path(home, "test-plugin");
 
-        let server = CapabilityServer::new(
-            sock.clone(),
-            grants,
-            audit.clone(),
-            Arc::new(EchoHandler),
-        );
+        let server =
+            CapabilityServer::new(sock.clone(), grants, audit.clone(), Arc::new(EchoHandler));
         let handle = server.serve().await.unwrap();
 
         let req = CapabilityRequest {
@@ -864,12 +847,8 @@ mod tests {
         );
         let sock = socket_path(home, "test-plugin");
 
-        let server = CapabilityServer::new(
-            sock.clone(),
-            grants,
-            audit.clone(),
-            Arc::new(EchoHandler),
-        );
+        let server =
+            CapabilityServer::new(sock.clone(), grants, audit.clone(), Arc::new(EchoHandler));
         let handle = server.serve().await.unwrap();
 
         let req = CapabilityRequest {
@@ -893,12 +872,7 @@ mod tests {
         let grants = grants_with(&[("brain/read", vec![])], "test-plugin");
         let sock = socket_path(home, "test-plugin");
 
-        let server = CapabilityServer::new(
-            sock.clone(),
-            grants,
-            audit,
-            Arc::new(EchoHandler),
-        );
+        let server = CapabilityServer::new(sock.clone(), grants, audit, Arc::new(EchoHandler));
         let handle = server.serve().await.unwrap();
 
         let stream = tokio::net::UnixStream::connect(&sock).await.unwrap();
@@ -923,12 +897,7 @@ mod tests {
         let grants = grants_with(&[("brain/read", vec![])], "test-plugin");
         let sock = socket_path(home, "test-plugin");
 
-        let server = CapabilityServer::new(
-            sock.clone(),
-            grants,
-            audit,
-            Arc::new(EchoHandler),
-        );
+        let server = CapabilityServer::new(sock.clone(), grants, audit, Arc::new(EchoHandler));
         let handle = server.serve().await.unwrap();
 
         // Connect once to poke the accept loop.
@@ -949,12 +918,7 @@ mod tests {
         let audit = Arc::new(AuditLog::open_default(home).unwrap());
         let grants = grants_with(&[("brain/read", vec![])], "test-plugin");
         let sock = socket_path(home, "test-plugin");
-        let server = CapabilityServer::new(
-            sock.clone(),
-            grants,
-            audit,
-            Arc::new(EchoHandler),
-        );
+        let server = CapabilityServer::new(sock.clone(), grants, audit, Arc::new(EchoHandler));
         let handle = server.serve().await.unwrap();
         assert!(sock.exists());
         handle.shutdown().await;
@@ -972,13 +936,8 @@ mod tests {
         // Pin a PID that is NOT this test's PID. The server should
         // reject our connections at accept time.
         let bogus_pid = 1u32;
-        let server = CapabilityServer::new(
-            sock.clone(),
-            grants,
-            audit,
-            Arc::new(EchoHandler),
-        )
-        .expect_pid(bogus_pid);
+        let server = CapabilityServer::new(sock.clone(), grants, audit, Arc::new(EchoHandler))
+            .expect_pid(bogus_pid);
         let handle = server.serve().await.unwrap();
 
         // Try to send a request; the server closes the connection

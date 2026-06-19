@@ -36,9 +36,9 @@ pub use manifest::{
 pub use output::{parse_response, OutputError};
 pub use peer::{
     default_peers_dir, default_signing_key_path, default_signing_pub_path, default_trust_file,
-    fingerprint, load_or_create_signing_key, load_trust_file, now_millis, sign_request,
-    trust_add, trust_remove, verify_request, PeerError, DRIFT_WINDOW_MS, PEER_HEADER, SIG_HEADER,
-    SIG_PREFIX, TS_HEADER,
+    fingerprint, load_or_create_signing_key, load_trust_file, now_millis, sign_request, trust_add,
+    trust_remove, verify_request, PeerError, DRIFT_WINDOW_MS, PEER_HEADER, SIG_HEADER, SIG_PREFIX,
+    TS_HEADER,
 };
 pub use registry::{AdapterRegistry, RegisteredAdapter, RegistryError};
 pub use result::{PhaseVerdict, ValidatorResult, VerdictStatus};

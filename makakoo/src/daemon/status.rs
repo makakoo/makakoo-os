@@ -69,7 +69,10 @@ mod tests {
     #[test]
     fn daemon_state_has_human_labels() {
         assert_eq!(DaemonState::NotInstalled.as_str(), "not installed");
-        assert_eq!(DaemonState::InstalledStopped.as_str(), "installed (stopped)");
+        assert_eq!(
+            DaemonState::InstalledStopped.as_str(),
+            "installed (stopped)"
+        );
         assert_eq!(DaemonState::Running.as_str(), "running");
     }
 

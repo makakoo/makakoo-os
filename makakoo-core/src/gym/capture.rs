@@ -159,7 +159,8 @@ impl ErrorCapture {
     }
 
     fn path_for(&self, source: ErrorSource) -> PathBuf {
-        self.today_dir().join(format!("{}.jsonl", source.as_filename()))
+        self.today_dir()
+            .join(format!("{}.jsonl", source.as_filename()))
     }
 
     /// Append one entry. Returns `true` on a successful write,
@@ -220,11 +221,7 @@ impl ErrorCapture {
     }
 
     fn append_atomic(&self, path: &Path, bytes: &[u8]) -> bool {
-        let mut file = match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
+        let mut file = match OpenOptions::new().create(true).append(true).open(path) {
             Ok(f) => f,
             Err(_) => return false,
         };
@@ -407,8 +404,7 @@ mod tests {
         // Every line must be valid JSON — no half-writes from racing
         // appenders. POSIX O_APPEND semantics give us this for free.
         for line in body.lines() {
-            let _: serde_json::Value =
-                serde_json::from_str(line).expect("line corrupted");
+            let _: serde_json::Value = serde_json::from_str(line).expect("line corrupted");
         }
         let count = body.lines().count();
         assert_eq!(count, 32);

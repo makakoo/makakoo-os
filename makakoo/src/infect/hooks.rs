@@ -162,9 +162,7 @@ fn install_one(slot: &HookSlot, home: &Path, dry_run: bool) -> HookInstallResult
     // The hook dir's *parent* tells us whether the user has that CLI
     // installed. `~/.claude/` is the signal, not `~/.claude/hooks/`
     // (the hooks subdir only exists after something writes a hook).
-    let cli_root = target_dir
-        .parent()
-        .unwrap_or(&target_dir);
+    let cli_root = target_dir.parent().unwrap_or(&target_dir);
     if !cli_root.exists() {
         return HookInstallResult {
             slot_name: slot.name,
@@ -372,10 +370,17 @@ mod tests {
         let report = install_gym_hooks(home.path(), true);
         assert!(report.dry_run);
         assert_eq!(
-            report.results.iter().filter(|r| matches!(r.status, HookInstallStatus::DryRun)).count(),
+            report
+                .results
+                .iter()
+                .filter(|r| matches!(r.status, HookInstallStatus::DryRun))
+                .count(),
             1
         );
-        assert!(!home.path().join(".claude/hooks/harvey-gym-error.js").exists());
+        assert!(!home
+            .path()
+            .join(".claude/hooks/harvey-gym-error.js")
+            .exists());
     }
 
     #[test]
@@ -416,8 +421,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let home = setup_home_with_cli_dirs(&[".claude"]);
         install_gym_hooks(home.path(), false);
-        let meta = std::fs::metadata(home.path().join(".claude/hooks/harvey-gym-error.js"))
-            .unwrap();
+        let meta =
+            std::fs::metadata(home.path().join(".claude/hooks/harvey-gym-error.js")).unwrap();
         assert_ne!(meta.permissions().mode() & 0o111, 0, "not executable");
     }
 }

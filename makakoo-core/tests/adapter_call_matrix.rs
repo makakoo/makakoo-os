@@ -280,10 +280,7 @@ async fn subprocess_plain_heuristic_happy_path() {
         eprintln!("sh missing; skipping");
         return;
     }
-    let m = subprocess_manifest(
-        vec!["sh", "-c", "printf 'pass — looks good'"],
-        "plain",
-    );
+    let m = subprocess_manifest(vec!["sh", "-c", "printf 'pass — looks good'"], "plain");
     let r = call_adapter(&m, "p", ctx(&[])).await;
     assert_eq!(r.verdict.status, VerdictStatus::Pass);
 }
@@ -319,10 +316,7 @@ async fn subprocess_substitutes_prompt_marker() {
     if which("sh").is_err() {
         return;
     }
-    let m = subprocess_manifest(
-        vec!["sh", "-c", "echo prompt-was={prompt}"],
-        "plain",
-    );
+    let m = subprocess_manifest(vec!["sh", "-c", "echo prompt-was={prompt}"], "plain");
     let r = call_adapter(&m, "hello", ctx(&[])).await;
     assert!(
         r.raw_response.contains("prompt-was=hello"),
@@ -449,10 +443,7 @@ async fn http_unreachable_timeout_becomes_infra_error() {
 fn which(bin: &str) -> std::io::Result<std::path::PathBuf> {
     use std::path::PathBuf;
     let Some(path) = std::env::var_os("PATH") else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no PATH",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no PATH"));
     };
     for dir in std::env::split_paths(&path) {
         let candidate: PathBuf = dir.join(bin);

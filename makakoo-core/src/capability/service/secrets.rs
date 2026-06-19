@@ -29,9 +29,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::capability::socket::{
-    CapabilityError, CapabilityHandler, CapabilityRequest,
-};
+use crate::capability::socket::{CapabilityError, CapabilityHandler, CapabilityRequest};
 
 #[derive(Debug, Error)]
 pub enum SecretError {
@@ -133,9 +131,7 @@ impl CapabilityHandler for SecretHandler {
         match request.method.as_str() {
             "secrets.read" => {
                 let p: ReadParams = serde_json::from_value(request.params.clone())
-                    .map_err(|e| {
-                        CapabilityError::bad_request(format!("bad params: {e}"))
-                    })?;
+                    .map_err(|e| CapabilityError::bad_request(format!("bad params: {e}")))?;
                 // Belt-and-suspenders: the caller's scope must match the
                 // key name they're requesting. The GrantTable already
                 // enforced this at dispatch time, but double-check so a
@@ -148,12 +144,8 @@ impl CapabilityHandler for SecretHandler {
                     )));
                 }
                 let value = self.backend.get(&p.name).map_err(|e| match e {
-                    SecretError::NotFound { .. } => {
-                        CapabilityError::handler(e.to_string())
-                    }
-                    SecretError::Backend { msg } => {
-                        CapabilityError::handler(msg)
-                    }
+                    SecretError::NotFound { .. } => CapabilityError::handler(e.to_string()),
+                    SecretError::Backend { msg } => CapabilityError::handler(msg),
                 })?;
                 Ok(serde_json::json!({ "value": value }))
             }
@@ -183,9 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn reads_known_secret() {
-        let backend = Arc::new(
-            InMemorySecretBackend::new().with("AIL_API_KEY", "sk-abc123"),
-        );
+        let backend = Arc::new(InMemorySecretBackend::new().with("AIL_API_KEY", "sk-abc123"));
         let h = SecretHandler::new(backend);
         let r = h
             .handle(
@@ -207,11 +197,7 @@ mod tests {
         let h = SecretHandler::new(backend);
         let err = h
             .handle(
-                &req(
-                    "secrets.read",
-                    json!({ "name": "MISSING" }),
-                    "MISSING",
-                ),
+                &req("secrets.read", json!({ "name": "MISSING" }), "MISSING"),
                 None,
             )
             .await
@@ -221,9 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn scope_must_match_requested_name() {
-        let backend = Arc::new(
-            InMemorySecretBackend::new().with("AIL_API_KEY", "sk-abc123"),
-        );
+        let backend = Arc::new(InMemorySecretBackend::new().with("AIL_API_KEY", "sk-abc123"));
         let h = SecretHandler::new(backend);
         // Scope grants AIL_API_KEY but the plugin asked for NOTION_TOKEN.
         // The handler rejects even if the backend would have the key —

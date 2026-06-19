@@ -28,9 +28,7 @@ use serde_json::{json, Value};
 
 use makakoo_core::llm::{ChatMessage, LlmClient};
 use makakoo_core::plugin::{Manifest, PatternTable, PluginKind, PluginRegistry, VariableKind};
-use makakoo_core::run::{
-    compose, load_mascot, load_strategy, resolve_route, ComposeRequest,
-};
+use makakoo_core::run::{compose, load_mascot, load_strategy, resolve_route, ComposeRequest};
 
 use crate::dispatch::{ToolContext, ToolHandler, ToolRegistry};
 use crate::jsonrpc::RpcError;
@@ -98,10 +96,22 @@ impl ToolHandler for PatternToolHandler {
             }
         }
 
-        let strategy_override = obj.get("_strategy").and_then(Value::as_str).map(str::to_string);
-        let mascot_override = obj.get("_mascot").and_then(Value::as_str).map(str::to_string);
-        let model_override = obj.get("_model").and_then(Value::as_str).map(str::to_string);
-        let vendor_override = obj.get("_vendor").and_then(Value::as_str).map(str::to_string);
+        let strategy_override = obj
+            .get("_strategy")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let mascot_override = obj
+            .get("_mascot")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let model_override = obj
+            .get("_model")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let vendor_override = obj
+            .get("_vendor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let json_mode = obj.get("_json").and_then(Value::as_bool).unwrap_or(false);
 
         // P5.9 — caveman default for MCP-invoked patterns with tag
@@ -521,7 +531,12 @@ required = true
         let home = std::fs::canonicalize(tmp.path()).unwrap();
         std::fs::create_dir_all(home.join("plugins")).unwrap();
         seed_pattern(&home, "summarize", "Sum: {{input}}", "");
-        seed_pattern(&home, "draft-email", "Draft: {{input}}", r#"tags = ["external"]"#);
+        seed_pattern(
+            &home,
+            "draft-email",
+            "Draft: {{input}}",
+            r#"tags = ["external"]"#,
+        );
 
         let ctx = Arc::new(ToolContext::empty(home));
         let mut registry = ToolRegistry::new();
@@ -549,7 +564,12 @@ required = true
         let tmp = tempfile::tempdir().unwrap();
         let home = std::fs::canonicalize(tmp.path()).unwrap();
         std::fs::create_dir_all(home.join("plugins")).unwrap();
-        seed_pattern(&home, "draft-email", "Draft: {{input}}", r#"tags = ["external"]"#);
+        seed_pattern(
+            &home,
+            "draft-email",
+            "Draft: {{input}}",
+            r#"tags = ["external"]"#,
+        );
 
         let ctx = Arc::new(ToolContext::empty(home));
         let mut registry = ToolRegistry::new();

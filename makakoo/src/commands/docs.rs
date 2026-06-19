@@ -15,8 +15,7 @@ use rusqlite::Connection;
 use crate::cli::DocsCmd;
 
 /// Default tarball URL for the makakoo-os repo at `main`.
-const GITHUB_TARBALL_URL: &str =
-    "https://api.github.com/repos/makakoo/makakoo-os/tarball/main";
+const GITHUB_TARBALL_URL: &str = "https://api.github.com/repos/makakoo/makakoo-os/tarball/main";
 
 /// Where the refreshed index is stored on the user's machine.
 pub fn cache_dir() -> Result<PathBuf> {
@@ -99,13 +98,8 @@ async fn update(from_github: bool, from_branch: Option<String>) -> anyhow::Resul
     let (doc_count, byte_count) = build_index(&extracted_root, &tmp_db)?;
 
     let final_db = cache.join("index.db");
-    std::fs::rename(&tmp_db, &final_db).with_context(|| {
-        format!(
-            "renaming {} → {}",
-            tmp_db.display(),
-            final_db.display()
-        )
-    })?;
+    std::fs::rename(&tmp_db, &final_db)
+        .with_context(|| format!("renaming {} → {}", tmp_db.display(), final_db.display()))?;
 
     // 4. Clean up staging ------------------------------------------------
     let _ = std::fs::remove_dir_all(&staging);
@@ -202,8 +196,8 @@ fn extract_tarball(bytes: &[u8], dest: &Path) -> Result<PathBuf> {
 /// Walk `docs/` and `spec/` inside `root`, insert every `.md` file into a
 /// fresh FTS5 database at `db_path`.  Returns `(doc_count, byte_count)`.
 fn build_index(root: &Path, db_path: &Path) -> Result<(usize, usize)> {
-    let conn = Connection::open(db_path)
-        .with_context(|| format!("opening {}", db_path.display()))?;
+    let conn =
+        Connection::open(db_path).with_context(|| format!("opening {}", db_path.display()))?;
 
     conn.execute_batch(CREATE_SCHEMA)
         .context("creating FTS5 schema")?;
@@ -270,18 +264,15 @@ fn walk_and_insert(
 }
 
 fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("reading dir {}", dir.display()))?
-    {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading dir {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
         let ft = entry.file_type()?;
         if ft.is_dir() {
             collect_md_files(&path, out)?;
-        } else if ft.is_file()
-            && path.extension().and_then(|s| s.to_str()) == Some("md") {
-                out.push(path);
-            }
+        } else if ft.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+            out.push(path);
+        }
     }
     Ok(())
 }

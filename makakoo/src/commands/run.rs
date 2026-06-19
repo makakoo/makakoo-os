@@ -24,9 +24,7 @@ use anyhow::{anyhow, bail, Context};
 use makakoo_core::llm::{ChatMessage, LlmClient};
 use makakoo_core::platform::makakoo_home;
 use makakoo_core::plugin::{PluginKind, PluginRegistry};
-use makakoo_core::run::{
-    compose, load_mascot, load_strategy, resolve_route, ComposeRequest,
-};
+use makakoo_core::run::{compose, load_mascot, load_strategy, resolve_route, ComposeRequest};
 
 use crate::context::CliContext;
 
@@ -51,9 +49,9 @@ pub async fn run(
     let canonical = canonical_pattern_dirname(pattern_name);
     let registry = PluginRegistry::load_default(&makakoo_home())
         .with_context(|| format!("loading plugin registry from {}", makakoo_home().display()))?;
-    let plugin = registry
-        .get(&canonical)
-        .ok_or_else(|| anyhow!("pattern {pattern_name:?} not found in registry (looked up {canonical:?})"))?;
+    let plugin = registry.get(&canonical).ok_or_else(|| {
+        anyhow!("pattern {pattern_name:?} not found in registry (looked up {canonical:?})")
+    })?;
     if plugin.manifest.plugin.kind != PluginKind::Pattern {
         bail!(
             "{canonical} exists but is kind={:?}, not pattern",
@@ -69,7 +67,10 @@ pub async fn run(
     // Read sibling system.md.
     let system_md_path = plugin.root.join("system.md");
     let system_md = std::fs::read_to_string(&system_md_path).with_context(|| {
-        format!("reading {} for pattern {canonical}", system_md_path.display())
+        format!(
+            "reading {} for pattern {canonical}",
+            system_md_path.display()
+        )
     })?;
 
     // Resolve route (Phase 3).
@@ -86,10 +87,9 @@ pub async fn run(
         .as_deref()
         .or(pattern_table.strategy_default.as_deref());
     let strategy_text = match strategy_name {
-        Some(name) if name != "none" => Some(
-            load_strategy(name, None)
-                .with_context(|| format!("loading strategy {name:?}"))?,
-        ),
+        Some(name) if name != "none" => {
+            Some(load_strategy(name, None).with_context(|| format!("loading strategy {name:?}"))?)
+        }
         _ => None,
     };
 
@@ -99,8 +99,7 @@ pub async fn run(
         .or(pattern_table.mascot_default.as_deref());
     let mascot_text = match mascot_name {
         Some(name) if name != "none" => Some(
-            load_mascot(name, None)
-                .with_context(|| format!("loading mascot persona {name:?}"))?,
+            load_mascot(name, None).with_context(|| format!("loading mascot persona {name:?}"))?,
         ),
         _ => None,
     };

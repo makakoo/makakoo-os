@@ -167,18 +167,18 @@ impl MemoryPromoter {
             ranked = out.len(),
             "memory_promoter: rank_candidates"
         );
-        out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out.truncate(MAX_PROMOTIONS_PER_RUN);
         Ok(out)
     }
 
     /// Write the top candidates above `threshold` to `memory_promotions`
     /// and stamp `promoted_at` on recall_stats.
-    pub fn promote_candidates(
-        &self,
-        threshold: f32,
-        limit: usize,
-    ) -> Result<Vec<Promotion>> {
+    pub fn promote_candidates(&self, threshold: f32, limit: usize) -> Result<Vec<Promotion>> {
         let ranked = self.rank_candidates()?;
         let picks: Vec<Promotion> = ranked
             .into_iter()
@@ -524,8 +524,8 @@ mod tests {
 
     #[test]
     fn weights_sum_near_one() {
-        let total = W_FREQUENCY + W_RELEVANCE + W_DIVERSITY + W_RECENCY
-            + W_CONSOLIDATION + W_CONCEPTUAL;
+        let total =
+            W_FREQUENCY + W_RELEVANCE + W_DIVERSITY + W_RECENCY + W_CONSOLIDATION + W_CONCEPTUAL;
         assert!((total - 1.0).abs() < 1e-4, "weights sum = {total}");
     }
 }

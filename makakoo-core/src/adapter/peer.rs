@@ -129,7 +129,9 @@ pub fn load_trust_file(path: &Path) -> Result<HashMap<String, VerifyingKey>, Pee
                 });
             }
         };
-        let raw = B64.decode(key_b64).map_err(|e| PeerError::Base64("pubkey", e))?;
+        let raw = B64
+            .decode(key_b64)
+            .map_err(|e| PeerError::Base64("pubkey", e))?;
         let key = pubkey_from_bytes(&raw)?;
         out.insert(name.to_string(), key);
     }
@@ -245,7 +247,8 @@ pub fn verify_request(
     let arr: [u8; 64] = raw.as_slice().try_into().unwrap();
     let sig = Signature::from_bytes(&arr);
     let digest = canonical_digest(body, ts);
-    key.verify(&digest, &sig).map_err(|_| PeerError::VerifyFailed)
+    key.verify(&digest, &sig)
+        .map_err(|_| PeerError::VerifyFailed)
 }
 
 fn pubkey_from_bytes(raw: &[u8]) -> Result<VerifyingKey, PeerError> {
@@ -260,7 +263,9 @@ fn pubkey_from_bytes(raw: &[u8]) -> Result<VerifyingKey, PeerError> {
 /// entry with the same name. Comments and other entries are preserved.
 pub fn trust_add(path: &Path, name: &str, pubkey_b64: &str) -> Result<(), PeerError> {
     // Validate before writing.
-    let raw = B64.decode(pubkey_b64).map_err(|e| PeerError::Base64("pubkey", e))?;
+    let raw = B64
+        .decode(pubkey_b64)
+        .map_err(|e| PeerError::Base64("pubkey", e))?;
     pubkey_from_bytes(&raw)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| PeerError::Io {
@@ -409,11 +414,8 @@ mod tests {
     #[test]
     fn tampered_body_fails_verify() {
         let tmp = TempDir::new().unwrap();
-        let (signing, verifying, _) = load_or_create_signing_key(
-            &tmp.path().join("k"),
-            &tmp.path().join("p"),
-        )
-        .unwrap();
+        let (signing, verifying, _) =
+            load_or_create_signing_key(&tmp.path().join("k"), &tmp.path().join("p")).unwrap();
         let ts = 1_700_000_000_000;
         let sig = sign_request(&signing, b"original body", ts);
         let mut trust = HashMap::new();
@@ -538,8 +540,11 @@ mod tests {
     fn trust_file_malformed_line_errors_with_line_number() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("trusted.keys");
-        fs::write(&path, "ok-so-far aGVsbG8=aGVsbG8=aGVsbG8=aGVsbG8=aGVsbG8=AAA=\nbad-line-no-key\n")
-            .unwrap();
+        fs::write(
+            &path,
+            "ok-so-far aGVsbG8=aGVsbG8=aGVsbG8=aGVsbG8=aGVsbG8=AAA=\nbad-line-no-key\n",
+        )
+        .unwrap();
         // First line is malformed base64; load fails with Base64 error
         // before it reaches line 2 — that's fine, both are errors.
         let err = load_trust_file(&path).unwrap_err();

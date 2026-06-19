@@ -123,7 +123,9 @@ impl PatrolJob for OlibiaGuardianPatrol {
         if !journal.exists() {
             findings.push(format!("no journal for {today}"));
         } else {
-            let body = tokio::fs::read_to_string(&journal).await.unwrap_or_default();
+            let body = tokio::fs::read_to_string(&journal)
+                .await
+                .unwrap_or_default();
             let total = body.lines().count();
             let malformed: Vec<usize> = body
                 .lines()
@@ -229,13 +231,8 @@ mod tests {
         let bus_db = dir.path().join("bus.db");
         let store = Arc::new(SuperbrainStore::open(&brain_db).unwrap());
         let bus = PersistentEventBus::open(&bus_db).unwrap();
-        let registry =
-            Arc::new(MascotRegistry::load(&dir.path().join("nursery.json")).unwrap());
-        let ctx = Arc::new(PatrolContext {
-            store,
-            bus,
-            home,
-        });
+        let registry = Arc::new(MascotRegistry::load(&dir.path().join("nursery.json")).unwrap());
+        let ctx = Arc::new(PatrolContext { store, bus, home });
         (dir, ctx, registry)
     }
 

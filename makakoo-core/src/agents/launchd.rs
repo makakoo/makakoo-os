@@ -51,9 +51,8 @@ impl LaunchAgentPlist {
         os_home: &Path,
         makakoo_home: &Path,
     ) -> Result<Self> {
-        validate_slot_id(slot_id).map_err(|e| {
-            MakakooError::Internal(format!("invalid slot id '{slot_id}': {e}"))
-        })?;
+        validate_slot_id(slot_id)
+            .map_err(|e| MakakooError::Internal(format!("invalid slot id '{slot_id}': {e}")))?;
         let label = format!("{LABEL_PREFIX}{slot_id}");
         let plist_path = os_home
             .join("Library/LaunchAgents")
@@ -70,9 +69,8 @@ impl LaunchAgentPlist {
     /// `LaunchAgents` directory if missing. Returns the path written.
     pub fn write(&self) -> Result<&Path> {
         if let Some(parent) = self.plist_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                MakakooError::Internal(format!("create LaunchAgents dir: {e}"))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| MakakooError::Internal(format!("create LaunchAgents dir: {e}")))?;
         }
         std::fs::write(&self.plist_path, &self.plist_xml).map_err(|e| {
             MakakooError::Internal(format!("write {}: {e}", self.plist_path.display()))
@@ -99,10 +97,18 @@ pub struct RealLaunchctl;
 
 impl LaunchctlExec for RealLaunchctl {
     fn bootstrap(&self, uid: u32, plist_path: &Path) -> Result<LaunchctlOutput> {
-        run_launchctl(&["bootstrap", &format!("gui/{uid}"), &plist_path.to_string_lossy()])
+        run_launchctl(&[
+            "bootstrap",
+            &format!("gui/{uid}"),
+            &plist_path.to_string_lossy(),
+        ])
     }
     fn bootout(&self, uid: u32, plist_path: &Path) -> Result<LaunchctlOutput> {
-        run_launchctl(&["bootout", &format!("gui/{uid}"), &plist_path.to_string_lossy()])
+        run_launchctl(&[
+            "bootout",
+            &format!("gui/{uid}"),
+            &plist_path.to_string_lossy(),
+        ])
     }
 }
 
@@ -214,12 +220,7 @@ fn xml_escape(s: &str) -> String {
     out
 }
 
-fn render_plist_xml(
-    label: &str,
-    makakoo_bin: &Path,
-    slot_id: &str,
-    makakoo_home: &Path,
-) -> String {
+fn render_plist_xml(label: &str, makakoo_bin: &Path, slot_id: &str, makakoo_home: &Path) -> String {
     let bin = xml_escape(&makakoo_bin.to_string_lossy());
     let label_e = xml_escape(label);
     let slot_e = xml_escape(slot_id);
@@ -302,8 +303,12 @@ mod tests {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
         let p = LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
-        assert!(p.plist_xml.contains("<string>com.makakoo.agent.secretary</string>"));
-        assert!(p.plist_xml.contains("<string>/usr/local/bin/makakoo</string>"));
+        assert!(p
+            .plist_xml
+            .contains("<string>com.makakoo.agent.secretary</string>"));
+        assert!(p
+            .plist_xml
+            .contains("<string>/usr/local/bin/makakoo</string>"));
         assert!(p.plist_xml.contains("<string>_supervisor</string>"));
         assert!(p.plist_xml.contains("<string>secretary</string>"));
         assert!(p.plist_xml.contains("agent-secretary.out.log"));
@@ -316,8 +321,7 @@ mod tests {
     fn plist_rejects_invalid_slot_id() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let err =
-            LaunchAgentPlist::from_slot("Bad Slot!", &bin, home.path(), home.path()).err();
+        let err = LaunchAgentPlist::from_slot("Bad Slot!", &bin, home.path(), home.path()).err();
         assert!(err.is_some(), "expected validation error");
     }
 
@@ -326,9 +330,8 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let p =
-            LaunchAgentPlist::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
-                .unwrap();
+        let p = LaunchAgentPlist::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
+            .unwrap();
         assert!(
             p.plist_path.starts_with(os_home.path()),
             "plist must land under OS home, not Makakoo home. Got: {}",
@@ -351,9 +354,8 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/opt/My Apps & Tools/<makakoo>");
-        let p =
-            LaunchAgentPlist::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
-                .unwrap();
+        let p = LaunchAgentPlist::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
+            .unwrap();
         assert!(
             !p.plist_xml.contains("/<makakoo>"),
             "raw '<' in path must be escaped"
@@ -453,11 +455,10 @@ mod tests {
 
     impl LaunchctlExec for MockLaunchctl {
         fn bootstrap(&self, uid: u32, plist_path: &Path) -> Result<LaunchctlOutput> {
-            self.calls.lock().unwrap().push((
-                "bootstrap".into(),
-                uid,
-                plist_path.to_path_buf(),
-            ));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("bootstrap".into(), uid, plist_path.to_path_buf()));
             let g = self.bootstrap_output.lock().unwrap();
             Ok(LaunchctlOutput {
                 exit_code: g.exit_code,
@@ -465,11 +466,10 @@ mod tests {
             })
         }
         fn bootout(&self, uid: u32, plist_path: &Path) -> Result<LaunchctlOutput> {
-            self.calls.lock().unwrap().push((
-                "bootout".into(),
-                uid,
-                plist_path.to_path_buf(),
-            ));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("bootout".into(), uid, plist_path.to_path_buf()));
             let g = self.bootout_output.lock().unwrap();
             Ok(LaunchctlOutput {
                 exit_code: g.exit_code,

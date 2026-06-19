@@ -61,9 +61,7 @@ impl OlibiaEvent {
     pub fn owl_voice(&self) -> String {
         match self {
             OlibiaEvent::SanchoTick(_) => "hoot — sancho did a tick".to_string(),
-            OlibiaEvent::SuperbrainWrite(_) => {
-                "hoot — brain grew a new leaf".to_string()
-            }
+            OlibiaEvent::SuperbrainWrite(_) => "hoot — brain grew a new leaf".to_string(),
             OlibiaEvent::SwarmDispatch(_) => "hoot — swarm swung into motion".to_string(),
             OlibiaEvent::NurseryHatch(_) => "hoot — a new chick hatched".to_string(),
             OlibiaEvent::Other(topic, _) => format!("hoot — heard {topic}"),
@@ -202,7 +200,8 @@ mod tests {
     #[test]
     fn reacts_to_sancho_tick() {
         let (_d, bus, olibia) = build_subagent();
-        bus.publish("sancho.tick", "test", json!({"id": 1})).unwrap();
+        bus.publish("sancho.tick", "test", json!({"id": 1}))
+            .unwrap();
         let line = olibia.react_once().unwrap();
         assert!(line.contains("sancho"));
         assert_eq!(olibia.reaction_count(), 1);
@@ -211,12 +210,8 @@ mod tests {
     #[test]
     fn reacts_to_swarm_dispatch() {
         let (_d, bus, olibia) = build_subagent();
-        bus.publish(
-            "swarm.dispatch.complete",
-            "gw",
-            json!({"run_id": "r1"}),
-        )
-        .unwrap();
+        bus.publish("swarm.dispatch.complete", "gw", json!({"run_id": "r1"}))
+            .unwrap();
         let line = olibia.react_once().unwrap();
         assert!(line.contains("swarm"));
     }

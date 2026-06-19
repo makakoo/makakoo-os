@@ -170,8 +170,7 @@ impl Client {
     /// spawned by the kernel — the kernel exports this env var before
     /// launching the plugin.
     pub async fn connect_from_env() -> Result<Self, ClientError> {
-        let path = std::env::var("MAKAKOO_SOCKET_PATH")
-            .map_err(|_| ClientError::NoSocketPath)?;
+        let path = std::env::var("MAKAKOO_SOCKET_PATH").map_err(|_| ClientError::NoSocketPath)?;
         Self::connect(path).await
     }
 
@@ -205,8 +204,7 @@ impl Client {
         };
         let mut guard = self.stream.lock().await;
 
-        let line =
-            serde_json::to_string(&req).map_err(|source| ClientError::Json { source })?;
+        let line = serde_json::to_string(&req).map_err(|source| ClientError::Json { source })?;
         guard
             .writer
             .write_all(line.as_bytes())
@@ -232,8 +230,8 @@ impl Client {
         if n == 0 {
             return Err(ClientError::Disconnected);
         }
-        let resp: Response = serde_json::from_str(buf.trim())
-            .map_err(|source| ClientError::Json { source })?;
+        let resp: Response =
+            serde_json::from_str(buf.trim()).map_err(|source| ClientError::Json { source })?;
 
         if let Some(err) = resp.error {
             if err.code == -32001 {
@@ -283,11 +281,7 @@ impl Client {
     }
 
     /// Write `bytes` to `path` under the plugin's state dir.
-    pub async fn state_write(
-        &self,
-        path: &str,
-        bytes: &[u8],
-    ) -> Result<usize, ClientError> {
+    pub async fn state_write(&self, path: &str, bytes: &[u8]) -> Result<usize, ClientError> {
         let v = self
             .call(
                 "state.write",
@@ -299,16 +293,11 @@ impl Client {
                 }),
             )
             .await?;
-        Ok(v.get("bytes_written")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0) as usize)
+        Ok(v.get("bytes_written").and_then(|x| x.as_u64()).unwrap_or(0) as usize)
     }
 
     /// List files + dirs one level under `path` (root state dir if None).
-    pub async fn state_list(
-        &self,
-        path: Option<&str>,
-    ) -> Result<Vec<StateEntry>, ClientError> {
+    pub async fn state_list(&self, path: Option<&str>) -> Result<Vec<StateEntry>, ClientError> {
         let params = match path {
             Some(p) => serde_json::json!({ "path": p }),
             None => serde_json::json!({}),
@@ -325,10 +314,7 @@ impl Client {
                 .and_then(|s| s.as_str())
                 .ok_or(ClientError::BadResponse)?
                 .to_string();
-            let is_dir = e
-                .get("is_dir")
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false);
+            let is_dir = e.get("is_dir").and_then(|b| b.as_bool()).unwrap_or(false);
             out.push(StateEntry { name, is_dir });
         }
         Ok(out)
@@ -345,9 +331,7 @@ impl Client {
                 serde_json::json!({ "path": path }),
             )
             .await?;
-        Ok(v.get("removed")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false))
+        Ok(v.get("removed").and_then(|b| b.as_bool()).unwrap_or(false))
     }
 
     // ── secrets ──────────────────────────────────────────────────────
@@ -387,7 +371,10 @@ impl Client {
                 serde_json::json!({ "query": query, "limit": limit }),
             )
             .await?;
-        let hits = v.get("hits").and_then(|x| x.as_array()).ok_or(ClientError::BadResponse)?;
+        let hits = v
+            .get("hits")
+            .and_then(|x| x.as_array())
+            .ok_or(ClientError::BadResponse)?;
         Ok(hits.clone())
     }
 
@@ -402,15 +389,15 @@ impl Client {
             params["doc_type"] = serde_json::json!(t);
         }
         let v = self.call("brain.recent", "brain/read", "", params).await?;
-        let hits = v.get("hits").and_then(|x| x.as_array()).ok_or(ClientError::BadResponse)?;
+        let hits = v
+            .get("hits")
+            .and_then(|x| x.as_array())
+            .ok_or(ClientError::BadResponse)?;
         Ok(hits.clone())
     }
 
     /// Fetch a single Brain document by id. Returns `None` if missing.
-    pub async fn brain_read(
-        &self,
-        doc_id: &str,
-    ) -> Result<Option<serde_json::Value>, ClientError> {
+    pub async fn brain_read(&self, doc_id: &str) -> Result<Option<serde_json::Value>, ClientError> {
         let v = self
             .call(
                 "brain.read",

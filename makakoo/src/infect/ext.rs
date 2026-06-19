@@ -24,8 +24,7 @@ use serde_json::{Map, Value};
 
 use super::slots::BLOCK_VERSION;
 use super::writer::{
-    atomic_write, render_markdown_block, upsert_markdown_block, SlotStatus,
-    SlotWriteResult,
+    atomic_write, render_markdown_block, upsert_markdown_block, SlotStatus, SlotWriteResult,
 };
 
 /// The 4 extension-based hosts shipped at F/5.
@@ -58,11 +57,7 @@ pub struct ExtTarget {
 /// Top-level entrypoint. Writes the bootstrap to one extension host
 /// target. Returns a `SlotWriteResult` in the same shape as the 7-CLI
 /// infect flow so reports read identically.
-pub fn write_ext_host(
-    target: &ExtTarget,
-    bootstrap_body: &str,
-    dry_run: bool,
-) -> SlotWriteResult {
+pub fn write_ext_host(target: &ExtTarget, bootstrap_body: &str, dry_run: bool) -> SlotWriteResult {
     match target.kind {
         ExtHostKind::Copilot | ExtHostKind::Cline | ExtHostKind::JetBrains => {
             write_markdown_file(target, bootstrap_body, dry_run)
@@ -71,11 +66,7 @@ pub fn write_ext_host(
     }
 }
 
-fn write_markdown_file(
-    target: &ExtTarget,
-    bootstrap_body: &str,
-    dry_run: bool,
-) -> SlotWriteResult {
+fn write_markdown_file(target: &ExtTarget, bootstrap_body: &str, dry_run: bool) -> SlotWriteResult {
     let existing = std::fs::read_to_string(&target.path).unwrap_or_default();
     let new_block = render_markdown_block(bootstrap_body);
     let (new_text, status, prior_version) = upsert_markdown_block(&existing, &new_block);
@@ -110,11 +101,7 @@ fn write_markdown_file(
     }
 }
 
-fn write_continue_json(
-    target: &ExtTarget,
-    bootstrap_body: &str,
-    dry_run: bool,
-) -> SlotWriteResult {
+fn write_continue_json(target: &ExtTarget, bootstrap_body: &str, dry_run: bool) -> SlotWriteResult {
     let result = splice_continue_json(&target.path, bootstrap_body, dry_run);
     match result {
         Ok((status, prior_version)) => SlotWriteResult {
@@ -147,20 +134,21 @@ fn splice_continue_json(
     let mut root: Value = if existing_raw.trim().is_empty() {
         Value::Object(Map::new())
     } else {
-        serde_json::from_str(&existing_raw)
-            .with_context(|| format!("parse {}", path.display()))?
+        serde_json::from_str(&existing_raw).with_context(|| format!("parse {}", path.display()))?
     };
 
     let obj = root
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Continue config is not a JSON object"))?;
 
-    let previous_system =
-        obj.get("systemMessage").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let previous_system = obj
+        .get("systemMessage")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let block = render_markdown_block(bootstrap_body);
-    let (new_system, status, prior_version) =
-        upsert_markdown_block(&previous_system, &block);
+    let (new_system, status, prior_version) = upsert_markdown_block(&previous_system, &block);
 
     if matches!(status, SlotStatus::Unchanged) {
         return Ok((status, prior_version));

@@ -70,7 +70,9 @@ mod handler_contract_tests {
     use std::path::PathBuf;
 
     fn registry_with_all() -> (ToolRegistry, Arc<ToolContext>) {
-        let ctx = Arc::new(ToolContext::empty(PathBuf::from("/tmp/makakoo-contract-test")));
+        let ctx = Arc::new(ToolContext::empty(PathBuf::from(
+            "/tmp/makakoo-contract-test",
+        )));
         let mut reg = ToolRegistry::new();
         register_all(&mut reg, &ctx);
         (reg, ctx)
@@ -135,7 +137,9 @@ mod handler_contract_tests {
         let (reg, _) = registry_with_all();
         for d in reg.list() {
             assert!(
-                d.name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                d.name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
                 "handler name {:?} must be lowercase alphanumeric + underscores",
                 d.name
             );
@@ -193,10 +197,7 @@ mod handler_contract_tests {
             "pi_set_model",
             "pi_steer",
         ] {
-            assert!(
-                names.contains(expected),
-                "missing pi handler: {expected}"
-            );
+            assert!(names.contains(expected), "missing pi handler: {expected}");
         }
     }
 }

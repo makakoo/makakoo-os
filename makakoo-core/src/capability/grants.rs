@@ -296,10 +296,7 @@ grants = [
 
         let check = t.check("net/http", "https://api.example.com/v1/users");
         assert!(check.is_allow());
-        assert_eq!(
-            check.matched_scope(),
-            Some("https://api.example.com/*")
-        );
+        assert_eq!(check.matched_scope(), Some("https://api.example.com/*"));
 
         let denied = t.check("net/http", "https://evil.com/x");
         assert!(!denied.is_allow());
@@ -325,7 +322,9 @@ grants = ["net/http"]
 "#,
         );
         let t = resolve_grants(&m, Path::new("/var/m")).unwrap();
-        assert!(t.check("net/http", "https://anywhere.example.com").is_allow());
+        assert!(t
+            .check("net/http", "https://anywhere.example.com")
+            .is_allow());
     }
 
     #[test]
@@ -489,9 +488,8 @@ grants = ["brain/read"]
                 continue;
             }
             let (m, _) = Manifest::load(&toml).unwrap();
-            resolve_grants(&m, Path::new("/var/m")).unwrap_or_else(|e| {
-                panic!("failed to resolve grants for {}: {e}", toml.display())
-            });
+            resolve_grants(&m, Path::new("/var/m"))
+                .unwrap_or_else(|e| panic!("failed to resolve grants for {}: {e}", toml.display()));
         }
     }
 }

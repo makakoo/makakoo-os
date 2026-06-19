@@ -240,9 +240,8 @@ fn group_sum(
 fn row_to_record(row: &Row<'_>) -> rusqlite::Result<CostRecord> {
     let occurred: String = row.get(1)?;
     let metadata_json: String = row.get(9)?;
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_else(|_| {
-        serde_json::Value::Object(Default::default())
-    });
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_json)
+        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
     Ok(CostRecord {
         id: row.get(0)?,
         occurred_at: DateTime::parse_from_rfc3339(&occurred)
@@ -288,16 +287,41 @@ mod tests {
     #[test]
     fn summary_all_sums_every_row() {
         let (_d, t) = open_tracker();
-        t.record(CostRecord::now("harvey", "anthropic", "opus-4-6", 100, 50, 0.01))
-            .unwrap();
-        t.record(CostRecord::now("olibia", "switchailocal", "ail-compound", 200, 80, 0.002))
-            .unwrap();
-        t.record(CostRecord::now("arbitrage-agent", "openai", "o3", 500, 120, 0.03))
-            .unwrap();
+        t.record(CostRecord::now(
+            "harvey",
+            "anthropic",
+            "opus-4-6",
+            100,
+            50,
+            0.01,
+        ))
+        .unwrap();
+        t.record(CostRecord::now(
+            "olibia",
+            "switchailocal",
+            "ail-compound",
+            200,
+            80,
+            0.002,
+        ))
+        .unwrap();
+        t.record(CostRecord::now(
+            "arbitrage-agent",
+            "openai",
+            "o3",
+            500,
+            120,
+            0.03,
+        ))
+        .unwrap();
         let s = t.summary("all").unwrap();
         assert_eq!(s.record_count, 3);
         assert_eq!(s.total_tokens, 1050);
-        assert!((s.total_usd - 0.042).abs() < 1e-6, "total_usd={}", s.total_usd);
+        assert!(
+            (s.total_usd - 0.042).abs() < 1e-6,
+            "total_usd={}",
+            s.total_usd
+        );
         // by_agent in descending USD order.
         assert_eq!(s.by_agent.len(), 3);
         assert_eq!(s.by_agent[0].0, "arbitrage-agent");

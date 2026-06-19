@@ -119,9 +119,8 @@ pub struct LegacyPathReport {
 /// zero-count report.
 pub fn migrate_legacy_paths(conn: &Connection, dry_run: bool) -> Result<LegacyPathReport> {
     let count_prefix = |table: &str| -> Result<i64> {
-        let sql = format!(
-            "SELECT COUNT(*) FROM {table} WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'"
-        );
+        let sql =
+            format!("SELECT COUNT(*) FROM {table} WHERE doc_path LIKE '/Users/sebastian/HARVEY/%'");
         Ok(conn.query_row(&sql, [], |r| r.get::<_, i64>(0))?)
     };
 
@@ -363,8 +362,7 @@ impl RecallTracker {
             )?;
         }
 
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM recall_stats", [], |r| r.get(0))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM recall_stats", [], |r| r.get(0))?;
         Ok(count as usize)
     }
 
@@ -724,7 +722,10 @@ mod tests {
             let n_after: i64 = conn
                 .query_row("SELECT COUNT(*) FROM recall_stats", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(n_before, n_after, "dedup must not drop rows with no duplicates");
+            assert_eq!(
+                n_before, n_after,
+                "dedup must not drop rows with no duplicates"
+            );
             assert_eq!(rep.recall_stats_deduped, 0);
         }
     }

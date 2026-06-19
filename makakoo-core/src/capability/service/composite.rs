@@ -16,9 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::capability::socket::{
-    CapabilityError, CapabilityHandler, CapabilityRequest,
-};
+use crate::capability::socket::{CapabilityError, CapabilityHandler, CapabilityRequest};
 
 /// Demux requests to a per-prefix `CapabilityHandler`. The prefix is
 /// the substring of `method` before the first `.`.
@@ -124,16 +122,14 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_prefix_errors() {
-        let c = CompositeHandler::new()
-            .register("state", Arc::new(NamedHandler("state")));
+        let c = CompositeHandler::new().register("state", Arc::new(NamedHandler("state")));
         let err = c.handle(&req("brain.read"), None).await.unwrap_err();
         assert!(err.message.contains("unknown method"));
     }
 
     #[tokio::test]
     async fn method_without_dot_uses_whole_string() {
-        let c = CompositeHandler::new()
-            .register("ping", Arc::new(NamedHandler("ping")));
+        let c = CompositeHandler::new().register("ping", Arc::new(NamedHandler("ping")));
         let r = c.handle(&req("ping"), None).await.unwrap();
         assert_eq!(r["handled_by"], "ping");
     }

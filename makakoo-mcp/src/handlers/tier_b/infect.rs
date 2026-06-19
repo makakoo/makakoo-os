@@ -39,21 +39,17 @@ impl HarveyInfectLocalHandler {
 fn validate_path(raw: &str, home: &Path) -> Result<PathBuf, String> {
     let as_path = Path::new(raw);
     if !as_path.is_absolute() {
-        return Err(format!(
-            "path must be absolute; got relative path {raw:?}"
-        ));
+        return Err(format!("path must be absolute; got relative path {raw:?}"));
     }
-    let canon = std::fs::canonicalize(as_path).map_err(|e| {
-        format!("path {raw:?} does not resolve: {e}")
-    })?;
+    let canon = std::fs::canonicalize(as_path)
+        .map_err(|e| format!("path {raw:?} does not resolve: {e}"))?;
     if !canon.is_dir() {
         return Err(format!(
             "path {} exists but is not a directory",
             canon.display()
         ));
     }
-    let home_canon = std::fs::canonicalize(home)
-        .unwrap_or_else(|_| home.to_path_buf());
+    let home_canon = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
     if !canon.starts_with(&home_canon) {
         return Err(format!(
             "path {} is outside $HOME ({}); use the shell `makakoo infect --local` \
@@ -161,12 +157,11 @@ impl ToolHandler for HarveyInfectLocalHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| RpcError::invalid_params("missing required `path`"))?;
 
-        let home = dirs::home_dir().ok_or_else(|| {
-            RpcError::internal("no $HOME available to validate path against")
-        })?;
+        let home = dirs::home_dir()
+            .ok_or_else(|| RpcError::internal("no $HOME available to validate path against"))?;
 
-        let project_path = validate_path(raw_path, &home)
-            .map_err(|e| RpcError::invalid_params(&e))?;
+        let project_path =
+            validate_path(raw_path, &home).map_err(|e| RpcError::invalid_params(&e))?;
 
         let rules = params.get("rules").and_then(|v| v.as_str());
         let dry_run = params
@@ -182,9 +177,7 @@ impl ToolHandler for HarveyInfectLocalHandler {
         if let Some(r) = rules {
             if !dry_run {
                 apply_rules_to_context(&project_path, r).map_err(|e| {
-                    RpcError::internal(format!(
-                        "failed to write .harvey/context.md: {e}"
-                    ))
+                    RpcError::internal(format!("failed to write .harvey/context.md: {e}"))
                 })?;
             }
         }
@@ -206,9 +199,10 @@ impl ToolHandler for HarveyInfectLocalHandler {
             cmd.arg("--detect-installed-only");
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            RpcError::internal(format!("failed to spawn makakoo: {e}"))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| RpcError::internal(format!("failed to spawn makakoo: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

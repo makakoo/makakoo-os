@@ -45,9 +45,11 @@ pub enum CargoSource {
 pub fn detect_install_method() -> InstallMethod {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
-        Err(_) => return InstallMethod::Unknown {
-            exe_path: PathBuf::from("<unknown>"),
-        },
+        Err(_) => {
+            return InstallMethod::Unknown {
+                exe_path: PathBuf::from("<unknown>"),
+            }
+        }
     };
     let canonical = std::fs::canonicalize(&exe).unwrap_or(exe);
     let home = dirs::home_dir().unwrap_or_default();
@@ -85,9 +87,7 @@ pub fn classify(exe: &Path, home: &Path) -> InstallMethod {
         Path::new("/usr/local"),
         Path::new("/home/linuxbrew/.linuxbrew"),
     ] {
-        if exe.starts_with(brew_prefix.join("bin"))
-            || exe.starts_with(brew_prefix.join("Cellar"))
-        {
+        if exe.starts_with(brew_prefix.join("bin")) || exe.starts_with(brew_prefix.join("Cellar")) {
             return InstallMethod::Homebrew {
                 prefix: brew_prefix.to_path_buf(),
             };
@@ -227,10 +227,7 @@ mod tests {
 
     #[test]
     fn unknown_for_random_path() {
-        let result = classify(
-            &p("/opt/something/weird/makakoo"),
-            &p("/Users/sebastian"),
-        );
+        let result = classify(&p("/opt/something/weird/makakoo"), &p("/Users/sebastian"));
         assert!(matches!(result, InstallMethod::Unknown { .. }));
     }
 

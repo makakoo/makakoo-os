@@ -303,7 +303,7 @@ pub fn probe_upstream(entry: &LockEntry) -> Result<UpstreamProbe, InstallError> 
     if let PluginSource::Path(_) = &plugin_source {
         return Err(InstallError::UpdateWrongSource {
             plugin: entry.name.clone(),
-        })
+        });
     }
     let spec = match &plugin_source {
         PluginSource::Git {
@@ -521,8 +521,7 @@ fn install_staged(
     // handlers. Done before staging so a bad manifest never touches
     // $MAKAKOO_HOME/plugins/.
     for task in &manifest.sancho.tasks {
-        if crate::sancho::NATIVE_TASK_NAMES.contains(&task.name.as_str())
-        {
+        if crate::sancho::NATIVE_TASK_NAMES.contains(&task.name.as_str()) {
             return Err(InstallError::NativeTaskCollision {
                 plugin: name,
                 task: task.name.clone(),

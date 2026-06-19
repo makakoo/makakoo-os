@@ -44,8 +44,7 @@ pub async fn run(
     // whole point of the plan output.
     let home = dirs::home_dir().unwrap_or_else(|| ctx.home().to_path_buf());
     let detected = detect_all(&home);
-    let present: Vec<&DetectedHost> =
-        detected.iter().filter(|h| h.is_detected()).collect();
+    let present: Vec<&DetectedHost> = detected.iter().filter(|h| h.is_detected()).collect();
     let ext = detect_ext_hosts(&home);
 
     print_plan(&distro, &detected, &ext, skip_daemon, skip_infect, dry_run);
@@ -58,7 +57,10 @@ pub async fn run(
 
     // Step 1: distro install.
     println!();
-    println!("{}", format!("[1/3] installing distro {distro}…").green().bold());
+    println!(
+        "{}",
+        format!("[1/3] installing distro {distro}…").green().bold()
+    );
     let distro_rc = super::distro::run(
         ctx,
         DistroCmd::Install {
@@ -97,12 +99,9 @@ pub async fn run(
         println!();
         println!(
             "{}",
-            format!(
-                "[3/3] infecting {} detected CLI host(s)…",
-                present.len()
-            )
-            .green()
-            .bold()
+            format!("[3/3] infecting {} detected CLI host(s)…", present.len())
+                .green()
+                .bold()
         );
         let report = crate::infect::run(true, false, None).await?;
         print!("{}", report.human_summary());
@@ -220,8 +219,7 @@ fn print_plan(
     // Extension-based hosts (VSCode + JetBrains) are detection-only for
     // now; infect of these lands in Phase F/5. Surface them so users
     // can see the detection working and expect the feature.
-    let ext_present: Vec<&DetectedExtHost> =
-        ext.iter().filter(|h| h.is_detected()).collect();
+    let ext_present: Vec<&DetectedExtHost> = ext.iter().filter(|h| h.is_detected()).collect();
     if !ext_present.is_empty() {
         println!("\n  extension hosts (will infect alongside the 7 CLIs):");
         for h in ext_present {
@@ -232,8 +230,7 @@ fn print_plan(
 
 fn print_summary(detected: &[DetectedHost]) {
     println!("{}", "install complete".green().bold());
-    let infected: Vec<&DetectedHost> =
-        detected.iter().filter(|h| h.is_detected()).collect();
+    let infected: Vec<&DetectedHost> = detected.iter().filter(|h| h.is_detected()).collect();
     println!("  detected hosts: {}", infected.len());
     if !infected.is_empty() {
         let names: Vec<&str> = infected.iter().map(|h| h.name).collect();

@@ -49,15 +49,13 @@ fn plugin_toml_parses_as_agent_kind_with_mcp_tool() {
     let (manifest, warnings) = Manifest::load(&manifest_path).unwrap();
     assert_eq!(manifest.plugin.name, "agent-browser-harness");
     assert_eq!(manifest.plugin.kind, PluginKind::Agent);
-    assert!(warnings.is_empty(), "plugin.toml emits warnings: {warnings:?}");
+    assert!(
+        warnings.is_empty(),
+        "plugin.toml emits warnings: {warnings:?}"
+    );
 
     // Must declare the harvey_browse MCP tool (Phase E contract).
-    let tool_names: Vec<&str> = manifest
-        .mcp
-        .tools
-        .iter()
-        .map(|t| t.name.as_str())
-        .collect();
+    let tool_names: Vec<&str> = manifest.mcp.tools.iter().map(|t| t.name.as_str()).collect();
     assert!(
         tool_names.contains(&"harvey_browse"),
         "harvey_browse not in plugin.mcp.tools: {tool_names:?}"
@@ -70,8 +68,14 @@ fn plugin_toml_parses_as_agent_kind_with_mcp_tool() {
     );
 
     // Entrypoint triplet must be complete — agent kind requires it.
-    assert!(manifest.entrypoint.start.is_some(), "entrypoint.start missing");
-    assert!(manifest.entrypoint.stop.is_some(), "entrypoint.stop missing");
+    assert!(
+        manifest.entrypoint.start.is_some(),
+        "entrypoint.start missing"
+    );
+    assert!(
+        manifest.entrypoint.stop.is_some(),
+        "entrypoint.stop missing"
+    );
     assert!(
         manifest.entrypoint.health.is_some(),
         "entrypoint.health missing"
@@ -142,12 +146,7 @@ fn harvey_browse_mcp_tool_is_declared_in_manifest() {
 
     let manifest_path = plugin_wrapper_dir().join("plugin.toml");
     let (manifest, _) = Manifest::load(&manifest_path).unwrap();
-    let declared: Vec<&str> = manifest
-        .mcp
-        .tools
-        .iter()
-        .map(|t| t.name.as_str())
-        .collect();
+    let declared: Vec<&str> = manifest.mcp.tools.iter().map(|t| t.name.as_str()).collect();
     assert!(
         declared.contains(&"harvey_browse"),
         "plugin.toml must declare harvey_browse — had {declared:?}"

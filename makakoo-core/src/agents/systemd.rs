@@ -37,13 +37,10 @@ impl SystemdUserUnit {
         os_home: &Path,
         makakoo_home: &Path,
     ) -> Result<Self> {
-        validate_slot_id(slot_id).map_err(|e| {
-            MakakooError::Internal(format!("invalid slot id '{slot_id}': {e}"))
-        })?;
+        validate_slot_id(slot_id)
+            .map_err(|e| MakakooError::Internal(format!("invalid slot id '{slot_id}': {e}")))?;
         let unit_name = format!("makakoo-agent-{slot_id}.service");
-        let unit_path = os_home
-            .join(".config/systemd/user")
-            .join(&unit_name);
+        let unit_path = os_home.join(".config/systemd/user").join(&unit_name);
         let body = render_unit_body(slot_id, makakoo_bin, makakoo_home);
         Ok(Self {
             unit_name,
@@ -54,9 +51,8 @@ impl SystemdUserUnit {
 
     pub fn write(&self) -> Result<&Path> {
         if let Some(parent) = self.unit_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                MakakooError::Internal(format!("create systemd user dir: {e}"))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| MakakooError::Internal(format!("create systemd user dir: {e}")))?;
         }
         std::fs::write(&self.unit_path, &self.unit_body).map_err(|e| {
             MakakooError::Internal(format!("write {}: {e}", self.unit_path.display()))
@@ -182,17 +178,22 @@ mod tests {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
         let u = SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
-        assert!(u.unit_body.contains("Description=Makakoo agent slot secretary"));
+        assert!(u
+            .unit_body
+            .contains("Description=Makakoo agent slot secretary"));
         // Paths are always double-quoted per systemd.unit(5) — even
         // when no spaces — so a future path with embedded whitespace
         // doesn't break parsing.
         assert!(
-            u.unit_body
-                .contains(r#"ExecStart="/usr/local/bin/makakoo" agent _supervisor --slot secretary"#),
+            u.unit_body.contains(
+                r#"ExecStart="/usr/local/bin/makakoo" agent _supervisor --slot secretary"#
+            ),
             "ExecStart must double-quote the binary path; got body:\n{}",
             u.unit_body
         );
-        assert!(u.unit_body.contains("Environment=MAKAKOO_AGENT_SLOT=secretary"));
+        assert!(u
+            .unit_body
+            .contains("Environment=MAKAKOO_AGENT_SLOT=secretary"));
         assert!(u.unit_body.contains("Restart=on-failure"));
         assert!(u.unit_body.contains("RestartSec=10"));
         assert!(u.unit_body.contains(r#"StandardOutput=append:""#));
@@ -210,13 +211,8 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let u = SystemdUserUnit::from_slot(
-            "secretary",
-            &bin,
-            os_home.path(),
-            makakoo_home.path(),
-        )
-        .unwrap();
+        let u = SystemdUserUnit::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
+            .unwrap();
         assert!(u.unit_path.starts_with(os_home.path()));
         assert!(!u.unit_path.starts_with(makakoo_home.path()));
         let mh = makakoo_home.path().to_string_lossy().into_owned();
@@ -233,13 +229,8 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/opt/My Apps/makakoo");
-        let u = SystemdUserUnit::from_slot(
-            "secretary",
-            &bin,
-            os_home.path(),
-            makakoo_home.path(),
-        )
-        .unwrap();
+        let u = SystemdUserUnit::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
+            .unwrap();
         assert!(
             u.unit_body
                 .contains(r#"ExecStart="/opt/My Apps/makakoo" agent _supervisor"#),

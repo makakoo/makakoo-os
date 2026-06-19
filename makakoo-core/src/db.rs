@@ -88,10 +88,7 @@ fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
     }
     // NULL content_hash rows trip the Rust row deserialiser. Cheap to
     // delete — a NULL primary key row is un-joinable anyway.
-    conn.execute(
-        "DELETE FROM recall_stats WHERE content_hash IS NULL",
-        [],
-    )?;
+    conn.execute("DELETE FROM recall_stats WHERE content_hash IS NULL", [])?;
     // Orphan brain_vectors rows — doc_id pointing to a brain_docs.id
     // that no longer exists (classic post-.recover artefact: vectors
     // were written for IDs that didn't survive the b-tree rebuild).
@@ -684,7 +681,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(after, 0, "all legacy triggers must be dropped by run_migrations");
+        assert_eq!(
+            after, 0,
+            "all legacy triggers must be dropped by run_migrations"
+        );
     }
 
     fn tmp_db_path() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -759,7 +759,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(orphans_before >= 1, "fixture must seed at least 1 orphan vector");
+        assert!(
+            orphans_before >= 1,
+            "fixture must seed at least 1 orphan vector"
+        );
         assert_eq!(orphans_after, 0, "heal must clear orphan vectors");
         assert_eq!(null_hashes, 0, "heal must clear NULL content_hash rows");
     }

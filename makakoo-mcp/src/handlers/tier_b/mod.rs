@@ -27,9 +27,13 @@ use crate::dispatch::{ToolContext, ToolRegistry};
 /// after the context is wired.
 pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     // Journal writes — 3 tools that all append to today's Brain journal.
-    registry.register(Arc::new(journal::BrainWriteJournalHandler::new(ctx.clone())));
+    registry.register(Arc::new(journal::BrainWriteJournalHandler::new(
+        ctx.clone(),
+    )));
     registry.register(Arc::new(journal::HarveyBrainWriteHandler::new(ctx.clone())));
-    registry.register(Arc::new(journal::HarveyJournalEntryHandler::new(ctx.clone())));
+    registry.register(Arc::new(journal::HarveyJournalEntryHandler::new(
+        ctx.clone(),
+    )));
 
     // Wiki compile + save.
     registry.register(Arc::new(wiki::WikiCompileHandler::new(ctx.clone())));
@@ -82,33 +86,33 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     registry.register(Arc::new(perms::ListWriteGrantsHandler::new(ctx.clone())));
 
     // v2-MEGA Phase 6: OpenClaw-parity channel-ops trait surface.
-    registry.register(Arc::new(channel_ops::ChannelDirectoryListChannelsHandler::new(
-        ctx.clone(),
-    )));
-    registry.register(Arc::new(channel_ops::ChannelDirectoryListUsersHandler::new(
-        ctx.clone(),
-    )));
-    registry.register(Arc::new(channel_ops::ChannelDirectoryLookupUserHandler::new(
-        ctx.clone(),
-    )));
+    registry.register(Arc::new(
+        channel_ops::ChannelDirectoryListChannelsHandler::new(ctx.clone()),
+    ));
+    registry.register(Arc::new(
+        channel_ops::ChannelDirectoryListUsersHandler::new(ctx.clone()),
+    ));
+    registry.register(Arc::new(
+        channel_ops::ChannelDirectoryLookupUserHandler::new(ctx.clone()),
+    ));
     registry.register(Arc::new(channel_ops::ChannelMessagingSendDmHandler::new(
         ctx.clone(),
     )));
-    registry.register(Arc::new(channel_ops::ChannelMessagingSendChannelHandler::new(
-        ctx.clone(),
-    )));
-    registry.register(Arc::new(channel_ops::ChannelMessagingBroadcastHandler::new(
-        ctx.clone(),
-    )));
-    registry.register(Arc::new(channel_ops::ChannelThreadingCreateThreadHandler::new(
-        ctx.clone(),
-    )));
-    registry.register(Arc::new(channel_ops::ChannelThreadingListThreadsHandler::new(
-        ctx.clone(),
-    )));
-    registry.register(Arc::new(channel_ops::ChannelThreadingFollowThreadHandler::new(
-        ctx.clone(),
-    )));
+    registry.register(Arc::new(
+        channel_ops::ChannelMessagingSendChannelHandler::new(ctx.clone()),
+    ));
+    registry.register(Arc::new(
+        channel_ops::ChannelMessagingBroadcastHandler::new(ctx.clone()),
+    ));
+    registry.register(Arc::new(
+        channel_ops::ChannelThreadingCreateThreadHandler::new(ctx.clone()),
+    ));
+    registry.register(Arc::new(
+        channel_ops::ChannelThreadingListThreadsHandler::new(ctx.clone()),
+    ));
+    registry.register(Arc::new(
+        channel_ops::ChannelThreadingFollowThreadHandler::new(ctx.clone()),
+    ));
     registry.register(Arc::new(channel_ops::ChannelApprovalRequestHandler::new(
         ctx.clone(),
     )));

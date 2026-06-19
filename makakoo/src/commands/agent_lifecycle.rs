@@ -83,11 +83,12 @@ pub fn start_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
         return run_supervisor_command(ctx, slot_id);
     }
 
-    let bin = std::env::current_exe()
-        .map_err(|e| anyhow::anyhow!("read current_exe: {e}"))?;
+    let bin = std::env::current_exe().map_err(|e| anyhow::anyhow!("read current_exe: {e}"))?;
     let plist = LaunchAgentPlist::from_slot(slot_id, &bin, &os_home(), home)
         .map_err(|e| anyhow::anyhow!("plist generation: {e}"))?;
-    plist.write().map_err(|e| anyhow::anyhow!("plist write: {e}"))?;
+    plist
+        .write()
+        .map_err(|e| anyhow::anyhow!("plist write: {e}"))?;
     let launchctl = RealLaunchctl;
     let out = launchctl
         .bootstrap(current_uid(), &plist.plist_path)
@@ -154,11 +155,11 @@ pub fn start_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
         return run_supervisor_command(ctx, slot_id);
     }
 
-    let bin = std::env::current_exe()
-        .map_err(|e| anyhow::anyhow!("read current_exe: {e}"))?;
+    let bin = std::env::current_exe().map_err(|e| anyhow::anyhow!("read current_exe: {e}"))?;
     let unit = SystemdUserUnit::from_slot(slot_id, &bin, &os_home(), home)
         .map_err(|e| anyhow::anyhow!("unit generation: {e}"))?;
-    unit.write().map_err(|e| anyhow::anyhow!("unit write: {e}"))?;
+    unit.write()
+        .map_err(|e| anyhow::anyhow!("unit write: {e}"))?;
     let s = RealSystemctl;
     let out = s
         .daemon_reload()
@@ -253,7 +254,9 @@ pub fn stop_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn stop_slot(_ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
-    output::print_error(format!("platform not supported — cannot stop slot {slot_id}"));
+    output::print_error(format!(
+        "platform not supported — cannot stop slot {slot_id}"
+    ));
     Ok(2)
 }
 
@@ -328,14 +331,10 @@ pub fn run_supervisor_command(ctx: &CliContext, slot_id: &str) -> anyhow::Result
         .map_err(|e| anyhow::anyhow!("slot load: {e}"))?;
     let defaults = makakoo_core::agents::llm_override::LlmDefaults::builtin_fallback();
     let over = slot_cfg.llm.as_ref().and_then(|s| s.effective_override());
-    let eff = makakoo_core::agents::llm_override::resolve_effective(
-        over.as_ref(),
-        &defaults,
-    );
+    let eff = makakoo_core::agents::llm_override::resolve_effective(over.as_ref(), &defaults);
     let spec = GatewayLaunchSpec::harveychat_default(&home, slot_id, Some(&eff));
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| anyhow::anyhow!("tokio runtime: {e}"))?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| anyhow::anyhow!("tokio runtime: {e}"))?;
     rt.block_on(async {
         makakoo_core::agents::supervisor_runtime::run_supervisor(spec, h, dir).await
     })

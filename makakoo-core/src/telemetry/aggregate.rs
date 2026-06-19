@@ -155,10 +155,7 @@ pub fn audit_rollup(
 }
 
 /// Convenience: rollup using `$MAKAKOO_HOME/logs/audit.jsonl`.
-pub fn rollup_default(
-    home: &Path,
-    period: Period,
-) -> Result<AuditRollup, RotationError> {
+pub fn rollup_default(home: &Path, period: Period) -> Result<AuditRollup, RotationError> {
     let log = AuditLog::open_default(home)?;
     audit_rollup(&log, period, Utc::now())
 }
@@ -213,20 +210,19 @@ mod tests {
         // 5x agent-pi/exec, 2x agent-pi/brain-write, 1x agent-foo/brain-read
         for _ in 0..5 {
             log.append(&entry(
-                "agent-pi", "exec/binary:pi", AuditResult::Allowed, now,
+                "agent-pi",
+                "exec/binary:pi",
+                AuditResult::Allowed,
+                now,
             ))
             .unwrap();
         }
         for _ in 0..2 {
-            log.append(&entry(
-                "agent-pi", "brain/write", AuditResult::Allowed, now,
-            ))
-            .unwrap();
+            log.append(&entry("agent-pi", "brain/write", AuditResult::Allowed, now))
+                .unwrap();
         }
-        log.append(&entry(
-            "agent-foo", "brain/read", AuditResult::Denied, now,
-        ))
-        .unwrap();
+        log.append(&entry("agent-foo", "brain/read", AuditResult::Denied, now))
+            .unwrap();
 
         let r = audit_rollup(&log, Period::Daily, now).unwrap();
         assert_eq!(r.total_calls, 8);
@@ -247,13 +243,14 @@ mod tests {
         let log = AuditLog::open_default(tmp.path()).unwrap();
         let now = Utc::now();
         log.append(&entry(
-            "old-plugin", "x", AuditResult::Allowed, now - Duration::days(8),
+            "old-plugin",
+            "x",
+            AuditResult::Allowed,
+            now - Duration::days(8),
         ))
         .unwrap();
-        log.append(&entry(
-            "new-plugin", "y", AuditResult::Allowed, now,
-        ))
-        .unwrap();
+        log.append(&entry("new-plugin", "y", AuditResult::Allowed, now))
+            .unwrap();
 
         let r = audit_rollup(&log, Period::Daily, now).unwrap();
         assert_eq!(r.total_calls, 1);

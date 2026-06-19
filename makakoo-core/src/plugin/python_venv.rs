@@ -132,7 +132,15 @@ pub fn ensure_venv(spec: &VenvSpec) -> Result<EnsureVenvReport, VenvError> {
         // One-shot upgrade. Failure is fatal: a stale wheel/setuptools
         // can cause cryptic pip errors downstream.
         let out = Command::new(&python_bin)
-            .args(["-m", "pip", "install", "--quiet", "--upgrade", "pip", "wheel"])
+            .args([
+                "-m",
+                "pip",
+                "install",
+                "--quiet",
+                "--upgrade",
+                "pip",
+                "wheel",
+            ])
             .output()
             .map_err(|e| VenvError::PipUpgrade(e.to_string()))?;
         if !out.status.success() {
@@ -190,10 +198,7 @@ fn venv_bin(venv_dir: &Path) -> PathBuf {
 fn build_pip_args(spec: &InstallSpec, plugin_dir: &Path) -> Vec<String> {
     match spec {
         InstallSpec::Editable => vec!["-e".into(), plugin_dir.display().to_string()],
-        InstallSpec::Pip(s) => s
-            .split_whitespace()
-            .map(|t| t.to_string())
-            .collect(),
+        InstallSpec::Pip(s) => s.split_whitespace().map(|t| t.to_string()).collect(),
         InstallSpec::Git { url, rev } => {
             let target = match rev {
                 Some(r) => format!("git+{url}@{r}"),

@@ -30,8 +30,8 @@ use crate::dispatch::{ToolContext, ToolHandler};
 use crate::jsonrpc::RpcError;
 
 use makakoo_core::channel_ops::{
-    ApprovalDecision, ChannelKind, ChannelOpError, ChannelOpsRegistry, ChannelSummary,
-    MessageRef, ThreadParent, ThreadSummary, UserSummary,
+    ApprovalDecision, ChannelKind, ChannelOpError, ChannelOpsRegistry, ChannelSummary, MessageRef,
+    ThreadParent, ThreadSummary, UserSummary,
 };
 
 const DEFAULT_APPROVAL_TIMEOUT_SECS: u64 = 300;
@@ -677,9 +677,9 @@ mod tests {
     use async_trait::async_trait;
     use makakoo_core::channel_ops::{
         ApprovalDecision, ApprovalKey, BroadcastResult, ChannelApprovalAdapter,
-        ChannelDirectoryAdapter, ChannelKind, ChannelMessagingAdapter,
-        ChannelOpError, ChannelSummary, MessageRef, ThreadParent, ThreadSummary,
-        ChannelThreadingAdapter, UserSummary,
+        ChannelDirectoryAdapter, ChannelKind, ChannelMessagingAdapter, ChannelOpError,
+        ChannelSummary, ChannelThreadingAdapter, MessageRef, ThreadParent, ThreadSummary,
+        UserSummary,
     };
     use std::path::PathBuf;
     use std::sync::Arc;

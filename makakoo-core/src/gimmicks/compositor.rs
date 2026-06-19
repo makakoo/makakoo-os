@@ -267,11 +267,7 @@ pub fn compose(species: &str, context: &str) -> Vec<String> {
 }
 
 /// Deterministic variant used by tests — caller supplies the RNG.
-pub fn compose_with_rng<R: rand::Rng>(
-    species: &str,
-    context: &str,
-    rng: &mut R,
-) -> Vec<String> {
+pub fn compose_with_rng<R: rand::Rng>(species: &str, context: &str, rng: &mut R) -> Vec<String> {
     // Species fallback: unknown → random valid one.
     let species_key: &str = if lookup(HEADS, species).is_some() {
         // We need a &'static str so we pass the canonical constant string.
@@ -337,11 +333,7 @@ pub fn compose_random(context: &str) -> (Vec<String>, &'static str) {
 /// Compose for a named mascot (nursery or buddy). Maps mascot species to the
 /// closest base species by substring match, else falls back to a stable hash
 /// of the mascot name.
-pub fn compose_for_mascot(
-    mascot_name: &str,
-    mascot_species: &str,
-    context: &str,
-) -> Vec<String> {
+pub fn compose_for_mascot(mascot_name: &str, mascot_species: &str, context: &str) -> Vec<String> {
     let species_lower = mascot_species.to_lowercase();
     let all: Vec<&'static str> = HEADS.iter().map(|(k, _)| *k).collect();
 

@@ -19,14 +19,11 @@ pub mod handlers;
 pub mod registry;
 
 pub use engine::SanchoEngine;
-pub use gates::{
-    ActiveHoursGate, Gate, GateState, LockGate, SessionGate, TimeGate, WeekdayGate,
-};
+pub use gates::{ActiveHoursGate, Gate, GateState, LockGate, SessionGate, TimeGate, WeekdayGate};
 pub use handlers::{
-    DailyBriefingHandler, DreamHandler, DynamicChecklistHandler, FakeLlmCall,
-    IndexRebuildHandler, LlmCall, MemoryConsolidationGateHandler,
-    MemoryConsolidationHandler, MemoryPromotionHandler, PermsPurgeHandler,
-    SubprocessHandler, SuperbrainSyncEmbedHandler, SwarmDispatchHandler,
+    DailyBriefingHandler, DreamHandler, DynamicChecklistHandler, FakeLlmCall, IndexRebuildHandler,
+    LlmCall, MemoryConsolidationGateHandler, MemoryConsolidationHandler, MemoryPromotionHandler,
+    PermsPurgeHandler, SubprocessHandler, SuperbrainSyncEmbedHandler, SwarmDispatchHandler,
     WikiLintHandler,
 };
 pub use registry::{HandlerReport, SanchoContext, SanchoHandler, SanchoRegistry, TaskRegistration};
@@ -273,10 +270,7 @@ fn build_subprocess_handler(
 /// manifest-driven subprocess tasks; pass `&PluginRegistry::default()` to
 /// get just the 8 native Rust handlers (used by tests and for the fresh
 /// install smoke).
-pub fn default_registry(
-    ctx: Arc<SanchoContext>,
-    plugins: &PluginRegistry,
-) -> SanchoRegistry {
+pub fn default_registry(ctx: Arc<SanchoContext>, plugins: &PluginRegistry) -> SanchoRegistry {
     let mut reg = native_registry(ctx);
     register_plugin_sancho_tasks(&mut reg, plugins);
     reg
@@ -561,7 +555,11 @@ tasks = [{ name = "togglable_tick", interval = "3600s" }]
         // Fresh: no lock file, plugin defaults to enabled, task registers.
         let plugins = PluginRegistry::load_default(home).unwrap();
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), NATIVE_TASK_COUNT + 1, "fresh install — native + 1 plugin task");
+        assert_eq!(
+            reg.len(),
+            NATIVE_TASK_COUNT + 1,
+            "fresh install — native + 1 plugin task"
+        );
 
         // Disable via lock file: task must drop out.
         let mut lock = PluginsLock::default();
@@ -584,7 +582,11 @@ tasks = [{ name = "togglable_tick", interval = "3600s" }]
             "registry must reflect lock's enabled=false"
         );
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), NATIVE_TASK_COUNT, "disabled plugin must not register");
+        assert_eq!(
+            reg.len(),
+            NATIVE_TASK_COUNT,
+            "disabled plugin must not register"
+        );
 
         // Re-enable: task comes back without reinstalling.
         let mut lock = PluginsLock::load(home).unwrap();
@@ -595,7 +597,11 @@ tasks = [{ name = "togglable_tick", interval = "3600s" }]
 
         let plugins = PluginRegistry::load_default(home).unwrap();
         let reg = default_registry(make_ctx(home), &plugins);
-        assert_eq!(reg.len(), NATIVE_TASK_COUNT + 1, "re-enable restores the task");
+        assert_eq!(
+            reg.len(),
+            NATIVE_TASK_COUNT + 1,
+            "re-enable restores the task"
+        );
     }
 
     #[test]

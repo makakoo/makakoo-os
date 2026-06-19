@@ -109,8 +109,7 @@ pub fn detect_ext_hosts(home: &Path) -> Vec<DetectedExtHost> {
 
     // 3. Cline (Claude Dev) — VSCode extension globalStorage. Long path.
     if let Some(user_dir) = vscode_user_dir(home) {
-        let cline_dir =
-            user_dir.join("globalStorage/saoudrizwan.claude-dev");
+        let cline_dir = user_dir.join("globalStorage/saoudrizwan.claude-dev");
         let cline_md = cline_dir.join("CLAUDE.md");
         out.push(DetectedExtHost {
             id: "cline",
@@ -134,7 +133,11 @@ pub fn detect_ext_hosts(home: &Path) -> Vec<DetectedExtHost> {
                 // "RustRover2025.1". The product-version shape is our
                 // filter: first letter uppercase + contains a version
                 // digit somewhere after the prefix.
-                if name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                if name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_uppercase())
+                    .unwrap_or(false)
                     && name.chars().any(|c| c.is_ascii_digit())
                 {
                     product_dirs.push(entry.path());
@@ -198,10 +201,7 @@ fn jetbrains_config_root(home: &Path) -> Option<PathBuf> {
 /// `dirs::home_dir().unwrap_or_default()` in production, inject a
 /// tempdir in tests.
 pub fn detect_all(home: &Path) -> Vec<DetectedHost> {
-    SLOTS
-        .iter()
-        .map(|slot| probe_host(slot, home))
-        .collect()
+    SLOTS.iter().map(|slot| probe_host(slot, home)).collect()
 }
 
 /// Detect only hosts where at least one signal (binary OR config)
@@ -321,7 +321,10 @@ mod tests {
         fs::create_dir_all(home.join(".claude")).unwrap();
         fs::write(home.join(".claude/CLAUDE.md"), "# empty").unwrap();
 
-        let claude = detect_all(home).into_iter().find(|h| h.name == "claude").unwrap();
+        let claude = detect_all(home)
+            .into_iter()
+            .find(|h| h.name == "claude")
+            .unwrap();
         assert!(claude.instructions_exists);
         assert!(claude.is_detected());
         assert!(!claude.bootstrap_present); // no marker yet
@@ -337,7 +340,10 @@ mod tests {
             "# Claude\n<!-- harvey:infect-global START v9 -->\nbootstrap\n<!-- harvey:infect-global END -->\n",
         )
         .unwrap();
-        let claude = detect_all(home).into_iter().find(|h| h.name == "claude").unwrap();
+        let claude = detect_all(home)
+            .into_iter()
+            .find(|h| h.name == "claude")
+            .unwrap();
         assert!(claude.bootstrap_present);
     }
 
@@ -453,8 +459,7 @@ mod tests {
         // this test; only forgetting to wire one should.
         let tmp = TempDir::new().unwrap();
         let all = detect_all(tmp.path());
-        let names: std::collections::HashSet<&str> =
-            all.iter().map(|h| h.name).collect();
+        let names: std::collections::HashSet<&str> = all.iter().map(|h| h.name).collect();
         for required in &[
             "claude", "gemini", "codex", "opencode", "vibe", "cursor", "qwen", "pi", "kimi",
         ] {

@@ -97,13 +97,7 @@ impl GraphStore {
     }
 
     /// Add an edge. Matching `(src, dst, edge_type)` bumps the weight.
-    pub fn add_edge(
-        &self,
-        src: &str,
-        dst: &str,
-        edge_type: &str,
-        weight_delta: f32,
-    ) -> Result<()> {
+    pub fn add_edge(&self, src: &str, dst: &str, edge_type: &str, weight_delta: f32) -> Result<()> {
         if !is_valid_entity(src) || !is_valid_entity(dst) || src == dst {
             return Ok(());
         }
@@ -151,9 +145,7 @@ impl GraphStore {
 
         let triples: Vec<(String, String, String)> = {
             let conn = self.conn.lock().expect("graph conn poisoned");
-            let mut stmt = conn.prepare(
-                "SELECT subject, predicate, object FROM entity_graph",
-            )?;
+            let mut stmt = conn.prepare("SELECT subject, predicate, object FROM entity_graph")?;
             let rows = stmt
                 .query_map([], |r| {
                     Ok((
@@ -275,8 +267,7 @@ impl GraphStore {
         }
         let mut visited: HashSet<String> = HashSet::new();
         visited.insert(from_l.clone());
-        let mut queue: std::collections::VecDeque<Vec<String>> =
-            std::collections::VecDeque::new();
+        let mut queue: std::collections::VecDeque<Vec<String>> = std::collections::VecDeque::new();
         queue.push_back(vec![from_l.clone()]);
         while let Some(path) = queue.pop_front() {
             if path.len() > max_depth {
@@ -355,8 +346,7 @@ impl GraphStore {
             let sub = induced_subgraph(&g, &comp);
             let inner = louvain_phase_one(&sub.graph);
             for inner_comm in inner {
-                let mapped: Vec<NodeIndex> =
-                    inner_comm.iter().map(|i| sub.reverse[i]).collect();
+                let mapped: Vec<NodeIndex> = inner_comm.iter().map(|i| sub.reverse[i]).collect();
                 communities.push(mapped);
             }
         }
@@ -434,9 +424,7 @@ impl GraphStore {
         let conn = self.conn.lock().expect("graph conn poisoned");
         let mut stmt = conn.prepare("SELECT src, dst FROM brain_graph_edges")?;
         let pairs = stmt
-            .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut adj: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (s, t) in pairs {
@@ -506,10 +494,7 @@ fn induced_subgraph(g: &UnGraph<String, f32>, nodes: &[NodeIndex]) -> Subgraph {
             (Some(a), Some(b)) => (*a, *b),
             _ => continue,
         };
-        let pair = (
-            nu.index().min(nv.index()),
-            nu.index().max(nv.index()),
-        );
+        let pair = (nu.index().min(nv.index()), nu.index().max(nv.index()));
         if !seen.insert(pair) {
             continue;
         }

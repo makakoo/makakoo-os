@@ -14,14 +14,12 @@ use crate::output;
 pub async fn run(args: Vec<String>, ctx: &CliContext) -> anyhow::Result<i32> {
     let registry = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
     if registry.get("skill-brain-network").is_none() {
-        output::print_error(
-            concat!(
-                "brain-network plugin not installed. Install it with: ",
-                "makakoo distro install federation\n",
-                "  or: makakoo plugin install --core skill-brain-network && ",
-                "makakoo plugin install --core agent-octopus-peer"
-            ),
-        );
+        output::print_error(concat!(
+            "brain-network plugin not installed. Install it with: ",
+            "makakoo distro install federation\n",
+            "  or: makakoo plugin install --core skill-brain-network && ",
+            "makakoo plugin install --core agent-octopus-peer"
+        ));
         return Ok(1);
     }
     skill::run("brain-network", &args, ctx).await

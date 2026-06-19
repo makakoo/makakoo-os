@@ -55,7 +55,9 @@ impl Section for CliAgentSection {
     fn run(&mut self, ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
         if binary_on_path(PI_BIN) {
             let version = pi_version().unwrap_or_else(|| "unknown version".to_string());
-            ui.line(format!("cli-agent: pi already on PATH ({version}). No action needed."))?;
+            ui.line(format!(
+                "cli-agent: pi already on PATH ({version}). No action needed."
+            ))?;
             return Ok(SectionOutcome::AlreadyPresent);
         }
 
@@ -79,7 +81,9 @@ fn install_pi(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
     if !binary_on_path("npm") {
         ui.line("cli-agent: npm not on PATH.")?;
         ui.line("  Install Node.js (ships with npm) from https://nodejs.org, then re-run")?;
-        ui.line(format!("  `makakoo setup cli-agent` — or run `npm install -g {PI_PACKAGE}` by hand."))?;
+        ui.line(format!(
+            "  `makakoo setup cli-agent` — or run `npm install -g {PI_PACKAGE}` by hand."
+        ))?;
         return Ok(SectionOutcome::Failed(
             "npm not found on PATH — install Node.js first".to_string(),
         ));
@@ -207,8 +211,8 @@ fn pi_version() -> Option<String> {
 // On Windows the test module is excluded entirely.
 #[cfg(all(test, unix))]
 mod tests {
-    use super::*;
     use super::super::test_support::{shim, shim_args, PathGuard};
+    use super::*;
     use std::io::Cursor;
     use tempfile::TempDir;
 
@@ -270,7 +274,11 @@ mod tests {
         let args = shim_args(dir.path(), "npm");
         assert_eq!(
             args,
-            vec!["install".to_string(), "-g".to_string(), PI_PACKAGE.to_string()]
+            vec![
+                "install".to_string(),
+                "-g".to_string(),
+                PI_PACKAGE.to_string()
+            ]
         );
     }
 
@@ -294,7 +302,11 @@ mod tests {
         let args = shim_args(dir.path(), "npm");
         assert_eq!(
             args,
-            vec!["install".to_string(), "-g".to_string(), PI_PACKAGE.to_string()]
+            vec![
+                "install".to_string(),
+                "-g".to_string(),
+                PI_PACKAGE.to_string()
+            ]
         );
     }
 

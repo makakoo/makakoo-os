@@ -52,11 +52,7 @@ pub struct SanchoEngine {
 
 impl SanchoEngine {
     /// Build a new engine. The engine takes ownership of the registry.
-    pub fn new(
-        registry: SanchoRegistry,
-        ctx: Arc<SanchoContext>,
-        tick_interval: Duration,
-    ) -> Self {
+    pub fn new(registry: SanchoRegistry, ctx: Arc<SanchoContext>, tick_interval: Duration) -> Self {
         Self {
             registry,
             state: Arc::new(Mutex::new(GateState::new())),
@@ -389,10 +385,7 @@ mod tests {
     struct CapturingWriter(Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for CapturingWriter {
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-            let mut guard = self
-                .0
-                .lock()
-                .expect("capture buffer mutex poisoned");
+            let mut guard = self.0.lock().expect("capture buffer mutex poisoned");
             guard.extend_from_slice(data);
             Ok(data.len())
         }

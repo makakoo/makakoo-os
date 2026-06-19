@@ -194,7 +194,11 @@ fn trust_cmd(cmd: AdapterTrustCmd) -> anyhow::Result<i32> {
             let removed = peer::trust_remove(&trust_path, &name)
                 .map_err(|e| anyhow::anyhow!("trust remove failed: {e}"))?;
             if removed {
-                println!("{} removed {} from trust file", "✅".to_string().green(), name);
+                println!(
+                    "{} removed {} from trust file",
+                    "✅".to_string().green(),
+                    name
+                );
             } else {
                 println!(
                     "{} no peer named `{}` in {}",
@@ -416,8 +420,18 @@ fn info(name: &str, as_json: bool) -> anyhow::Result<i32> {
         return Ok(0);
     }
 
-    println!("{}", format!("─── Adapter: {} v{} ───", name, manifest.adapter.version).bold());
-    println!("  source:         {}", if bundled { "bundled (not installed)" } else { "registered" });
+    println!(
+        "{}",
+        format!("─── Adapter: {} v{} ───", name, manifest.adapter.version).bold()
+    );
+    println!(
+        "  source:         {}",
+        if bundled {
+            "bundled (not installed)"
+        } else {
+            "registered"
+        }
+    );
     println!("  manifest:       {}", path.display());
     println!("  description:    {}", manifest.adapter.description);
     if let Some(h) = &manifest.adapter.homepage {
@@ -426,10 +440,7 @@ fn info(name: &str, as_json: bool) -> anyhow::Result<i32> {
     println!("  transport:      {}", transport_str(&manifest));
     println!("  output.format:  {:?}", manifest.output.format);
     println!("  roles:          {}", roles_str(&manifest));
-    println!(
-        "  sandbox:        {:?}",
-        manifest.security.sandbox_profile
-    );
+    println!("  sandbox:        {:?}", manifest.security.sandbox_profile);
     if let Some(s) = &manifest.security.signed_by {
         println!("  signed_by:      {}", s);
     }
@@ -464,7 +475,10 @@ async fn call(
     let manifest: Manifest = if let Some(r) = registry.get(name) {
         r.manifest.clone()
     } else if bundled {
-        match load_bundled_adapters().into_iter().find(|b| b.manifest.adapter.name == name) {
+        match load_bundled_adapters()
+            .into_iter()
+            .find(|b| b.manifest.adapter.name == name)
+        {
             Some(b) => b.manifest,
             None => {
                 output::print_error(format!(
@@ -543,11 +557,7 @@ fn install(
         Ok(report) => {
             println!(
                 "{}",
-                format!(
-                    "✅ installed {} v{}",
-                    report.adapter_name, report.version
-                )
-                .green()
+                format!("✅ installed {} v{}", report.adapter_name, report.version).green()
             );
             println!("  registered: {}", report.registered_path.display());
             println!("  hash:       {}", report.canonical_hash);
@@ -579,11 +589,7 @@ fn install(
 /// Walk a pack root — every immediate subdir containing `adapter.toml`
 /// becomes one install. Each adapter's own signature + trust rules still
 /// apply individually (Phase F: `makakoo-adapters-core` ships this way).
-fn install_pack(
-    pack_root: &Path,
-    root: &InstallRoot,
-    opts: InstallOptions,
-) -> anyhow::Result<i32> {
+fn install_pack(pack_root: &Path, root: &InstallRoot, opts: InstallOptions) -> anyhow::Result<i32> {
     if !pack_root.is_dir() {
         output::print_error(format!(
             "pack root {} is not a directory",
@@ -619,10 +625,7 @@ fn install_pack(
                 ok.push(r.adapter_name);
             }
             Err(e) => {
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("<dir>");
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("<dir>");
                 println!("  {} {}: {}", "❌".red(), name.bold(), format!("{e}").red());
                 failed.push(name.to_string());
             }
@@ -630,12 +633,7 @@ fn install_pack(
     }
     println!(
         "{}",
-        format!(
-            "pack install: {} ok, {} failed",
-            ok.len(),
-            failed.len()
-        )
-        .bold()
+        format!("pack install: {} ok, {} failed", ok.len(), failed.len()).bold()
     );
     if failed.is_empty() {
         Ok(0)
@@ -733,17 +731,14 @@ fn set_enabled(name: &str, enable: bool) -> anyhow::Result<i32> {
 
 fn status(as_json: bool) -> anyhow::Result<i32> {
     let root = InstallRoot::default_from_env();
-    let reg = AdapterRegistry::load_default().unwrap_or_else(|_| {
-        AdapterRegistry::load(PathBuf::new()).expect("empty")
-    });
+    let reg = AdapterRegistry::load_default()
+        .unwrap_or_else(|_| AdapterRegistry::load(PathBuf::new()).expect("empty"));
     let ledger = TrustLedger::load_from(root.trust_ledger_path()).unwrap_or_default();
 
     let mut rows: Vec<StatusRow> = Vec::new();
     for adapter in reg.list() {
         let name = adapter.name().to_string();
-        let marker = root
-            .registered_dir()
-            .join(format!("{name}.disabled"));
+        let marker = root.registered_dir().join(format!("{name}.disabled"));
         let enabled = !marker.exists();
         let trusted_at = ledger
             .get(&name)
@@ -818,9 +813,8 @@ struct StatusRow {
 }
 
 async fn doctor(name: &str, as_json: bool) -> anyhow::Result<i32> {
-    let reg = AdapterRegistry::load_default().unwrap_or_else(|_| {
-        AdapterRegistry::load(PathBuf::new()).expect("empty")
-    });
+    let reg = AdapterRegistry::load_default()
+        .unwrap_or_else(|_| AdapterRegistry::load(PathBuf::new()).expect("empty"));
     let manifest = match reg.get(name) {
         Some(r) => r.manifest.clone(),
         None => match load_bundled_adapters()
@@ -869,9 +863,12 @@ async fn doctor(name: &str, as_json: bool) -> anyhow::Result<i32> {
             }
         }
         AuthScheme::Basic => {
-            for k in [manifest.auth.user_env.as_deref(), manifest.auth.pass_env.as_deref()]
-                .into_iter()
-                .flatten()
+            for k in [
+                manifest.auth.user_env.as_deref(),
+                manifest.auth.pass_env.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
             {
                 let present = std::env::var(k).is_ok();
                 checks.push(DoctorCheck {
@@ -946,7 +943,12 @@ async fn doctor(name: &str, as_json: bool) -> anyhow::Result<i32> {
         if c.ok {
             println!("  {} {}  {}", "✅".green(), c.name.clone().bold(), c.detail);
         } else {
-            println!("  {} {}  {}", "❌".red(), c.name.clone().bold(), c.detail.clone().red());
+            println!(
+                "  {} {}  {}",
+                "❌".red(),
+                c.name.clone().bold(),
+                c.detail.clone().red()
+            );
         }
     }
     if all_ok {
@@ -964,9 +966,8 @@ struct DoctorCheck {
 
 fn search(query: &str) -> anyhow::Result<i32> {
     let query = query.to_ascii_lowercase();
-    let reg = AdapterRegistry::load_default().unwrap_or_else(|_| {
-        AdapterRegistry::load(PathBuf::new()).expect("empty")
-    });
+    let reg = AdapterRegistry::load_default()
+        .unwrap_or_else(|_| AdapterRegistry::load(PathBuf::new()).expect("empty"));
     let mut hits: Vec<(String, &str)> = Vec::new();
     for a in reg.list() {
         if a.name().to_ascii_lowercase().contains(&query) {
@@ -1003,7 +1004,10 @@ fn migrate_config(path: &Path) -> anyhow::Result<i32> {
         }
     };
     let Some(providers) = json.get("providers").and_then(|v| v.as_array()) else {
-        println!("{}", "(no `providers` array — nothing to migrate)".dark_grey());
+        println!(
+            "{}",
+            "(no `providers` array — nothing to migrate)".dark_grey()
+        );
         return Ok(0);
     };
 
@@ -1019,7 +1023,10 @@ fn migrate_config(path: &Path) -> anyhow::Result<i32> {
             skipped += 1;
             continue;
         };
-        let kind = p.get("type").and_then(|v| v.as_str()).unwrap_or("subprocess");
+        let kind = p
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("subprocess");
         let manifest_body = match kind {
             "subprocess" => subprocess_manifest_toml(p),
             "http" => http_manifest_toml(p),
@@ -1054,10 +1061,7 @@ fn subprocess_manifest_toml(p: &serde_json::Value) -> String {
                 .join(", ")
         })
         .unwrap_or_else(|| "\"echo\", \"{prompt}\"".into());
-    let stdin = p
-        .get("stdin")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let stdin = p.get("stdin").and_then(|v| v.as_bool()).unwrap_or(false);
     format!(
         r#"# auto-generated by `makakoo adapter migrate-config`
 [adapter]
@@ -1198,10 +1202,9 @@ fn transport_str(m: &Manifest) -> String {
         ),
         TransportKind::Subprocess => format!("subprocess {:?}", m.transport.command),
         TransportKind::McpStdio => format!("mcp-stdio {:?}", m.transport.command),
-        TransportKind::McpHttp => format!(
-            "mcp-http @ {}",
-            m.transport.url.as_deref().unwrap_or("?")
-        ),
+        TransportKind::McpHttp => {
+            format!("mcp-http @ {}", m.transport.url.as_deref().unwrap_or("?"))
+        }
         TransportKind::McpHttpSigned => format!(
             "mcp-http-signed @ {} (peer={})",
             m.transport.url.as_deref().unwrap_or("?"),
@@ -1297,11 +1300,6 @@ fn load_bundled_adapters() -> Vec<BundledAdapter> {
             });
         }
     }
-    out.sort_by(|a, b| {
-        a.manifest
-            .adapter
-            .name
-            .cmp(&b.manifest.adapter.name)
-    });
+    out.sort_by(|a, b| a.manifest.adapter.name.cmp(&b.manifest.adapter.name));
     out
 }

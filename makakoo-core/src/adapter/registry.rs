@@ -500,7 +500,11 @@ sandbox_profile = "network-io"
     fn write_primary_creates_parent_dirs() {
         let tmp = tempfile::tempdir().unwrap();
         let reg = registry_with_adapters(tmp.path(), &["switchailocal"]);
-        let nested = tmp.path().join("nested").join("deeper").join("primary.toml");
+        let nested = tmp
+            .path()
+            .join("nested")
+            .join("deeper")
+            .join("primary.toml");
         write_primary_adapter_to(&nested, "switchailocal", &reg).unwrap();
         assert!(nested.exists());
     }

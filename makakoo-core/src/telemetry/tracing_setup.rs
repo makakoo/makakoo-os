@@ -62,8 +62,8 @@ impl LogFormat {
 /// Safe to call multiple times — the first caller wins, later callers
 /// silently no-op (matches `try_init` semantics).
 pub fn init_stderr(default_directive: &str) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_directive));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directive));
 
     match LogFormat::from_env() {
         LogFormat::Json => {

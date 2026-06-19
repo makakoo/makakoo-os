@@ -37,8 +37,7 @@ const L2_TOP_K: usize = 5;
 const SOUL_CORE_TONE_HEADER: &str = "## Core Tone";
 const SOUL_NEXT_SECTION: &str = "\n## ";
 
-const FALLBACK_IDENTITY: &str =
-    "You are Makakoo — the user's autonomous cognitive extension. \
+const FALLBACK_IDENTITY: &str = "You are Makakoo — the user's autonomous cognitive extension. \
      Skip preamble. Return solutions, not questions. \
      Use tools, read schemas, run bash. Sharp, concise, hyper-competent.";
 
@@ -51,21 +50,33 @@ pub enum Intent {
 }
 
 const CODE_KEYWORDS: &[&str] = &[
-    "refactor", "debug", "compile", "stacktrace", "import",
-    "function", " class ", " def ", "lint", "typecheck",
-    "merge conflict", "rebase", "commit ", "pytest", "cargo ",
-    " npm ", " test ",
+    "refactor",
+    "debug",
+    "compile",
+    "stacktrace",
+    "import",
+    "function",
+    " class ",
+    " def ",
+    "lint",
+    "typecheck",
+    "merge conflict",
+    "rebase",
+    "commit ",
+    "pytest",
+    "cargo ",
+    " npm ",
+    " test ",
 ];
 
 const CODE_FILE_EXTENSIONS: &[&str] = &[
-    ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
-    ".c", ".cpp", ".h", ".rb", ".php", ".swift", ".kt", ".sh",
-    ".sql", ".yaml", ".yml", ".toml", ".json",
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".rb", ".php",
+    ".swift", ".kt", ".sh", ".sql", ".yaml", ".yml", ".toml", ".json",
 ];
 
 const CREATIVE_KEYWORDS: &[&str] = &[
-    "draft", "write a", "compose", "essay", "story", "poem",
-    "tweet", "linkedin", "email", "reply to",
+    "draft", "write a", "compose", "essay", "story", "poem", "tweet", "linkedin", "email",
+    "reply to",
 ];
 
 /// Heuristic intent detection from raw query text.

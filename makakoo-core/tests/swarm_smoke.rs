@@ -34,12 +34,7 @@ async fn smoke_three_subagents_complete_and_write_artifacts() {
     let coordinator = Arc::new(AgentCoordinator::new());
     let llm = Arc::new(LlmClient::with_base_url(format!("{}/v1", mock.uri())));
     let bus = PersistentEventBus::open(&dir.path().join("bus.db")).unwrap();
-    let gateway = SwarmGateway::new(
-        Arc::clone(&coordinator),
-        Arc::clone(&artifacts),
-        llm,
-        bus,
-    );
+    let gateway = SwarmGateway::new(Arc::clone(&coordinator), Arc::clone(&artifacts), llm, bus);
 
     // Dispatch 3 fake subagents.
     let mut responses = Vec::new();

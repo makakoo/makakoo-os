@@ -120,7 +120,10 @@ impl CliContext {
             return Ok(Arc::clone(s));
         }
         let store = SuperbrainStore::open(&self.db_path).with_context(|| {
-            format!("failed to open superbrain store at {}", self.db_path.display())
+            format!(
+                "failed to open superbrain store at {}",
+                self.db_path.display()
+            )
         })?;
         let arc = Arc::new(store);
         let _ = self.store.set(Arc::clone(&arc));
@@ -177,8 +180,9 @@ impl CliContext {
         if let Some(c) = self.chat.get() {
             return Ok(Arc::clone(c));
         }
-        let chat = ChatStore::open(&self.chat_path)
-            .with_context(|| format!("failed to open chat store at {}", self.chat_path.display()))?;
+        let chat = ChatStore::open(&self.chat_path).with_context(|| {
+            format!("failed to open chat store at {}", self.chat_path.display())
+        })?;
         let arc = Arc::new(chat);
         let _ = self.chat.set(Arc::clone(&arc));
         Ok(arc)
@@ -204,7 +208,10 @@ impl CliContext {
         }
         let registry = self.nursery()?;
         let tracker = BuddyTracker::load(registry, &self.buddy_path).with_context(|| {
-            format!("failed to load buddy tracker at {}", self.buddy_path.display())
+            format!(
+                "failed to load buddy tracker at {}",
+                self.buddy_path.display()
+            )
         })?;
         let arc = Arc::new(tracker);
         let _ = self.buddy.set(Arc::clone(&arc));
@@ -213,9 +220,7 @@ impl CliContext {
 
     /// LLM client (env-driven base URL + API key).
     pub fn llm(&self) -> Arc<LlmClient> {
-        self.llm
-            .get_or_init(|| Arc::new(LlmClient::new()))
-            .clone()
+        self.llm.get_or_init(|| Arc::new(LlmClient::new())).clone()
     }
 
     /// Embedding client (env-driven base URL + API key).

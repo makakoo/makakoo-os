@@ -482,8 +482,7 @@ impl TransportEntry {
         // requirement for those:
         //   - web: bot-tokenless (cookie-signed visitor auth)
         //   - voice_twilio: auth_token lives under [config]
-        let kind_without_top_token =
-            matches!(self.kind.as_str(), "web" | "voice_twilio");
+        let kind_without_top_token = matches!(self.kind.as_str(), "web" | "voice_twilio");
         if !kind_without_top_token {
             let bot_token = self.bot_token_ref();
             if bot_token.is_empty() {
@@ -979,7 +978,10 @@ cookie_ttl_seconds = 86400
         match &entry.config {
             TransportConfig::Web(w) => {
                 assert!(w.production_mode);
-                assert_eq!(w.allowed_origins, vec!["https://harvey.example".to_string()]);
+                assert_eq!(
+                    w.allowed_origins,
+                    vec!["https://harvey.example".to_string()]
+                );
                 assert_eq!(w.cookie_ttl_seconds, 86400);
             }
             _ => panic!("expected web variant"),

@@ -178,8 +178,7 @@ impl IpcServer {
         if socket_path.exists() {
             std::fs::remove_file(socket_path)?;
         }
-        let listener = UnixListener::bind(socket_path)
-            .map_err(MakakooError::Io)?;
+        let listener = UnixListener::bind(socket_path).map_err(MakakooError::Io)?;
         Ok(Self { listener })
     }
 

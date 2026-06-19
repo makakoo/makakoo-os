@@ -95,9 +95,9 @@ async fn write_today_journal(
     if let Some(store) = ctx.store.as_ref() {
         store
             .write_document(&doc_id, &next, doc_type, Value::Null)
-            .map_err(|e| RpcError::internal(format!(
-                "brain_write_journal: store upsert failed: {e}"
-            )))?;
+            .map_err(|e| {
+                RpcError::internal(format!("brain_write_journal: store upsert failed: {e}"))
+            })?;
     }
     Ok(doc_id)
 }
@@ -261,10 +261,7 @@ mod tests {
     async fn brain_write_journal_creates_file_on_first_call() {
         let tmp = tempfile::tempdir().unwrap();
         let h = BrainWriteJournalHandler::new(ctx(tmp.path()));
-        let out = h
-            .call(json!({ "content": "first entry" }))
-            .await
-            .unwrap();
+        let out = h.call(json!({ "content": "first entry" })).await.unwrap();
         let doc_id = out["doc_id"].as_str().unwrap().to_string();
         let body = std::fs::read_to_string(&doc_id).unwrap();
         assert!(body.contains("- first entry"));

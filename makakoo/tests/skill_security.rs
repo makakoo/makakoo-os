@@ -331,10 +331,8 @@ fn plugin_install_high_risk_with_override_succeeds() {
         &[("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin.to_string_lossy())],
     );
     assert!(!out_no_ack.status.success());
-    assert!(
-        String::from_utf8_lossy(&out_no_ack.stderr)
-            .contains("--allow-risk requires a non-empty --risk-ack explanation")
-    );
+    assert!(String::from_utf8_lossy(&out_no_ack.stderr)
+        .contains("--allow-risk requires a non-empty --risk-ack explanation"));
 
     // 2) Test allow_risk with risk_ack -> succeeds
     let out = run(
@@ -414,10 +412,8 @@ fn plugin_install_no_skill_scan_policy() {
         &[],
     );
     assert!(!out_git.status.success());
-    assert!(
-        String::from_utf8_lossy(&out_git.stderr)
-            .contains("--no-skill-scan is only allowed for local path installs")
-    );
+    assert!(String::from_utf8_lossy(&out_git.stderr)
+        .contains("--no-skill-scan is only allowed for local path installs"));
 }
 
 #[test]

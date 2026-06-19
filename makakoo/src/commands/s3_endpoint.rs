@@ -103,10 +103,8 @@ pub fn load_registry(ctx: &CliContext) -> Result<EndpointRegistry> {
         reg.default = Some(DEFAULT_ENDPOINT_NAME.to_string());
         return Ok(reg);
     }
-    let body = fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_str(&body)
-        .with_context(|| format!("parse {}", path.display()))
+    let body = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_str(&body).with_context(|| format!("parse {}", path.display()))
 }
 
 pub fn save_registry(ctx: &CliContext, reg: &EndpointRegistry) -> Result<()> {
@@ -260,10 +258,7 @@ fn list(ctx: &CliContext, as_json: bool) -> Result<i32> {
         return Ok(0);
     }
     let default = reg.default.as_deref().unwrap_or("");
-    println!(
-        "{:1}  {:14} {:8} {:14} URL",
-        "*", "NAME", "REGION", "KIND"
-    );
+    println!("{:1}  {:14} {:8} {:14} URL", "*", "NAME", "REGION", "KIND");
     for (name, spec) in &reg.endpoints {
         let marker = if name == default { "*" } else { " " };
         println!(
@@ -289,7 +284,9 @@ fn add(
 ) -> Result<i32> {
     let mut reg = load_registry(ctx)?;
     if reg.endpoints.contains_key(name) {
-        output::print_error(format!("endpoint {name} already exists. Use `remove` first."));
+        output::print_error(format!(
+            "endpoint {name} already exists. Use `remove` first."
+        ));
         return Ok(1);
     }
     let spec = EndpointSpec {

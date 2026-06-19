@@ -67,7 +67,10 @@ where
 /// the whole thing is uppercased. Stolen from Fabric for muscle-memory
 /// continuity.
 pub fn fabric_model_env_var(pattern_name: &str) -> String {
-    format!("FABRIC_MODEL_{}", pattern_name.replace('-', "_").to_uppercase())
+    format!(
+        "FABRIC_MODEL_{}",
+        pattern_name.replace('-', "_").to_uppercase()
+    )
 }
 
 #[cfg(test)]
@@ -146,7 +149,13 @@ mod tests {
         );
         assert_eq!(r.vendor, "from-flag");
 
-        let r = resolve_route("summarize", &pat(None, Some("from-toml")), None, None, no_env);
+        let r = resolve_route(
+            "summarize",
+            &pat(None, Some("from-toml")),
+            None,
+            None,
+            no_env,
+        );
         assert_eq!(r.vendor, "from-toml");
     }
 

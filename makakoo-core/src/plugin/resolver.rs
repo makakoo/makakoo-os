@@ -93,14 +93,15 @@ pub(crate) fn parse_dep_spec(
         .to_string();
     let req = match parts.next() {
         None => VersionReq::STAR,
-        Some(raw) => raw
-            .trim()
-            .parse::<VersionReq>()
-            .map_err(|e| ResolverError::InvalidDepSpec {
-                plugin: plugin.to_string(),
-                spec: spec.to_string(),
-                msg: format!("bad version constraint: {e}"),
-            })?,
+        Some(raw) => {
+            raw.trim()
+                .parse::<VersionReq>()
+                .map_err(|e| ResolverError::InvalidDepSpec {
+                    plugin: plugin.to_string(),
+                    spec: spec.to_string(),
+                    msg: format!("bad version constraint: {e}"),
+                })?
+        }
     };
     Ok((name, req))
 }
@@ -153,8 +154,10 @@ pub fn resolve_load_order(manifests: &[Manifest]) -> Result<Vec<Manifest>, Resol
 
     // Build name → manifest lookup. Duplicates are a registry-level concern,
     // not a resolver concern — assume unique here.
-    let by_name: HashMap<&str, &Manifest> =
-        manifests.iter().map(|m| (m.plugin.name.as_str(), m)).collect();
+    let by_name: HashMap<&str, &Manifest> = manifests
+        .iter()
+        .map(|m| (m.plugin.name.as_str(), m))
+        .collect();
 
     // Step 2: resolve every [depends].plugins entry and build an adjacency
     // list (plugin → deps) keyed by name.
@@ -164,13 +167,14 @@ pub fn resolve_load_order(manifests: &[Manifest]) -> Result<Vec<Manifest>, Resol
         let mut deps: Vec<String> = Vec::new();
         for spec in &m.depends.plugins {
             let (dep_name, req) = parse_dep_spec(&name, spec)?;
-            let dep = by_name
-                .get(dep_name.as_str())
-                .ok_or_else(|| ResolverError::MissingDependency {
-                    plugin: name.clone(),
-                    dep: dep_name.clone(),
-                    req: req.clone(),
-                })?;
+            let dep =
+                by_name
+                    .get(dep_name.as_str())
+                    .ok_or_else(|| ResolverError::MissingDependency {
+                        plugin: name.clone(),
+                        dep: dep_name.clone(),
+                        req: req.clone(),
+                    })?;
             if !req.matches(&dep.plugin.version) {
                 return Err(ResolverError::IncompatibleDependency {
                     plugin: name.clone(),
@@ -272,7 +276,9 @@ run = "true"
 {deps_line}
 "#
         );
-        Manifest::parse(&body, &PathBuf::from("test.toml")).unwrap().0
+        Manifest::parse(&body, &PathBuf::from("test.toml"))
+            .unwrap()
+            .0
     }
 
     #[test]
@@ -326,10 +332,7 @@ run = "true"
 
     #[test]
     fn version_incompatible_dep_fails() {
-        let manifests = vec![
-            make("aa", "0.9.0", &[]),
-            make("bb", "1.0.0", &["aa ^1"]),
-        ];
+        let manifests = vec![make("aa", "0.9.0", &[]), make("bb", "1.0.0", &["aa ^1"])];
         let err = resolve_load_order(&manifests).unwrap_err();
         assert!(matches!(err, ResolverError::IncompatibleDependency { .. }));
     }

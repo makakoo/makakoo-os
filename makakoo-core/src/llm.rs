@@ -12,10 +12,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::error::{MakakooError, Result};
 
@@ -147,8 +147,7 @@ impl LlmClient {
             "messages": messages,
         });
         let resp = self.post_with_retry("/chat/completions", &body).await?;
-        extract_content(&resp)
-            .ok_or_else(|| MakakooError::llm("no content in chat response"))
+        extract_content(&resp).ok_or_else(|| MakakooError::llm("no content in chat response"))
     }
 
     /// Chat completion with tools, returning both content and tool calls.
@@ -166,7 +165,10 @@ impl LlmClient {
         let resp = self.post_with_retry("/chat/completions", &body).await?;
         let content = extract_content(&resp);
         let tool_calls = extract_tool_calls(&resp);
-        Ok(ChatResponse { content, tool_calls })
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+        })
     }
 
     /// Image understanding via mimo-v2-omni.
@@ -301,9 +303,7 @@ impl LlmClient {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(MakakooError::llm(format!(
-                    "http {status}: {text}"
-                )));
+                return Err(MakakooError::llm(format!("http {status}: {text}")));
             }
             let v: Value = resp.json().await?;
             return Ok(v);

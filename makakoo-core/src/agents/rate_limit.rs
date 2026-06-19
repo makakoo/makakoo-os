@@ -162,8 +162,7 @@ impl RateLimiter {
 
 /// Locked reply text the gateway relays verbatim on rate-limit hit
 /// when no slot-custom message is set.
-pub const DEFAULT_RATE_LIMIT_MESSAGE: &str =
-    "I'm receiving messages too fast — please slow down.";
+pub const DEFAULT_RATE_LIMIT_MESSAGE: &str = "I'm receiving messages too fast — please slow down.";
 
 #[cfg(test)]
 mod tests {
@@ -217,10 +216,7 @@ mod tests {
             l.check_and_consume("secretary", "t", "x"),
             RateDecision::Admit
         );
-        assert_eq!(
-            l.check_and_consume("career", "t", "x"),
-            RateDecision::Admit
-        );
+        assert_eq!(l.check_and_consume("career", "t", "x"), RateDecision::Admit);
     }
 
     #[test]

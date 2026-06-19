@@ -120,14 +120,8 @@ mod tests {
     fn save_and_reload_roundtrips() {
         let home = fresh_home();
         let mut state = StateFile::default();
-        state.set(
-            "persona",
-            SectionStatus::Completed { at: Utc::now() },
-        );
-        state.set(
-            "brain",
-            SectionStatus::Skipped { at: Utc::now() },
-        );
+        state.set("persona", SectionStatus::Completed { at: Utc::now() });
+        state.set("brain", SectionStatus::Skipped { at: Utc::now() });
         save(home.path(), &state).unwrap();
 
         let back = load(home.path());

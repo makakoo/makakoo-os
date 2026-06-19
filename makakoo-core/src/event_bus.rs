@@ -391,11 +391,10 @@ impl PersistentEventBus {
     /// Return the highest seq currently persisted (0 if empty).
     pub fn latest_seq(&self) -> Result<i64> {
         let conn = self.conn.lock().expect("conn mutex poisoned");
-        let seq: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(seq), 0) FROM bus_events",
-            [],
-            |row| row.get(0),
-        )?;
+        let seq: i64 =
+            conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM bus_events", [], |row| {
+                row.get(0)
+            })?;
         Ok(seq)
     }
 
@@ -410,11 +409,7 @@ impl PersistentEventBus {
     pub fn stats(&self) -> Result<BusStats> {
         let total = self.count()?;
         let latest = self.latest_seq()?;
-        let subs = self
-            .subscribers
-            .lock()
-            .expect("subs mutex poisoned")
-            .len();
+        let subs = self.subscribers.lock().expect("subs mutex poisoned").len();
         Ok(BusStats {
             total_events: total,
             latest_seq: latest,
@@ -690,10 +685,7 @@ mod tests {
         let tail = bus2.poll_since(0, "*", 100).unwrap();
         assert_eq!(tail.len(), 3);
         let topics: Vec<String> = tail.iter().map(|(_, ev)| ev.topic.clone()).collect();
-        assert_eq!(
-            topics,
-            vec!["persist.test", "persist.test", "other"]
-        );
+        assert_eq!(topics, vec!["persist.test", "persist.test", "other"]);
     }
 
     #[test]
@@ -715,10 +707,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 3);
-        assert_eq!(
-            *replayed.lock().unwrap(),
-            vec!["r.one", "r.two", "r.three"]
-        );
+        assert_eq!(*replayed.lock().unwrap(), vec!["r.one", "r.two", "r.three"]);
 
         // Replay from mid — skip first event
         let partial: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

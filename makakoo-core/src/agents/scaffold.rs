@@ -109,7 +109,10 @@ impl AgentSpec {
         out.push_str(&format!("name = \"{}\"\n", escape(&self.name)));
         out.push_str(&format!("kind = \"{}\"\n", escape(&self.kind)));
         out.push_str(&format!("entry = \"{}\"\n", escape(&self.entry)));
-        out.push_str(&format!("description = \"{}\"\n", escape(&self.description)));
+        out.push_str(&format!(
+            "description = \"{}\"\n",
+            escape(&self.description)
+        ));
         out.push_str(&format!("version = \"{}\"\n", escape(&self.version)));
         out.push_str(&format!(
             "created_at = \"{}\"\n",
@@ -244,7 +247,10 @@ impl AgentScaffold {
             };
             let spec_path = path.join("agent.toml");
             if spec_path.exists() {
-                match fs::read_to_string(&spec_path).map_err(MakakooError::from).and_then(|c| AgentSpec::from_toml(&c)) {
+                match fs::read_to_string(&spec_path)
+                    .map_err(MakakooError::from)
+                    .and_then(|c| AgentSpec::from_toml(&c))
+                {
                     Ok(spec) => out.push(spec),
                     Err(_) => out.push(stub_spec(&name)),
                 }

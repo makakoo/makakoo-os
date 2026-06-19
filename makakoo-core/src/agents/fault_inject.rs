@@ -127,38 +127,60 @@ pub fn run_scenario(s: FaultScenario) -> FaultOutcome {
             // Simulate 4s restart latency — within 5s SLA.
             let sim = Duration::from_secs(4);
             if within_sigterm_restart_sla(sim) {
-                FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    "simulated SIGTERM → restart in 4s (< 5s SLA)")
+                FaultOutcome::pass(
+                    s,
+                    start.elapsed().as_millis(),
+                    "simulated SIGTERM → restart in 4s (< 5s SLA)",
+                )
             } else {
-                FaultOutcome::fail(s, start.elapsed().as_millis(),
-                    "simulated restart exceeded 5s SLA")
+                FaultOutcome::fail(
+                    s,
+                    start.elapsed().as_millis(),
+                    "simulated restart exceeded 5s SLA",
+                )
             }
         }
-        FaultScenario::GatewayOomSigkill => {
-            match classify_oom_exit(137, "") {
-                Some("sigkill") => FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    "exit code 137 classified as OOM SIGKILL"),
-                _ => FaultOutcome::fail(s, start.elapsed().as_millis(),
-                    "OOM classifier failed to recognize 137"),
-            }
-        }
+        FaultScenario::GatewayOomSigkill => match classify_oom_exit(137, "") {
+            Some("sigkill") => FaultOutcome::pass(
+                s,
+                start.elapsed().as_millis(),
+                "exit code 137 classified as OOM SIGKILL",
+            ),
+            _ => FaultOutcome::fail(
+                s,
+                start.elapsed().as_millis(),
+                "OOM classifier failed to recognize 137",
+            ),
+        },
         FaultScenario::GatewayOomMemoryError => {
             match classify_oom_exit(1, "Traceback... MemoryError: out of memory") {
-                Some("memory_error") => FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    "exit 1 + 'MemoryError' classified as OOM"),
-                _ => FaultOutcome::fail(s, start.elapsed().as_millis(),
-                    "OOM classifier failed on Python MemoryError stderr"),
+                Some("memory_error") => FaultOutcome::pass(
+                    s,
+                    start.elapsed().as_millis(),
+                    "exit 1 + 'MemoryError' classified as OOM",
+                ),
+                _ => FaultOutcome::fail(
+                    s,
+                    start.elapsed().as_millis(),
+                    "OOM classifier failed on Python MemoryError stderr",
+                ),
             }
         }
         FaultScenario::TransportWsDrop => {
             // 12s reconnect — within 30s SLA.
             let sim = Duration::from_secs(12);
             if within_ws_reconnect_sla(sim) {
-                FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    "simulated WS drop → reconnect in 12s (< 30s SLA)")
+                FaultOutcome::pass(
+                    s,
+                    start.elapsed().as_millis(),
+                    "simulated WS drop → reconnect in 12s (< 30s SLA)",
+                )
             } else {
-                FaultOutcome::fail(s, start.elapsed().as_millis(),
-                    "simulated WS reconnect exceeded 30s SLA")
+                FaultOutcome::fail(
+                    s,
+                    start.elapsed().as_millis(),
+                    "simulated WS reconnect exceeded 30s SLA",
+                )
             }
         }
         FaultScenario::TransportTokenRevoke => {
@@ -166,28 +188,41 @@ pub fn run_scenario(s: FaultScenario) -> FaultOutcome {
             FaultOutcome::pass(s, start.elapsed().as_millis(),
                 "401 from credential check would mark slot status=failed; slot survives (no full crash)")
         }
-        FaultScenario::IpcSocketUnlink => {
-            FaultOutcome::pass(s, start.elapsed().as_millis(),
-                "missing IPC socket would surface as gateway_unavailable in status.json")
-        }
+        FaultScenario::IpcSocketUnlink => FaultOutcome::pass(
+            s,
+            start.elapsed().as_millis(),
+            "missing IPC socket would surface as gateway_unavailable in status.json",
+        ),
         FaultScenario::ToolScopeViolation => {
             use crate::agents::scope::check_tool;
             let slot = scope_test_slot();
             match check_tool(&slot, "run_command") {
-                Err(_) => FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    "scope::check_tool denied run_command outside allowlist"),
-                Ok(()) => FaultOutcome::fail(s, start.elapsed().as_millis(),
-                    "scope check unexpectedly admitted run_command"),
+                Err(_) => FaultOutcome::pass(
+                    s,
+                    start.elapsed().as_millis(),
+                    "scope::check_tool denied run_command outside allowlist",
+                ),
+                Ok(()) => FaultOutcome::fail(
+                    s,
+                    start.elapsed().as_millis(),
+                    "scope check unexpectedly admitted run_command",
+                ),
             }
         }
         FaultScenario::PathScopeViolation => {
             use crate::agents::scope::check_path;
             let slot = scope_test_slot();
             match check_path(&slot, std::path::Path::new("/etc/passwd")) {
-                Err(_) => FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    "scope::check_path denied /etc/passwd outside allowlist"),
-                Ok(()) => FaultOutcome::fail(s, start.elapsed().as_millis(),
-                    "scope check unexpectedly admitted /etc/passwd"),
+                Err(_) => FaultOutcome::pass(
+                    s,
+                    start.elapsed().as_millis(),
+                    "scope::check_path denied /etc/passwd outside allowlist",
+                ),
+                Ok(()) => FaultOutcome::fail(
+                    s,
+                    start.elapsed().as_millis(),
+                    "scope check unexpectedly admitted /etc/passwd",
+                ),
             }
         }
         FaultScenario::RateLimitBurst => {
@@ -204,8 +239,11 @@ pub fn run_scenario(s: FaultScenario) -> FaultOutcome {
                 }
             }
             if admits == 60 && denies == 140 {
-                FaultOutcome::pass(s, start.elapsed().as_millis(),
-                    "burst of 200: 60 admitted, 140 denied (locked 60/window cap)".to_string())
+                FaultOutcome::pass(
+                    s,
+                    start.elapsed().as_millis(),
+                    "burst of 200: 60 admitted, 140 denied (locked 60/window cap)".to_string(),
+                )
             } else {
                 FaultOutcome::fail(s, start.elapsed().as_millis(),
                     format!("rate-limit burst yielded {admits} admits + {denies} denies; expected 60/140"))
@@ -216,7 +254,10 @@ pub fn run_scenario(s: FaultScenario) -> FaultOutcome {
 
 /// Run the entire scenario suite, returning a transcript.
 pub fn run_all() -> Vec<FaultOutcome> {
-    FaultScenario::all().iter().map(|s| run_scenario(*s)).collect()
+    FaultScenario::all()
+        .iter()
+        .map(|s| run_scenario(*s))
+        .collect()
 }
 
 /// Construct a minimal AgentSlot suitable for the scope-violation
@@ -320,7 +361,11 @@ mod tests {
     fn scenario_names_are_unique_and_kebab_case() {
         let mut seen = std::collections::HashSet::new();
         for s in FaultScenario::all() {
-            assert!(seen.insert(s.name()), "duplicate scenario name {}", s.name());
+            assert!(
+                seen.insert(s.name()),
+                "duplicate scenario name {}",
+                s.name()
+            );
             assert!(s.name().chars().all(|c| c.is_ascii_lowercase() || c == '-'));
         }
     }

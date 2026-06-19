@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeZone, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -196,23 +196,19 @@ impl ChatStore {
              WHERE channel = ?1 AND channel_user_id = ?2
              ORDER BY created_at DESC, id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(
-            params![channel, user_id, limit as i64],
-            |row| {
-                let id: i64 = row.get(0)?;
-                let role: String = row.get(1)?;
-                let content: String = row.get(2)?;
-                let metadata_raw: String = row.get(3)?;
-                let created_at: f64 = row.get(4)?;
-                Ok((id, role, content, metadata_raw, created_at))
-            },
-        )?;
+        let rows = stmt.query_map(params![channel, user_id, limit as i64], |row| {
+            let id: i64 = row.get(0)?;
+            let role: String = row.get(1)?;
+            let content: String = row.get(2)?;
+            let metadata_raw: String = row.get(3)?;
+            let created_at: f64 = row.get(4)?;
+            Ok((id, role, content, metadata_raw, created_at))
+        })?;
 
         let mut out: Vec<ChatMessage> = Vec::new();
         for r in rows {
             let (id, role, content, metadata_raw, created_at) = r?;
-            let metadata: Value =
-                serde_json::from_str(&metadata_raw).unwrap_or(Value::Null);
+            let metadata: Value = serde_json::from_str(&metadata_raw).unwrap_or(Value::Null);
             let tokens = metadata
                 .get("tokens")
                 .and_then(|v| v.as_u64())
@@ -259,14 +255,7 @@ impl ChatStore {
             let started_at: f64 = row.get(3)?;
             let last_active: f64 = row.get(4)?;
             let metadata_raw: String = row.get(5)?;
-            Ok((
-                id,
-                channel,
-                user_id,
-                started_at,
-                last_active,
-                metadata_raw,
-            ))
+            Ok((id, channel, user_id, started_at, last_active, metadata_raw))
         };
 
         let rows: Vec<(i64, String, String, f64, f64, String)> = if has_filter {
@@ -305,15 +294,13 @@ impl ChatStore {
 
     pub fn message_count(&self) -> Result<usize> {
         let conn = self.lock()?;
-        let n: i64 =
-            conn.query_row("SELECT COUNT(*) FROM chat_messages", [], |row| row.get(0))?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM chat_messages", [], |row| row.get(0))?;
         Ok(n as usize)
     }
 
     pub fn conversation_count(&self) -> Result<usize> {
         let conn = self.lock()?;
-        let n: i64 =
-            conn.query_row("SELECT COUNT(*) FROM chat_sessions", [], |row| row.get(0))?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM chat_sessions", [], |row| row.get(0))?;
         Ok(n as usize)
     }
 
@@ -357,8 +344,7 @@ impl ChatStore {
         let mut out = Vec::new();
         for r in rows {
             let (id, role, content, metadata_raw, created_at) = r?;
-            let metadata: Value =
-                serde_json::from_str(&metadata_raw).unwrap_or(Value::Null);
+            let metadata: Value = serde_json::from_str(&metadata_raw).unwrap_or(Value::Null);
             let tokens = metadata
                 .get("tokens")
                 .and_then(|v| v.as_u64())

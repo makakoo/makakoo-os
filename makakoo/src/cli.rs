@@ -1871,8 +1871,7 @@ mod tests {
 
     #[test]
     fn parse_search_with_limit() {
-        let cli =
-            Cli::try_parse_from(["makakoo", "search", "--limit", "5", "tytus"]).unwrap();
+        let cli = Cli::try_parse_from(["makakoo", "search", "--limit", "5", "tytus"]).unwrap();
         if let Commands::Search { query, limit } = cli.command.unwrap() {
             assert_eq!(query, "tytus");
             assert_eq!(limit, 5);
@@ -1896,7 +1895,13 @@ mod tests {
         if let Commands::Network { args } = cli.command.unwrap() {
             assert_eq!(
                 args,
-                ["activate", "--peer-name", "donna-vps", "--bind", "tailscale"]
+                [
+                    "activate",
+                    "--peer-name",
+                    "donna-vps",
+                    "--bind",
+                    "tailscale"
+                ]
             );
         } else {
             panic!("expected Network");
@@ -1905,11 +1910,12 @@ mod tests {
 
     #[test]
     fn parse_query_with_top_k() {
-        let cli = Cli::try_parse_from([
-            "makakoo", "query", "--top-k", "3", "what is lope?",
-        ])
-        .unwrap();
-        if let Commands::Query { question, top_k, .. } = cli.command.unwrap() {
+        let cli =
+            Cli::try_parse_from(["makakoo", "query", "--top-k", "3", "what is lope?"]).unwrap();
+        if let Commands::Query {
+            question, top_k, ..
+        } = cli.command.unwrap()
+        {
             assert_eq!(question, "what is lope?");
             assert_eq!(top_k, 3);
         } else {
@@ -1920,7 +1926,12 @@ mod tests {
     #[test]
     fn parse_sancho_tick() {
         let cli = Cli::try_parse_from(["makakoo", "sancho", "tick"]).unwrap();
-        matches!(cli.command.unwrap(), Commands::Sancho { cmd: SanchoCmd::Tick });
+        matches!(
+            cli.command.unwrap(),
+            Commands::Sancho {
+                cmd: SanchoCmd::Tick
+            }
+        );
     }
 
     #[test]
@@ -1990,7 +2001,13 @@ mod tests {
     #[test]
     fn parse_skill_with_args() {
         let cli = Cli::try_parse_from([
-            "makakoo", "skill", "canary", "run", "opencode", "--workspace", "clean",
+            "makakoo",
+            "skill",
+            "canary",
+            "run",
+            "opencode",
+            "--workspace",
+            "clean",
         ])
         .unwrap();
         if let Commands::Skill { name, args } = cli.command.unwrap() {
@@ -2073,10 +2090,8 @@ mod tests {
 
     #[test]
     fn parse_plugin_install_core() {
-        let cli = Cli::try_parse_from([
-            "makakoo", "plugin", "install", "--core", "mascot-gym",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["makakoo", "plugin", "install", "--core", "mascot-gym"]).unwrap();
         if let Commands::Plugin {
             cmd:
                 PluginCmd::Install {
@@ -2097,13 +2112,7 @@ mod tests {
 
     #[test]
     fn parse_plugin_install_local_path() {
-        let cli = Cli::try_parse_from([
-            "makakoo",
-            "plugin",
-            "install",
-            "/tmp/my-plugin",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["makakoo", "plugin", "install", "/tmp/my-plugin"]).unwrap();
         if let Commands::Plugin {
             cmd: PluginCmd::Install { source, core, .. },
         } = cli.command.unwrap()
@@ -2151,11 +2160,9 @@ mod tests {
         ])
         .unwrap();
         if let Commands::Plugin {
-            cmd:
-                PluginCmd::Install {
-                    allow_unstable_ref,
-                    ..
-                },
+            cmd: PluginCmd::Install {
+                allow_unstable_ref, ..
+            },
         } = cli.command.unwrap()
         {
             assert!(allow_unstable_ref);
@@ -2227,10 +2234,7 @@ mod tests {
         let Commands::Plugin {
             cmd:
                 PluginCmd::Internal {
-                    cmd:
-                        PluginInternalCmd::VenvBootstrap {
-                            mode, url, rev, ..
-                        },
+                    cmd: PluginInternalCmd::VenvBootstrap { mode, url, rev, .. },
                 },
         } = cli.command.unwrap()
         else {
@@ -2243,10 +2247,8 @@ mod tests {
 
     #[test]
     fn parse_plugin_uninstall_with_purge() {
-        let cli = Cli::try_parse_from([
-            "makakoo", "plugin", "uninstall", "mascot-gym", "--purge",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["makakoo", "plugin", "uninstall", "mascot-gym", "--purge"])
+            .unwrap();
         if let Commands::Plugin {
             cmd: PluginCmd::Uninstall { name, purge },
         } = cli.command.unwrap()
@@ -2271,10 +2273,7 @@ mod tests {
 
     #[test]
     fn parse_distro_install_named() {
-        let cli = Cli::try_parse_from([
-            "makakoo", "distro", "install", "core", "--yes",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["makakoo", "distro", "install", "core", "--yes"]).unwrap();
         if let Commands::Distro {
             cmd:
                 DistroCmd::Install {
@@ -2431,12 +2430,16 @@ mod tests {
     #[test]
     fn parse_session_fork_with_new_id() {
         let cli = Cli::try_parse_from([
-            "makakoo", "session", "fork", "abc",
-            "--from", "m3", "--new-id", "abc-alt",
+            "makakoo", "session", "fork", "abc", "--from", "m3", "--new-id", "abc-alt",
         ])
         .unwrap();
         if let Commands::Session {
-            cmd: SessionCmd::Fork { source, from, new_id },
+            cmd:
+                SessionCmd::Fork {
+                    source,
+                    from,
+                    new_id,
+                },
         } = cli.command.unwrap()
         {
             assert_eq!(source, "abc");
@@ -2524,7 +2527,10 @@ mod tests {
         } = cli.command.unwrap()
         {
             assert!(name.is_none());
-            assert_eq!(from.as_deref().map(|p| p.to_str().unwrap()), Some("/tmp/custom.toml"));
+            assert_eq!(
+                from.as_deref().map(|p| p.to_str().unwrap()),
+                Some("/tmp/custom.toml")
+            );
             assert!(dry_run);
         } else {
             panic!("expected Distro::Install");
@@ -2550,14 +2556,9 @@ mod tests {
 
     #[test]
     fn parse_adapter_list_with_flags() {
-        let cli = Cli::try_parse_from([
-            "makakoo",
-            "adapter",
-            "list",
-            "--json",
-            "--include-bundled",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["makakoo", "adapter", "list", "--json", "--include-bundled"])
+                .unwrap();
         if let Commands::Adapter {
             cmd:
                 AdapterCmd::List {
@@ -2650,9 +2651,14 @@ mod tests {
 
     #[test]
     fn parse_adapter_update() {
-        let cli =
-            Cli::try_parse_from(["makakoo", "adapter", "update", "openclaw", "--accept-re-trust"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "adapter",
+            "update",
+            "openclaw",
+            "--accept-re-trust",
+        ])
+        .unwrap();
         if let Commands::Adapter {
             cmd:
                 AdapterCmd::Update {
@@ -2763,7 +2769,12 @@ mod tests {
     #[test]
     fn parse_adapter_export() {
         let cli = Cli::try_parse_from([
-            "makakoo", "adapter", "export", "openclaw", "--out", "/tmp/openclaw.tgz",
+            "makakoo",
+            "adapter",
+            "export",
+            "openclaw",
+            "--out",
+            "/tmp/openclaw.tgz",
         ])
         .unwrap();
         if let Commands::Adapter {
@@ -2812,8 +2823,8 @@ mod tests {
 
     #[test]
     fn parse_adapter_info_json() {
-        let cli = Cli::try_parse_from(["makakoo", "adapter", "info", "openclaw", "--json"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["makakoo", "adapter", "info", "openclaw", "--json"]).unwrap();
         if let Commands::Adapter {
             cmd: AdapterCmd::Info { name, json },
         } = cli.command.unwrap()

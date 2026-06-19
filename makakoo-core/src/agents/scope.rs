@@ -140,8 +140,11 @@ pub fn check_tool(slot: &AgentSlot, tool: &str) -> Result<(), ScopeError> {
 /// `forbidden_paths` accept either absolute paths or `~/…` shorthand.
 pub fn check_path(slot: &AgentSlot, candidate: &Path) -> Result<(), ScopeError> {
     let candidate_canon = canonicalise(candidate);
-    let allowed_canon: Vec<PathBuf> =
-        slot.allowed_paths.iter().map(|s| canonicalise(Path::new(s))).collect();
+    let allowed_canon: Vec<PathBuf> = slot
+        .allowed_paths
+        .iter()
+        .map(|s| canonicalise(Path::new(s)))
+        .collect();
     let forbidden_canon: Vec<PathBuf> = slot
         .forbidden_paths
         .iter()

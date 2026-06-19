@@ -154,16 +154,10 @@ impl AgentSlot {
         for t in clone.transports.iter_mut() {
             t.secret_ref = t.secret_ref.as_ref().map(|_| "<redacted>".into());
             t.secret_env = t.secret_env.as_ref().map(|_| "<redacted>".into());
-            t.inline_secret_dev = t
-                .inline_secret_dev
-                .as_ref()
-                .map(|_| "<redacted>".into());
+            t.inline_secret_dev = t.inline_secret_dev.as_ref().map(|_| "<redacted>".into());
             t.app_token_ref = t.app_token_ref.as_ref().map(|_| "<redacted>".into());
             t.app_token_env = t.app_token_env.as_ref().map(|_| "<redacted>".into());
-            t.inline_app_token_dev = t
-                .inline_app_token_dev
-                .as_ref()
-                .map(|_| "<redacted>".into());
+            t.inline_app_token_dev = t.inline_app_token_dev.as_ref().map(|_| "<redacted>".into());
         }
         clone
     }
@@ -176,15 +170,12 @@ impl AgentSlot {
             MakakooError::Config(format!("agent slot {} parse: {}", path.display(), e))
         })?;
         slot.validate()?;
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| {
-                MakakooError::InvalidInput(format!(
-                    "agent slot path '{}' has no filename stem",
-                    path.display()
-                ))
-            })?;
+        let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+            MakakooError::InvalidInput(format!(
+                "agent slot path '{}' has no filename stem",
+                path.display()
+            ))
+        })?;
         if stem != slot.slot_id {
             return Err(MakakooError::InvalidInput(format!(
                 "agent slot filename '{}' must equal slot_id '{}' (filename and slot_id must match)",

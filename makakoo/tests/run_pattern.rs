@@ -192,10 +192,7 @@ description = "missing system.md"
     )
     .unwrap();
 
-    let out = run(
-        &["run", "broken", "--input", "x", "--dry-run"],
-        &home,
-    );
+    let out = run(&["run", "broken", "--input", "x", "--dry-run"], &home);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("not found in registry"));
@@ -208,10 +205,7 @@ fn pattern_prefix_optional() {
     let home = home_resolved(&dir);
     seed_pattern(&home, "summarize", "Body: {{input}}", "");
 
-    let bare = run(
-        &["run", "summarize", "--input", "X", "--dry-run"],
-        &home,
-    );
+    let bare = run(&["run", "summarize", "--input", "X", "--dry-run"], &home);
     let prefixed = run(
         &["run", "pattern-summarize", "--input", "X", "--dry-run"],
         &home,
@@ -299,7 +293,9 @@ fn strategy_overlay_composes_above_pattern() {
     );
     let stdout = assert_success(&out);
     // Caveman strategy text appears before the pattern body.
-    let caveman_pos = stdout.find("HARD-GATE BYPASS").expect("caveman text expected");
+    let caveman_pos = stdout
+        .find("HARD-GATE BYPASS")
+        .expect("caveman text expected");
     let body_pos = stdout.find("Body: x").expect("body expected");
     assert!(
         caveman_pos < body_pos,
@@ -350,10 +346,7 @@ fn pattern_strategy_default_used_when_no_flag() {
         r#"strategy_default = "harvey-rigor""#,
     );
 
-    let out = run(
-        &["run", "auditor", "--input", "x", "--dry-run"],
-        &home,
-    );
+    let out = run(&["run", "auditor", "--input", "x", "--dry-run"], &home);
     let stdout = assert_success(&out);
     assert!(stdout.contains("# strategy: harvey-rigor"));
     assert!(stdout.contains("Harvey Rigor"));
@@ -440,10 +433,7 @@ fn input_from_file_with_at_prefix() {
     std::fs::write(&input_file, "from file").unwrap();
     let arg = format!("@{}", input_file.display());
 
-    let out = run(
-        &["run", "summarize", "--input", &arg, "--dry-run"],
-        &home,
-    );
+    let out = run(&["run", "summarize", "--input", &arg, "--dry-run"], &home);
     let stdout = assert_success(&out);
     assert!(stdout.contains("Got: from file"));
 }

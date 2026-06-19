@@ -128,7 +128,10 @@ impl Section for ModelProviderSection {
                 .unwrap_or("");
             ui.line(format!("  {}. {} — {}", i + 1, n, summary))?;
         }
-        ui.line(format!("  {}. (skip — don't change the primary)", names.len() + 1))?;
+        ui.line(format!(
+            "  {}. (skip — don't change the primary)",
+            names.len() + 1
+        ))?;
         ui.prompt_write(format!("\nPick 1-{}: ", names.len() + 1))?;
 
         let raw = ui.read_line()?;
