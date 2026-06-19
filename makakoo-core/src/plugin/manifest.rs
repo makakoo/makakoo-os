@@ -706,21 +706,17 @@ impl Manifest {
 
         // Kind-specific extras.
         match self.plugin.kind {
-            PluginKind::Mascot => {
-                if self.mascot.is_none() {
-                    return Err(ManifestError::invalid(
-                        path,
-                        "[mascot] table required when plugin.kind = mascot",
-                    ));
-                }
+            PluginKind::Mascot if self.mascot.is_none() => {
+                return Err(ManifestError::invalid(
+                    path,
+                    "[mascot] table required when plugin.kind = mascot",
+                ));
             }
-            PluginKind::BootstrapFragment => {
-                if self.infect.fragments.is_empty() {
-                    return Err(ManifestError::invalid(
-                        path,
-                        "kind = bootstrap-fragment requires [infect.fragments]",
-                    ));
-                }
+            PluginKind::BootstrapFragment if self.infect.fragments.is_empty() => {
+                return Err(ManifestError::invalid(
+                    path,
+                    "kind = bootstrap-fragment requires [infect.fragments]",
+                ));
             }
             PluginKind::Pattern => {
                 if self.pattern.is_none() {

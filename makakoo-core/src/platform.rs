@@ -46,9 +46,9 @@ pub fn makakoo_home() -> PathBuf {
                 return PathBuf::from(x).join("makakoo");
             }
         }
-        return dirs::home_dir()
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".local/share/makakoo");
+            .join(".local/share/makakoo")
     }
     #[cfg(target_os = "windows")]
     {

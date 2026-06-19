@@ -80,6 +80,9 @@ fn speak_windows(text: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    // Used by the platform-gated tests below; which ones compile depends on
+    // the target, so the glob is unused on some platforms (e.g. Linux CI).
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

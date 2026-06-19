@@ -601,7 +601,7 @@ impl FleetSummary {
         md.push_str(&format!("  - **Low:** {}\n\n", self.severity_counts.low));
 
         let mut sorted_targets = self.targets.clone();
-        sorted_targets.sort_by(|a, b| b.score.cmp(&a.score));
+        sorted_targets.sort_by_key(|t| std::cmp::Reverse(t.score));
 
         if let Some(worst) = sorted_targets.first() {
             if worst.score > 0 {

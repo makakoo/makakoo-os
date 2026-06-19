@@ -501,21 +501,18 @@ impl Gateway for DiscordAdapter {
                         11 => {
                             // HEARTBEAT_ACK — ignore.
                         }
-                        0 => {
-                            // DISPATCH — handle MESSAGE_CREATE.
-                            if dispatch.t.as_deref() == Some("MESSAGE_CREATE") {
-                                if let Some(d) = dispatch.d {
-                                    if let Ok(msg) =
-                                        serde_json::from_value::<DiscordMessage>(d.clone())
-                                    {
-                                        if let Some(frame) = self.build_inbound_frame(msg).await {
-                                            // Sink-closed = supervisor
-                                            // shutting down; bail out
-                                            // cleanly so the task can
-                                            // unwind.
-                                            if sink.send(frame).await.is_err() {
-                                                return Ok(());
-                                            }
+                        // DISPATCH — handle MESSAGE_CREATE.
+                        0 if dispatch.t.as_deref() == Some("MESSAGE_CREATE") => {
+                            if let Some(d) = dispatch.d {
+                                if let Ok(msg) = serde_json::from_value::<DiscordMessage>(d.clone())
+                                {
+                                    if let Some(frame) = self.build_inbound_frame(msg).await {
+                                        // Sink-closed = supervisor
+                                        // shutting down; bail out
+                                        // cleanly so the task can
+                                        // unwind.
+                                        if sink.send(frame).await.is_err() {
+                                            return Ok(());
                                         }
                                     }
                                 }
