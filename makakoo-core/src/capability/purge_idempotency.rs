@@ -111,8 +111,7 @@ fn save(path: &Path, state: &PurgeState) -> std::io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     let tmp = tmp_path_for(path);
-    let serialized =
-        serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
+    let serialized = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
     {
         let mut f = File::create(&tmp)?;
         f.write_all(&serialized)?;
@@ -188,11 +187,21 @@ pub fn check_and_record(home: &Path, now: DateTime<Utc>) -> PurgeCheck {
                 seconds_since_last: delta.num_seconds(),
             }
         } else {
-            let _ = save(&path, &PurgeState { last_purged_at: now });
+            let _ = save(
+                &path,
+                &PurgeState {
+                    last_purged_at: now,
+                },
+            );
             PurgeCheck::Proceed
         }
     } else {
-        let _ = save(&path, &PurgeState { last_purged_at: now });
+        let _ = save(
+            &path,
+            &PurgeState {
+                last_purged_at: now,
+            },
+        );
         PurgeCheck::Proceed
     };
 
@@ -256,13 +265,10 @@ mod tests {
         check_and_record(h.path(), t0);
         let t_mid = t0 + Duration::seconds(30);
         check_and_record(h.path(), t_mid); // skipped
-        // After the skipped call, state should STILL carry t0, not t_mid.
-        // So a call at t0 + 70s still sees the gap as >= cooldown from t0.
+                                           // After the skipped call, state should STILL carry t0, not t_mid.
+                                           // So a call at t0 + 70s still sees the gap as >= cooldown from t0.
         let t_after = t0 + Duration::seconds(61);
-        assert_eq!(
-            check_and_record(h.path(), t_after),
-            PurgeCheck::Proceed
-        );
+        assert_eq!(check_and_record(h.path(), t_after), PurgeCheck::Proceed);
     }
 
     #[test]

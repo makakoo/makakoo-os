@@ -196,8 +196,7 @@ pub struct PostInstallTable {
     pub message: Option<String>,
 }
 
-static NAME_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[a-z][a-z0-9-]{1,62}$").unwrap());
+static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z][a-z0-9-]{1,62}$").unwrap());
 
 const NAME_REGEX_STR: &str = "^[a-z][a-z0-9-]{1,62}$";
 
@@ -364,10 +363,7 @@ message = "hi"
         assert_eq!(f.include(), &["core.toml".to_string()]);
         assert_eq!(f.plugins.len(), 2);
         assert_eq!(f.plugins["skill-market"].version(), "*");
-        assert_eq!(
-            f.plugins["agent-arbitrage"].blake3().unwrap().len(),
-            64
-        );
+        assert_eq!(f.plugins["agent-arbitrage"].blake3().unwrap().len(), 64);
         assert_eq!(f.excludes.plugins, vec!["skill-prose"]);
         assert_eq!(f.post_install.message.as_deref(), Some("hi"));
     }
@@ -416,9 +412,7 @@ version = "^1.0"
 "#;
         let f = DistroFile::parse(src, &test_path()).unwrap();
         f.check_kernel(&semver::Version::new(1, 2, 3)).unwrap();
-        let err = f
-            .check_kernel(&semver::Version::new(0, 9, 0))
-            .unwrap_err();
+        let err = f.check_kernel(&semver::Version::new(0, 9, 0)).unwrap_err();
         assert!(matches!(err, DistroError::KernelMismatch { .. }));
     }
 

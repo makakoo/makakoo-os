@@ -107,10 +107,7 @@ fn bootstrap(ctx: &CliContext, force_rotate: bool) -> Result<i32> {
                 "service key exists in Garage but missing from keychain — \
                  re-storing from `garage key info <id>`",
             );
-            let info = run_garage_cli(
-                ctx,
-                &["key", "info", &prior_ids[0], "--show-secret"],
-            )?;
+            let info = run_garage_cli(ctx, &["key", "info", &prior_ids[0], "--show-secret"])?;
             let (access, secret) = parse_key_creds(&info)?;
             store_creds_in_keychain(&access, &secret)?;
         }
@@ -127,11 +124,8 @@ fn bootstrap(ctx: &CliContext, force_rotate: bool) -> Result<i32> {
     //     `aws s3 mb s3://<bucket>` fails with `Access key … is not
     //     allowed to create buckets`. The service identity needs to
     //     own the bucket-namespace lifecycle for Phase C.
-    run_garage_cli(
-        ctx,
-        &["key", "allow", "--create-bucket", SERVICE_KEY_NAME],
-    )
-    .context("garage key allow --create-bucket failed")?;
+    run_garage_cli(ctx, &["key", "allow", "--create-bucket", SERVICE_KEY_NAME])
+        .context("garage key allow --create-bucket failed")?;
 
     // 7. Grant the service key full access on every bucket. The service
     //    identity is Makakoo's own; it never gets handed to user buckets
@@ -273,15 +267,7 @@ fn ensure_single_node_layout(ctx: &CliContext) -> Result<()> {
     let _ = run_garage_cli(
         ctx,
         &[
-            "layout",
-            "assign",
-            &node_id,
-            "-z",
-            "dc1",
-            "-c",
-            "100G",
-            "-t",
-            "makakoo",
+            "layout", "assign", &node_id, "-z", "dc1", "-c", "100G", "-t", "makakoo",
         ],
     )?;
     let _ = run_garage_cli(ctx, &["layout", "apply", "--version", "1"])?;

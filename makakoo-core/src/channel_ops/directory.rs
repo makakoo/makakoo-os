@@ -46,9 +46,7 @@ pub enum ChannelOpError {
     UnknownChannel(String),
     #[error("unknown user '{0}'")]
     UnknownUser(String),
-    #[error(
-        "operation '{op}' is not supported by transport '{kind}': {reason}"
-    )]
+    #[error("operation '{op}' is not supported by transport '{kind}': {reason}")]
     Unsupported {
         kind: &'static str,
         op: &'static str,
@@ -78,8 +76,5 @@ pub trait ChannelDirectoryAdapter: Send + Sync {
     /// Resolve a single user by id, handle, or email. Returns
     /// `Ok(None)` when the user does not exist; `Err(Unsupported)`
     /// when the transport has no lookup primitive.
-    async fn lookup_user(
-        &self,
-        query: &str,
-    ) -> Result<Option<UserSummary>, ChannelOpError>;
+    async fn lookup_user(&self, query: &str) -> Result<Option<UserSummary>, ChannelOpError>;
 }

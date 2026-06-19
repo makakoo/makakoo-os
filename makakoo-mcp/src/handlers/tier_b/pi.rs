@@ -123,11 +123,7 @@ async fn drain_stdout(child: &mut Child) -> Result<Vec<Value>, RpcError> {
 
 /// Run a whole RPC turn against pi: spawn, write one request, drain
 /// stdout, wait with timeout. Returns the parsed frames pi produced.
-async fn rpc_turn(
-    request: Value,
-    timeout_s: u64,
-    args: &[&str],
-) -> Result<Vec<Value>, RpcError> {
+async fn rpc_turn(request: Value, timeout_s: u64, args: &[&str]) -> Result<Vec<Value>, RpcError> {
     let mut child = spawn_pi_rpc(args)?;
     write_one_request(&mut child, request).await?;
 
@@ -197,10 +193,7 @@ fn collect_usage(frames: &[Value]) -> Option<Value> {
         if let Some(u) = frame.get("usage") {
             return Some(u.clone());
         }
-        if let Some(u) = frame
-            .get("event")
-            .and_then(|v| v.get("usage"))
-        {
+        if let Some(u) = frame.get("event").and_then(|v| v.get("usage")) {
             return Some(u.clone());
         }
     }

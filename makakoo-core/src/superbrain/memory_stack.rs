@@ -142,10 +142,7 @@ impl MemoryStack {
 
     /// L2: semantic hits, ranked by similarity and trimmed to budget.
     fn build_l2(&self, hits: &[SemanticHit], budget: usize) -> String {
-        let mut ranked: Vec<&SemanticHit> = hits
-            .iter()
-            .filter(|h| h.similarity > 0.3)
-            .collect();
+        let mut ranked: Vec<&SemanticHit> = hits.iter().filter(|h| h.similarity > 0.3).collect();
         ranked.sort_by(|a, b| {
             b.similarity
                 .partial_cmp(&a.similarity)
@@ -179,9 +176,8 @@ impl MemoryStack {
         }
         // Pick the first node whose lowercased id contains any term.
         let conn = self.conn.lock().expect("memstack conn poisoned");
-        let mut stmt = conn.prepare(
-            "SELECT id FROM brain_graph_nodes WHERE node_type != 'journal'",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id FROM brain_graph_nodes WHERE node_type != 'journal'")?;
         let ids: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -221,11 +217,7 @@ impl MemoryStack {
     }
 
     /// Raw FTS5 journal lookup over the last `max_age_days`.
-    fn recent_journal_fts(
-        &self,
-        query: &str,
-        max_age_days: i64,
-    ) -> Result<Vec<JournalCandidate>> {
+    fn recent_journal_fts(&self, query: &str, max_age_days: i64) -> Result<Vec<JournalCandidate>> {
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -292,7 +284,13 @@ fn compress_line(s: &str) -> String {
 fn sanitise_fts_query(q: &str) -> String {
     let cleaned: String = q
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
     cleaned
         .split_whitespace()
@@ -384,9 +382,7 @@ mod tests {
     fn assemble_context_honours_budget() {
         let (_d, stack) = make_stack();
         let identity = SessionIdentity::new("a".repeat(5000));
-        let ctx = stack
-            .assemble_context(&identity, "", &[], 100)
-            .unwrap();
+        let ctx = stack.assemble_context(&identity, "", &[], 100).unwrap();
         // 100 tokens ≈ 400 chars, plus ~30 chars of section framing.
         assert!(ctx.len() < 600, "context too long: {}", ctx.len());
     }

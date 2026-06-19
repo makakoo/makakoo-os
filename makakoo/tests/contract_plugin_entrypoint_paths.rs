@@ -20,12 +20,7 @@ use std::path::{Path, PathBuf};
 /// indicates a misrooted entrypoint. The subprocess handler CWDs to the
 /// plugin root already, so no plugin-relative script should start with
 /// these directory names.
-const BAD_FIRST_SEGMENTS: &[&str] = &[
-    "plugins",
-    "plugins-core",
-    "agents",
-    "harvey-os",
-];
+const BAD_FIRST_SEGMENTS: &[&str] = &["plugins", "plugins-core", "agents", "harvey-os"];
 
 /// Walk `plugins-core/<name>/plugin.toml` and collect every `[entrypoint]`
 /// command string.

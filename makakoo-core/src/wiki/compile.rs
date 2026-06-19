@@ -80,10 +80,7 @@ impl WikiCompiler {
             }
             prev_blank = false;
 
-            let leading_ws: String = trimmed
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect();
+            let leading_ws: String = trimmed.chars().take_while(|c| c.is_whitespace()).collect();
             let body = trimmed.trim_start();
 
             // Already a bullet — preserve verbatim.

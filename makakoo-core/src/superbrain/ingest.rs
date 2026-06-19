@@ -109,11 +109,25 @@ impl IngestEngine {
 
         let pages_dir = self.brain_dir.join("pages");
         if pages_dir.exists() {
-            self.sync_dir(&pages_dir, "page", &existing, opts.force, &mut report, &mut seen)?;
+            self.sync_dir(
+                &pages_dir,
+                "page",
+                &existing,
+                opts.force,
+                &mut report,
+                &mut seen,
+            )?;
         }
         let journals_dir = self.brain_dir.join("journals");
         if journals_dir.exists() {
-            self.sync_dir(&journals_dir, "journal", &existing, opts.force, &mut report, &mut seen)?;
+            self.sync_dir(
+                &journals_dir,
+                "journal",
+                &existing,
+                opts.force,
+                &mut report,
+                &mut seen,
+            )?;
         }
         if opts.include_auto_memory && self.auto_memory_dir.exists() {
             self.sync_dir(
@@ -144,8 +158,7 @@ impl IngestEngine {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM entity_graph", [])?;
         let rows: Vec<(String, String, String, String)> = {
-            let mut stmt =
-                tx.prepare("SELECT name, doc_type, entities, path FROM brain_docs")?;
+            let mut stmt = tx.prepare("SELECT name, doc_type, entities, path FROM brain_docs")?;
             let r = stmt
                 .query_map([], |r| {
                     Ok((
@@ -159,8 +172,7 @@ impl IngestEngine {
             r
         };
         for (name, doc_type, entities_json, path) in rows {
-            let entities: Vec<String> =
-                serde_json::from_str(&entities_json).unwrap_or_default();
+            let entities: Vec<String> = serde_json::from_str(&entities_json).unwrap_or_default();
             let valid_from = if doc_type == "journal" {
                 let stem: String = name.replace('_', "-").chars().take(10).collect();
                 Some(stem)
@@ -196,11 +208,7 @@ impl IngestEngine {
 
     /// Embed up to `limit` documents that don't have vectors yet.
     /// Returns the number of vectors written.
-    pub async fn embed_pending(
-        &self,
-        embedder: &EmbeddingClient,
-        limit: usize,
-    ) -> Result<usize> {
+    pub async fn embed_pending(&self, embedder: &EmbeddingClient, limit: usize) -> Result<usize> {
         let pending = self.store.docs_missing_vectors(limit)?;
         let mut written = 0usize;
         for (doc_id, content) in pending {
@@ -473,9 +481,18 @@ mod tests {
 
     #[test]
     fn doc_type_for_recognises_path_segments() {
-        assert_eq!(doc_type_for(Path::new("/x/data/Brain/pages/a.md")), Some("page"));
-        assert_eq!(doc_type_for(Path::new("/x/data/Brain/journals/2026_04_18.md")), Some("journal"));
-        assert_eq!(doc_type_for(Path::new("/x/data/auto-memory/foo.md")), Some("memory"));
+        assert_eq!(
+            doc_type_for(Path::new("/x/data/Brain/pages/a.md")),
+            Some("page")
+        );
+        assert_eq!(
+            doc_type_for(Path::new("/x/data/Brain/journals/2026_04_18.md")),
+            Some("journal")
+        );
+        assert_eq!(
+            doc_type_for(Path::new("/x/data/auto-memory/foo.md")),
+            Some("memory")
+        );
         assert_eq!(doc_type_for(Path::new("/x/random/file.md")), None);
     }
 
@@ -490,8 +507,14 @@ mod tests {
     fn sync_indexes_pages_and_journals_then_skips_unchanged() {
         let (dir, engine) = make_engine();
         let brain = dir.path().join("data").join("Brain");
-        write(&brain.join("pages").join("Tytus.md"), "# Tytus\nlinks to [[Harvey]] and [[Makakoo]]");
-        write(&brain.join("journals").join("2026_04_18.md"), "- worked on Sprint 006 phase 2");
+        write(
+            &brain.join("pages").join("Tytus.md"),
+            "# Tytus\nlinks to [[Harvey]] and [[Makakoo]]",
+        );
+        write(
+            &brain.join("journals").join("2026_04_18.md"),
+            "- worked on Sprint 006 phase 2",
+        );
 
         let report = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(report.pages, 1);
@@ -511,9 +534,17 @@ mod tests {
     fn sync_force_reindexes_everything() {
         let (dir, engine) = make_engine();
         let pages = dir.path().join("data").join("Brain").join("pages");
-        write(&pages.join("X.md"), "# X — body long enough to clear the min-chars threshold easily");
+        write(
+            &pages.join("X.md"),
+            "# X — body long enough to clear the min-chars threshold easily",
+        );
         let _ = engine.sync(SyncOptions::default()).unwrap();
-        let forced = engine.sync(SyncOptions { force: true, include_auto_memory: false }).unwrap();
+        let forced = engine
+            .sync(SyncOptions {
+                force: true,
+                include_auto_memory: false,
+            })
+            .unwrap();
         assert_eq!(forced.pages, 1);
         assert_eq!(forced.skipped, 0);
     }
@@ -524,8 +555,14 @@ mod tests {
         let pages = dir.path().join("data").join("Brain").join("pages");
         let p1 = pages.join("Keep.md");
         let p2 = pages.join("Drop.md");
-        write(&p1, "# Keep — body long enough to clear the min-chars threshold");
-        write(&p2, "# Drop — body long enough to clear the min-chars threshold");
+        write(
+            &p1,
+            "# Keep — body long enough to clear the min-chars threshold",
+        );
+        write(
+            &p2,
+            "# Drop — body long enough to clear the min-chars threshold",
+        );
         engine.sync(SyncOptions::default()).unwrap();
         fs::remove_file(&p2).unwrap();
         let r = engine.sync(SyncOptions::default()).unwrap();
@@ -537,8 +574,16 @@ mod tests {
         let (dir, engine) = make_engine();
         let am = dir.path().join("data").join("auto-memory");
         write(&am.join("MEMORY.md"), "- index, must be skipped");
-        write(&am.join("project_x.md"), "# Project X\n- body long enough to qualify for indexing");
-        let r = engine.sync(SyncOptions { force: false, include_auto_memory: true }).unwrap();
+        write(
+            &am.join("project_x.md"),
+            "# Project X\n- body long enough to qualify for indexing",
+        );
+        let r = engine
+            .sync(SyncOptions {
+                force: false,
+                include_auto_memory: true,
+            })
+            .unwrap();
         assert_eq!(r.memories, 1);
     }
 
@@ -552,7 +597,10 @@ mod tests {
         let (dir, engine) = make_engine();
         let brain = dir.path().join("data").join("Brain");
         let path = brain.join("journals").join("2026_04_18.md");
-        write(&path, "- single-file ingest test entry — long enough to stick");
+        write(
+            &path,
+            "- single-file ingest test entry — long enough to stick",
+        );
         let result = engine.sync_file(&path).unwrap();
         assert_eq!(result, IngestResult::Journal);
     }
@@ -561,7 +609,10 @@ mod tests {
     fn sync_file_rejects_paths_outside_known_subdirs() {
         let (dir, engine) = make_engine();
         let stray = dir.path().join("loose.md");
-        write(&stray, "- not under pages/journals/auto-memory — should error");
+        write(
+            &stray,
+            "- not under pages/journals/auto-memory — should error",
+        );
         assert!(engine.sync_file(&stray).is_err());
     }
 

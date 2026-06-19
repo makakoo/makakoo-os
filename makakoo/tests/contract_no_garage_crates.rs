@@ -95,8 +95,7 @@ fn garage_store_install_sh_defers_to_garagetytus() {
     // download the brew formula directly. If you find yourself wanting
     // to add the SHA pin back here, the lifecycle is regressing —
     // re-read garage-store's Phase D adapter shim comments first.
-    let install_sh = workspace_root()
-        .join("plugins-core/garage-store/bin/install.sh");
+    let install_sh = workspace_root().join("plugins-core/garage-store/bin/install.sh");
     let body = fs::read_to_string(&install_sh)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", install_sh.display()));
 

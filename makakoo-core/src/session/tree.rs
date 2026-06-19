@@ -222,10 +222,11 @@ impl SessionTree {
             line: 0,
             source,
         })?;
-        f.write_all(line.as_bytes()).map_err(|source| SessionError::Io {
-            path: path.clone(),
-            source,
-        })?;
+        f.write_all(line.as_bytes())
+            .map_err(|source| SessionError::Io {
+                path: path.clone(),
+                source,
+            })?;
         f.write_all(b"\n").map_err(|source| SessionError::Io {
             path: path.clone(),
             source,
@@ -259,11 +260,12 @@ impl SessionTree {
             if line.trim().is_empty() {
                 continue;
             }
-            let entry: Entry = serde_json::from_str(&line).map_err(|source| SessionError::Json {
-                path: path.clone(),
-                line: ix,
-                source,
-            })?;
+            let entry: Entry =
+                serde_json::from_str(&line).map_err(|source| SessionError::Json {
+                    path: path.clone(),
+                    line: ix,
+                    source,
+                })?;
 
             if ix == 0 {
                 match &entry {
@@ -533,10 +535,11 @@ pub fn rewind_to_label(tree: &SessionTree, label_name: &str) -> Result<usize> {
                 line: 0,
                 source,
             })?;
-            out.write_all(line.as_bytes()).map_err(|source| SessionError::Io {
-                path: tmp.clone(),
-                source,
-            })?;
+            out.write_all(line.as_bytes())
+                .map_err(|source| SessionError::Io {
+                    path: tmp.clone(),
+                    source,
+                })?;
             out.write_all(b"\n").map_err(|source| SessionError::Io {
                 path: tmp.clone(),
                 source,

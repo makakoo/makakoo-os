@@ -77,7 +77,6 @@ pub struct LlmDefaults {
     pub top_p: f32,
 }
 
-
 impl LlmDefaults {
     /// The makakoo built-in fallback when no system config is set.
     /// Used in tests and when `~/MAKAKOO/config/makakoo.toml` is
@@ -156,10 +155,7 @@ impl EffectiveLlm {
 
 /// Apply the locked precedence order: `[llm.override]` field wins,
 /// otherwise inherit from `defaults`.
-pub fn resolve_effective(
-    over: Option<&LlmOverride>,
-    defaults: &LlmDefaults,
-) -> EffectiveLlm {
+pub fn resolve_effective(over: Option<&LlmOverride>, defaults: &LlmDefaults) -> EffectiveLlm {
     let over = over.cloned().unwrap_or_default();
     let model = match over.model {
         Some(m) => (m, LlmSource::Override),
@@ -193,8 +189,14 @@ pub fn resolve_effective(
 pub fn effective_to_env(eff: &EffectiveLlm) -> Vec<(String, String)> {
     vec![
         ("MAKAKOO_LLM_MODEL".into(), eff.model.0.clone()),
-        ("MAKAKOO_LLM_MAX_TOKENS".into(), eff.max_tokens.0.to_string()),
-        ("MAKAKOO_LLM_TEMPERATURE".into(), format!("{}", eff.temperature.0)),
+        (
+            "MAKAKOO_LLM_MAX_TOKENS".into(),
+            eff.max_tokens.0.to_string(),
+        ),
+        (
+            "MAKAKOO_LLM_TEMPERATURE".into(),
+            format!("{}", eff.temperature.0),
+        ),
         (
             "MAKAKOO_LLM_REASONING_EFFORT".into(),
             match eff.reasoning_effort.0 {
@@ -317,7 +319,10 @@ mod tests {
         let override_count = out.matches("[override]").count();
         let default_count = out.matches("[system default]").count();
         assert_eq!(override_count, 2, "model + max_tokens overridden");
-        assert_eq!(default_count, 3, "temperature + reasoning + top_p inherited");
+        assert_eq!(
+            default_count, 3,
+            "temperature + reasoning + top_p inherited"
+        );
     }
 
     #[test]

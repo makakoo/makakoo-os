@@ -154,7 +154,8 @@ mod tests {
     #[tokio::test]
     async fn happy_path_multi_message() {
         let input = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"a\"}\n\
-                      {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"b\"}\n" as &[u8];
+                      {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"b\"}\n"
+            as &[u8];
         let mut r = FrameReader::new(input);
         let m1 = r.read_message().await.unwrap().unwrap();
         let m2 = r.read_message().await.unwrap().unwrap();

@@ -36,9 +36,7 @@ pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use harness::{
-    is_interactive_stdin, Section, SectionOutcome, SectionStatus, Ui,
-};
+pub use harness::{is_interactive_stdin, Section, SectionOutcome, SectionStatus, Ui};
 
 /// Parsed CLI args for `makakoo setup`. One value type so downstream
 /// changes to `cli.rs` are localized.
@@ -154,12 +152,8 @@ pub fn run(args: SetupArgs) -> anyhow::Result<i32> {
 /// Resolve which section indices to run based on positional/flag filters.
 /// Returns indices into the full registry so platform-gated sections
 /// still show in the summary table as "not applicable".
-fn select_sections(
-    sections: &[Box<dyn Section>],
-    args: &SetupArgs,
-) -> anyhow::Result<Vec<usize>> {
-    let valid_names: HashSet<&'static str> =
-        sections.iter().map(|s| s.name()).collect();
+fn select_sections(sections: &[Box<dyn Section>], args: &SetupArgs) -> anyhow::Result<Vec<usize>> {
+    let valid_names: HashSet<&'static str> = sections.iter().map(|s| s.name()).collect();
 
     // Positional `section` wins if set.
     if let Some(name) = &args.section {
@@ -222,10 +216,7 @@ fn select_sections(
 /// 2. Otherwise ask the section for its live `status()` (detects
 ///    `AlreadySatisfied` from reality, e.g. "persona.json exists" or
 ///    "brain_sources.json has multi-source").
-fn resolve_display_status(
-    section: &dyn Section,
-    state: &state::StateFile,
-) -> SectionStatus {
+fn resolve_display_status(section: &dyn Section, state: &state::StateFile) -> SectionStatus {
     let from_state = state.get(section.name());
     if from_state.is_terminal() || matches!(from_state, SectionStatus::Failed { .. }) {
         from_state

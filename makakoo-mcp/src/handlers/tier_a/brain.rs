@@ -308,9 +308,7 @@ impl ToolHandler for HarveySuperbrainQueryHandler {
         self.inner.input_schema()
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
-        self.inner
-            .run(params, "mcp:harvey_superbrain_query")
-            .await
+        self.inner.run(params, "mcp:harvey_superbrain_query").await
     }
 }
 
@@ -693,7 +691,10 @@ mod tests {
         assert!(out.is_array());
         assert!(!out.as_array().unwrap().is_empty(), "should find the doc");
         assert_eq!(count_recall(&store), 1);
-        assert_eq!(first_recall_source(&store).as_deref(), Some("mcp:brain_search"));
+        assert_eq!(
+            first_recall_source(&store).as_deref(),
+            Some("mcp:brain_search")
+        );
     }
 
     #[tokio::test]
@@ -777,9 +778,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (ctx, store) = wired_ctx(dir.path());
         let h = BrainSearchHandler::new(ctx);
-        h.call(json!({"query": "zxqwvnonsenseXYZ"}))
-            .await
-            .unwrap();
+        h.call(json!({"query": "zxqwvnonsenseXYZ"})).await.unwrap();
         assert_eq!(count_recall(&store), 0);
     }
 }

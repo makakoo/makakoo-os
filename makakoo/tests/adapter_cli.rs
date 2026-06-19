@@ -16,7 +16,6 @@ fn makakoo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_makakoo"))
 }
 
-
 fn new_scratch() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let home = tempfile::tempdir().unwrap();
     let adapters = home.path().join("adapters");

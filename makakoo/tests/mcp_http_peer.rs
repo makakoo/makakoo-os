@@ -74,10 +74,7 @@ impl Drop for Peer {
 
 /// Spawn a peer. The trust file is seeded with the caller's `trusted`
 /// name → pubkey before the process boots.
-fn spawn_peer(
-    bin: &PathBuf,
-    trusted: Option<(&str, &ed25519_dalek::VerifyingKey)>,
-) -> Peer {
+fn spawn_peer(bin: &PathBuf, trusted: Option<(&str, &ed25519_dalek::VerifyingKey)>) -> Peer {
     use makakoo_core::adapter::peer as peerlib;
 
     let home = TempDir::new().expect("home");

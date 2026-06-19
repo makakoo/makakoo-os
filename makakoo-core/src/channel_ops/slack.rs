@@ -20,12 +20,8 @@ use crate::channel_ops::approval::{
 use crate::channel_ops::directory::{
     ChannelDirectoryAdapter, ChannelKind, ChannelOpError, ChannelSummary, UserSummary,
 };
-use crate::channel_ops::messaging::{
-    BroadcastResult, ChannelMessagingAdapter, MessageRef,
-};
-use crate::channel_ops::threading::{
-    ChannelThreadingAdapter, ThreadParent, ThreadSummary,
-};
+use crate::channel_ops::messaging::{BroadcastResult, ChannelMessagingAdapter, MessageRef};
+use crate::channel_ops::threading::{ChannelThreadingAdapter, ThreadParent, ThreadSummary};
 use crate::transport::slack::SlackAdapter;
 
 #[derive(Deserialize)]
@@ -187,10 +183,7 @@ impl ChannelDirectoryAdapter for SlackDirectory {
         Ok(env.members.into_iter().map(|u| u.into_summary()).collect())
     }
 
-    async fn lookup_user(
-        &self,
-        query: &str,
-    ) -> Result<Option<UserSummary>, ChannelOpError> {
+    async fn lookup_user(&self, query: &str) -> Result<Option<UserSummary>, ChannelOpError> {
         // Two-step: if query starts with "U" treat as user id and call
         // users.info; otherwise treat as email and call
         // users.lookupByEmail.
@@ -324,11 +317,7 @@ impl ChannelMessagingAdapter for SlackMessaging {
         self.post_message(channel_id, text).await
     }
 
-    async fn broadcast(
-        &self,
-        channel_ids: &[String],
-        text: &str,
-    ) -> Vec<BroadcastResult> {
+    async fn broadcast(&self, channel_ids: &[String], text: &str) -> Vec<BroadcastResult> {
         let mut out = Vec::with_capacity(channel_ids.len());
         for cid in channel_ids {
             let outcome = self
@@ -415,10 +404,7 @@ impl ChannelThreadingAdapter for SlackThreading {
             .ok_or_else(|| ChannelOpError::Remote("chat.postMessage missing ts".into()))
     }
 
-    async fn list_threads(
-        &self,
-        channel_id: &str,
-    ) -> Result<Vec<ThreadSummary>, ChannelOpError> {
+    async fn list_threads(&self, channel_id: &str) -> Result<Vec<ThreadSummary>, ChannelOpError> {
         // Slack has no top-level "list threads in channel" API. Best
         // we can do without scanning history page-by-page is read the
         // channel's recent history, then filter for messages whose
@@ -809,8 +795,7 @@ mod tests {
             .mount(&server)
             .await;
         let center = Arc::new(ApprovalCenter::new());
-        let approval =
-            SlackApproval::new(adapter(server.uri()), center.clone(), "secretary");
+        let approval = SlackApproval::new(adapter(server.uri()), center.clone(), "secretary");
 
         let key = ApprovalKey::new("secretary", "slack-main", "C1");
         let center_clone = center.clone();

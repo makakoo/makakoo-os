@@ -52,9 +52,7 @@ pub enum MigrationOutcome {
     /// Slot TOML already exists. The migration MAY have backfilled
     /// missing artifacts (fresh DB, archived config) — see
     /// `backfilled_artifacts`.
-    AlreadyMigrated {
-        backfilled_artifacts: Vec<PathBuf>,
-    },
+    AlreadyMigrated { backfilled_artifacts: Vec<PathBuf> },
     /// Source `data/chat/config.json` does not exist — nothing to do.
     NothingToMigrate,
 }
@@ -120,11 +118,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         ))
     })?;
 
-    let allowed_users: Vec<String> = legacy
-        .allowlist
-        .iter()
-        .map(|id| id.to_string())
-        .collect();
+    let allowed_users: Vec<String> = legacy.allowlist.iter().map(|id| id.to_string()).collect();
 
     let transport = TransportEntry {
         id: "telegram-main".into(),
@@ -144,11 +138,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         allowed_users,
         config: TransportConfig::Telegram(TelegramConfig {
             polling_timeout_seconds: 30,
-            allowed_chat_ids: legacy
-                .allowlist
-                .iter()
-                .map(|id| id.to_string())
-                .collect(),
+            allowed_chat_ids: legacy.allowlist.iter().map(|id| id.to_string()).collect(),
             allowed_group_ids: vec![],
             support_thread: false,
         }),
@@ -172,10 +162,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
 
     // Always create the per-agent data directory so DB seeding +
     // config archive land in the same place.
-    let agent_dir = makakoo_home
-        .join("data")
-        .join("agents")
-        .join("harveychat");
+    let agent_dir = makakoo_home.join("data").join("agents").join("harveychat");
     std::fs::create_dir_all(&agent_dir)?;
 
     // Archive the conversations DB. Original is preserved AS WELL
@@ -306,7 +293,11 @@ mod tests {
         // No conversations.db present.
         let outcome = migrate(dir.path()).unwrap();
         match outcome {
-            MigrationOutcome::Migrated { archived_db, new_db, .. } => {
+            MigrationOutcome::Migrated {
+                archived_db,
+                new_db,
+                ..
+            } => {
                 assert!(archived_db.is_none());
                 // Fresh per-agent DB still seeded even when no
                 // legacy DB existed.
@@ -324,7 +315,9 @@ mod tests {
         let original_config = dir.path().join("data").join("chat").join("config.json");
         let outcome = migrate(dir.path()).unwrap();
         match outcome {
-            MigrationOutcome::Migrated { archived_config, .. } => {
+            MigrationOutcome::Migrated {
+                archived_config, ..
+            } => {
                 let archived = archived_config.expect("archived config path");
                 assert!(archived.exists());
                 assert!(original_config.exists(), "original config preserved");
@@ -351,7 +344,10 @@ mod tests {
                     Some("conversations.db")
                 );
                 assert_eq!(
-                    new_db.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()),
+                    new_db
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|s| s.to_str()),
                     Some("harveychat")
                 );
             }
@@ -375,7 +371,9 @@ mod tests {
         // Re-run — should backfill the deleted artifacts.
         let outcome = migrate(dir.path()).unwrap();
         match outcome {
-            MigrationOutcome::AlreadyMigrated { backfilled_artifacts } => {
+            MigrationOutcome::AlreadyMigrated {
+                backfilled_artifacts,
+            } => {
                 assert!(!backfilled_artifacts.is_empty(), "backfill must happen");
                 assert!(agent_dir.join("config.json.bak").exists());
                 assert!(agent_dir.join("conversations.db").exists());

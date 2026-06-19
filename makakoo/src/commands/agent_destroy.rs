@@ -93,10 +93,7 @@ pub fn run(ctx: &CliContext, args: DestroyArgs) -> anyhow::Result<i32> {
             return Ok(64);
         }
         Err(DestroyError::SlotNotFound { slot_id, path }) => {
-            output::print_error(format!(
-                "slot '{slot_id}' not found at {}",
-                path.display()
-            ));
+            output::print_error(format!("slot '{slot_id}' not found at {}", path.display()));
             return Ok(1);
         }
         Err(DestroyError::ArchiveExists { path }) => {
@@ -232,10 +229,7 @@ mod tests {
         write_slot(tmp.path(), "secretary", "slot_id = \"secretary\"\n");
         let rc = run(&ctx, args("secretary", true)).unwrap();
         assert_eq!(rc, 0);
-        assert!(!tmp
-            .path()
-            .join("config/agents/secretary.toml")
-            .exists());
+        assert!(!tmp.path().join("config/agents/secretary.toml").exists());
     }
 
     #[test]
@@ -254,10 +248,7 @@ mod tests {
         let rc = run(&ctx, args("harveychat", true)).unwrap();
         assert_eq!(rc, 64, "harveychat refusal must use exit 64 (EX_USAGE)");
         // TOML must still exist.
-        assert!(tmp
-            .path()
-            .join("config/agents/harveychat.toml")
-            .exists());
+        assert!(tmp.path().join("config/agents/harveychat.toml").exists());
     }
 
     #[test]

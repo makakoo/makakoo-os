@@ -13,7 +13,5 @@ pub mod dispatch;
 pub mod verify;
 
 pub use detect::{detect_install_method, CargoSource, InstallMethod};
-pub use dispatch::{
-    plan_upgrade, run_upgrade, BinaryTarget, UpgradeAction, UpgradeError,
-};
+pub use dispatch::{plan_upgrade, run_upgrade, BinaryTarget, UpgradeAction, UpgradeError};
 pub use verify::{capture_version, daemon_restart_hint};

@@ -89,20 +89,14 @@ fn empty_list_json_is_v033_envelope() {
     let home = home_resolved(&dir);
     let out = run(&["perms", "list", "--json"], &home);
     let stdout = ok_stdout(&out);
-    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
-        .expect("valid json");
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid json");
     let obj = parsed.as_object().expect("top-level object");
     assert_eq!(obj["schema_version"], serde_json::json!(1));
     assert!(
         obj["baseline"].as_array().unwrap().len() >= 4,
         "baseline should include 4 canonical roots"
     );
-    assert!(
-        obj["active"]
-            .as_array()
-            .expect("active array")
-            .is_empty()
-    );
+    assert!(obj["active"].as_array().expect("active array").is_empty());
     assert_eq!(obj["expired_today_count"], serde_json::json!(0));
     assert_eq!(obj["all"], serde_json::json!(false));
 }
@@ -113,15 +107,15 @@ fn populated_list_json_returns_grant_records_in_active() {
     let home = home_resolved(&dir);
     let target = home.join("json-zone");
     std::fs::create_dir_all(&target).unwrap();
-    run(&["perms", "grant", target.to_str().unwrap(), "--for", "1h"], &home);
+    run(
+        &["perms", "grant", target.to_str().unwrap(), "--for", "1h"],
+        &home,
+    );
 
     let out = run(&["perms", "list", "--json"], &home);
     let stdout = ok_stdout(&out);
-    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
-        .expect("valid json");
-    let active = parsed["active"]
-        .as_array()
-        .expect("active array");
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid json");
+    let active = parsed["active"].as_array().expect("active array");
     assert_eq!(active.len(), 1);
     // Grant records carry the full v0.3.3 field set — including
     // `owner`, which v0.3.3 Phase A introduced.
@@ -130,11 +124,13 @@ fn populated_list_json_returns_grant_records_in_active() {
         assert!(g.get(key).is_some(), "grant record missing {key}: {g:?}");
     }
     assert_eq!(
-        g["plugin"], serde_json::json!("cli"),
+        g["plugin"],
+        serde_json::json!("cli"),
         "CLI-created grant carries plugin='cli'"
     );
     assert_eq!(
-        g["owner"], serde_json::json!("cli"),
+        g["owner"],
+        serde_json::json!("cli"),
         "owner defaults to plugin at grant time"
     );
 }
@@ -145,8 +141,7 @@ fn list_all_flag_surfaces_in_envelope() {
     let home = home_resolved(&dir);
     let out = run(&["perms", "list", "--json", "--all"], &home);
     let stdout = ok_stdout(&out);
-    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
-        .expect("valid json");
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid json");
     assert_eq!(parsed["all"], serde_json::json!(true));
     // When --all is passed, expired_today_count is 0 — everything
     // is in `active` regardless of expiry status.
@@ -191,9 +186,7 @@ fn grant_then_revoke_removes_it() {
     let target_str = target.to_string_lossy().to_string();
 
     let grant_out = run(
-        &[
-            "perms", "grant", &target_str, "--for", "24h", "--mkdir",
-        ],
+        &["perms", "grant", &target_str, "--for", "24h", "--mkdir"],
         &home,
     );
     let grant_id = ok_stdout(&grant_out).trim().to_string();
@@ -263,12 +256,7 @@ fn grant_permanent_outside_home_requires_yes_really() {
     let outside = "/tmp/makakoo-perms-test-outside";
     std::fs::create_dir_all(outside).ok();
 
-    let without = run(
-        &[
-            "perms", "grant", outside, "--for", "permanent",
-        ],
-        &home,
-    );
+    let without = run(&["perms", "grant", outside, "--for", "permanent"], &home);
     assert!(
         !without.status.success(),
         "permanent outside HOME should refuse without --yes-really"
@@ -278,7 +266,12 @@ fn grant_permanent_outside_home_requires_yes_really() {
 
     let with = run(
         &[
-            "perms", "grant", outside, "--for", "permanent", "--yes-really",
+            "perms",
+            "grant",
+            outside,
+            "--for",
+            "permanent",
+            "--yes-really",
         ],
         &home,
     );
@@ -324,7 +317,11 @@ fn grant_with_mkdir_creates_dir() {
         ],
         &home,
     );
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(target.exists(), "mkdir should have created {target:?}");
 }
 
@@ -361,22 +358,40 @@ fn audit_filters_by_plugin() {
     // Create one grant with --plugin=cli and one with --plugin=harveychat.
     run(
         &[
-            "perms", "grant", &target_str, "--for", "1h", "--mkdir",
-            "--plugin", "cli",
+            "perms",
+            "grant",
+            &target_str,
+            "--for",
+            "1h",
+            "--mkdir",
+            "--plugin",
+            "cli",
         ],
         &home,
     );
     run(
         &[
-            "perms", "grant", &target_str, "--for", "1h", "--mkdir",
-            "--plugin", "harveychat",
+            "perms",
+            "grant",
+            &target_str,
+            "--for",
+            "1h",
+            "--mkdir",
+            "--plugin",
+            "harveychat",
         ],
         &home,
     );
 
     let out = run(
         &[
-            "perms", "audit", "--json", "--since", "1h", "--plugin", "harveychat",
+            "perms",
+            "audit",
+            "--json",
+            "--since",
+            "1h",
+            "--plugin",
+            "harveychat",
         ],
         &home,
     );
@@ -401,8 +416,14 @@ fn show_prints_grant_detail() {
     let target_str = target.to_string_lossy().to_string();
     let grant_id = ok_stdout(&run(
         &[
-            "perms", "grant", &target_str, "--for", "1h", "--label",
-            "detail-test", "--mkdir",
+            "perms",
+            "grant",
+            &target_str,
+            "--for",
+            "1h",
+            "--label",
+            "detail-test",
+            "--mkdir",
         ],
         &home,
     ))

@@ -180,6 +180,9 @@ mod tests {
 
         LinuxPlatform.symlink_dir(&target, &link).unwrap();
         assert!(link.exists());
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }

@@ -25,18 +25,11 @@ pub enum SectionStatus {
     /// already on PATH). We don't persist this — it's recomputed each run.
     AlreadySatisfied,
     /// Section ran successfully and made changes.
-    Completed {
-        at: DateTime<Utc>,
-    },
+    Completed { at: DateTime<Utc> },
     /// User explicitly chose "skip" — don't re-ask unless `--reset`.
-    Skipped {
-        at: DateTime<Utc>,
-    },
+    Skipped { at: DateTime<Utc> },
     /// Section attempted and errored. Re-asks next run.
-    Failed {
-        reason: String,
-        at: DateTime<Utc>,
-    },
+    Failed { reason: String, at: DateTime<Utc> },
 }
 
 impl SectionStatus {
@@ -159,11 +152,7 @@ impl<'a> Ui<'a> {
 
     /// Ask a [Y/n/s] question. Re-prompts on invalid input. Empty line
     /// accepts the default.
-    pub fn ask_ynskip(
-        &mut self,
-        question: &str,
-        default: YnSkip,
-    ) -> anyhow::Result<YnSkip> {
+    pub fn ask_ynskip(&mut self, question: &str, default: YnSkip) -> anyhow::Result<YnSkip> {
         let hint = match default {
             YnSkip::Yes => "[Y/n/s]",
             YnSkip::No => "[y/N/s]",

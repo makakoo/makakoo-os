@@ -157,7 +157,6 @@ pub enum StateRetention {
     PurgeOnUninstall,
 }
 
-
 /// `[plugin]` identity table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -402,9 +401,7 @@ impl PatternTable {
     /// True if this pattern's tags opt it out of caveman default behavior
     /// when invoked via MCP (Locked Decision 11).
     pub fn opts_out_of_caveman(&self) -> bool {
-        self.tags
-            .iter()
-            .any(|t| t == "external" || t == "polished")
+        self.tags.iter().any(|t| t == "external" || t == "polished")
     }
 }
 
@@ -480,7 +477,6 @@ pub enum RestartPolicy {
     /// Never restart automatically — supervisor is external (e.g. launchd).
     Never,
 }
-
 
 fn default_health_interval_sec() -> u32 {
     60
@@ -622,9 +618,9 @@ impl Manifest {
             path: origin.to_path_buf(),
             source,
         })?;
-        let table = raw.as_table().ok_or_else(|| {
-            ManifestError::invalid(origin, "top-level must be a TOML table")
-        })?;
+        let table = raw
+            .as_table()
+            .ok_or_else(|| ManifestError::invalid(origin, "top-level must be a TOML table"))?;
         for key in table.keys() {
             if !KNOWN_TOP_LEVEL.contains(&key.as_str()) {
                 warnings.push(format!(
@@ -635,11 +631,10 @@ impl Manifest {
 
         // Step 2: typed parse (deny_unknown_fields catches rule 17 inside
         // known tables).
-        let manifest: Manifest =
-            toml::from_str(body).map_err(|source| ManifestError::Toml {
-                path: origin.to_path_buf(),
-                source,
-            })?;
+        let manifest: Manifest = toml::from_str(body).map_err(|source| ManifestError::Toml {
+            path: origin.to_path_buf(),
+            source,
+        })?;
 
         // Step 3: cross-field validation.
         manifest.validate(origin, &mut warnings)?;
@@ -673,9 +668,7 @@ impl Manifest {
         if source_variants != 1 {
             return Err(ManifestError::invalid(
                 path,
-                format!(
-                    "[source] must have exactly one of git/tar/path (found {source_variants})"
-                ),
+                format!("[source] must have exactly one of git/tar/path (found {source_variants})"),
             ));
         }
 
@@ -913,13 +906,12 @@ fn validate_grant(grant: &str, path: &Path) -> Result<(), ManifestError> {
         }
     }
     // Explicit rejection: secrets/read:* is too broad (spec §1.7).
-    if (verb == "secrets/read" || verb == "secrets/write")
-        && scope == Some("*") {
-            return Err(ManifestError::invalid(
-                path,
-                format!("verb {verb:?} with scope '*' rejected: too broad"),
-            ));
-        }
+    if (verb == "secrets/read" || verb == "secrets/write") && scope == Some("*") {
+        return Err(ManifestError::invalid(
+            path,
+            format!("verb {verb:?} with scope '*' rejected: too broad"),
+        ));
+    }
     Ok(())
 }
 
@@ -930,9 +922,7 @@ fn looks_like_tag_or_sha(rev: &str) -> bool {
     if rev.starts_with('v') && rev.len() > 1 && rev.as_bytes()[1].is_ascii_digit() {
         return true;
     }
-    let looks_hex = rev.len() >= 7
-        && rev.len() <= 40
-        && rev.chars().all(|c| c.is_ascii_hexdigit());
+    let looks_hex = rev.len() >= 7 && rev.len() <= 40 && rev.chars().all(|c| c.is_ascii_hexdigit());
     looks_hex
 }
 
@@ -993,10 +983,7 @@ run = ".venv/bin/python -m example"
 
     #[test]
     fn rejects_zero_source_variants() {
-        let body = minimal().replace(
-            "[source]\npath = \"local/example\"",
-            "[source]",
-        );
+        let body = minimal().replace("[source]\npath = \"local/example\"", "[source]");
         let err = Manifest::parse(&body, &p()).unwrap_err();
         assert!(format!("{err}").contains("exactly one of git/tar/path"));
     }
@@ -1150,10 +1137,7 @@ start = ".venv/bin/python -m x --start"
 
     #[test]
     fn rejects_unknown_field_in_known_table() {
-        let body = minimal().replace(
-            "[plugin]",
-            "[plugin]\nmysterious = \"value\"",
-        );
+        let body = minimal().replace("[plugin]", "[plugin]\nmysterious = \"value\"");
         let err = Manifest::parse(&body, &p()).unwrap_err();
         let s = format!("{err}");
         assert!(s.contains("mysterious") || s.contains("unknown field"));
@@ -1389,7 +1373,8 @@ health_endpoint = "skill check"
 "#;
         let (_m, w) = Manifest::parse(body, &p()).unwrap();
         assert!(
-            w.0.iter().any(|s| s.contains("[service] table") && s.contains("kind = skill")),
+            w.0.iter()
+                .any(|s| s.contains("[service] table") && s.contains("kind = skill")),
             "expected mismatched-kind warning, got {:?}",
             w.0
         );
@@ -1584,7 +1569,11 @@ command = ".venv/bin/pytest"
             0 => (0..size)
                 .map(|_| {
                     let b = rng.byte() & 0x7f;
-                    if b < 0x20 && b != b'\n' && b != b'\t' { b'?' } else { b }
+                    if b < 0x20 && b != b'\n' && b != b'\t' {
+                        b'?'
+                    } else {
+                        b
+                    }
                 })
                 .map(char::from)
                 .collect(),
@@ -1638,18 +1627,18 @@ command = ".venv/bin/pytest"
         // intent of each hostile input.
         let origin = p();
         let hostile = [
-            "",                                          // empty
-            "\0\0\0",                                    // nulls
-            "[",                                         // incomplete
-            "[[[[[",                                     // very deep
-            "name = \"",                                 // unterminated string
-            "[plugin]\nname = \"\\uD800\"",              // unpaired surrogate
-            "[plugin]\nname = 0x7FFFFFFFFFFFFFFF",       // int overflow territory
-            "[plugin]\nname = 1.0e99999",                // float overflow
-            "[plugin]\nkind = \"skill\"\n[[plugin]]",    // table/array clash
-            "[plugin]\r\n\x1bname = \"x\"",              // ANSI escape
-            &"#".repeat(100_000),                        // massive comment
-            &"[x]\n".repeat(10_000),                     // repeated sections
+            "",                                       // empty
+            "\0\0\0",                                 // nulls
+            "[",                                      // incomplete
+            "[[[[[",                                  // very deep
+            "name = \"",                              // unterminated string
+            "[plugin]\nname = \"\\uD800\"",           // unpaired surrogate
+            "[plugin]\nname = 0x7FFFFFFFFFFFFFFF",    // int overflow territory
+            "[plugin]\nname = 1.0e99999",             // float overflow
+            "[plugin]\nkind = \"skill\"\n[[plugin]]", // table/array clash
+            "[plugin]\r\n\x1bname = \"x\"",           // ANSI escape
+            &"#".repeat(100_000),                     // massive comment
+            &"[x]\n".repeat(10_000),                  // repeated sections
         ];
         for (i, body) in hostile.iter().enumerate() {
             let r = std::panic::catch_unwind(|| {

@@ -14,12 +14,12 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use makakoo_client::{Client, ClientError};
 use makakoo_core::capability::{
     service::{CompositeHandler, InMemorySecretBackend, SecretHandler, StateHandler},
     socket::CapabilityServer,
     AuditLog, AuditResult, CapabilityHandler, GrantTable, Verb,
 };
-use makakoo_client::{Client, ClientError};
 
 fn grants(_state_dir: &std::path::Path) -> Arc<GrantTable> {
     let mut t = GrantTable::new("test-plugin", "1.0.0");
@@ -49,8 +49,7 @@ async fn round_trip_state_and_denied_secret() {
     let audit = Arc::new(AuditLog::open_default(home).unwrap());
     let grant_table = grants(&state_dir);
 
-    let secret_backend =
-        Arc::new(InMemorySecretBackend::new().with("AIL_API_KEY", "sk-secret"));
+    let secret_backend = Arc::new(InMemorySecretBackend::new().with("AIL_API_KEY", "sk-secret"));
     let composite: Arc<dyn CapabilityHandler> = Arc::new(
         CompositeHandler::new()
             .register("state", Arc::new(StateHandler::new(state_dir.clone())))
@@ -58,12 +57,7 @@ async fn round_trip_state_and_denied_secret() {
     );
 
     let socket_path = home.join("run/plugins/test-plugin.sock");
-    let server = CapabilityServer::new(
-        socket_path.clone(),
-        grant_table,
-        audit.clone(),
-        composite,
-    );
+    let server = CapabilityServer::new(socket_path.clone(), grant_table, audit.clone(), composite);
     let handle = server.serve().await.unwrap();
 
     let client = Client::connect(&socket_path).await.unwrap();
@@ -93,10 +87,7 @@ async fn round_trip_state_and_denied_secret() {
         .iter()
         .map(|e| e["result"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        results,
-        vec!["allowed", "allowed", "allowed", "denied"]
-    );
+    assert_eq!(results, vec!["allowed", "allowed", "allowed", "denied"]);
 
     // Verb trail gives us the audit story: state.write, state.read,
     // secrets.read AIL_API_KEY, secrets.read POLYMARKET_API_KEY.
@@ -106,7 +97,12 @@ async fn round_trip_state_and_denied_secret() {
         .collect();
     assert_eq!(
         verbs,
-        vec!["state/plugin", "state/plugin", "secrets/read", "secrets/read"]
+        vec![
+            "state/plugin",
+            "state/plugin",
+            "secrets/read",
+            "secrets/read"
+        ]
     );
 
     handle.shutdown().await;
@@ -121,12 +117,10 @@ async fn state_list_returns_file_we_wrote() {
     let audit = Arc::new(AuditLog::open_default(home).unwrap());
     let grant_table = grants(&state_dir);
     let composite: Arc<dyn CapabilityHandler> = Arc::new(
-        CompositeHandler::new()
-            .register("state", Arc::new(StateHandler::new(state_dir.clone()))),
+        CompositeHandler::new().register("state", Arc::new(StateHandler::new(state_dir.clone()))),
     );
     let socket_path = home.join("run/plugins/test-plugin.sock");
-    let server =
-        CapabilityServer::new(socket_path.clone(), grant_table, audit, composite);
+    let server = CapabilityServer::new(socket_path.clone(), grant_table, audit, composite);
     let handle = server.serve().await.unwrap();
     let client = Client::connect(&socket_path).await.unwrap();
 
@@ -147,13 +141,10 @@ async fn state_read_of_missing_file_is_server_error_not_panic() {
     std::fs::create_dir_all(&state_dir).unwrap();
     let audit = Arc::new(AuditLog::open_default(home).unwrap());
     let grant_table = grants(&state_dir);
-    let composite: Arc<dyn CapabilityHandler> = Arc::new(
-        CompositeHandler::new()
-            .register("state", Arc::new(StateHandler::new(state_dir))),
-    );
+    let composite: Arc<dyn CapabilityHandler> =
+        Arc::new(CompositeHandler::new().register("state", Arc::new(StateHandler::new(state_dir))));
     let socket_path = home.join("run/plugins/test-plugin.sock");
-    let server =
-        CapabilityServer::new(socket_path.clone(), grant_table, audit, composite);
+    let server = CapabilityServer::new(socket_path.clone(), grant_table, audit, composite);
     let handle = server.serve().await.unwrap();
     let client = Client::connect(&socket_path).await.unwrap();
 
@@ -173,13 +164,10 @@ async fn connect_from_env_reads_socket_path_var() {
     std::fs::create_dir_all(&state_dir).unwrap();
     let audit = Arc::new(AuditLog::open_default(home).unwrap());
     let grant_table = grants(&state_dir);
-    let composite: Arc<dyn CapabilityHandler> = Arc::new(
-        CompositeHandler::new()
-            .register("state", Arc::new(StateHandler::new(state_dir))),
-    );
+    let composite: Arc<dyn CapabilityHandler> =
+        Arc::new(CompositeHandler::new().register("state", Arc::new(StateHandler::new(state_dir))));
     let socket_path = home.join("run/plugins/test-plugin.sock");
-    let server =
-        CapabilityServer::new(socket_path.clone(), grant_table, audit, composite);
+    let server = CapabilityServer::new(socket_path.clone(), grant_table, audit, composite);
     let handle = server.serve().await.unwrap();
 
     std::env::set_var("MAKAKOO_SOCKET_PATH", &socket_path);

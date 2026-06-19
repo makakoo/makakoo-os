@@ -79,20 +79,19 @@ const ALLOWLIST: &[&str] = &[
     "development/",
     // Archive pointers (historical read-only material)
     "/.makakoo/archive/",
-
     // === Category (b) — migration / detection tooling ===
     // These files exist precisely to recognize and rewrite the retired
     // harvey-os tree. Their job requires keeping the literal string.
-    "makakoo/src/infect/",               // every infect adapter has comments about the old layout
-    "makakoo/src/commands/migrate.rs",   // the migration CLI
-    "makakoo/src/commands/skill.rs",     // still references the legacy path in one comment
-    "makakoo/src/skill_runner.rs",       // regression guards assert PYTHONPATH doesn't contain "harvey-os"
-    "makakoo/src/cli.rs",                // CLI help text references retirement
-    "makakoo-core/src/chat/store.rs",    // doc comment pointing at original Python file
-    "makakoo-core/src/chat/router.rs",   // same
+    "makakoo/src/infect/", // every infect adapter has comments about the old layout
+    "makakoo/src/commands/migrate.rs", // the migration CLI
+    "makakoo/src/commands/skill.rs", // still references the legacy path in one comment
+    "makakoo/src/skill_runner.rs", // regression guards assert PYTHONPATH doesn't contain "harvey-os"
+    "makakoo/src/cli.rs",          // CLI help text references retirement
+    "makakoo-core/src/chat/store.rs", // doc comment pointing at original Python file
+    "makakoo-core/src/chat/router.rs", // same
     "makakoo-core/src/sancho/handlers.rs", // same
-    "makakoo-core/src/memory.rs",        // same
-    "makakoo-core/src/event_bus.rs",     // same
+    "makakoo-core/src/memory.rs",  // same
+    "makakoo-core/src/event_bus.rs", // same
     // launchd plist docstring explaining retirement
     "plugins-core/lib-harvey-core/src/core/sancho/sancho.plist",
     // lib-harvey-core's own plugin.toml describes the transition
@@ -106,9 +105,10 @@ fn walk(dir: &Path, hits: &mut Vec<(PathBuf, u32)>) {
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
-            if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                n == "target" || n == "node_modules" || n.starts_with('.')
-            }) {
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == "target" || n == "node_modules" || n.starts_with('.'))
+            {
                 continue;
             }
             walk(&p, hits);
@@ -147,10 +147,7 @@ fn no_new_harveyos_refs_outside_allowlist() {
         walk(&repo_root.join(root), &mut hits);
     }
 
-    let violations: Vec<_> = hits
-        .iter()
-        .filter(|(p, _)| !is_allowlisted(p))
-        .collect();
+    let violations: Vec<_> = hits.iter().filter(|(p, _)| !is_allowlisted(p)).collect();
 
     if !violations.is_empty() {
         let mut msg = String::from(

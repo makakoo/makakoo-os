@@ -62,9 +62,7 @@ pub fn verify_cookie(
         return Err(CookieError::Malformed);
     }
     let visitor_id = parts[0];
-    let exp: u64 = parts[1]
-        .parse()
-        .map_err(|_| CookieError::Malformed)?;
+    let exp: u64 = parts[1].parse().map_err(|_| CookieError::Malformed)?;
     let sig = parts[2];
     let recomputed = sign_cookie(
         key,
@@ -193,11 +191,7 @@ pub fn check_origin(cfg: &WebConfig, origin: Option<&str>) -> OriginCheck {
     if is_loopback_origin(origin) && !cfg.production_mode {
         return OriginCheck::AcceptDev;
     }
-    if cfg
-        .allowed_origins
-        .iter()
-        .any(|allowed| allowed == origin)
-    {
+    if cfg.allowed_origins.iter().any(|allowed| allowed == origin) {
         return OriginCheck::AcceptProd;
     }
     OriginCheck::Reject
@@ -235,10 +229,7 @@ impl WebChatAdapter {
         visitor_id: &str,
     ) -> mpsc::UnboundedReceiver<MakakooOutboundFrame> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.sinks
-            .lock()
-            .await
-            .insert(visitor_id.to_string(), tx);
+        self.sinks.lock().await.insert(visitor_id.to_string(), tx);
         rx
     }
 

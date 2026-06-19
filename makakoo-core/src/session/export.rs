@@ -28,7 +28,14 @@ pub fn to_markdown(entries: &[Entry]) -> String {
     let mut out = String::new();
     for e in entries {
         match e {
-            Entry::Session { id, created_at, parent_session, fork_from_entry, title, .. } => {
+            Entry::Session {
+                id,
+                created_at,
+                parent_session,
+                fork_from_entry,
+                title,
+                ..
+            } => {
                 out.push_str(&format!("# Session `{}`\n\n", id));
                 out.push_str(&format!("- created: {}\n", ts(created_at)));
                 if let Some(t) = title {
@@ -42,31 +49,68 @@ pub fn to_markdown(entries: &[Entry]) -> String {
                 }
                 out.push('\n');
             }
-            Entry::Message { role, content, ts: t, .. } => {
+            Entry::Message {
+                role,
+                content,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!("### {} — {}\n\n", role_label(role), ts(t)));
                 out.push_str(content);
                 out.push_str("\n\n");
             }
-            Entry::Compaction { first_kept_entry_id, tokens_before, tokens_after, ts: t, .. } => {
+            Entry::Compaction {
+                first_kept_entry_id,
+                tokens_before,
+                tokens_after,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!(
                     "> _compaction @ {}_ — {}→{} tokens, first-kept `{}`\n\n",
-                    ts(t), tokens_before, tokens_after, first_kept_entry_id,
+                    ts(t),
+                    tokens_before,
+                    tokens_after,
+                    first_kept_entry_id,
                 ));
             }
-            Entry::BranchSummary { branch_session_id, summary, ts: t, .. } => {
+            Entry::BranchSummary {
+                branch_session_id,
+                summary,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!(
                     "> _branch @ {}_ → session `{}`: {}\n\n",
-                    ts(t), branch_session_id, summary,
+                    ts(t),
+                    branch_session_id,
+                    summary,
                 ));
             }
-            Entry::Custom { kind, payload, ts: t, .. } => {
+            Entry::Custom {
+                kind,
+                payload,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!("> _{}_ @ {}\n\n", kind, ts(t)));
                 out.push_str("```json\n");
                 out.push_str(&serde_json::to_string_pretty(payload).unwrap_or_default());
                 out.push_str("\n```\n\n");
             }
-            Entry::CustomMessage { kind, role, content, ts: t, .. } => {
-                out.push_str(&format!("### {} ({}) — {}\n\n", role_label(role), kind, ts(t)));
+            Entry::CustomMessage {
+                kind,
+                role,
+                content,
+                ts: t,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "### {} ({}) — {}\n\n",
+                    role_label(role),
+                    kind,
+                    ts(t)
+                ));
                 out.push_str(content);
                 out.push_str("\n\n");
             }
@@ -99,16 +143,26 @@ pub fn to_html(entries: &[Entry]) -> String {
     out.push_str(".turn.user{background:#f0f4ff}\n");
     out.push_str(".turn.assistant{background:#f7f7f7}\n");
     out.push_str(".turn.system{background:#fff8e1}\n");
-    out.push_str(".turn.tool{background:#eef8ee;font-family:ui-monospace,SFMono-Regular,monospace}\n");
+    out.push_str(
+        ".turn.tool{background:#eef8ee;font-family:ui-monospace,SFMono-Regular,monospace}\n",
+    );
     out.push_str(".meta{color:#666;font-size:12px;margin-bottom:.4em}\n");
     out.push_str(".marker{color:#888;font-style:italic;margin:.6em 0}\n");
     out.push_str(".label{color:#9b59b6}\n");
-    out.push_str("pre{background:#272822;color:#f8f8f2;padding:.6em;border-radius:6px;overflow:auto}\n");
+    out.push_str(
+        "pre{background:#272822;color:#f8f8f2;padding:.6em;border-radius:6px;overflow:auto}\n",
+    );
     out.push_str("</style>\n</head>\n<body>\n");
 
     for e in entries {
         match e {
-            Entry::Session { id, created_at, title, parent_session, .. } => {
+            Entry::Session {
+                id,
+                created_at,
+                title,
+                parent_session,
+                ..
+            } => {
                 out.push_str(&format!(
                     "<h1>Session <code>{}</code></h1>\n",
                     html_escape(id),
@@ -116,15 +170,22 @@ pub fn to_html(entries: &[Entry]) -> String {
                 out.push_str(&format!(
                     "<div class=\"meta\">created {}{}{}</div>\n",
                     ts(created_at),
-                    title.as_deref()
+                    title
+                        .as_deref()
                         .map(|t| format!(" · title: {}", html_escape(t)))
                         .unwrap_or_default(),
-                    parent_session.as_deref()
+                    parent_session
+                        .as_deref()
                         .map(|p| format!(" · forked from <code>{}</code>", html_escape(p)))
                         .unwrap_or_default(),
                 ));
             }
-            Entry::Message { role, content, ts: t, .. } => {
+            Entry::Message {
+                role,
+                content,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!(
                     "<div class=\"turn {role}\"><div class=\"meta\">{role} · {t_ts}</div><div>{body}</div></div>\n",
                     role = role_label(role),
@@ -132,7 +193,13 @@ pub fn to_html(entries: &[Entry]) -> String {
                     body = html_escape(content).replace('\n', "<br>"),
                 ));
             }
-            Entry::CustomMessage { kind, role, content, ts: t, .. } => {
+            Entry::CustomMessage {
+                kind,
+                role,
+                content,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!(
                     "<div class=\"turn {role}\"><div class=\"meta\">{role} ({kind}) · {t_ts}</div><div>{body}</div></div>\n",
                     role = role_label(role),
@@ -141,25 +208,45 @@ pub fn to_html(entries: &[Entry]) -> String {
                     body = html_escape(content).replace('\n', "<br>"),
                 ));
             }
-            Entry::Compaction { tokens_before, tokens_after, ts: t, .. } => {
+            Entry::Compaction {
+                tokens_before,
+                tokens_after,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!(
                     "<div class=\"marker\">compaction at {} — {}→{} tokens</div>\n",
-                    ts(t), tokens_before, tokens_after,
+                    ts(t),
+                    tokens_before,
+                    tokens_after,
                 ));
             }
-            Entry::BranchSummary { branch_session_id, summary, ts: t, .. } => {
+            Entry::BranchSummary {
+                branch_session_id,
+                summary,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!(
                     "<div class=\"marker\">branch at {} → <code>{}</code>: {}</div>\n",
-                    ts(t), html_escape(branch_session_id), html_escape(summary),
+                    ts(t),
+                    html_escape(branch_session_id),
+                    html_escape(summary),
                 ));
             }
             Entry::Label { name, ts: t, .. } => {
                 out.push_str(&format!(
                     "<div class=\"marker label\">🏷️ label <strong>{}</strong> at {}</div>\n",
-                    html_escape(name), ts(t),
+                    html_escape(name),
+                    ts(t),
                 ));
             }
-            Entry::Custom { kind, payload, ts: t, .. } => {
+            Entry::Custom {
+                kind,
+                payload,
+                ts: t,
+                ..
+            } => {
                 out.push_str(&format!(
                     "<div class=\"marker\">{kind} at {t_ts}</div>\n<pre>{body}</pre>\n",
                     kind = html_escape(kind),

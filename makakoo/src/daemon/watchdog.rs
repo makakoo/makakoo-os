@@ -117,10 +117,7 @@ fn maybe_compact(path: &PathBuf) {
             return;
         }
     };
-    let lines: Vec<String> = BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .collect();
+    let lines: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
     if lines.len() < 2 {
         return;
     }
@@ -233,8 +230,7 @@ mod tests {
             lines.len()
         );
         for line in &lines {
-            let v: serde_json::Value =
-                serde_json::from_str(line).expect("valid json per line");
+            let v: serde_json::Value = serde_json::from_str(line).expect("valid json per line");
             assert!(v.get("ts").and_then(|x| x.as_str()).is_some());
             assert!(v.get("daemon_uptime_s").and_then(|x| x.as_u64()).is_some());
             assert!(v.get("makakoo_home").is_some());

@@ -12,11 +12,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
-use crate::tools::{
-    list::ListEntry,
-    search::SearchHit,
-    topic::TopicResult,
-};
+use crate::tools::{list::ListEntry, search::SearchHit, topic::TopicResult};
 
 const BAKED_DB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/docs-corpus.db"));
 
@@ -272,7 +268,11 @@ mod tests {
     #[test]
     fn opens_and_counts_docs() {
         let idx = Index::open().expect("open");
-        assert!(idx.doc_count > 50, "expected >50 docs, got {}", idx.doc_count);
+        assert!(
+            idx.doc_count > 50,
+            "expected >50 docs, got {}",
+            idx.doc_count
+        );
     }
 
     #[test]
@@ -283,8 +283,7 @@ mod tests {
         // Top hit's title or path should mention plugin.
         let top = &hits[0];
         assert!(
-            top.title.to_lowercase().contains("plugin")
-                || top.path.contains("plugin"),
+            top.title.to_lowercase().contains("plugin") || top.path.contains("plugin"),
             "top hit unrelated: {top:?}"
         );
     }

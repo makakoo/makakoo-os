@@ -30,9 +30,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::capability::socket::{
-    CapabilityError, CapabilityHandler, CapabilityRequest,
-};
+use crate::capability::socket::{CapabilityError, CapabilityHandler, CapabilityRequest};
 
 #[derive(Debug, Error)]
 pub enum StateError {
@@ -127,10 +125,7 @@ impl CapabilityHandler for StateHandler {
                     .jail(&p.path)
                     .map_err(|e| CapabilityError::bad_request(e.to_string()))?;
                 let bytes = tokio::fs::read(&target).await.map_err(|e| {
-                    CapabilityError::handler(format!(
-                        "state.read {:?}: {e}",
-                        target.display()
-                    ))
+                    CapabilityError::handler(format!("state.read {:?}: {e}", target.display()))
                 })?;
                 Ok(serde_json::json!({
                     "bytes_b64": BASE64.encode(&bytes),
@@ -144,10 +139,7 @@ impl CapabilityHandler for StateHandler {
                     .map_err(|e| CapabilityError::bad_request(e.to_string()))?;
                 if let Some(parent) = target.parent() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                        CapabilityError::handler(format!(
-                            "mkdir {:?}: {e}",
-                            parent.display()
-                        ))
+                        CapabilityError::handler(format!("mkdir {:?}: {e}", parent.display()))
                     })?;
                 }
                 let bytes = BASE64
@@ -155,10 +147,7 @@ impl CapabilityHandler for StateHandler {
                     .map_err(|e| CapabilityError::bad_request(format!("bad b64: {e}")))?;
                 let n = bytes.len();
                 tokio::fs::write(&target, &bytes).await.map_err(|e| {
-                    CapabilityError::handler(format!(
-                        "state.write {:?}: {e}",
-                        target.display()
-                    ))
+                    CapabilityError::handler(format!("state.write {:?}: {e}", target.display()))
                 })?;
                 Ok(serde_json::json!({ "bytes_written": n }))
             }
@@ -175,27 +164,21 @@ impl CapabilityHandler for StateHandler {
                 }
                 let mut out: Vec<Entry> = Vec::new();
                 let mut rd = tokio::fs::read_dir(&dir).await.map_err(|e| {
-                    CapabilityError::handler(format!(
-                        "list {:?}: {e}",
-                        dir.display()
-                    ))
+                    CapabilityError::handler(format!("list {:?}: {e}", dir.display()))
                 })?;
-                while let Some(e) = rd.next_entry().await.map_err(|e| {
-                    CapabilityError::handler(format!("list iter: {e}"))
-                })? {
-                    let is_dir = e
-                        .file_type()
-                        .await
-                        .map(|t| t.is_dir())
-                        .unwrap_or(false);
+                while let Some(e) = rd
+                    .next_entry()
+                    .await
+                    .map_err(|e| CapabilityError::handler(format!("list iter: {e}")))?
+                {
+                    let is_dir = e.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
                     out.push(Entry {
                         name: e.file_name().to_string_lossy().to_string(),
                         is_dir,
                     });
                 }
                 out.sort_by(|a, b| a.name.cmp(&b.name));
-                Ok(serde_json::to_value(serde_json::json!({ "entries": out }))
-                    .unwrap())
+                Ok(serde_json::to_value(serde_json::json!({ "entries": out })).unwrap())
             }
             "state.delete" => {
                 let p: DeleteParams = parse_params(&request.params)?;
@@ -205,17 +188,17 @@ impl CapabilityHandler for StateHandler {
                 if !target.exists() {
                     return Ok(serde_json::json!({ "removed": false }));
                 }
-                let md = tokio::fs::metadata(&target).await.map_err(|e| {
-                    CapabilityError::handler(format!("stat: {e}"))
-                })?;
+                let md = tokio::fs::metadata(&target)
+                    .await
+                    .map_err(|e| CapabilityError::handler(format!("stat: {e}")))?;
                 if md.is_dir() {
-                    tokio::fs::remove_dir_all(&target).await.map_err(|e| {
-                        CapabilityError::handler(format!("rmdir: {e}"))
-                    })?;
+                    tokio::fs::remove_dir_all(&target)
+                        .await
+                        .map_err(|e| CapabilityError::handler(format!("rmdir: {e}")))?;
                 } else {
-                    tokio::fs::remove_file(&target).await.map_err(|e| {
-                        CapabilityError::handler(format!("unlink: {e}"))
-                    })?;
+                    tokio::fs::remove_file(&target)
+                        .await
+                        .map_err(|e| CapabilityError::handler(format!("unlink: {e}")))?;
                 }
                 Ok(serde_json::json!({ "removed": true }))
             }
@@ -260,7 +243,10 @@ mod tests {
             "path": "foo/bar.json",
             "bytes_b64": BASE64.encode(bytes),
         });
-        let w = h.handle(&req("state.write", write_params), None).await.unwrap();
+        let w = h
+            .handle(&req("state.write", write_params), None)
+            .await
+            .unwrap();
         assert_eq!(w["bytes_written"], bytes.len());
 
         let r = h
@@ -293,10 +279,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let h = StateHandler::new(tmp.path().to_path_buf());
         let err = h
-            .handle(
-                &req("state.read", json!({ "path": "../evil" })),
-                None,
-            )
+            .handle(&req("state.read", json!({ "path": "../evil" })), None)
             .await
             .unwrap_err();
         assert!(err.message.contains("parent"));

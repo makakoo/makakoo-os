@@ -88,10 +88,7 @@ impl WhatsAppAdapter {
     }
 
     fn graph_url(&self, path: &str) -> String {
-        format!(
-            "{}/{}{}",
-            self.api_base, self.config.graph_version, path
-        )
+        format!("{}/{}{}", self.api_base, self.config.graph_version, path)
     }
 }
 

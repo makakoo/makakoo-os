@@ -34,9 +34,7 @@ pub enum StagingError {
     },
     #[error("manifest error: {0}")]
     Manifest(#[from] ManifestError),
-    #[error(
-        "blake3 mismatch for {plugin:?}: expected {expected}, computed {actual}"
-    )]
+    #[error("blake3 mismatch for {plugin:?}: expected {expected}, computed {actual}")]
     HashMismatch {
         plugin: String,
         expected: String,
@@ -206,9 +204,7 @@ fn collect_files(base: &Path, cur: &Path, out: &mut Vec<PathBuf>) -> Result<(), 
                 .strip_prefix(base)
                 .map_err(|_| StagingError::Io {
                     path: path.clone(),
-                    source: std::io::Error::other(
-                        "path escaped base",
-                    ),
+                    source: std::io::Error::other("path escaped base"),
                 })?
                 .to_path_buf();
             out.push(rel);

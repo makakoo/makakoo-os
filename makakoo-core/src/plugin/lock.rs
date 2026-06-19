@@ -123,8 +123,8 @@ impl PluginsLock {
                 source,
             })?;
         }
-        let rendered = toml::to_string_pretty(self)
-            .map_err(|source| LockError::Serialize { source })?;
+        let rendered =
+            toml::to_string_pretty(self).map_err(|source| LockError::Serialize { source })?;
 
         // Write to a sibling tmp file and rename so readers never see a
         // half-written file.

@@ -200,15 +200,9 @@ pub fn parse_inbound_to_frame(
     let stripped = strip_quoted_lines(&body);
 
     let mut raw_meta = std::collections::BTreeMap::new();
-    raw_meta.insert(
-        "body_raw".into(),
-        serde_json::Value::String(body.clone()),
-    );
+    raw_meta.insert("body_raw".into(), serde_json::Value::String(body.clone()));
     if let Some(ref irt) = in_reply_to {
-        raw_meta.insert(
-            "in_reply_to".into(),
-            serde_json::Value::String(irt.clone()),
-        );
+        raw_meta.insert("in_reply_to".into(), serde_json::Value::String(irt.clone()));
     }
 
     let conversation_id = in_reply_to.clone().unwrap_or_else(|| message_id.clone());
@@ -287,7 +281,8 @@ pub fn strip_quoted_lines(body: &str) -> String {
         // Outlook-style. Match "From:" appearing at line start AND
         // preceded by a blank-ish line — which conservatively means
         // we look one line ahead.
-        if trimmed.starts_with("From:") && kept.last().map(|l: &String| l.is_empty()).unwrap_or(false)
+        if trimmed.starts_with("From:")
+            && kept.last().map(|l: &String| l.is_empty()).unwrap_or(false)
         {
             hit_quote = true;
             break;
@@ -408,7 +403,8 @@ mod tests {
 
     #[test]
     fn strip_drops_gmail_style_quote_block() {
-        let body = "Sounds good, thanks!\n\nOn Mon, Jan 1, 2026 at 12:00 PM Alice <alice@x> wrote:\n> hi";
+        let body =
+            "Sounds good, thanks!\n\nOn Mon, Jan 1, 2026 at 12:00 PM Alice <alice@x> wrote:\n> hi";
         let out = strip_quoted_lines(body);
         assert_eq!(out, "Sounds good, thanks!");
     }
@@ -435,7 +431,10 @@ mod tests {
 
     #[test]
     fn strip_passes_through_simple_body() {
-        assert_eq!(strip_quoted_lines("Just text\nMore text"), "Just text\nMore text");
+        assert_eq!(
+            strip_quoted_lines("Just text\nMore text"),
+            "Just text\nMore text"
+        );
     }
 
     // ── threading headers ────────────────────────────────────
@@ -520,8 +519,8 @@ mod tests {
     #[test]
     fn parse_inbound_missing_message_id_errors() {
         let raw = b"From: alice@example.com\r\n\r\nbody";
-        let err = parse_inbound_to_frame(&ctx(), "x@x", &["alice@example.com".into()], raw)
-            .unwrap_err();
+        let err =
+            parse_inbound_to_frame(&ctx(), "x@x", &["alice@example.com".into()], raw).unwrap_err();
         assert!(matches!(err, ParseError::NoMessageId));
     }
 

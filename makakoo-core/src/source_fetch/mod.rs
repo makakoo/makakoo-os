@@ -38,9 +38,8 @@ use regex::Regex;
 use tempfile::TempDir;
 use thiserror::Error;
 
-static TAG_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^v?\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$").unwrap()
-});
+static TAG_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^v?\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$").unwrap());
 static SHA40_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-f0-9]{40}$").unwrap());
 
 #[derive(Debug, Error)]
@@ -366,9 +365,7 @@ pub fn extract_tarball(bytes: &[u8], into: &Path) -> Result<(), String> {
 }
 
 fn locate_unwrapped_root(extract_dir: &Path) -> Result<PathBuf, FetchError> {
-    let entries: Vec<_> = fs::read_dir(extract_dir)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let entries: Vec<_> = fs::read_dir(extract_dir)?.filter_map(|e| e.ok()).collect();
     if entries.len() == 1 {
         let only = entries[0].path();
         if only.is_dir() {
@@ -522,7 +519,10 @@ mod tests {
         // or curl doesn't support file:// in this env (TarballHttp). Both
         // prove the bytes did not end up staged.
         assert!(
-            matches!(err, FetchError::Sha256Mismatch { .. } | FetchError::TarballHttp { .. }),
+            matches!(
+                err,
+                FetchError::Sha256Mismatch { .. } | FetchError::TarballHttp { .. }
+            ),
             "unexpected error variant: {err:?}"
         );
     }

@@ -129,7 +129,13 @@ impl TelegramBot {
                 // All core-store work is synchronous and small; running
                 // it on the async executor thread is fine.
                 let response = match handle_message(
-                    &store, &router, &llm, &model, msg.chat.id.0, &display, text,
+                    &store,
+                    &router,
+                    &llm,
+                    &model,
+                    msg.chat.id.0,
+                    &display,
+                    text,
                 )
                 .await
                 {
@@ -157,8 +163,7 @@ pub(crate) async fn handle_message(
     user_display: &str,
     text: &str,
 ) -> Result<String> {
-    let conv =
-        store.get_or_create_conversation("telegram", &chat_id.to_string(), user_display)?;
+    let conv = store.get_or_create_conversation("telegram", &chat_id.to_string(), user_display)?;
     store.append_message(conv.id, "user", text, None)?;
 
     let decision = router.route(text);
@@ -210,13 +215,7 @@ mod tests {
         let (_dir, store) = fresh_store();
         let router = Arc::new(IntelligentRouter::new());
         let llm = Arc::new(LlmClient::with_base_url("http://127.0.0.1:1"));
-        let bot = TelegramBot::new(
-            "123:fake",
-            store,
-            router,
-            llm,
-            vec![-100_1234, 42],
-        );
+        let bot = TelegramBot::new("123:fake", store, router, llm, vec![-100_1234, 42]);
         assert_eq!(bot.allowlist(), &[-100_1234, 42]);
         assert_eq!(bot.model(), "ail-compound");
         assert!(bot.is_allowed(42));
@@ -228,8 +227,7 @@ mod tests {
         let (_dir, store) = fresh_store();
         let router = Arc::new(IntelligentRouter::new());
         let llm = Arc::new(LlmClient::with_base_url("http://127.0.0.1:1"));
-        let bot = TelegramBot::new("t", store, router, llm, vec![1])
-            .with_model("ail-mini");
+        let bot = TelegramBot::new("t", store, router, llm, vec![1]).with_model("ail-mini");
         assert_eq!(bot.model(), "ail-mini");
     }
 
@@ -249,7 +247,13 @@ mod tests {
         let llm = LlmClient::with_base_url(server.uri());
 
         let reply = handle_message(
-            &store, &router, &llm, "ail-compound", 42, "alice", "hey harvey",
+            &store,
+            &router,
+            &llm,
+            "ail-compound",
+            42,
+            "alice",
+            "hey harvey",
         )
         .await
         .unwrap();
@@ -273,11 +277,9 @@ mod tests {
         let (_dir, store) = fresh_store();
         let router = IntelligentRouter::new();
         let llm = LlmClient::with_base_url("http://127.0.0.1:1");
-        let reply = handle_message(
-            &store, &router, &llm, "ail-compound", 7, "eve", "/status",
-        )
-        .await
-        .unwrap();
+        let reply = handle_message(&store, &router, &llm, "ail-compound", 7, "eve", "/status")
+            .await
+            .unwrap();
         assert!(reply.contains("command"));
         assert!(reply.contains("status"));
     }
@@ -318,11 +320,9 @@ mod tests {
         let llm = LlmClient::with_base_url(server.uri());
 
         for _ in 0..3 {
-            handle_message(
-                &store, &router, &llm, "ail-compound", 9, "sam", "ping",
-            )
-            .await
-            .unwrap();
+            handle_message(&store, &router, &llm, "ail-compound", 9, "sam", "ping")
+                .await
+                .unwrap();
         }
         let conv = store
             .get_or_create_conversation("telegram", "9", "sam")

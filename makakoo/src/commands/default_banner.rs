@@ -59,7 +59,9 @@ fn print_returning_user() {
     println!("  You're set up. Most-used commands:");
     println!();
     println!("    \x1b[1mmakakoo search <query>\x1b[0m   Full-text search across the Brain");
-    println!("    \x1b[1mmakakoo query <q>\x1b[0m         Ask a question (RAG over Brain + plugins)");
+    println!(
+        "    \x1b[1mmakakoo query <q>\x1b[0m         Ask a question (RAG over Brain + plugins)"
+    );
     println!("    \x1b[1mmakakoo plugin list\x1b[0m       Show installed plugins");
     println!("    \x1b[1mmakakoo sancho status\x1b[0m     Background watchdog state");
     println!("    \x1b[1mmakakoo sync\x1b[0m              Re-index Brain + auto-memory");
@@ -100,8 +102,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let ctx = CliContext::for_home(PathBuf::from(tmp.path()));
         std::fs::create_dir_all(ctx.data_dir()).expect("mkdir data");
-        std::fs::write(ctx.data_dir().join("superbrain.db"), b"")
-            .expect("touch db");
+        std::fs::write(ctx.data_dir().join("superbrain.db"), b"").expect("touch db");
         assert!(is_already_set_up(&ctx));
     }
 }

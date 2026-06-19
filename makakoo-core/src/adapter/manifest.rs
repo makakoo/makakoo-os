@@ -154,7 +154,6 @@ pub enum SandboxProfile {
     Isolated,
 }
 
-
 /// Role the adapter is willing to serve. Subset of
 /// `{validator, delegate, swarm_member}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
@@ -918,10 +917,8 @@ signed_by = "traylinx"
 
     #[test]
     fn custom_output_requires_parser() {
-        let body = VALID_MINIMAL.replace(
-            r#"format = "lope-verdict-block""#,
-            r#"format = "custom""#,
-        );
+        let body =
+            VALID_MINIMAL.replace(r#"format = "lope-verdict-block""#, r#"format = "custom""#);
         let err = Manifest::parse_str(&body).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("parser"), "got {msg}");
@@ -949,10 +946,7 @@ signed_by = "traylinx"
     #[test]
     fn tarball_requires_sha256() {
         let body = VALID_MINIMAL
-            .replace(
-                r#"source_type = "git""#,
-                r#"source_type = "https-tarball""#,
-            )
+            .replace(r#"source_type = "git""#, r#"source_type = "https-tarball""#)
             .replace(
                 r#"source = "https://github.com/traylinx/openclaw-adapter.git""#,
                 r#"source = "https://example.com/adapter.tgz""#,

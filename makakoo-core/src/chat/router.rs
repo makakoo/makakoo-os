@@ -62,8 +62,7 @@ impl IntelligentRouter {
         }
 
         if let Some(rest) = trimmed.strip_prefix('/') {
-            let mut tokens: Vec<String> =
-                rest.split_whitespace().map(|s| s.to_string()).collect();
+            let mut tokens: Vec<String> = rest.split_whitespace().map(|s| s.to_string()).collect();
             if tokens.is_empty() {
                 return RouteDecision::DirectAnswer;
             }
@@ -149,13 +148,7 @@ fn intent_keywords() -> &'static [(&'static str, &'static [&'static str])] {
         "bookmark",
         "write to brain",
     ];
-    const MINIMAL: &[&str] = &[
-        "quick",
-        "briefly",
-        "tl;dr",
-        "one-liner",
-        "short answer",
-    ];
+    const MINIMAL: &[&str] = &["quick", "briefly", "tl;dr", "one-liner", "short answer"];
     &[
         ("research", RESEARCH),
         ("image", IMAGE),
@@ -235,10 +228,7 @@ mod tests {
     #[test]
     fn unmatched_falls_to_direct_answer() {
         let r = IntelligentRouter::new();
-        assert_eq!(
-            r.route("what time is dinner"),
-            RouteDecision::DirectAnswer
-        );
+        assert_eq!(r.route("what time is dinner"), RouteDecision::DirectAnswer);
     }
 
     #[test]

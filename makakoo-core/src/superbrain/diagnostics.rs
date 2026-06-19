@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::error::Result;
-use crate::superbrain::promoter::{MIN_RECALL_COUNT, MIN_SCORE, MIN_UNIQUE_QUERIES, MAX_AGE_DAYS};
+use crate::superbrain::promoter::{MAX_AGE_DAYS, MIN_RECALL_COUNT, MIN_SCORE, MIN_UNIQUE_QUERIES};
 
 /// Promoter gate constants exposed to diagnostics callers so output can
 /// annotate thresholds without re-importing each constant.
@@ -105,9 +105,7 @@ fn recall_log_stats(conn: &Connection) -> Result<RecallLogStats> {
         "SELECT source, COUNT(*) FROM recall_log
          GROUP BY source ORDER BY COUNT(*) DESC LIMIT 20",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-    })?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     for row in rows {
         let (source, n) = row?;
         by_source.insert(source, n);
@@ -167,8 +165,7 @@ fn recall_stats_stats(conn: &Connection, t: &GateThresholds) -> Result<RecallSta
 }
 
 fn promotion_stats(conn: &Connection) -> Result<PromotionStats> {
-    let total: i64 =
-        conn.query_row("SELECT COUNT(*) FROM memory_promotions", [], |r| r.get(0))?;
+    let total: i64 = conn.query_row("SELECT COUNT(*) FROM memory_promotions", [], |r| r.get(0))?;
     let last_7d: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memory_promotions
          WHERE promoted_at >= datetime('now', '-7 days')",
@@ -176,11 +173,9 @@ fn promotion_stats(conn: &Connection) -> Result<PromotionStats> {
         |r| r.get(0),
     )?;
     let last_promoted_at: Option<String> = conn
-        .query_row(
-            "SELECT MAX(promoted_at) FROM memory_promotions",
-            [],
-            |r| r.get::<_, Option<String>>(0),
-        )
+        .query_row("SELECT MAX(promoted_at) FROM memory_promotions", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
         .unwrap_or(None);
     Ok(PromotionStats {
         total,
@@ -226,7 +221,12 @@ mod tests {
                 "INSERT INTO recall_log
                     (doc_id, doc_path, content_hash, query_hash, score, source)
                  VALUES (?1, ?2, ?3, 'q', 0.5, ?4)",
-                rusqlite::params![doc_id, format!("/tmp/{doc_id}.md"), format!("h{doc_id}"), src],
+                rusqlite::params![
+                    doc_id,
+                    format!("/tmp/{doc_id}.md"),
+                    format!("h{doc_id}"),
+                    src
+                ],
             )
             .unwrap();
         }

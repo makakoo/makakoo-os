@@ -29,10 +29,22 @@ fn purge_legacy(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
 fn print_report(r: &LegacyPathReport, dry_run: bool) {
     let mode = if dry_run { "DRY RUN — " } else { "" };
     println!("{mode}Legacy HARVEY-path migration report");
-    println!("  recall_log rows rewritten:         {}", r.recall_log_rewritten);
-    println!("  recall_stats rows rewritten:       {}", r.recall_stats_rewritten);
-    println!("  memory_promotions rows rewritten:  {}", r.memory_promotions_rewritten);
-    println!("  recall_stats rows deduped:         {}", r.recall_stats_deduped);
+    println!(
+        "  recall_log rows rewritten:         {}",
+        r.recall_log_rewritten
+    );
+    println!(
+        "  recall_stats rows rewritten:       {}",
+        r.recall_stats_rewritten
+    );
+    println!(
+        "  memory_promotions rows rewritten:  {}",
+        r.memory_promotions_rewritten
+    );
+    println!(
+        "  recall_stats rows deduped:         {}",
+        r.recall_stats_deduped
+    );
     if dry_run {
         println!();
         println!("Re-run without --dry-run to apply.");

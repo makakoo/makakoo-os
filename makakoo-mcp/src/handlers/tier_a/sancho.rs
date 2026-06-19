@@ -107,10 +107,7 @@ impl ToolHandler for DreamHandler {
         })
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
-        let limit = params
-            .get("limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(20) as usize;
+        let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
 
         let store = self
             .ctx

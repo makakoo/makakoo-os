@@ -141,9 +141,10 @@ pub fn verify_manifest_bytes(
         None => load_publisher_key(publisher)?,
     };
     let sig = load_signature(sig_path)?;
-    key.verify(manifest_bytes, &sig).map_err(|_| SignError::VerifyFailed {
-        publisher: publisher.to_string(),
-    })
+    key.verify(manifest_bytes, &sig)
+        .map_err(|_| SignError::VerifyFailed {
+            publisher: publisher.to_string(),
+        })
 }
 
 /// Test-only helper: sign a blob with an ephemeral Ed25519 key and write
@@ -190,7 +191,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let manifest = b"[adapter]\nname = \"openclaw\"\n";
         let sig_path = testing_sign_manifest(tmp.path(), "traylinx", manifest);
-        verify_manifest_bytes("traylinx", manifest, &sig_path, Some(&tmp.path().join("keys"))).unwrap();
+        verify_manifest_bytes(
+            "traylinx",
+            manifest,
+            &sig_path,
+            Some(&tmp.path().join("keys")),
+        )
+        .unwrap();
     }
 
     #[test]

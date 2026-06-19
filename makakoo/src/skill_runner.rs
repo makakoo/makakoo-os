@@ -241,10 +241,7 @@ fn walk_for_skill(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
                 Some(s) => s.to_string(),
                 None => continue,
             };
-            if basename == name
-                && path.join("SKILL.md").is_file()
-                && dir_has_runnable_py(&path)
-            {
+            if basename == name && path.join("SKILL.md").is_file() && dir_has_runnable_py(&path) {
                 return Ok(Some(path));
             }
             if let Some(found) = inner(&path, name, depth + 1)? {
@@ -320,10 +317,7 @@ fn resolve_entry(skill_dir: &Path, name: &str) -> Result<PathBuf> {
             if p.extension().and_then(|e| e.to_str()) != Some("py") {
                 continue;
             }
-            let basename = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let basename = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if basename.starts_with('_') {
                 continue;
             }
@@ -392,8 +386,7 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("SKILL.md"), "---\nname: gamma\n---\n").unwrap();
         fs::write(deep.join("run.py"), "print('deep')\n").unwrap();
-        let runner =
-            SkillRunner::with_paths(PathBuf::from("python3"), dir.path().join("skills"));
+        let runner = SkillRunner::with_paths(PathBuf::from("python3"), dir.path().join("skills"));
         let hit = runner.discover("gamma").unwrap();
         assert!(hit.skill_dir.ends_with("gamma"));
     }
@@ -412,11 +405,8 @@ mod tests {
         if !python.status.success() {
             return;
         }
-        let py = PathBuf::from(
-            String::from_utf8_lossy(&python.stdout).trim().to_string(),
-        );
-        let (_dir, skills_dir) =
-            scratch_skills("zeta", "run.py", "import sys; sys.exit(0)\n");
+        let py = PathBuf::from(String::from_utf8_lossy(&python.stdout).trim().to_string());
+        let (_dir, skills_dir) = scratch_skills("zeta", "run.py", "import sys; sys.exit(0)\n");
         let runner = SkillRunner::with_paths(py, skills_dir);
         let status = runner.run("zeta", &[]).unwrap();
         assert!(status.success());
@@ -432,11 +422,8 @@ mod tests {
         if !python.status.success() {
             return;
         }
-        let py = PathBuf::from(
-            String::from_utf8_lossy(&python.stdout).trim().to_string(),
-        );
-        let (_dir, skills_dir) =
-            scratch_skills("omega", "run.py", "import sys; sys.exit(7)\n");
+        let py = PathBuf::from(String::from_utf8_lossy(&python.stdout).trim().to_string());
+        let (_dir, skills_dir) = scratch_skills("omega", "run.py", "import sys; sys.exit(7)\n");
         let runner = SkillRunner::with_paths(py, skills_dir);
         let status = runner.run("omega", &[]).unwrap();
         assert!(!status.success());
@@ -590,7 +577,10 @@ mod tests {
         let home = PathBuf::from("/fake/home");
         let env = build_skill_env(&home, &[]);
         let pp = env.get("PYTHONPATH").unwrap();
-        assert!(pp.contains(sentinel), "existing PYTHONPATH must be preserved");
+        assert!(
+            pp.contains(sentinel),
+            "existing PYTHONPATH must be preserved"
+        );
 
         match old {
             Some(v) => std::env::set_var("PYTHONPATH", v),
@@ -613,7 +603,10 @@ mod tests {
         let pp = env.get("PYTHONPATH").unwrap();
         // Library plugins contribute their src/ subdir so `from
         // core.terminal import ...` resolves against <plugin>/src/core/terminal/.
-        assert!(pp.contains("/plugins/lib-hte/src"), "lib-hte should join src/");
+        assert!(
+            pp.contains("/plugins/lib-hte/src"),
+            "lib-hte should join src/"
+        );
         assert!(
             pp.contains("/plugins/lib-harvey-core/src"),
             "lib-harvey-core should join src/"

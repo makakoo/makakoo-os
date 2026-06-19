@@ -179,8 +179,15 @@ mod tests {
         assert_eq!(
             render_args(&cmd),
             vec![
-                "bucket", "create", "demo", "--endpoint", "local",
-                "--ttl", "7d", "--quota", "1G",
+                "bucket",
+                "create",
+                "demo",
+                "--endpoint",
+                "local",
+                "--ttl",
+                "7d",
+                "--quota",
+                "1G",
             ]
         );
     }
@@ -197,8 +204,13 @@ mod tests {
         assert_eq!(
             render_args(&cmd),
             vec![
-                "bucket", "create", "demo",
-                "--ttl", "permanent", "--quota", "unlimited",
+                "bucket",
+                "create",
+                "demo",
+                "--ttl",
+                "permanent",
+                "--quota",
+                "unlimited",
                 "--confirm-yes-really",
             ]
         );
@@ -226,10 +238,15 @@ mod tests {
         assert_eq!(
             render_args(&cmd),
             vec![
-                "bucket", "grant", "demo",
-                "--to", "external-app",
-                "--perms", "read,write",
-                "--ttl", "1h",
+                "bucket",
+                "grant",
+                "demo",
+                "--to",
+                "external-app",
+                "--perms",
+                "read,write",
+                "--ttl",
+                "1h",
                 "--json",
             ]
         );
@@ -237,7 +254,9 @@ mod tests {
 
     #[test]
     fn render_revoke() {
-        let cmd = BucketCmd::Revoke { grant_id: "g_20260425_abc".into() };
+        let cmd = BucketCmd::Revoke {
+            grant_id: "g_20260425_abc".into(),
+        };
         assert_eq!(
             render_args(&cmd),
             vec!["bucket", "revoke", "g_20260425_abc"]

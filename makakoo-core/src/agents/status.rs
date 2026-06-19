@@ -240,7 +240,8 @@ mod tests {
         // simulate a 2-hour-old error.
         {
             let mut g = h.inner.lock().unwrap();
-            g.error_timestamps.push_back(Utc::now() - Duration::hours(2));
+            g.error_timestamps
+                .push_back(Utc::now() - Duration::hours(2));
         }
         h.record_error();
         h.record_error();

@@ -200,11 +200,7 @@ pub fn write_bootstrap_to_slot(
 /// - `SlotStatus::Unchanged` when no block was found (nothing to do),
 /// - `SlotStatus::DryRun` when `dry_run=true` and a removal would occur,
 /// - `SlotStatus::Error(..)` on IO / parse failures.
-pub fn remove_bootstrap_from_slot(
-    slot: &CliSlot,
-    home: &Path,
-    dry_run: bool,
-) -> SlotWriteResult {
+pub fn remove_bootstrap_from_slot(slot: &CliSlot, home: &Path, dry_run: bool) -> SlotWriteResult {
     let path = slot.absolute(home);
     match slot.format {
         SlotFormat::Markdown => remove_markdown(slot, &path, dry_run),
@@ -344,8 +340,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
             prior_version: None,
         };
     };
-    let prior_version =
-        opencode_entry_version(arr[idx].as_str().unwrap_or_default());
+    let prior_version = opencode_entry_version(arr[idx].as_str().unwrap_or_default());
     arr.remove(idx);
     // Drop the instructions array entirely if we emptied it — keeps
     // the user's config file tidy instead of leaving an empty array.
@@ -627,7 +622,9 @@ fn kimi_set_role_additional(doc: &mut serde_yaml_ng::Value, value: String) {
     if !spa.is_mapping() {
         *spa = Value::Mapping(Mapping::new());
     }
-    let spa_map = spa.as_mapping_mut().expect("system_prompt_args is a mapping");
+    let spa_map = spa
+        .as_mapping_mut()
+        .expect("system_prompt_args is a mapping");
     spa_map.insert(
         Value::String("ROLE_ADDITIONAL".into()),
         Value::String(value),
@@ -983,12 +980,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&written).unwrap();
         let arr = parsed["instructions"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
-        assert!(
-            arr[0]
-                .as_str()
-                .unwrap()
-                .contains(&format!("[harvey:infect-global v{}]", BLOCK_VERSION))
-        );
+        assert!(arr[0]
+            .as_str()
+            .unwrap()
+            .contains(&format!("[harvey:infect-global v{}]", BLOCK_VERSION)));
         assert_eq!(arr[1].as_str().unwrap(), "user note");
     }
 
@@ -1033,7 +1028,10 @@ mod tests {
 
         let result = remove_bootstrap_from_slot(&slot, tmp.path(), false);
         assert_eq!(result.status, SlotStatus::Updated);
-        assert!(!path.exists(), "infect-only slot should be removed after uninfect");
+        assert!(
+            !path.exists(),
+            "infect-only slot should be removed after uninfect"
+        );
     }
 
     #[test]
@@ -1137,8 +1135,20 @@ mod tests {
         assert!(raw.contains(BODY));
 
         let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).unwrap();
-        assert_eq!(parsed.get("agent").and_then(|a| a.get("name")).and_then(|v| v.as_str()), Some("Harvey"));
-        assert_eq!(parsed.get("agent").and_then(|a| a.get("extend")).and_then(|v| v.as_str()), Some("default"));
+        assert_eq!(
+            parsed
+                .get("agent")
+                .and_then(|a| a.get("name"))
+                .and_then(|v| v.as_str()),
+            Some("Harvey")
+        );
+        assert_eq!(
+            parsed
+                .get("agent")
+                .and_then(|a| a.get("extend"))
+                .and_then(|v| v.as_str()),
+            Some("default")
+        );
     }
 
     #[test]
@@ -1160,9 +1170,27 @@ mod tests {
 
         let raw = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).unwrap();
-        assert_eq!(parsed.get("agent").and_then(|a| a.get("name")).and_then(|v| v.as_str()), Some("Custom Name"));
-        assert_eq!(parsed.get("agent").and_then(|a| a.get("model")).and_then(|v| v.as_str()), Some("kimi-k2.5"));
-        assert_eq!(parsed.get("agent").and_then(|a| a.get("when_to_use")).and_then(|v| v.as_str()), Some("coding"));
+        assert_eq!(
+            parsed
+                .get("agent")
+                .and_then(|a| a.get("name"))
+                .and_then(|v| v.as_str()),
+            Some("Custom Name")
+        );
+        assert_eq!(
+            parsed
+                .get("agent")
+                .and_then(|a| a.get("model"))
+                .and_then(|v| v.as_str()),
+            Some("kimi-k2.5")
+        );
+        assert_eq!(
+            parsed
+                .get("agent")
+                .and_then(|a| a.get("when_to_use"))
+                .and_then(|v| v.as_str()),
+            Some("coding")
+        );
         assert!(raw.contains(BLOCK_START));
         assert!(raw.contains(BODY));
     }
@@ -1263,8 +1291,7 @@ mod tests {
     fn kimi_set_role_additional_replaces_non_mapping_doc() {
         // Setting into a non-mapping document rebuilds a clean mapping and
         // round-trips through the codec without loss.
-        let mut doc: serde_yaml_ng::Value =
-            serde_yaml_ng::from_str("- not\n- a\n- map\n").unwrap();
+        let mut doc: serde_yaml_ng::Value = serde_yaml_ng::from_str("- not\n- a\n- map\n").unwrap();
         kimi_set_role_additional(&mut doc, "hello".to_string());
         let s = serde_yaml_ng::to_string(&doc).unwrap();
         let reparsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&s).unwrap();
@@ -1276,8 +1303,7 @@ mod tests {
         // A value packed with YAML-significant characters must survive a
         // set → serialize → parse → extract round-trip byte-for-byte.
         let hostile = "colon: x # hash \"dq\" 'sq' \\ bslash café 日本語 🦉 | > % @ `tick`";
-        let mut doc =
-            serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new());
+        let mut doc = serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new());
         kimi_set_role_additional(&mut doc, hostile.to_string());
         let s = serde_yaml_ng::to_string(&doc).unwrap();
         let reparsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&s).unwrap();

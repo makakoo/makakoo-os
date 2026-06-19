@@ -144,8 +144,7 @@ impl BuddyTracker {
     /// a valid 3-line uniform-width sprite.
     pub fn display_frame(&self) -> String {
         let Some(mascot) = self.active() else {
-            return "[no active buddy — `harvey nursery adopt <name>` to pick one]\n"
-                .to_string();
+            return "[no active buddy — `harvey nursery adopt <name>` to pick one]\n".to_string();
         };
         let state = self.state();
         // Pick a recipe whose vibe matches the mood. Every key here exists
@@ -281,8 +280,7 @@ mod tests {
         tracker.tick();
         let after = tracker.state();
         assert_eq!(after.energy, before - 1);
-        assert!(["happy", "content", "alert", "sleepy", "lonely"]
-            .contains(&after.mood.as_str()));
+        assert!(["happy", "content", "alert", "sleepy", "lonely"].contains(&after.mood.as_str()));
     }
 
     #[test]

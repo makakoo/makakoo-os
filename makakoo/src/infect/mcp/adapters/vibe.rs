@@ -232,7 +232,10 @@ FOO = "bar"
 
         // Both entries present.
         let count = body.matches("[[mcp_servers]]").count();
-        assert_eq!(count, 2, "should have 2 [[mcp_servers]] entries; got: {body}");
+        assert_eq!(
+            count, 2,
+            "should have 2 [[mcp_servers]] entries; got: {body}"
+        );
         assert!(body.contains(r#"name = "other""#));
         assert!(body.contains(r#"name = "harvey""#));
         assert!(body.contains(r#"FOO = "bar""#));
@@ -276,7 +279,12 @@ MAKAKOO_HOME = "/h"
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let outcome = sync(&path, &spec(), true);
-        assert_eq!(outcome, SyncOutcome::WouldChange { kind: ChangeKind::Add });
+        assert_eq!(
+            outcome,
+            SyncOutcome::WouldChange {
+                kind: ChangeKind::Add
+            }
+        );
         assert!(!path.exists());
     }
 

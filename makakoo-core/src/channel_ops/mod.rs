@@ -96,11 +96,7 @@ impl ChannelOpsRegistry {
         self.messaging.write().await.insert(key, adapter);
     }
 
-    pub async fn register_approval(
-        &self,
-        slot_id: &str,
-        adapter: Arc<dyn ChannelApprovalAdapter>,
-    ) {
+    pub async fn register_approval(&self, slot_id: &str, adapter: Arc<dyn ChannelApprovalAdapter>) {
         let key = OpKey::new(slot_id, adapter.transport_id());
         self.approval.write().await.insert(key, adapter);
     }
@@ -233,10 +229,7 @@ mod tests {
         async fn list_users(&self) -> Result<Vec<UserSummary>, ChannelOpError> {
             Ok(vec![])
         }
-        async fn lookup_user(
-            &self,
-            _query: &str,
-        ) -> Result<Option<UserSummary>, ChannelOpError> {
+        async fn lookup_user(&self, _query: &str) -> Result<Option<UserSummary>, ChannelOpError> {
             Ok(None)
         }
     }
@@ -270,11 +263,7 @@ mod tests {
                 message_id: "1".into(),
             })
         }
-        async fn broadcast(
-            &self,
-            channel_ids: &[String],
-            _text: &str,
-        ) -> Vec<BroadcastResult> {
+        async fn broadcast(&self, channel_ids: &[String], _text: &str) -> Vec<BroadcastResult> {
             channel_ids
                 .iter()
                 .map(|c| BroadcastResult {
@@ -447,7 +436,8 @@ mod tests {
         let tid = "telegram-main";
         r.register_directory(slot, fake("telegram", tid)).await;
         r.register_messaging(slot, fake_msg("telegram", tid)).await;
-        r.register_threading(slot, fake_thread("telegram", tid)).await;
+        r.register_threading(slot, fake_thread("telegram", tid))
+            .await;
         r.register_approval(
             slot,
             fake_approve(
@@ -503,10 +493,19 @@ mod tests {
             .await;
 
         // Each slot only sees its own adapters.
-        assert!(r.lookup_directory("secretary", "telegram-main").await.is_some());
-        assert!(r.lookup_messaging("secretary", "slack-main").await.is_none());
+        assert!(r
+            .lookup_directory("secretary", "telegram-main")
+            .await
+            .is_some());
+        assert!(r
+            .lookup_messaging("secretary", "slack-main")
+            .await
+            .is_none());
         assert!(r.lookup_directory("career", "slack-main").await.is_some());
-        assert!(r.lookup_messaging("career", "telegram-main").await.is_none());
+        assert!(r
+            .lookup_messaging("career", "telegram-main")
+            .await
+            .is_none());
     }
 
     #[tokio::test]

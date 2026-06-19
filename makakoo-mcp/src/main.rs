@@ -111,8 +111,15 @@ async fn main() -> Result<()> {
     }
 
     if let Some(http_arg) = args.http.as_deref() {
-        return run_http(http_arg, args.bind, args.trust_file, args.signing_key, registry, ctx)
-            .await;
+        return run_http(
+            http_arg,
+            args.bind,
+            args.trust_file,
+            args.signing_key,
+            registry,
+            ctx,
+        )
+        .await;
     }
 
     let server = server::McpServer::new(registry, ctx);
@@ -179,10 +186,7 @@ async fn run_http(
     }
 
     let state = Arc::new(http_server::HttpState::new(
-        registry,
-        ctx,
-        trust,
-        trust_path,
+        registry, ctx, trust, trust_path,
     ));
     http_server::serve(bind_addr, state).await
 }
@@ -315,9 +319,7 @@ async fn build_context() -> Result<ToolContext> {
 /// event bus) using the standard makakoo data dir paths. Separated from
 /// `build_context` so its failure modes stay contained and the main
 /// build still returns a usable context without swarm support.
-async fn build_swarm_state(
-    data: &std::path::Path,
-) -> Result<Arc<makakoo_core::swarm::SwarmState>> {
+async fn build_swarm_state(data: &std::path::Path) -> Result<Arc<makakoo_core::swarm::SwarmState>> {
     use std::sync::Mutex;
 
     let map = |e: makakoo_core::MakakooError| anyhow::anyhow!("{e}");
@@ -325,13 +327,12 @@ async fn build_swarm_state(
     let conn = makakoo_core::db::open_db(&db_path).map_err(map)?;
     makakoo_core::db::run_migrations(&conn).map_err(map)?;
     let conn_arc = Arc::new(Mutex::new(conn));
-    let artifacts = Arc::new(
-        makakoo_core::swarm::ArtifactStore::open(Arc::clone(&conn_arc)).map_err(map)?,
-    );
+    let artifacts =
+        Arc::new(makakoo_core::swarm::ArtifactStore::open(Arc::clone(&conn_arc)).map_err(map)?);
     let coordinator = Arc::new(makakoo_core::swarm::AgentCoordinator::new());
     let llm = Arc::new(makakoo_core::llm::LlmClient::new());
-    let bus = makakoo_core::event_bus::PersistentEventBus::open(&data.join("events.db"))
-        .map_err(map)?;
+    let bus =
+        makakoo_core::event_bus::PersistentEventBus::open(&data.join("events.db")).map_err(map)?;
     let gateway = Arc::new(makakoo_core::swarm::SwarmGateway::new(
         Arc::clone(&coordinator),
         Arc::clone(&artifacts),
@@ -367,7 +368,10 @@ mod tests {
             Some(v) => std::env::set_var("MAKAKOO_HOME", v),
             None => std::env::remove_var("MAKAKOO_HOME"),
         }
-        assert!(ctx.store.is_some(), "store should open under fresh MAKAKOO_HOME");
+        assert!(
+            ctx.store.is_some(),
+            "store should open under fresh MAKAKOO_HOME"
+        );
         assert!(
             ctx.recall.is_some(),
             "recall tracker must be wired whenever store is — sprint-010 phase-a"

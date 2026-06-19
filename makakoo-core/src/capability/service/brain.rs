@@ -32,9 +32,7 @@ use chrono::Local;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::capability::socket::{
-    CapabilityError, CapabilityHandler, CapabilityRequest,
-};
+use crate::capability::socket::{CapabilityError, CapabilityHandler, CapabilityRequest};
 use crate::superbrain::store::SuperbrainStore;
 
 const DEFAULT_LIMIT: usize = 10;
@@ -108,8 +106,7 @@ impl CapabilityHandler for BrainHandler {
                 let p: RecentParams = if request.params.is_null() {
                     RecentParams::default()
                 } else {
-                    serde_json::from_value(request.params.clone())
-                        .map_err(bad_params)?
+                    serde_json::from_value(request.params.clone()).map_err(bad_params)?
                 };
                 let limit = p.limit.unwrap_or(DEFAULT_LIMIT);
                 let hits = self
@@ -218,10 +215,7 @@ mod tests {
         let store = make_store(tmp.path());
         let h = BrainHandler::new(store, tmp.path().join("Brain"));
         let r = h
-            .handle(
-                &req("brain.recent", serde_json::Value::Null),
-                None,
-            )
+            .handle(&req("brain.recent", serde_json::Value::Null), None)
             .await
             .unwrap();
         assert!(r["hits"].is_array());
@@ -248,7 +242,10 @@ mod tests {
 
         let r = h
             .handle(
-                &req("brain.write_journal", json!({ "line": "Shipped Phase E/3b" })),
+                &req(
+                    "brain.write_journal",
+                    json!({ "line": "Shipped Phase E/3b" }),
+                ),
                 None,
             )
             .await
@@ -277,7 +274,10 @@ mod tests {
         .unwrap();
         // Line already normalised
         h.handle(
-            &req("brain.write_journal", json!({ "line": "- already bulleted" })),
+            &req(
+                "brain.write_journal",
+                json!({ "line": "- already bulleted" }),
+            ),
             None,
         )
         .await

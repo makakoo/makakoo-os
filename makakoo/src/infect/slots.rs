@@ -164,10 +164,7 @@ mod tests {
         let names: Vec<&str> = SLOTS.iter().map(|s| s.name).collect();
         assert_eq!(
             names,
-            vec![
-                "claude", "gemini", "codex", "opencode", "vibe", "cursor",
-                "qwen", "pi", "kimi"
-            ]
+            vec!["claude", "gemini", "codex", "opencode", "vibe", "cursor", "qwen", "pi", "kimi"]
         );
     }
 

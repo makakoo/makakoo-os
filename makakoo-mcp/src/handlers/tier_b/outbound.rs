@@ -131,7 +131,8 @@ mod tests {
             .unwrap();
         // HARD RULE: status is pending, never sent.
         assert_eq!(
-            out["status"], json!("pending"),
+            out["status"],
+            json!("pending"),
             "outbound_draft must NEVER auto-send"
         );
         assert_ne!(out["status"], json!("sent"));

@@ -99,9 +99,8 @@ impl SupervisorStatusFile {
     /// run dir. Atomic = write to `.tmp`, rename onto target. Avoids
     /// partial-read races with the CLI.
     pub fn write_atomic(&self, run_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(run_dir).map_err(|e| {
-            MakakooError::Internal(format!("create run_dir: {e}"))
-        })?;
+        std::fs::create_dir_all(run_dir)
+            .map_err(|e| MakakooError::Internal(format!("create run_dir: {e}")))?;
         let target = run_dir.join("status.json");
         let tmp = run_dir.join("status.json.tmp");
         let body = serde_json::to_vec_pretty(self)
@@ -249,8 +248,7 @@ impl GatewayLaunchSpec {
         effective_llm: Option<&crate::agents::llm_override::EffectiveLlm>,
     ) -> Self {
         let home_str = makakoo_home.to_string_lossy().into_owned();
-        let python_dir = makakoo_home
-            .join("plugins-core/agent-harveychat/python");
+        let python_dir = makakoo_home.join("plugins-core/agent-harveychat/python");
         let mut spec = Self::new("python3")
             .arg("gateway.py")
             .arg("--slot")
@@ -300,11 +298,11 @@ impl SupervisorInner {
             pid: self.gateway_pid,
             last_frame_at: self.last_frame_at,
         };
-        let transports: Vec<_> =
-            self.transports.iter().map(|h| h.snapshot()).collect();
-        let circuit_break_until = self.restart.tripped_at().map(|t| {
-            t + chrono::Duration::from_std(RESTART_BUDGET_WINDOW).unwrap()
-        });
+        let transports: Vec<_> = self.transports.iter().map(|h| h.snapshot()).collect();
+        let circuit_break_until = self
+            .restart
+            .tripped_at()
+            .map(|t| t + chrono::Duration::from_std(RESTART_BUDGET_WINDOW).unwrap());
         SupervisorStatusFile {
             slot_id: self.slot_id.clone(),
             state: self.state,
@@ -352,7 +350,10 @@ mod tests {
         let t0 = now_at(1000);
         for i in 0..RESTART_BUDGET_LIMIT {
             let r = b.record_crash(now_at(1000 + i as i64));
-            assert!(matches!(r, RestartDecision::Backoff(_)), "crash {i} should backoff");
+            assert!(
+                matches!(r, RestartDecision::Backoff(_)),
+                "crash {i} should backoff"
+            );
         }
         assert!(!b.is_tripped());
         // Touch t0 so clippy doesn't complain about the unused

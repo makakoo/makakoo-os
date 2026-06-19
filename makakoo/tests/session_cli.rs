@@ -75,9 +75,17 @@ fn session_list_works_when_flag_enabled() {
         .output()
         .unwrap();
 
-    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.lines().any(|l| l.trim() == "alpha"), "missing alpha: {stdout}");
+    assert!(
+        stdout.lines().any(|l| l.trim() == "alpha"),
+        "missing alpha: {stdout}"
+    );
 }
 
 #[test]
@@ -149,7 +157,10 @@ fn session_label_then_rewind_collapses_history() {
     let sessions = dir.path().join("data").join("sessions").join("alpha.jsonl");
     {
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&sessions).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&sessions)
+            .unwrap();
         let line = format!(
             r#"{{"type":"message","id":"m3","parentId":"{label_id}","role":"user","content":"drop me","ts":"2026-04-21T00:00:10Z"}}
 "#,
@@ -171,7 +182,10 @@ fn session_label_then_rewind_collapses_history() {
 
     // Reload the file and confirm the trailing `m3` entry is gone.
     let body = std::fs::read_to_string(&sessions).unwrap();
-    assert!(!body.contains("m3"), "rewind did not drop trailing entry: {body}");
+    assert!(
+        !body.contains("m3"),
+        "rewind did not drop trailing entry: {body}"
+    );
     // And a .bak file now exists alongside.
     let parent = sessions.parent().unwrap();
     let has_backup = std::fs::read_dir(parent)

@@ -41,7 +41,11 @@ impl SecretRef {
     /// Build from the flat TOML triple at the `[[transport]]` level.
     /// Empty strings count as "absent" — TOML linters often emit
     /// `inline_secret_dev = ""` even when the field isn't set.
-    pub fn from_flat(env: Option<String>, keyring_ref: Option<String>, inline: Option<String>) -> Self {
+    pub fn from_flat(
+        env: Option<String>,
+        keyring_ref: Option<String>,
+        inline: Option<String>,
+    ) -> Self {
         fn norm(s: Option<String>) -> Option<String> {
             s.and_then(|v| if v.is_empty() { None } else { Some(v) })
         }
@@ -110,7 +114,8 @@ pub trait SecretsAdapter: Send + Sync {
             });
         }
         Err(MakakooError::Config(
-            "no secret source resolved (env unset, keyring miss, no inline) — adapter cannot start".into(),
+            "no secret source resolved (env unset, keyring miss, no inline) — adapter cannot start"
+                .into(),
         ))
     }
 }

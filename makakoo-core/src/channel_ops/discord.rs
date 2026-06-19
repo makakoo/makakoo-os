@@ -20,12 +20,8 @@ use crate::channel_ops::approval::{
 use crate::channel_ops::directory::{
     ChannelDirectoryAdapter, ChannelKind, ChannelOpError, ChannelSummary, UserSummary,
 };
-use crate::channel_ops::messaging::{
-    BroadcastResult, ChannelMessagingAdapter, MessageRef,
-};
-use crate::channel_ops::threading::{
-    ChannelThreadingAdapter, ThreadParent, ThreadSummary,
-};
+use crate::channel_ops::messaging::{BroadcastResult, ChannelMessagingAdapter, MessageRef};
+use crate::channel_ops::threading::{ChannelThreadingAdapter, ThreadParent, ThreadSummary};
 use crate::transport::discord::DiscordAdapter;
 
 fn auth_header(adapter: &DiscordAdapter) -> String {
@@ -81,11 +77,11 @@ fn discord_channel_kind(t: Option<u8>) -> ChannelKind {
     // Discord channel types per
     // https://discord.com/developers/docs/resources/channel#channel-object-channel-types
     match t.unwrap_or(0) {
-        0 => ChannelKind::Channel,            // GUILD_TEXT
-        1 => ChannelKind::Dm,                 // DM
-        2 => ChannelKind::Channel,            // GUILD_VOICE — treat as channel
-        3 => ChannelKind::Group,              // GROUP_DM
-        4 => ChannelKind::Channel,            // GUILD_CATEGORY
+        0 => ChannelKind::Channel,      // GUILD_TEXT
+        1 => ChannelKind::Dm,           // DM
+        2 => ChannelKind::Channel,      // GUILD_VOICE — treat as channel
+        3 => ChannelKind::Group,        // GROUP_DM
+        4 => ChannelKind::Channel,      // GUILD_CATEGORY
         10..=12 => ChannelKind::Thread, // PUBLIC_THREAD / PRIVATE_THREAD / NEWS_THREAD
         _ => ChannelKind::Channel,
     }
@@ -143,7 +139,12 @@ impl ChannelDirectoryAdapter for DiscordDirectory {
                 .map_err(|e| ChannelOpError::Http(e.to_string()))?;
             gs.into_iter().map(|g| g.id).collect()
         } else {
-            self.inner.config.guild_ids.iter().map(|g| g.to_string()).collect()
+            self.inner
+                .config
+                .guild_ids
+                .iter()
+                .map(|g| g.to_string())
+                .collect()
         };
 
         let mut out: Vec<ChannelSummary> = Vec::new();
@@ -193,10 +194,7 @@ impl ChannelDirectoryAdapter for DiscordDirectory {
         })
     }
 
-    async fn lookup_user(
-        &self,
-        query: &str,
-    ) -> Result<Option<UserSummary>, ChannelOpError> {
+    async fn lookup_user(&self, query: &str) -> Result<Option<UserSummary>, ChannelOpError> {
         // Discord user_ids are snowflake numeric strings. We don't
         // attempt to lookup by username since there's no public
         // `users.lookupByName` API.
@@ -327,11 +325,7 @@ impl ChannelMessagingAdapter for DiscordMessaging {
         self.post_message(channel_id, text).await
     }
 
-    async fn broadcast(
-        &self,
-        channel_ids: &[String],
-        text: &str,
-    ) -> Vec<BroadcastResult> {
+    async fn broadcast(&self, channel_ids: &[String], text: &str) -> Vec<BroadcastResult> {
         let mut out = Vec::with_capacity(channel_ids.len());
         for cid in channel_ids {
             let outcome = self
@@ -410,10 +404,7 @@ impl ChannelThreadingAdapter for DiscordThreading {
         Ok(chan.id)
     }
 
-    async fn list_threads(
-        &self,
-        channel_id: &str,
-    ) -> Result<Vec<ThreadSummary>, ChannelOpError> {
+    async fn list_threads(&self, channel_id: &str) -> Result<Vec<ThreadSummary>, ChannelOpError> {
         // GET /guilds/{guild_id}/threads/active is the documented
         // endpoint, but it requires guild_id. Without one, we fall
         // back to GET /channels/{id}/threads/archived/public which
@@ -595,7 +586,13 @@ mod tests {
     async fn directory_list_users_is_unsupported() {
         let dir = DiscordDirectory::new(adapter("http://unused".into(), vec![]));
         let err = dir.list_users().await.unwrap_err();
-        assert!(matches!(err, ChannelOpError::Unsupported { op: "list_users", .. }));
+        assert!(matches!(
+            err,
+            ChannelOpError::Unsupported {
+                op: "list_users",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -784,7 +781,8 @@ mod tests {
             .mount(&server)
             .await;
         let center = Arc::new(ApprovalCenter::new());
-        let approval = DiscordApproval::new(adapter(server.uri(), vec![]), center.clone(), "secretary");
+        let approval =
+            DiscordApproval::new(adapter(server.uri(), vec![]), center.clone(), "secretary");
 
         let key = ApprovalKey::new("secretary", "discord-main", "C1");
         let center_clone = center.clone();
@@ -815,7 +813,8 @@ mod tests {
             .mount(&server)
             .await;
         let center = Arc::new(ApprovalCenter::new());
-        let approval = DiscordApproval::new(adapter(server.uri(), vec![]), center.clone(), "secretary");
+        let approval =
+            DiscordApproval::new(adapter(server.uri(), vec![]), center.clone(), "secretary");
         let err = approval
             .request_approval("Cnope", "x", Duration::from_millis(50))
             .await

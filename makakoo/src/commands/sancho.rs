@@ -29,15 +29,8 @@ async fn build_engine(ctx: &CliContext) -> anyhow::Result<SanchoEngine> {
     let bus = ctx.event_bus()?;
     let llm = ctx.llm();
     let emb = ctx.embeddings();
-    let sancho_ctx = Arc::new(SanchoContext::new(
-        store,
-        bus,
-        llm,
-        emb,
-        ctx.home().clone(),
-    ));
-    let plugins = PluginRegistry::load_default(ctx.home())
-        .unwrap_or_default();
+    let sancho_ctx = Arc::new(SanchoContext::new(store, bus, llm, emb, ctx.home().clone()));
+    let plugins = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
     let registry = default_registry(Arc::clone(&sancho_ctx), &plugins);
     Ok(SanchoEngine::new(
         registry,

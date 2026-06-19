@@ -15,8 +15,7 @@ use super::detect::{CargoSource, InstallMethod};
 /// Public entry point: which binary to upgrade. The dispatcher upgrades
 /// `makakoo` and `makakoo-mcp` together by default — they're the two
 /// halves of the same parasite OS and ship in lockstep.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryTarget {
     /// Both `makakoo` and `makakoo-mcp` (default).
     #[default]
@@ -26,7 +25,6 @@ pub enum BinaryTarget {
     /// `makakoo-mcp` only — rare, mostly for dev iteration.
     McpOnly,
 }
-
 
 impl BinaryTarget {
     pub fn includes_kernel(self) -> bool {

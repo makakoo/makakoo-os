@@ -301,8 +301,12 @@ fn check_mcp_entry(home: &Path, target: &McpTarget, spec: &McpServerSpec) -> Mcp
     let outcome = crate::infect::mcp::sync_one(home, &makakoo_home, target, spec, true);
     match outcome {
         SyncOutcome::Unchanged => McpEntryStatus::Ok,
-        SyncOutcome::WouldChange { kind: ChangeKind::Add } => McpEntryStatus::Missing,
-        SyncOutcome::WouldChange { kind: ChangeKind::Update } => McpEntryStatus::StaleCommand,
+        SyncOutcome::WouldChange {
+            kind: ChangeKind::Add,
+        } => McpEntryStatus::Missing,
+        SyncOutcome::WouldChange {
+            kind: ChangeKind::Update,
+        } => McpEntryStatus::StaleCommand,
         // Skipped / errored / Added (not in dry-run) → treat as missing
         // so the report nudges the user to run repair.
         _ => McpEntryStatus::Missing,
@@ -513,7 +517,11 @@ mod tests {
         assert!(actions.iter().any(|a| a.contains("repointed")));
 
         let r = audit(dir.path(), dir.path(), McpTarget::Vibe, &spec(dir.path()));
-        assert!(!r.skills_broken, "report after repair: {:?}", r.issues_human());
+        assert!(
+            !r.skills_broken,
+            "report after repair: {:?}",
+            r.issues_human()
+        );
     }
 
     #[test]

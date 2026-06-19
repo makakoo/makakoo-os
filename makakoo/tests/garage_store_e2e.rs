@@ -142,14 +142,23 @@ fn install_start_bootstrap_aws_ls_stop_cycle() {
 
     // 4. Pull creds from keychain, run `aws s3 ls`.
     let creds_out = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", "makakoo", "-a", "makakoo-s3-service", "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "makakoo",
+            "-a",
+            "makakoo-s3-service",
+            "-w",
+        ])
         .output()
         .expect("security spawn");
     assert!(
         creds_out.status.success(),
         "keychain entry not found after bootstrap"
     );
-    let creds_json = String::from_utf8_lossy(&creds_out.stdout).trim().to_string();
+    let creds_json = String::from_utf8_lossy(&creds_out.stdout)
+        .trim()
+        .to_string();
     let creds: serde_json::Value = serde_json::from_str(&creds_json).unwrap();
     let access = creds["access_key"].as_str().unwrap();
     let secret = creds["secret_key"].as_str().unwrap();

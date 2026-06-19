@@ -35,7 +35,11 @@ pub async fn run(ctx: &CliContext, cmd: SessionCmd) -> anyhow::Result<i32> {
     match cmd {
         SessionCmd::List { json } => list(ctx, json),
         SessionCmd::Show { id, json } => show(ctx, &id, json),
-        SessionCmd::Fork { source, from, new_id } => fork_cmd(ctx, &source, &from, new_id),
+        SessionCmd::Fork {
+            source,
+            from,
+            new_id,
+        } => fork_cmd(ctx, &source, &from, new_id),
         SessionCmd::Label { id, name } => label(ctx, &id, &name),
         SessionCmd::Rewind { id, label } => rewind(ctx, &id, &label),
         SessionCmd::Export { id, format, out } => export(ctx, &id, &format, out),
@@ -91,9 +95,8 @@ fn fork_cmd(
     new_id: Option<String>,
 ) -> anyhow::Result<i32> {
     let source = open_tree(ctx, source_id)?;
-    let resolved_new_id = new_id.unwrap_or_else(|| {
-        format!("{source_id}-fork-{}", Utc::now().format("%Y%m%dT%H%M%S"))
-    });
+    let resolved_new_id = new_id
+        .unwrap_or_else(|| format!("{source_id}-fork-{}", Utc::now().format("%Y%m%dT%H%M%S")));
     let new = session_fork(&source, resolved_new_id.clone(), from_entry)
         .with_context(|| format!("forking session {source_id} at {from_entry}"))?;
     println!("{}", new.id());
@@ -147,9 +150,8 @@ fn export(
         Some(path) => {
             if let Some(parent) = path.parent() {
                 if !parent.as_os_str().is_empty() {
-                    fs::create_dir_all(parent).with_context(|| {
-                        format!("creating {}", parent.display())
-                    })?;
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("creating {}", parent.display()))?;
                 }
             }
             let tmp = path.with_extension(format!(

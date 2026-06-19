@@ -11,10 +11,7 @@ use std::path::PathBuf;
 use makakoo_core::agents::{slot_path, AgentRegistry, AgentSlot};
 use makakoo_core::transport::config::{TelegramConfig, TransportConfig, TransportEntry};
 use makakoo_core::transport::{
-    config::SlackConfig,
-    secrets::SecretsAdapter,
-    slack::SlackAdapter,
-    telegram::TelegramAdapter,
+    config::SlackConfig, secrets::SecretsAdapter, slack::SlackAdapter, telegram::TelegramAdapter,
     Transport, TransportContext,
 };
 
@@ -96,10 +93,7 @@ pub fn show(ctx: &CliContext, slot_id: &str, json: bool) -> anyhow::Result<i32> 
         // source attribution (override vs system default).
         let defaults = makakoo_core::agents::llm_override::LlmDefaults::builtin_fallback();
         let over = slot.llm.as_ref().and_then(|s| s.effective_override());
-        let eff = makakoo_core::agents::llm_override::resolve_effective(
-            over.as_ref(),
-            &defaults,
-        );
+        let eff = makakoo_core::agents::llm_override::resolve_effective(over.as_ref(), &defaults);
         print!("{}", eff.render_human());
     }
     Ok(0)
@@ -121,41 +115,43 @@ pub fn validate(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
     // We're already inside `#[tokio::main]`'s runtime — use the
     // current handle plus block_in_place rather than spawning a
     // nested runtime (which panics).
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-        let mut failures = Vec::new();
-        for entry in &slot.transports {
-            if !entry.enabled {
-                continue;
-            }
-            match verify_one(slot_id, entry).await {
-                Ok((account_id, tenant_id)) => {
-                    let tenant = tenant_id
-                        .map(|t| format!(", tenant={}", t))
-                        .unwrap_or_default();
-                    println!(
-                        "  ✓ {} ({}): account={}{}",
-                        entry.id, entry.kind, account_id, tenant
-                    );
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let mut failures = Vec::new();
+            for entry in &slot.transports {
+                if !entry.enabled {
+                    continue;
                 }
-                Err(e) => {
-                    failures.push(format!("  ✗ {} ({}): {}", entry.id, entry.kind, e));
+                match verify_one(slot_id, entry).await {
+                    Ok((account_id, tenant_id)) => {
+                        let tenant = tenant_id
+                            .map(|t| format!(", tenant={}", t))
+                            .unwrap_or_default();
+                        println!(
+                            "  ✓ {} ({}): account={}{}",
+                            entry.id, entry.kind, account_id, tenant
+                        );
+                    }
+                    Err(e) => {
+                        failures.push(format!("  ✗ {} ({}): {}", entry.id, entry.kind, e));
+                    }
                 }
             }
-        }
-        if failures.is_empty() {
-            println!("agent slot '{}' validate OK", slot_id);
-            Ok(0)
-        } else {
-            for f in failures {
-                eprintln!("{f}");
+            if failures.is_empty() {
+                println!("agent slot '{}' validate OK", slot_id);
+                Ok(0)
+            } else {
+                for f in failures {
+                    eprintln!("{f}");
+                }
+                output::print_error(format!(
+                    "agent slot '{}' has failing transports — fix before `agent start`",
+                    slot_id
+                ));
+                Ok(2)
             }
-            output::print_error(format!(
-                "agent slot '{}' has failing transports — fix before `agent start`",
-                slot_id
-            ));
-            Ok(2)
-        }
-    }))
+        })
+    })
 }
 
 async fn verify_one(
@@ -172,8 +168,12 @@ async fn verify_one(
             let bot_token = secrets
                 .resolve(&entry.bot_token_ref())
                 .map_err(|e| anyhow::anyhow!("resolve bot token: {}", e))?;
-            let adapter =
-                TelegramAdapter::new(ctx_inner, cfg.clone(), bot_token.value, entry.allowed_users.clone());
+            let adapter = TelegramAdapter::new(
+                ctx_inner,
+                cfg.clone(),
+                bot_token.value,
+                entry.allowed_users.clone(),
+            );
             let id = adapter
                 .verify_credentials()
                 .await
@@ -221,8 +221,7 @@ async fn verify_one(
 pub fn inventory(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
     use makakoo_core::plugin::PluginRegistry;
 
-    let plugins =
-        PluginRegistry::load_default(ctx.home()).unwrap_or_default();
+    let plugins = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
     let registry = AgentRegistry::load(ctx.home())?;
     let migrated_slot_ids: std::collections::HashSet<String> =
         registry.slots.iter().map(|s| s.slot_id.clone()).collect();
@@ -358,13 +357,14 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
     };
 
     if !args.skip_credential_check {
-        let result =
-            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
                 for entry in slot.transports.iter().filter(|t| t.enabled) {
                     verify_one(&slot.slot_id, entry).await?;
                 }
                 Ok::<(), anyhow::Error>(())
-            }));
+            })
+        });
         if let Err(e) = result {
             output::print_error(format!(
                 "agent create '{}': credential check failed: {} (run with --skip-credential-check to scaffold without verifying)",
@@ -380,7 +380,10 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         slot.slot_id,
         target.display()
     ));
-    println!("Next: `makakoo agent validate {}` then `makakoo agent start {}`.", slot.slot_id, slot.slot_id);
+    println!(
+        "Next: `makakoo agent validate {}` then `makakoo agent start {}`.",
+        slot.slot_id, slot.slot_id
+    );
     Ok(0)
 }
 
@@ -516,9 +519,7 @@ pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
             backfilled_artifacts,
         } => {
             if backfilled_artifacts.is_empty() {
-                output::print_info(
-                    "harveychat already migrated — nothing to do (re-run safe)",
-                );
+                output::print_info("harveychat already migrated — nothing to do (re-run safe)");
             } else {
                 output::print_info(format!(
                     "harveychat already migrated — backfilled {} missing artifact(s)",
@@ -531,11 +532,8 @@ pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
             Ok(0)
         }
         MigrationOutcome::NothingToMigrate => {
-            output::print_warn(
-                "no legacy data/chat/config.json found — nothing to migrate",
-            );
+            output::print_warn("no legacy data/chat/config.json found — nothing to migrate");
             Ok(0)
         }
     }
 }
-

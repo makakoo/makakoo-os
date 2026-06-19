@@ -261,10 +261,8 @@ mod tests {
     fn ctx_with_chat() -> (tempfile::TempDir, Arc<ToolContext>) {
         let dir = tempfile::tempdir().unwrap();
         let store = ChatStore::open(&dir.path().join("chat.db")).unwrap();
-        let ctx = Arc::new(
-            ToolContext::empty(PathBuf::from("/tmp/mkk-comm"))
-                .with_chat(Arc::new(store)),
-        );
+        let ctx =
+            Arc::new(ToolContext::empty(PathBuf::from("/tmp/mkk-comm")).with_chat(Arc::new(store)));
         (dir, ctx)
     }
 
@@ -274,10 +272,7 @@ mod tests {
         std::env::remove_var("HARVEY_TELEGRAM_ALLOWLIST");
         let (_dir, ctx) = ctx_with_chat();
         let h = HarveyTelegramSendHandler::new(ctx);
-        let out = h
-            .call(json!({"chat_id": 999, "text": "hi"}))
-            .await
-            .unwrap();
+        let out = h.call(json!({"chat_id": 999, "text": "hi"})).await.unwrap();
         assert!(!out["ok"].as_bool().unwrap());
         let reason = out["reason"].as_str().unwrap();
         assert!(reason.contains("unsolicited") || reason.contains("HARVEY_TELEGRAM_ALLOWLIST"));

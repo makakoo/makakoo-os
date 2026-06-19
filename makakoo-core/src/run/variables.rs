@@ -46,9 +46,7 @@ pub fn resolve_values(
         } else if let Some(d) = default {
             out.insert(name.clone(), d.clone());
         } else if *required {
-            return Err(SubstitutionError::MissingRequired {
-                name: name.clone(),
-            });
+            return Err(SubstitutionError::MissingRequired { name: name.clone() });
         } else {
             // Optional variable with no default and no provided value:
             // substitute empty string. Pattern authors who care can

@@ -263,7 +263,10 @@ impl DiscordAdapter {
     /// Map a Discord MESSAGE_CREATE event to a Makakoo inbound frame.
     /// Returns `None` when the message must be dropped (self-loop,
     /// non-allowlisted guild, non-allowlisted user, missing author).
-    pub(crate) async fn build_inbound_frame(&self, msg: DiscordMessage) -> Option<MakakooInboundFrame> {
+    pub(crate) async fn build_inbound_frame(
+        &self,
+        msg: DiscordMessage,
+    ) -> Option<MakakooInboundFrame> {
         let identity = self.identity.lock().await.clone()?;
         let author = msg.author?;
 
@@ -309,10 +312,7 @@ impl DiscordAdapter {
         // ignore. We pass empty text through.
         let mut raw = std::collections::BTreeMap::new();
         if let Some(ref gid) = msg.guild_id {
-            raw.insert(
-                "guild_id".into(),
-                serde_json::Value::String(gid.clone()),
-            );
+            raw.insert("guild_id".into(), serde_json::Value::String(gid.clone()));
         }
         if let Some(name) = author.username {
             raw.insert("author_username".into(), serde_json::Value::String(name));
@@ -391,12 +391,9 @@ impl Gateway for DiscordAdapter {
         // adapter's surface — Phase 12 (rest) adds the reconnect loop.
         let intents = compute_intents(self.config.message_content);
         let url = self.gateway_url.clone();
-        let (mut ws_stream, _) =
-            tokio_tungstenite::connect_async(&url)
-                .await
-                .map_err(|e| {
-                    MakakooError::Internal(format!("discord gateway connect failed: {e}"))
-                })?;
+        let (mut ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .map_err(|e| MakakooError::Internal(format!("discord gateway connect failed: {e}")))?;
 
         let mut last_seq: Option<u64> = None;
         let mut heartbeat_interval_ms: Option<u64> = None;
@@ -433,9 +430,8 @@ impl Gateway for DiscordAdapter {
                                 "discord gateway heartbeat send failed: {e}"
                             )));
                         }
-                        next_heartbeat = Some(
-                            std::time::Instant::now() + Duration::from_millis(interval_ms),
-                        );
+                        next_heartbeat =
+                            Some(std::time::Instant::now() + Duration::from_millis(interval_ms));
                     }
                 }
                 Ok(None) => {
@@ -746,7 +742,13 @@ mod tests {
 
     #[tokio::test]
     async fn build_inbound_frame_dm_scope_passes_through() {
-        let a = primed(cfg(), vec!["U-AUTHOR".into()], "U-BOT", "http://unused".into()).await;
+        let a = primed(
+            cfg(),
+            vec!["U-AUTHOR".into()],
+            "U-BOT",
+            "http://unused".into(),
+        )
+        .await;
         let msg = DiscordMessage {
             id: "M1".into(),
             channel_id: "C-DM".into(),

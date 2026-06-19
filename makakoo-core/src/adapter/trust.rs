@@ -199,10 +199,7 @@ impl TrustLedger {
 }
 
 /// Snapshot a manifest for the first-trust moment.
-pub fn trust_entry_from_manifest(
-    manifest: &Manifest,
-    notes: impl Into<String>,
-) -> TrustEntry {
+pub fn trust_entry_from_manifest(manifest: &Manifest, notes: impl Into<String>) -> TrustEntry {
     TrustEntry {
         manifest_hash: manifest.canonical_hash(),
         version: manifest.adapter.version.to_string(),
@@ -425,17 +422,17 @@ signed_by = "traylinx"
         );
         let m2 = Manifest::parse_str(&m2_src).unwrap();
         let diff = diff_manifest(&entry, &m2);
-        assert_eq!(
-            diff.allowed_hosts_added,
-            vec!["evil.example".to_string()]
-        );
+        assert_eq!(diff.allowed_hosts_added, vec!["evil.example".to_string()]);
     }
 
     #[test]
     fn diff_detects_sandbox_change() {
         let m1 = Manifest::parse_str(MANIFEST).unwrap();
         let entry = trust_entry_from_manifest(&m1, "");
-        let m2_src = MANIFEST.replace(r#"sandbox_profile = "network-io""#, r#"sandbox_profile = "none""#);
+        let m2_src = MANIFEST.replace(
+            r#"sandbox_profile = "network-io""#,
+            r#"sandbox_profile = "none""#,
+        );
         let m2 = Manifest::parse_str(&m2_src).unwrap();
         let diff = diff_manifest(&entry, &m2);
         assert_eq!(
@@ -448,14 +445,12 @@ signed_by = "traylinx"
     fn diff_detects_version_bump() {
         let m1 = Manifest::parse_str(MANIFEST).unwrap();
         let entry = trust_entry_from_manifest(&m1, "");
-        let m2_src = MANIFEST.replace(r#"version = "1.4.2""#, r#"version = "1.5.0""#)
+        let m2_src = MANIFEST
+            .replace(r#"version = "1.4.2""#, r#"version = "1.5.0""#)
             .replace(r#"ref = "v1.4.2""#, r#"ref = "v1.5.0""#);
         let m2 = Manifest::parse_str(&m2_src).unwrap();
         let diff = diff_manifest(&entry, &m2);
-        assert_eq!(
-            diff.version_changed,
-            Some(("1.4.2".into(), "1.5.0".into()))
-        );
+        assert_eq!(diff.version_changed, Some(("1.4.2".into(), "1.5.0".into())));
         assert!(diff.hash_changed);
     }
 }

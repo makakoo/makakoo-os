@@ -32,9 +32,7 @@ pub fn load_mascot(name: &str, plugins_root: Option<&Path>) -> Result<String, Ma
     let root = plugins_root
         .map(|p| p.to_path_buf())
         .unwrap_or_else(default_plugins_root);
-    let path = root
-        .join(format!("mascot-{name}"))
-        .join("persona.md");
+    let path = root.join(format!("mascot-{name}")).join("persona.md");
     if !path.exists() {
         return Err(MascotLoadError::NotFound {
             name: name.to_string(),

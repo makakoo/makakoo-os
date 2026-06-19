@@ -101,11 +101,7 @@ pub struct AuditEvent {
 }
 
 impl AuditEvent {
-    pub fn new(
-        slot_id: impl Into<String>,
-        kind: AuditKind,
-        outcome: AuditOutcome,
-    ) -> Self {
+    pub fn new(slot_id: impl Into<String>, kind: AuditKind, outcome: AuditOutcome) -> Self {
         Self {
             ts: Utc::now(),
             slot_id: slot_id.into(),
@@ -136,8 +132,8 @@ impl AuditEvent {
     }
 
     pub fn to_jsonl(&self) -> String {
-        let mut s = serde_json::to_string(self)
-            .expect("AuditEvent serializes — all fields are JSON-safe");
+        let mut s =
+            serde_json::to_string(self).expect("AuditEvent serializes — all fields are JSON-safe");
         s.push('\n');
         s
     }
@@ -295,7 +291,10 @@ fn evict_oldest_rotated(makakoo_home: &Path) -> std::io::Result<()> {
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy().into_owned();
-        if name_str.starts_with("agents.") && name_str.ends_with(".jsonl") && name_str != "agents.jsonl" {
+        if name_str.starts_with("agents.")
+            && name_str.ends_with(".jsonl")
+            && name_str != "agents.jsonl"
+        {
             // Extract unix_ts from name.
             if let Some(stem) = name_str.strip_prefix("agents.") {
                 if let Some(ts) = stem.strip_suffix(".jsonl") {
@@ -400,8 +399,14 @@ mod tests {
             "user_id": "U001",
         });
         let r = redact(v);
-        assert_eq!(r["secret_value"], serde_json::Value::String("<redacted>".into()));
-        assert_eq!(r["password"], serde_json::Value::String("<redacted>".into()));
+        assert_eq!(
+            r["secret_value"],
+            serde_json::Value::String("<redacted>".into())
+        );
+        assert_eq!(
+            r["password"],
+            serde_json::Value::String("<redacted>".into())
+        );
         assert_eq!(r["token"], serde_json::Value::String("<redacted>".into()));
         assert_eq!(r["user_id"], serde_json::Value::String("U001".into()));
     }
@@ -412,7 +417,10 @@ mod tests {
             "outer": {"bot_token": "xoxb-secret", "name": "ok"}
         });
         let r = redact(v);
-        assert_eq!(r["outer"]["bot_token"], serde_json::Value::String("<redacted>".into()));
+        assert_eq!(
+            r["outer"]["bot_token"],
+            serde_json::Value::String("<redacted>".into())
+        );
         assert_eq!(r["outer"]["name"], serde_json::Value::String("ok".into()));
     }
 
@@ -420,7 +428,10 @@ mod tests {
     fn redact_walks_arrays_of_objects() {
         let v = serde_json::json!([{"api_key": "k"}, {"x": 1}]);
         let r = redact(v);
-        assert_eq!(r[0]["api_key"], serde_json::Value::String("<redacted>".into()));
+        assert_eq!(
+            r[0]["api_key"],
+            serde_json::Value::String("<redacted>".into())
+        );
         assert_eq!(r[1]["x"], serde_json::Value::Number(1.into()));
     }
 
@@ -439,7 +450,11 @@ mod tests {
     #[test]
     fn append_appends_not_overwrites() {
         let tmp = TempDir::new().unwrap();
-        for kind in [AuditKind::SlotStart, AuditKind::SlotStop, AuditKind::SlotDestroy] {
+        for kind in [
+            AuditKind::SlotStart,
+            AuditKind::SlotStop,
+            AuditKind::SlotDestroy,
+        ] {
             let e = AuditEvent::new("x", kind, AuditOutcome::Success);
             append_event(tmp.path(), &e).unwrap();
         }
@@ -466,11 +481,7 @@ mod tests {
             AuditKind::SlotStart,
             AuditKind::ScopeTool,
         ] {
-            append_event(
-                tmp.path(),
-                &AuditEvent::new("x", k, AuditOutcome::Success),
-            )
-            .unwrap();
+            append_event(tmp.path(), &AuditEvent::new("x", k, AuditOutcome::Success)).unwrap();
         }
         let events = tail_events(tmp.path(), 100, Some(AuditKind::ScopeTool)).unwrap();
         assert_eq!(events.len(), 2);

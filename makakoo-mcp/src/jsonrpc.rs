@@ -121,10 +121,9 @@ mod tests {
 
     #[test]
     fn request_deserializes_with_id() {
-        let req: Request = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#,
-        )
-        .unwrap();
+        let req: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#)
+                .unwrap();
         assert_eq!(req.jsonrpc, "2.0");
         assert_eq!(req.id, Some(json!(1)));
         assert_eq!(req.method, "ping");
@@ -132,10 +131,9 @@ mod tests {
 
     #[test]
     fn request_deserializes_notification_without_id() {
-        let req: Request = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-        )
-        .unwrap();
+        let req: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+                .unwrap();
         assert!(req.id.is_none());
         assert_eq!(req.method, "notifications/initialized");
     }

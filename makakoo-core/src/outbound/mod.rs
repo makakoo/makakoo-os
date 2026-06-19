@@ -227,9 +227,8 @@ impl OutboundQueue {
 
     pub fn stats(&self) -> Result<OutboundStats> {
         let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT status, COUNT(*) FROM outbound_drafts GROUP BY status",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT status, COUNT(*) FROM outbound_drafts GROUP BY status")?;
         let rows = stmt.query_map([], |row| {
             let status: String = row.get(0)?;
             let count: i64 = row.get(1)?;

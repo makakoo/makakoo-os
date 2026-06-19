@@ -105,16 +105,10 @@ pub async fn call_transport(
     ctx: &CallContext,
 ) -> Result<TransportResponse, TransportError> {
     match manifest.transport.kind {
-        TransportKind::OpenAiCompatible => {
-            HttpTransport.call(manifest, prompt, ctx).await
-        }
-        TransportKind::Subprocess => {
-            SubprocessTransport.call(manifest, prompt, ctx).await
-        }
+        TransportKind::OpenAiCompatible => HttpTransport.call(manifest, prompt, ctx).await,
+        TransportKind::Subprocess => SubprocessTransport.call(manifest, prompt, ctx).await,
         TransportKind::McpHttp => McpHttpTransport.call(manifest, prompt, ctx).await,
-        TransportKind::McpHttpSigned => {
-            McpHttpSignedTransport.call(manifest, prompt, ctx).await
-        }
+        TransportKind::McpHttpSigned => McpHttpSignedTransport.call(manifest, prompt, ctx).await,
         TransportKind::McpStdio => McpStdioTransport.call(manifest, prompt, ctx).await,
     }
 }
@@ -227,11 +221,10 @@ fn apply_http_auth(
             Ok(req.header("Authorization", format!("Bearer {value}")))
         }
         AuthScheme::Header => {
-            let hname = manifest
-                .auth
-                .header_name
-                .as_deref()
-                .ok_or_else(|| TransportError::BadManifest("auth.header_name missing".into()))?;
+            let hname =
+                manifest.auth.header_name.as_deref().ok_or_else(|| {
+                    TransportError::BadManifest("auth.header_name missing".into())
+                })?;
             let env = manifest
                 .auth
                 .key_env
@@ -243,12 +236,16 @@ fn apply_http_auth(
             Ok(req.header(hname, value))
         }
         AuthScheme::Basic => {
-            let u_env = manifest.auth.user_env.as_deref().ok_or_else(|| {
-                TransportError::BadManifest("auth.user_env missing".into())
-            })?;
-            let p_env = manifest.auth.pass_env.as_deref().ok_or_else(|| {
-                TransportError::BadManifest("auth.pass_env missing".into())
-            })?;
+            let u_env = manifest
+                .auth
+                .user_env
+                .as_deref()
+                .ok_or_else(|| TransportError::BadManifest("auth.user_env missing".into()))?;
+            let p_env = manifest
+                .auth
+                .pass_env
+                .as_deref()
+                .ok_or_else(|| TransportError::BadManifest("auth.pass_env missing".into()))?;
             let user = ctx
                 .resolve_env(u_env)
                 .ok_or_else(|| TransportError::MissingEnv(u_env.to_string()))?;
@@ -504,9 +501,7 @@ impl Transport for McpHttpSignedTransport {
             TransportError::BadManifest("transport.url missing for mcp-http-signed".into())
         })?;
         let peer_name = manifest.transport.peer_name.as_deref().ok_or_else(|| {
-            TransportError::BadManifest(
-                "transport.peer_name missing for mcp-http-signed".into(),
-            )
+            TransportError::BadManifest("transport.peer_name missing for mcp-http-signed".into())
         })?;
 
         // Locate the signing key. Two sources, in order:
@@ -540,10 +535,7 @@ impl Transport for McpHttpSignedTransport {
             .post(url)
             .header(peer::PEER_HEADER, peer_name)
             .header(peer::TS_HEADER, ts.to_string())
-            .header(
-                peer::SIG_HEADER,
-                format!("{}{}", peer::SIG_PREFIX, sig),
-            )
+            .header(peer::SIG_HEADER, format!("{}{}", peer::SIG_PREFIX, sig))
             .header("Content-Type", "application/json")
             .body(body_bytes)
             .send()
@@ -573,9 +565,7 @@ impl Transport for McpHttpSignedTransport {
     }
 }
 
-fn load_local_signing_key(
-    ctx: &CallContext,
-) -> Result<ed25519_dalek::SigningKey, TransportError> {
+fn load_local_signing_key(ctx: &CallContext) -> Result<ed25519_dalek::SigningKey, TransportError> {
     use super::peer;
     use base64::Engine;
 
@@ -622,12 +612,11 @@ fn load_local_signing_key(
 fn mcp_params_from_prompt(prompt: &str) -> serde_json::Value {
     let trimmed = prompt.trim_start();
     if trimmed.starts_with('{') {
-        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Ok(serde_json::Value::Object(map)) =
+            serde_json::from_str::<serde_json::Value>(trimmed)
+        {
             if let Some(tool_name) = map.get("tool").and_then(|v| v.as_str()) {
-                let args = map
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or_else(|| json!({}));
+                let args = map.get("arguments").cloned().unwrap_or_else(|| json!({}));
                 return json!({ "name": tool_name, "arguments": args });
             }
         }

@@ -171,8 +171,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let db = tmp.path().join("chat.db");
         let store = ChatStore::open(&db).unwrap();
-        let ctx =
-            ToolContext::empty(tmp.path().to_path_buf()).with_chat(Arc::new(store));
+        let ctx = ToolContext::empty(tmp.path().to_path_buf()).with_chat(Arc::new(store));
         (tmp, Arc::new(ctx))
     }
 

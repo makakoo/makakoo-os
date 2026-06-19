@@ -200,7 +200,10 @@ fn build_sandbox_exec(spec: &ProfileSpec, argv: &[String]) -> (String, Vec<Strin
     let _ = std::fs::create_dir_all(&spec.install_dir);
     let _ = std::fs::write(&profile_path, profile_body);
 
-    let mut new_args = vec!["-f".to_string(), profile_path.to_string_lossy().into_owned()];
+    let mut new_args = vec![
+        "-f".to_string(),
+        profile_path.to_string_lossy().into_owned(),
+    ];
     new_args.extend(argv.iter().cloned());
     ("sandbox-exec".to_string(), new_args)
 }
@@ -427,8 +430,10 @@ requires_filesystem = ["write:/tmp/x"]"#,
 
     #[test]
     fn isolated_rejects_non_empty_allowed_hosts() {
-        let body = NETWORK_IO_MANIFEST
-            .replace(r#"sandbox_profile = "network-io""#, r#"sandbox_profile = "isolated""#);
+        let body = NETWORK_IO_MANIFEST.replace(
+            r#"sandbox_profile = "network-io""#,
+            r#"sandbox_profile = "isolated""#,
+        );
         let m = Manifest::parse_str(&body).unwrap();
         let spec = ProfileSpec::from_manifest(&m, PathBuf::from("/tmp/x"));
         let err = assert_manifest_self_consistent(&spec).unwrap_err();

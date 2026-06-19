@@ -29,7 +29,10 @@ fn plugin_toml_parses_as_mcp_tool_with_bootstrap_fragment() {
     let (manifest, warnings) = Manifest::load(&plugin_dir().join("plugin.toml")).unwrap();
     assert_eq!(manifest.plugin.name, "tool-headroom");
     assert_eq!(manifest.plugin.kind, PluginKind::McpTool);
-    assert!(warnings.is_empty(), "plugin.toml emits warnings: {warnings:?}");
+    assert!(
+        warnings.is_empty(),
+        "plugin.toml emits warnings: {warnings:?}"
+    );
     assert!(manifest.abi.mcp_tool.is_some(), "missing mcp-tool ABI");
     assert!(
         manifest.abi.bootstrap_fragment.is_some(),

@@ -160,10 +160,7 @@ fn agent_status(p: &LoadedPlugin) -> anyhow::Result<i32> {
         }
         return Ok(rc);
     }
-    let scan = Command::new("/usr/bin/pgrep")
-        .arg("-f")
-        .arg(name)
-        .output();
+    let scan = Command::new("/usr/bin/pgrep").arg("-f").arg(name).output();
     match scan {
         Ok(out) if out.status.success() => {
             println!("{name}: up (pgrep match)");
@@ -300,11 +297,7 @@ fn service_health(p: &LoadedPlugin) -> Option<HealthProbe> {
         }
         return Some(HealthProbe::Shell(ep));
     }
-    p.manifest
-        .entrypoint
-        .health
-        .clone()
-        .map(HealthProbe::Shell)
+    p.manifest.entrypoint.health.clone().map(HealthProbe::Shell)
 }
 
 fn probe_http(url: &str) -> i32 {
@@ -325,7 +318,10 @@ fn probe_http(url: &str) -> i32 {
 fn log_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
         let home = std::env::var_os("HOME").unwrap_or_default();
-        Path::new(&home).join("Library").join("Logs").join("makakoo")
+        Path::new(&home)
+            .join("Library")
+            .join("Logs")
+            .join("makakoo")
     } else {
         let home = std::env::var_os("HOME").unwrap_or_default();
         Path::new(&home)

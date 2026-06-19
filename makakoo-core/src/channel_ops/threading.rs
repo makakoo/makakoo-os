@@ -53,10 +53,7 @@ pub trait ChannelThreadingAdapter: Send + Sync {
 
     /// List threads anchored on the given channel. Implementations
     /// that have no listing API return `Unsupported`.
-    async fn list_threads(
-        &self,
-        channel_id: &str,
-    ) -> Result<Vec<ThreadSummary>, ChannelOpError>;
+    async fn list_threads(&self, channel_id: &str) -> Result<Vec<ThreadSummary>, ChannelOpError>;
 
     /// Mark a thread as one the bot is actively watching. For
     /// transports without an explicit follow primitive this is a

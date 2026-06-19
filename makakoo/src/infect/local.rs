@@ -88,10 +88,7 @@ impl LocalReport {
             self.project_root.display()
         )];
         if self.context_created {
-            lines.push(format!(
-                "  {prefix}created {}",
-                self.context_path.display()
-            ));
+            lines.push(format!("  {prefix}created {}", self.context_path.display()));
         } else {
             lines.push(format!(
                 "  {prefix}using existing {}",
@@ -99,9 +96,7 @@ impl LocalReport {
             ));
         }
         if self.gitignore_created {
-            lines.push(format!(
-                "  {prefix}created .harvey/.gitignore"
-            ));
+            lines.push(format!("  {prefix}created .harvey/.gitignore"));
         }
         if let Some(status) = &self.root_gitignore_status {
             lines.push(format!("  {prefix}root .gitignore {:?}", status));
@@ -374,10 +369,7 @@ pub fn dispatch_local(dir: &Path, home: &Path, opts: LocalOptions) -> Result<Loc
 
 /// Select derivative targets per options and probed dotdirs. Returns each
 /// target paired with whether it should be written on this run.
-fn select_targets(
-    opts: &LocalOptions,
-    home: &Path,
-) -> Vec<(&'static DerivativeTarget, bool)> {
+fn select_targets(opts: &LocalOptions, home: &Path) -> Vec<(&'static DerivativeTarget, bool)> {
     // The `codex+opencode` target's label has both names joined by `+`;
     // match-by-substring is intentional so users can pass `--target codex`
     // OR `--target opencode` and hit the same AGENTS.md entry.
@@ -393,9 +385,7 @@ fn select_targets(
         .map(|t| {
             let label_ok = target_match(t.label);
             let installed_ok = if opts.detect_installed_only {
-                t.probe_dotdirs
-                    .iter()
-                    .any(|d| home.join(d).exists())
+                t.probe_dotdirs.iter().any(|d| home.join(d).exists())
             } else {
                 true
             };
@@ -546,8 +536,8 @@ fn remove_local_blocks(
         if !path.exists() {
             continue;
         }
-        let prior = fs::read_to_string(&path)
-            .map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
+        let prior =
+            fs::read_to_string(&path).map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
         let stripped = re.replace_all(&prior, "").to_string();
         if stripped == prior {
             report.writes.push(LocalWrite {
@@ -805,7 +795,12 @@ mod tests {
         assert!(!r2.context_created, "second run shouldn't recreate context");
         assert!(!r2.gitignore_created);
         for w in &r2.writes {
-            assert_eq!(w.status, LocalStatus::Unchanged, "second run should be idempotent; {:?}", w);
+            assert_eq!(
+                w.status,
+                LocalStatus::Unchanged,
+                "second run should be idempotent; {:?}",
+                w
+            );
         }
     }
 
@@ -844,7 +839,11 @@ mod tests {
         // Nothing on disk.
         assert!(!proj.join(".harvey").exists());
         for t in DERIVATIVE_TARGETS {
-            assert!(!proj.join(t.relative).exists(), "{} should not exist", t.relative);
+            assert!(
+                !proj.join(t.relative).exists(),
+                "{} should not exist",
+                t.relative
+            );
         }
     }
 
@@ -1051,7 +1050,11 @@ mod tests {
         assert!(r1.gitignore_created);
         let gi_before = fs::read_to_string(proj.join(".harvey/.gitignore")).unwrap();
         // User edits it — our re-run shouldn't clobber.
-        fs::write(proj.join(".harvey/.gitignore"), format!("{gi_before}# user added\n")).unwrap();
+        fs::write(
+            proj.join(".harvey/.gitignore"),
+            format!("{gi_before}# user added\n"),
+        )
+        .unwrap();
         let r2 = dispatch_local(&proj, &home, LocalOptions::default()).unwrap();
         assert!(!r2.gitignore_created);
         let gi_after = fs::read_to_string(proj.join(".harvey/.gitignore")).unwrap();

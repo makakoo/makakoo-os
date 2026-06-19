@@ -3,7 +3,7 @@
 //! Default model: `qwen3-embedding:0.6b` — matches the canonical Brain
 //! sync model used by the reference install.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::error::{MakakooError, Result};
 use crate::llm::DEFAULT_BASE_URL;

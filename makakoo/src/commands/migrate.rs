@@ -34,14 +34,7 @@ use crate::context::CliContext;
 use crate::output;
 
 /// Canonical kernel dirs that H/1 ensures exist.
-const KERNEL_DIRS: &[&str] = &[
-    "plugins",
-    "state",
-    "run",
-    "run/plugins",
-    "logs",
-    "config",
-];
+const KERNEL_DIRS: &[&str] = &["plugins", "state", "run", "run/plugins", "logs", "config"];
 
 /// Ad-hoc directories we know Sebastian's Python agents currently
 /// populate under `data/`. These are NOT migrated by H/1 — listing
@@ -73,10 +66,7 @@ pub struct MigrationMarker {
 
 pub async fn run(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
     let home = ctx.home();
-    output::print_info(format!(
-        "makakoo migrate — target: {}",
-        home.display()
-    ));
+    output::print_info(format!("makakoo migrate — target: {}", home.display()));
     if dry_run {
         println!("{}", "[dry-run] no changes will be made".yellow());
     }
@@ -103,10 +93,7 @@ pub async fn run(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
                 println!("  {} {}", "created".green(), path.display());
             }
             Err(e) => {
-                output::print_error(format!(
-                    "failed to create {}: {e}",
-                    path.display()
-                ));
+                output::print_error(format!("failed to create {}: {e}", path.display()));
                 return Ok(1);
             }
         }
@@ -124,9 +111,7 @@ pub async fn run(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
     let marker_path = home.join("config/migration.json");
     let rendered = serde_json::to_string_pretty(&marker)?;
     if let Err(e) = std::fs::write(&marker_path, rendered + "\n") {
-        output::print_warn(format!(
-            "failed to write migration marker: {e}"
-        ));
+        output::print_warn(format!("failed to write migration marker: {e}"));
     }
 
     println!();
@@ -139,10 +124,7 @@ pub async fn run(ctx: &CliContext, dry_run: bool) -> anyhow::Result<i32> {
     println!("  marker: {}", marker_path.display());
 
     println!();
-    println!(
-        "{}",
-        "next steps:".cyan().bold()
-    );
+    println!("{}", "next steps:".cyan().bold());
     println!("  1. makakoo distro install core   # materialize the 4 plugins-core manifests");
     println!("  2. makakoo install               # daemon + infect CLI hosts");
     println!();
@@ -198,11 +180,7 @@ fn audit_current_state(home: &Path) -> HomeAudit {
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
                     .filter(|e| e.path().is_dir())
-                    .filter(|e| {
-                        !e.file_name()
-                            .to_string_lossy()
-                            .starts_with('.')
-                    })
+                    .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
                     .count()
             })
             .unwrap_or(0)
@@ -240,9 +218,7 @@ fn count_files(dir: &Path, ext: &str) -> usize {
     std::fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path().extension().and_then(|x| x.to_str()) == Some(ext)
-                })
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some(ext))
                 .count()
         })
         .unwrap_or(0)
@@ -267,10 +243,7 @@ fn print_audit(a: &HomeAudit) {
     );
 
     if a.existing_plugins_count > 0 {
-        println!(
-            "  plugins dir:   {} registered",
-            a.existing_plugins_count
-        );
+        println!("  plugins dir:   {} registered", a.existing_plugins_count);
     } else {
         println!("  plugins dir:   (empty or missing)");
     }
@@ -314,17 +287,20 @@ fn print_plan(a: &HomeAudit, dry_run: bool) {
     };
     println!("{header}");
     if a.missing_kernel_dirs.is_empty() {
-        println!("  {}", "all kernel dirs present — nothing to create".dark_grey());
+        println!(
+            "  {}",
+            "all kernel dirs present — nothing to create".dark_grey()
+        );
         return;
     }
-    println!("  will create {} kernel dir(s):", a.missing_kernel_dirs.len());
+    println!(
+        "  will create {} kernel dir(s):",
+        a.missing_kernel_dirs.len()
+    );
     for d in &a.missing_kernel_dirs {
         println!("    - {}/{}", a.home.display(), d);
     }
-    println!(
-        "\n  will {}:",
-        "NOT touch".red().bold()
-    );
+    println!("\n  will {}:", "NOT touch".red().bold());
     println!("    - data/Brain/         (journals + pages)");
     println!("    - data/superbrain.db  (FTS + vector index)");
     println!("    - data/<plugin>/      (ad-hoc Python agent state)");
@@ -363,16 +339,8 @@ mod tests {
     fn audit_detects_brain_journals() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("data/Brain/journals")).unwrap();
-        std::fs::write(
-            tmp.path().join("data/Brain/journals/2026_04_16.md"),
-            "- hi",
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.path().join("data/Brain/journals/2026_04_15.md"),
-            "- hi",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("data/Brain/journals/2026_04_16.md"), "- hi").unwrap();
+        std::fs::write(tmp.path().join("data/Brain/journals/2026_04_15.md"), "- hi").unwrap();
         let a = audit_current_state(tmp.path());
         assert_eq!(a.brain_journal_count, 2);
     }

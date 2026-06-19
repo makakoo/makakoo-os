@@ -55,9 +55,7 @@ pub async fn run(
     prompt.push_str(&format!("Brain context:\n{context_block}"));
 
     let llm = ctx.llm();
-    let answer = llm
-        .chat(model, vec![ChatMessage::user(prompt)])
-        .await?;
+    let answer = llm.chat(model, vec![ChatMessage::user(prompt)]).await?;
     println!("{}", answer.trim());
     Ok(0)
 }

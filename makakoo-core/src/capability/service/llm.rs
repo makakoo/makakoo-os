@@ -20,9 +20,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::capability::socket::{
-    CapabilityError, CapabilityHandler, CapabilityRequest,
-};
+use crate::capability::socket::{CapabilityError, CapabilityHandler, CapabilityRequest};
 use crate::capability::verb::scope_matches;
 use crate::embeddings::EmbeddingClient;
 use crate::llm::{ChatMessage, LlmClient};
@@ -81,8 +79,8 @@ impl CapabilityHandler for LlmHandler {
     ) -> Result<serde_json::Value, CapabilityError> {
         match request.method.as_str() {
             "llm.chat" => {
-                let p: ChatParams = serde_json::from_value(request.params.clone())
-                    .map_err(bad_params)?;
+                let p: ChatParams =
+                    serde_json::from_value(request.params.clone()).map_err(bad_params)?;
 
                 // Extra check: even with a matched scope at the grant
                 // layer, double-verify the requested model actually
@@ -111,8 +109,8 @@ impl CapabilityHandler for LlmHandler {
                 Ok(json!({ "content": content, "model": p.model }))
             }
             "llm.embed" => {
-                let p: EmbedParams = serde_json::from_value(request.params.clone())
-                    .map_err(bad_params)?;
+                let p: EmbedParams =
+                    serde_json::from_value(request.params.clone()).map_err(bad_params)?;
                 let vec = self
                     .emb
                     .embed(&p.text)

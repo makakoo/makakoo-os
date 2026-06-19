@@ -60,9 +60,7 @@ pub fn parse_response(
     let validator = manifest.adapter.name.as_str();
 
     match manifest.output.format {
-        OutputFormat::LopeVerdictBlock => Ok(parse_verdict_block(
-            validator, text, duration,
-        )),
+        OutputFormat::LopeVerdictBlock => Ok(parse_verdict_block(validator, text, duration)),
         OutputFormat::OpenAiChat => parse_openai_chat(manifest, text, duration),
         OutputFormat::Plain => Ok(parse_plain(validator, text, duration)),
         OutputFormat::Custom => Err(OutputError::CustomUnsupported),
@@ -174,7 +172,8 @@ fn parse_openai_chat(
     text: &str,
     duration: Duration,
 ) -> Result<ValidatorResult, OutputError> {
-    let json: Value = serde_json::from_str(text).map_err(|e| OutputError::NotJson(e.to_string()))?;
+    let json: Value =
+        serde_json::from_str(text).map_err(|e| OutputError::NotJson(e.to_string()))?;
     let dot_path = manifest
         .output
         .verdict_field
@@ -365,10 +364,7 @@ rationale: missing retries
                 {"message": {"content": "blah\n---VERDICT---\n{\"status\":\"PASS\",\"confidence\":0.95,\"rationale\":\"ok\"}\n---END---\n"}}
             ]
         }"#;
-        let m = make_manifest(
-            OutputFormat::OpenAiChat,
-            Some("choices.0.message.content"),
-        );
+        let m = make_manifest(OutputFormat::OpenAiChat, Some("choices.0.message.content"));
         let r = parse_response(&m, response.as_bytes(), Duration::from_secs(2)).unwrap();
         assert_eq!(r.verdict.status, VerdictStatus::Pass);
         assert!((r.verdict.confidence - 0.95).abs() < 1e-9);
@@ -377,20 +373,14 @@ rationale: missing retries
     #[test]
     fn openai_chat_missing_field_errors() {
         let response = r#"{"choices": []}"#;
-        let m = make_manifest(
-            OutputFormat::OpenAiChat,
-            Some("choices.0.message.content"),
-        );
+        let m = make_manifest(OutputFormat::OpenAiChat, Some("choices.0.message.content"));
         let err = parse_response(&m, response.as_bytes(), Duration::from_secs(0)).unwrap_err();
         assert!(matches!(err, OutputError::VerdictFieldMissing(_)));
     }
 
     #[test]
     fn openai_chat_bad_json_errors() {
-        let m = make_manifest(
-            OutputFormat::OpenAiChat,
-            Some("choices.0.message.content"),
-        );
+        let m = make_manifest(OutputFormat::OpenAiChat, Some("choices.0.message.content"));
         let err = parse_response(&m, b"not json", Duration::from_secs(0)).unwrap_err();
         assert!(matches!(err, OutputError::NotJson(_)));
     }
@@ -402,10 +392,7 @@ rationale: missing retries
                 {"message": {"content": "Great, everything looks pass-worthy."}}
             ]
         }"#;
-        let m = make_manifest(
-            OutputFormat::OpenAiChat,
-            Some("choices.0.message.content"),
-        );
+        let m = make_manifest(OutputFormat::OpenAiChat, Some("choices.0.message.content"));
         let r = parse_response(&m, response.as_bytes(), Duration::from_secs(1)).unwrap();
         assert_eq!(r.verdict.status, VerdictStatus::Pass);
         assert!((r.verdict.confidence - 0.5).abs() < 1e-9);
@@ -414,8 +401,12 @@ rationale: missing retries
     #[test]
     fn plain_heuristic_detects_fail() {
         let m = make_manifest(OutputFormat::Plain, None);
-        let r = parse_response(&m, b"this will fail catastrophically", Duration::from_secs(1))
-            .unwrap();
+        let r = parse_response(
+            &m,
+            b"this will fail catastrophically",
+            Duration::from_secs(1),
+        )
+        .unwrap();
         assert_eq!(r.verdict.status, VerdictStatus::Fail);
     }
 
@@ -436,10 +427,7 @@ rationale: missing retries
     #[test]
     fn extract_dot_path_various_shapes() {
         let v: Value = serde_json::from_str(r#"{"a": [{"b": "hit"}]}"#).unwrap();
-        assert_eq!(
-            extract_dot_path(&v, "a.0.b").unwrap().as_str(),
-            Some("hit")
-        );
+        assert_eq!(extract_dot_path(&v, "a.0.b").unwrap().as_str(), Some("hit"));
         assert!(extract_dot_path(&v, "a.99.b").is_none());
         assert!(extract_dot_path(&v, "nope").is_none());
     }

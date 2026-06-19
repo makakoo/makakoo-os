@@ -24,8 +24,8 @@ pub fn run(scenario_name: Option<String>, json: bool) -> anyhow::Result<()> {
     };
     if json {
         for o in &outcomes {
-            let line = serde_json::to_string(o)
-                .map_err(|e| anyhow::anyhow!("serialize outcome: {e}"))?;
+            let line =
+                serde_json::to_string(o).map_err(|e| anyhow::anyhow!("serialize outcome: {e}"))?;
             println!("{line}");
         }
     } else {
@@ -54,10 +54,7 @@ fn parse_scenario(name: &str) -> anyhow::Result<FaultScenario> {
 }
 
 fn render(outcomes: &[FaultOutcome]) {
-    println!(
-        "{:<28} {:<5} {:>8}  note",
-        "scenario", "pass", "elapsed"
-    );
+    println!("{:<28} {:<5} {:>8}  note", "scenario", "pass", "elapsed");
     println!("{}", "-".repeat(100));
     for o in outcomes {
         let badge = if o.pass { "PASS" } else { "FAIL" };

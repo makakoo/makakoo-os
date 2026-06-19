@@ -324,7 +324,9 @@ impl Gateway for TelegramAdapter {
                     }
                 }
                 let Some(msg) = update.message else { continue };
-                let Some(text) = msg.text.clone() else { continue };
+                let Some(text) = msg.text.clone() else {
+                    continue;
+                };
                 let Some(frame) = self.build_inbound_frame(msg, text).await else {
                     continue;
                 };
@@ -375,9 +377,7 @@ impl TelegramAdapter {
 
         // Per-transport allowlist (Q7 simplified).  Empty list =
         // least-privilege deny-all.
-        if self.allowed_users.is_empty()
-            || !self.allowed_users.iter().any(|u| u == &sender_id)
-        {
+        if self.allowed_users.is_empty() || !self.allowed_users.iter().any(|u| u == &sender_id) {
             tracing::debug!(
                 target: "makakoo_core::transport::telegram",
                 transport_id = self.ctx.transport_id,
@@ -501,13 +501,8 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let adapter = TelegramAdapter::with_api_base(
-            ctx(),
-            config(),
-            "bad".into(),
-            allowed(),
-            server.uri(),
-        );
+        let adapter =
+            TelegramAdapter::with_api_base(ctx(), config(), "bad".into(), allowed(), server.uri());
         let err = adapter.verify_credentials().await.unwrap_err();
         assert!(format!("{err}").contains("Unauthorized"));
     }
@@ -601,7 +596,10 @@ mod tests {
         let msg = TelegramMessage {
             message_id: 1,
             date: 0,
-            chat: TelegramChat { id: 1, kind: "supergroup".into() },
+            chat: TelegramChat {
+                id: 1,
+                kind: "supergroup".into(),
+            },
             from: None,
             text: Some("x".into()),
             message_thread_id: Some(99),
@@ -619,7 +617,10 @@ mod tests {
         let msg = TelegramMessage {
             message_id: 1,
             date: 0,
-            chat: TelegramChat { id: 1, kind: "supergroup".into() },
+            chat: TelegramChat {
+                id: 1,
+                kind: "supergroup".into(),
+            },
             from: None,
             text: Some("x".into()),
             message_thread_id: Some(99),
@@ -635,7 +636,10 @@ mod tests {
         let msg = TelegramMessage {
             message_id: 1,
             date: 0,
-            chat: TelegramChat { id: 100, kind: "private".into() },
+            chat: TelegramChat {
+                id: 100,
+                kind: "private".into(),
+            },
             from: Some(TelegramUser {
                 id: 8675309,
                 username: Some("MakakooBot".into()),
@@ -644,7 +648,10 @@ mod tests {
             text: Some("self echo".into()),
             message_thread_id: None,
         };
-        assert!(adapter.build_inbound_frame(msg, "self echo".into()).await.is_none());
+        assert!(adapter
+            .build_inbound_frame(msg, "self echo".into())
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -653,7 +660,10 @@ mod tests {
         let msg = TelegramMessage {
             message_id: 1,
             date: 0,
-            chat: TelegramChat { id: 222, kind: "private".into() },
+            chat: TelegramChat {
+                id: 222,
+                kind: "private".into(),
+            },
             from: Some(TelegramUser {
                 id: 222,
                 username: None,
@@ -662,7 +672,10 @@ mod tests {
             text: Some("hi".into()),
             message_thread_id: None,
         };
-        assert!(adapter.build_inbound_frame(msg, "hi".into()).await.is_none());
+        assert!(adapter
+            .build_inbound_frame(msg, "hi".into())
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -671,11 +684,21 @@ mod tests {
         let msg = TelegramMessage {
             message_id: 1,
             date: 0,
-            chat: TelegramChat { id: 1, kind: "private".into() },
-            from: Some(TelegramUser { id: 1, username: None, first_name: None }),
+            chat: TelegramChat {
+                id: 1,
+                kind: "private".into(),
+            },
+            from: Some(TelegramUser {
+                id: 1,
+                username: None,
+                first_name: None,
+            }),
             text: Some("hi".into()),
             message_thread_id: None,
         };
-        assert!(adapter.build_inbound_frame(msg, "hi".into()).await.is_none());
+        assert!(adapter
+            .build_inbound_frame(msg, "hi".into())
+            .await
+            .is_none());
     }
 }

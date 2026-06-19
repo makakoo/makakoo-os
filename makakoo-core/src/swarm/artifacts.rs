@@ -174,10 +174,9 @@ impl ArtifactStore {
     /// Total artifact count. Cheap diagnostic.
     pub fn count(&self) -> Result<i64> {
         let conn = self.lock()?;
-        let n: i64 =
-            conn.query_row("SELECT COUNT(*) FROM swarm_artifacts", params![], |row| {
-                row.get(0)
-            })?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM swarm_artifacts", params![], |row| {
+            row.get(0)
+        })?;
         Ok(n)
     }
 }
@@ -302,7 +301,10 @@ mod tests {
         store
             .write(mk(ArtifactKind::Checkpoint, "r", "a", "cp2"))
             .unwrap();
-        let latest = store.latest("r", ArtifactKind::Checkpoint).unwrap().unwrap();
+        let latest = store
+            .latest("r", ArtifactKind::Checkpoint)
+            .unwrap()
+            .unwrap();
         assert_eq!(latest.content, "cp2");
     }
 

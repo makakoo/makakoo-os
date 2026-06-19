@@ -440,11 +440,8 @@ impl SanchoHandler for MemoryConsolidationGateHandler {
         let start = Instant::now();
         let sentinel = Self::sentinel_path(&ctx.home);
         if !sentinel.exists() {
-            let report = HandlerReport::ok(
-                "memory_consolidation_gate",
-                "no sentinel",
-                start.elapsed(),
-            );
+            let report =
+                HandlerReport::ok("memory_consolidation_gate", "no sentinel", start.elapsed());
             publish_report(ctx, &report);
             return Ok(report);
         }
@@ -509,10 +506,7 @@ impl SanchoHandler for MemoryPromotionHandler {
         let promoter = MemoryPromoter::new(ctx.store.conn_arc());
         let promoted = promoter.promote_candidates(self.threshold, self.top_k)?;
         let msg = format!("{} promotions", promoted.len());
-        append_journal_line(
-            &ctx.home,
-            &format!("- [[SANCHO]] memory_promotion: {msg}"),
-        )?;
+        append_journal_line(&ctx.home, &format!("- [[SANCHO]] memory_promotion: {msg}"))?;
         let report = HandlerReport::ok("memory_promotion", msg, start.elapsed());
         publish_report(ctx, &report);
         Ok(report)
@@ -719,10 +713,7 @@ impl SanchoHandler for SubprocessHandler {
         cmd.env("HARVEY_HOME", &ctx.home);
         cmd.env(
             "PYTHONPATH",
-            ctx.home
-                .join("harvey-os")
-                .to_string_lossy()
-                .into_owned(),
+            ctx.home.join("harvey-os").to_string_lossy().into_owned(),
         );
 
         let output = cmd.output().await;
@@ -733,7 +724,11 @@ impl SanchoHandler for SubprocessHandler {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let summary = truncate(&stdout, 200);
                 let line = if summary.is_empty() {
-                    format!("- [[SANCHO]] {}: ok ({}ms)", self.task_name, elapsed.as_millis())
+                    format!(
+                        "- [[SANCHO]] {}: ok ({}ms)",
+                        self.task_name,
+                        elapsed.as_millis()
+                    )
                 } else {
                     format!(
                         "- [[SANCHO]] {}: ok — {} ({}ms)",
@@ -765,16 +760,10 @@ impl SanchoHandler for SubprocessHandler {
                 Ok(report)
             }
             Err(e) => {
-                let line = format!(
-                    "- [[SANCHO]] {}: SPAWN ERROR — {}",
-                    self.task_name, e
-                );
+                let line = format!("- [[SANCHO]] {}: SPAWN ERROR — {}", self.task_name, e);
                 let _ = append_journal_line(&ctx.home, &line);
-                let report = HandlerReport::failed(
-                    &self.task_name,
-                    format!("spawn error: {e}"),
-                    elapsed,
-                );
+                let report =
+                    HandlerReport::failed(&self.task_name, format!("spawn error: {e}"), elapsed);
                 publish_report(ctx, &report);
                 Ok(report)
             }
@@ -826,7 +815,7 @@ impl SanchoHandler for SwarmDispatchHandler {
     }
 
     async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
-        use crate::swarm::dispatch_queue::{load_receipts, load_queue, write_receipt, Receipt};
+        use crate::swarm::dispatch_queue::{load_queue, load_receipts, write_receipt, Receipt};
         use crate::swarm::gateway::SwarmGateway;
         use crate::swarm::QueueEntry;
         use std::collections::HashSet;
@@ -844,7 +833,11 @@ impl SanchoHandler for SwarmDispatchHandler {
             }
         };
         if queue.is_empty() {
-            return Ok(HandlerReport::ok("swarm_dispatch", "queue empty", start.elapsed()));
+            return Ok(HandlerReport::ok(
+                "swarm_dispatch",
+                "queue empty",
+                start.elapsed(),
+            ));
         }
         let receipts = load_receipts(&ctx.home).unwrap_or_default();
         let done: HashSet<String> = receipts.into_iter().map(|r| r.id).collect();
@@ -854,7 +847,10 @@ impl SanchoHandler for SwarmDispatchHandler {
             None => {
                 return Ok(HandlerReport::ok(
                     "swarm_dispatch",
-                    format!("gateway not installed; {} pending", queue.len() - done.len()),
+                    format!(
+                        "gateway not installed; {} pending",
+                        queue.len() - done.len()
+                    ),
                     start.elapsed(),
                 ));
             }
@@ -960,9 +956,7 @@ impl SanchoHandler for PermsPurgeHandler {
 
     async fn run(&self, ctx: &SanchoContext) -> Result<HandlerReport> {
         use crate::capability::audit::{AuditEntry, AuditLog, AuditResult};
-        use crate::capability::purge_idempotency::{
-            check_and_record, PurgeCheck,
-        };
+        use crate::capability::purge_idempotency::{check_and_record, PurgeCheck};
         use crate::capability::user_grants::UserGrants;
         use chrono::Utc;
 
@@ -973,18 +967,12 @@ impl SanchoHandler for PermsPurgeHandler {
         // previous tick landed less than PURGE_COOLDOWN_SECONDS ago.
         // Fail-open on I/O errors so a broken state file can't
         // silently disable hygiene.
-        if let PurgeCheck::SkipCooldown { seconds_since_last } =
-            check_and_record(&ctx.home, now)
-        {
+        if let PurgeCheck::SkipCooldown { seconds_since_last } = check_and_record(&ctx.home, now) {
             let msg = format!(
                 "skipped (within {s}s cooldown since last tick)",
                 s = seconds_since_last
             );
-            let report = HandlerReport::ok(
-                "perms_purge_tick",
-                msg,
-                start.elapsed(),
-            );
+            let report = HandlerReport::ok("perms_purge_tick", msg, start.elapsed());
             publish_report(ctx, &report);
             return Ok(report);
         }
@@ -992,11 +980,7 @@ impl SanchoHandler for PermsPurgeHandler {
         let mut grants = UserGrants::load(&ctx.home);
         let removed = grants.purge_expired(now);
         if removed.is_empty() {
-            let report = HandlerReport::ok(
-                "perms_purge_tick",
-                "0 expired",
-                start.elapsed(),
-            );
+            let report = HandlerReport::ok("perms_purge_tick", "0 expired", start.elapsed());
             publish_report(ctx, &report);
             return Ok(report);
         }
@@ -1038,10 +1022,7 @@ impl SanchoHandler for PermsPurgeHandler {
         }
 
         let msg = format!("{} expired", removed.len());
-        let _ = append_journal_line(
-            &ctx.home,
-            &format!("- [[SANCHO]] perms_purge_tick: {msg}"),
-        );
+        let _ = append_journal_line(&ctx.home, &format!("- [[SANCHO]] perms_purge_tick: {msg}"));
         let report = HandlerReport::ok("perms_purge_tick", msg, start.elapsed());
         publish_report(ctx, &report);
         Ok(report)
@@ -1201,8 +1182,7 @@ mod tests {
     async fn memory_consolidation_gate_consumes_and_unlinks_sentinel() {
         let dir = TempDir::new().unwrap();
         let ctx = ctx_with_store(&dir);
-        let sentinel =
-            MemoryConsolidationGateHandler::sentinel_path(&ctx.home);
+        let sentinel = MemoryConsolidationGateHandler::sentinel_path(&ctx.home);
         fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
         fs::write(&sentinel, b"trigger").unwrap();
         assert!(sentinel.exists());
@@ -1283,9 +1263,9 @@ mod tests {
     // state is untouched (gateway missing → no side-effects).
     #[tokio::test]
     async fn swarm_dispatch_handler_noops_without_gateway() {
-        use crate::swarm::{enqueue_team, Receipt};
         use crate::swarm::dispatch_queue::write_receipt;
         use crate::swarm::TeamDispatchRequest;
+        use crate::swarm::{enqueue_team, Receipt};
 
         let dir = TempDir::new().unwrap();
         let ctx = ctx_with_store(&dir);
@@ -1338,7 +1318,11 @@ mod tests {
         let handler = SwarmDispatchHandler::new();
         let report = handler.run(&ctx).await.unwrap();
         assert!(report.ok);
-        assert!(report.message.contains("queue empty"), "msg: {}", report.message);
+        assert!(
+            report.message.contains("queue empty"),
+            "msg: {}",
+            report.message
+        );
     }
 
     // ─── PermsPurgeHandler (Phase F) ──────────────────────────────
@@ -1356,9 +1340,11 @@ mod tests {
         let p = default_path(&ctx.home);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         let mut u = UserGrants::empty_at(p);
-        for (id, offset_minutes) in
-            [("g_expired_a", -30i64), ("g_expired_b", -1), ("g_active_c", 60)]
-        {
+        for (id, offset_minutes) in [
+            ("g_expired_a", -30i64),
+            ("g_expired_b", -1),
+            ("g_active_c", 60),
+        ] {
             u.add(UserGrant {
                 id: id.into(),
                 scope: format!("fs/write:/tmp/{id}/**"),
@@ -1377,7 +1363,11 @@ mod tests {
         let h = PermsPurgeHandler::new();
         let report = h.run(&ctx).await.unwrap();
         assert!(report.ok);
-        assert!(report.message.contains("2 expired"), "msg: {}", report.message);
+        assert!(
+            report.message.contains("2 expired"),
+            "msg: {}",
+            report.message
+        );
 
         // Disk shows only the active grant.
         let loaded = UserGrants::load(&ctx.home);
@@ -1442,9 +1432,7 @@ mod tests {
     /// `skipped`, and write ZERO additional audit entries.
     #[tokio::test]
     async fn perms_purge_cooldown_prevents_double_audit_on_rapid_retick() {
-        use crate::capability::user_grants::{
-            default_path, UserGrant, UserGrants,
-        };
+        use crate::capability::user_grants::{default_path, UserGrant, UserGrants};
         use chrono::{Duration as ChronoDuration, Utc};
 
         let dir = TempDir::new().unwrap();

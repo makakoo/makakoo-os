@@ -86,7 +86,10 @@ impl TransportRouter {
     /// Look up an adapter by `(slot_id, transport_id)`.
     pub async fn lookup(&self, slot_id: &str, transport_id: &str) -> Option<Arc<dyn Transport>> {
         let slots = self.slots.read().await;
-        slots.get(slot_id).and_then(|m| m.get(transport_id)).cloned()
+        slots
+            .get(slot_id)
+            .and_then(|m| m.get(transport_id))
+            .cloned()
     }
 
     /// List the registered transports for a slot.  Returns
@@ -124,10 +127,7 @@ impl TransportRouter {
                     transport_id: frame.transport_id.clone(),
                 })?
         };
-        adapter
-            .send(frame)
-            .await
-            .map_err(RouterError::AdapterError)
+        adapter.send(frame).await.map_err(RouterError::AdapterError)
     }
 }
 
@@ -148,9 +148,9 @@ impl Default for TransportRouter {
 pub fn verify_no_duplicate_identities<'a>(
     identities: impl IntoIterator<
         Item = (
-            &'a str, // transport_id
-            &'a str, // kind
-            &'a str, // account_id
+            &'a str,         // transport_id
+            &'a str,         // kind
+            &'a str,         // account_id
             Option<&'a str>, // tenant_id (Slack: team_id)
         ),
     >,
@@ -265,7 +265,10 @@ mod tests {
             text: "hi".into(),
             reply_to_message_id: None,
         };
-        let err = router.dispatch_outbound("secretary", &frame).await.unwrap_err();
+        let err = router
+            .dispatch_outbound("secretary", &frame)
+            .await
+            .unwrap_err();
         assert!(matches!(err, RouterError::UnknownTransport { .. }));
     }
 
@@ -288,9 +291,7 @@ mod tests {
     #[tokio::test]
     async fn list_slot_returns_sorted() {
         let router = TransportRouter::new();
-        router
-            .register("secretary", fake("slack", "z-slack"))
-            .await;
+        router.register("secretary", fake("slack", "z-slack")).await;
         router
             .register("secretary", fake("telegram", "a-telegram"))
             .await;

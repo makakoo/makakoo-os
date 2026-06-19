@@ -84,12 +84,8 @@ async fn tytus_cli_mcp_envelope_round_trip() {
     // Pick the cheapest always-available tool — tytus_status — which
     // returns a JSON doc whether the user is logged in or not.
     let envelope = r#"{"tool":"tytus_status","arguments":{}}"#;
-    let result = call_adapter_with_default_timeout(
-        &manifest,
-        envelope,
-        Duration::from_secs(20),
-    )
-    .await;
+    let result =
+        call_adapter_with_default_timeout(&manifest, envelope, Duration::from_secs(20)).await;
     assert_eq!(result.error, "", "tytus-cli error: {}", result.error);
     assert!(
         !result.raw_response.trim().is_empty(),
@@ -121,11 +117,7 @@ async fn switchailocal_openai_compat_round_trip() {
         Duration::from_secs(30),
     )
     .await;
-    assert_eq!(
-        result.error, "",
-        "switchailocal error: {}",
-        result.error
-    );
+    assert_eq!(result.error, "", "switchailocal error: {}", result.error);
     assert!(
         !result.raw_response.trim().is_empty(),
         "switchailocal returned empty content"

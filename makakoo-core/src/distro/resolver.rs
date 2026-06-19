@@ -189,10 +189,7 @@ name = "core"
         assert_eq!(r.plugins.len(), 2);
         let names: Vec<&str> = r.plugins.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["plugin-a", "plugin-b"]);
-        assert!(r
-            .plugins
-            .iter()
-            .all(|p| p.source_distro == "core"));
+        assert!(r.plugins.iter().all(|p| p.source_distro == "core"));
     }
 
     #[test]

@@ -221,10 +221,7 @@ mod tests {
     fn slot_from_env_errors_when_unset() {
         let _guard = crate::test_lock::lock_env();
         std::env::remove_var(ENV_VAR);
-        assert!(matches!(
-            slot_from_env(),
-            Err(IdentityError::EnvVarMissing)
-        ));
+        assert!(matches!(slot_from_env(), Err(IdentityError::EnvVarMissing)));
     }
 
     #[test]
