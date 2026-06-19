@@ -59,17 +59,19 @@ def chunk_file(path, file_type):
         from pydub import AudioSegment
         audio = AudioSegment.from_file(path)
         chunks = []
-        for i in range(0, len(audio), 75000):
-            ch = audio[i:i+75000]
-            p = f"/tmp/audio_chunk_{i//75000}.wav"
-            ch.export(p, format="wav")
-            chunks.append((Path(p).read_bytes(), "audio/wav", f"{i//75000}"))
+        with tempfile.TemporaryDirectory(prefix="harvey_ingest_") as td:
+            for i in range(0, len(audio), 75000):
+                ch = audio[i:i+75000]
+                p = str(Path(td) / f"audio_chunk_{i//75000}.wav")
+                ch.export(p, format="wav")
+                chunks.append((Path(p).read_bytes(), "audio/wav", f"{i//75000}"))
         return chunks
 
     if file_type == "video":
         result = subprocess.run(
-            f'ffprobe -v quiet -show_entries format=duration -of csv=p=0 "{str(path)}"',
-            capture_output=True, text=True, shell=True
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True
         )
         duration_str = result.stdout.strip()
         if not duration_str:
@@ -78,27 +80,29 @@ def chunk_file(path, file_type):
         total = float(duration_str)
         chunk_secs = 30  # 30s chunks for Gemini compatibility
         chunks = []
-        for i in range(0, int(total), chunk_secs):
-            end = min(i + chunk_secs, total)
-            p = f"/tmp/video_chunk_{i//chunk_secs}.mp4"
-            rc = subprocess.run([
-                "ffmpeg", "-y", "-i", str(path), "-ss", str(i), "-t", str(end - i),
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-c:a", "aac", "-b:a", "64k", p
-            ], capture_output=True)
-            if rc.returncode == 0:
-                chunks.append((Path(p).read_bytes(), "video/mp4", f"{i}s-{int(end)}s"))
+        with tempfile.TemporaryDirectory(prefix="harvey_ingest_") as td:
+            for i in range(0, int(total), chunk_secs):
+                end = min(i + chunk_secs, total)
+                p = str(Path(td) / f"video_chunk_{i//chunk_secs}.mp4")
+                rc = subprocess.run([
+                    "ffmpeg", "-y", "-i", str(path), "-ss", str(i), "-t", str(end - i),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                    "-c:a", "aac", "-b:a", "64k", p
+                ], capture_output=True)
+                if rc.returncode == 0:
+                    chunks.append((Path(p).read_bytes(), "video/mp4", f"{i}s-{int(end)}s"))
         return chunks
 
     if file_type == "pdf":
         import fitz
         doc = fitz.open(path)
         chunks = []
-        for i in range(0, len(doc), 5):
-            page_slice = doc[i:i+5]
-            tmp = f"/tmp/pdf_chunk_{i//5}.pdf"
-            page_slice.save(tmp)
-            chunks.append((Path(tmp).read_bytes(), "application/pdf", f"pages_{i}-{min(i+5,len(doc))}"))
+        with tempfile.TemporaryDirectory(prefix="harvey_ingest_") as td:
+            for i in range(0, len(doc), 5):
+                page_slice = doc[i:i+5]
+                tmp = str(Path(td) / f"pdf_chunk_{i//5}.pdf")
+                page_slice.save(tmp)
+                chunks.append((Path(tmp).read_bytes(), "application/pdf", f"pages_{i}-{min(i+5,len(doc))}"))
         return chunks
 
     return [(Path(path).read_bytes(), "application/octet-stream", "unknown")]

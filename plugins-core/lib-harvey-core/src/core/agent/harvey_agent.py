@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1154,7 +1155,10 @@ def tool_get_calendar() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Allowed Commands (whitelist — no writes, no network, no git push)
+#  Allowed Commands — read-only allowlist, executed without a shell.
+#  Deny by default: argv[0] must be an allowed binary (or the whole
+#  string an exact vetted command); read-only subcommands only; the
+#  sole network calls are two loopback health checks. See F1 notes.
 # ═══════════════════════════════════════════════════════════════
 
 SAFE_COMMANDS = frozenset(
@@ -1175,14 +1179,12 @@ SAFE_COMMANDS = frozenset(
         "ls -la",
         "ls -lh",
         "pwd",
-        "cd",
         "launchctl list",
         "crontab -l",
         "git status",
         "git log --oneline -5",
         "git branch",
         "git remote -v",
-        "ps aux | grep",
         "pmset -g",
         "caffeinate -u",
         "curl -s http://localhost:18080/health",
@@ -1190,91 +1192,103 @@ SAFE_COMMANDS = frozenset(
     }
 )
 
-ALLOWED_PREFIXES = (
-    "ps ",
-    "uptime",
-    "who",
-    "hostname",
-    "uname -a",
-    "df ",
-    "free",
-    "top ",
-    "ls ",
-    "pwd",
-    "launchctl",
-    "crontab",
-    "git status",
-    "git log",
-    "git branch",
-    "git remote",
-    "pmset",
-    "caffeinate",
-    "ps aux | grep",
-    "curl -s http://",
-    "curl http://",
+# argv[0] binaries permitted for ad-hoc read-only introspection. Anything
+# whose first token is not in this set is rejected. `curl` is deliberately
+# absent: arbitrary URLs are not allowed — only the two exact loopback
+# health checks in SAFE_COMMANDS may reach the network.
+ALLOWED_BINARIES = frozenset(
+    {
+        "ps",
+        "uptime",
+        "who",
+        "hostname",
+        "uname",
+        "df",
+        "free",
+        "top",
+        "ls",
+        "pwd",
+        "launchctl",
+        "crontab",
+        "git",
+        "pmset",
+        "caffeinate",
+    }
+)
+
+# Binaries whose first argument must name a read-only subcommand. This is
+# what keeps `git push`, `crontab <file>` (install), `launchctl bootout`
+# and friends out — only the listed verbs are accepted.
+_SUBCOMMAND_ALLOWLIST = {
+    "git": frozenset({"status", "log", "branch", "remote"}),
+    "launchctl": frozenset({"list"}),
+    "crontab": frozenset({"-l"}),
+}
+
+# Characters that imply shell interpretation. Commands are never run through
+# a shell (see tool_run_command), but we also refuse these outright so an
+# injection attempt is rejected early and visibly rather than silently
+# defanged. None of the allowed read-only commands contain any of them.
+_SHELL_METACHARS = frozenset(
+    [
+        "`", "$", "(", ")", ";", "&", "|", "<", ">",
+        "{", "}", "[", "]", "*", "?", "!", "~",
+        "\n", "\r", "\t", "\\", '"', "'",
+    ]
 )
 
 
-def _is_safe_command(cmd: str) -> bool:
-    """Check if a command is safe to execute (read-only, no side effects)."""
+def _validate_command(cmd: str) -> Optional[List[str]]:
+    """Return a vetted argv for ``cmd``, or None to reject it.
+
+    Read-only and deny-by-default. The returned argv is always executed
+    WITHOUT a shell, so shell metacharacters can never be interpreted; we
+    also reject them up front as defense-in-depth (F1 remediation).
+    """
     if not cmd or len(cmd) > 500:
-        return False
+        return None
+    if any(ch in _SHELL_METACHARS for ch in cmd):
+        return None
+    if "--help" in cmd.lower():  # avoid pager/banner side effects
+        return None
 
-    # Check for dangerous patterns
-    dangerous = [
-        ">",
-        "|",
-        ";",
-        "&",
-        "&&",
-        "||",
-        "sudo",
-        "chmod",
-        "chown",
-        "rm ",
-        "rm -",
-        "mv ",
-        "cp ",
-        "mkdir",
-        "touch",
-        "ln ",
-        "pip install",
-        "npm install",
-        "cargo install",
-        "git push",
-        "git commit",
-        "git add",
-        "kill ",
-        "killall",
-        "--help",  # prevent banner-based exploits
-    ]
-    cmd_lower = cmd.lower()
-    for d in dangerous:
-        if d in cmd_lower:
-            return False
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return None
+    if not argv:
+        return None
 
-    # Allow exact match of safe commands
+    # Vetted exact strings (the only network calls are two loopback URLs).
     if cmd in SAFE_COMMANDS:
-        return True
+        return argv
 
-    # Allow safe prefixes
-    for prefix in ALLOWED_PREFIXES:
-        if cmd.startswith(prefix):
-            return True
+    binary = argv[0]
+    if binary not in ALLOWED_BINARIES:
+        return None
 
-    return False
+    sub_allow = _SUBCOMMAND_ALLOWLIST.get(binary)
+    if sub_allow is not None and (len(argv) < 2 or argv[1] not in sub_allow):
+        return None
+
+    return argv
+
+
+def _is_safe_command(cmd: str) -> bool:
+    """Back-compat boolean wrapper; prefer _validate_command for execution."""
+    return _validate_command(cmd) is not None
 
 
 def tool_run_command(command: str) -> str:
-    """Run a safe read-only shell command."""
-    if not _is_safe_command(command):
+    """Run a vetted read-only command with a fixed argv (never via a shell)."""
+    argv = _validate_command(command)
+    if argv is None:
         return f"Command rejected — '{command[:50]}' is not in the allowed list."
 
     try:
         env = _get_subprocess_env()
         result = subprocess.run(
-            command,
-            shell=True,
+            argv,
             capture_output=True,
             text=True,
             timeout=15,
@@ -1286,6 +1300,8 @@ def tool_run_command(command: str) -> str:
         if len(output) > 3000:
             output = output[:3000] + "\n... (truncated)"
         return output
+    except FileNotFoundError:
+        return f"Command not found: {argv[0]}"
     except subprocess.TimeoutExpired:
         return "Command timed out."
     except Exception as e:
