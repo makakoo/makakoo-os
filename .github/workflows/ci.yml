@@ -10,6 +10,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Formatting gate — the codebase is rustfmt-clean; any unformatted code
+  # fails CI. Cheap (no build), so it runs as a fast fail. Pinned to the
+  # same toolchain as the clippy gate (below) so formatting is deterministic
+  # — a new rustfmt release reformats differently and would otherwise break
+  # the gate without a single source change (rustfmt 1.89 vs 1.95 differ
+  # on hundreds of files).
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
   # Phase B Gate 1 + Phase F Gate 5 — `cargo test --workspace` green on
   # macOS + Linux + Windows. Windows added in sprint-013 alongside the
   # `makakoo uninfect` + Windows platform adapter deliverables.
