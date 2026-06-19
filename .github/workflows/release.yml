@@ -120,7 +120,11 @@ jobs:
           Copy-Item -Recurse distros      "$stage/distros"
           Copy-Item -Recurse plugins-core "$stage/plugins-core"
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
-          (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash | Out-File -FilePath "$stage.zip.sha256" -Encoding ASCII
+          $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
+          # Emit the Unix `shasum -a 256` line shape (`<hash>  <file>`) with a
+          # plain LF (not Out-File's CRLF) so the combined SHA256SUMS manifest
+          # verifies cleanly with `sha256sum -c` on Linux.
+          [IO.File]::WriteAllText("$stage.zip.sha256", "$hash  $stage.zip`n")
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -154,6 +158,15 @@ jobs:
           set -euo pipefail
           mkdir -p release-files
           find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} release-files/ \;
+          # Build one canonical SHA256SUMS manifest from the per-artifact
+          # sidecars. Each sidecar is `<hash>  <file>` (Unix shasum + the
+          # normalized Windows writer), so the concatenation verifies directly
+          # with `sha256sum -c SHA256SUMS`. Sorted by filename for a stable,
+          # diffable manifest. SHA256SUMS doesn't match *.sha256, so it never
+          # includes itself.
+          ( cd release-files && cat ./*.sha256 | LC_ALL=C sort -k2 > SHA256SUMS )
+          echo "── SHA256SUMS ──"
+          cat release-files/SHA256SUMS
           ls -la release-files/
 
       # Generate cryptographic build provenance via Sigstore.

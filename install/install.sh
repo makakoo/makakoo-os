@@ -43,6 +43,8 @@ Environment overrides:
   MAKAKOO_INSTALL_DIR   Same as --install-dir
   MAKAKOO_REPO          GitHub org/repo (default: makakoo/makakoo-os)
   MAKAKOO_LOCAL_TARBALL Use a local tarball path instead of downloading
+  MAKAKOO_BASE_URL      Download origin for tarball + .sha256 (mirror/air-gap)
+  MAKAKOO_SKIP_CHECKSUM Set to 1 to skip sha256 verification (unpublished builds)
 
 After installing, run:
   makakoo install       Install core distro, daemon, infect CLI hosts
@@ -88,7 +90,13 @@ esac
 
 # ─── resolve URL ─────────────────────────────────────────────────────────
 
-if [ "$VERSION" = "latest" ]; then
+# MAKAKOO_BASE_URL overrides the download origin — useful for an internal
+# mirror, an air-gapped relay, or the installer's own test harness. The
+# tarball and its `.sha256` sidecar are both fetched from "$MAKAKOO_BASE_URL/"
+# and verification still applies.
+if [ -n "${MAKAKOO_BASE_URL:-}" ]; then
+    TAR_URL="${MAKAKOO_BASE_URL%/}/makakoo-${TARGET}.tar.gz"
+elif [ "$VERSION" = "latest" ]; then
     TAR_URL="https://github.com/${REPO}/releases/latest/download/makakoo-${TARGET}.tar.gz"
 else
     # Accept both "0.1.0" and "v0.1.0" shapes.
@@ -123,23 +131,64 @@ trap cleanup EXIT INT TERM
 
 tarball="$tmp/makakoo.tar.gz"
 
+# sha256 of a file → lowercase hex on stdout; nonzero if no tool available.
+_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | awk '{print $NF}'
+    else return 1
+    fi
+}
+
+# fetch URL → dest with curl then wget; nonzero on failure.
+_fetch() {
+    if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+    else echo "neither curl nor wget found on PATH" >&2; return 2
+    fi
+}
+
+# Verify $1 (a downloaded file) against the .sha256 sidecar at $2.sha256.
+# Fails closed: a missing tool, a missing sidecar, or a mismatch all abort.
+verify_checksum() {
+    if [ "${MAKAKOO_SKIP_CHECKSUM:-0}" = "1" ]; then
+        echo "warning: MAKAKOO_SKIP_CHECKSUM=1 — skipping integrity verification" >&2
+        return 0
+    fi
+    local actual expected
+    actual="$(_sha256 "$1")" || {
+        echo "error: no sha256 tool (need sha256sum, shasum, or openssl); cannot verify." >&2
+        echo "       re-run with MAKAKOO_SKIP_CHECKSUM=1 to install without verification." >&2
+        exit 1
+    }
+    if ! _fetch "$2.sha256" "$1.sha256"; then
+        echo "error: could not download checksum $2.sha256" >&2
+        echo "       refusing to install unverified bytes (set MAKAKOO_SKIP_CHECKSUM=1 to override)." >&2
+        exit 1
+    fi
+    expected="$(awk '{print tolower($1); exit}' "$1.sha256")"
+    actual="$(printf '%s' "$actual" | tr 'A-F' 'a-f')"
+    if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+        echo "error: checksum mismatch — refusing to install." >&2
+        echo "  expected: ${expected:-<empty>}" >&2
+        echo "  actual:   $actual" >&2
+        exit 1
+    fi
+    echo "✓ sha256 verified"
+}
+
 if [ -n "$LOCAL_TARBALL" ]; then
     if [ ! -f "$LOCAL_TARBALL" ]; then
         echo "local tarball not found: $LOCAL_TARBALL" >&2
         exit 1
     fi
+    # Local tarballs are user-supplied bytes; no remote sidecar to verify.
     cp "$LOCAL_TARBALL" "$tarball"
 else
     echo
     echo "downloading…"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$TAR_URL" -o "$tarball"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$tarball" "$TAR_URL"
-    else
-        echo "neither curl nor wget found on PATH" >&2
-        exit 1
-    fi
+    _fetch "$TAR_URL" "$tarball" || { echo "download failed: $TAR_URL" >&2; exit 1; }
+    verify_checksum "$tarball" "$TAR_URL"
 fi
 
 echo "extracting…"

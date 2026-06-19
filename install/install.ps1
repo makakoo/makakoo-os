@@ -131,6 +131,31 @@ try {
         Write-Host ""
         Write-Host "downloading…"
         Invoke-WebRequest -Uri $zipUrl -OutFile $archive -UseBasicParsing
+
+        # ─── verify checksum (fail closed) ───────────────────────────
+        # Local archives ($LocalTarball) are user-supplied and skip this.
+        # Set $env:MAKAKOO_SKIP_CHECKSUM = "1" to bypass for an unpublished
+        # build.
+        if ($env:MAKAKOO_SKIP_CHECKSUM -eq "1") {
+            Write-Warning "MAKAKOO_SKIP_CHECKSUM=1 — skipping integrity verification"
+        } else {
+            $sumUrl  = "$zipUrl.sha256"
+            $sumFile = "$archive.sha256"
+            try {
+                Invoke-WebRequest -Uri $sumUrl -OutFile $sumFile -UseBasicParsing
+            } catch {
+                Write-Error "could not download checksum $sumUrl — refusing to install unverified bytes (set `$env:MAKAKOO_SKIP_CHECKSUM = '1' to override)"
+                exit 1
+            }
+            # Sidecar is `<hash>  <file>`; take the first whitespace token.
+            $expected = ((Get-Content -Raw $sumFile).Trim() -split '\s+')[0].ToLower()
+            $actual   = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+            if (-not $expected -or $expected -ne $actual) {
+                Write-Error "checksum mismatch — refusing to install.`n  expected: $expected`n  actual:   $actual"
+                exit 1
+            }
+            Write-Host "✓ sha256 verified"
+        }
     }
 
     Write-Host "extracting…"
