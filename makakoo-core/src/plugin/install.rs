@@ -488,6 +488,8 @@ fn skill_security_config_for_install(makakoo_home: &Path) -> SkillSecurityConfig
     SkillSecurityConfig::load_from(&path)
 }
 
+// cohesive parameter set; a params struct is a deferred refactor
+#[allow(clippy::too_many_arguments)]
 fn install_staged(
     src_path: &Path,
     source_str: String,

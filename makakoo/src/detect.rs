@@ -80,8 +80,8 @@ impl DetectedExtHost {
     }
 }
 
-/// Detect the 4 extension-based hosts (VSCode Copilot + Continue + Cline
-/// + JetBrains AI). On macOS these live under
+/// Detect the 4 extension-based hosts (VSCode Copilot, Continue, Cline,
+/// JetBrains AI). On macOS these live under
 /// `~/Library/Application Support/…`; on Linux under `~/.config/…`; on
 /// Windows under `%APPDATA%…`.
 pub fn detect_ext_hosts(home: &Path) -> Vec<DetectedExtHost> {

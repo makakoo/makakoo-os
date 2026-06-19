@@ -505,8 +505,10 @@ mod tests {
         let canonical = dir.path().join("skills-shared");
         fs::create_dir_all(&canonical).unwrap();
 
-        let mut drift = DriftReport::default();
-        drift.skills_broken = true;
+        let drift = DriftReport {
+            skills_broken: true,
+            ..Default::default()
+        };
         let actions = repair_symlinks(dir.path(), dir.path(), McpTarget::Vibe, &drift);
         assert!(actions.iter().any(|a| a.contains("repointed")));
 
@@ -522,8 +524,10 @@ mod tests {
         let recursive = canonical.join("auto-memory");
         std::os::unix::fs::symlink(&canonical, &recursive).unwrap();
 
-        let mut drift = DriftReport::default();
-        drift.recursive_symlink_in_memory = true;
+        let drift = DriftReport {
+            recursive_symlink_in_memory: true,
+            ..Default::default()
+        };
         let actions = repair_symlinks(dir.path(), dir.path(), McpTarget::Vibe, &drift);
         assert!(actions.iter().any(|a| a.contains("removed recursive")));
         assert!(!recursive.exists());
@@ -583,10 +587,12 @@ mod tests {
 
     #[test]
     fn issue_count_matches_human_list() {
-        let mut r = DriftReport::default();
-        r.mcp_missing = true;
-        r.skills_broken = true;
-        r.recursive_symlink_in_memory = true;
+        let r = DriftReport {
+            mcp_missing: true,
+            skills_broken: true,
+            recursive_symlink_in_memory: true,
+            ..Default::default()
+        };
         assert_eq!(r.issue_count(), 3);
         assert_eq!(r.issues_human().len(), 3);
     }

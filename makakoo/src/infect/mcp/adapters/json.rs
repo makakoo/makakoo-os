@@ -234,6 +234,8 @@ mod tests {
         }
     }
 
+    // name mirrors the JSON key "mcpServers" casing on purpose
+    #[allow(non_snake_case)]
     #[test]
     fn add_to_empty_file_creates_mcpServers_with_harvey() {
         let dir = tempdir().unwrap();
@@ -299,6 +301,8 @@ mod tests {
         assert!(!path.exists());
     }
 
+    // name mirrors the JSON key "mcpServers" casing on purpose
+    #[allow(non_snake_case)]
     #[test]
     fn opencode_uses_mcp_parent_key_not_mcpServers() {
         let dir = tempdir().unwrap();

@@ -17,8 +17,8 @@
 //!   * `stop   <name>` runs `entrypoint.stop`.
 //!   * `health <name>` runs `entrypoint.health` (exit 0 = alive).
 //!   * `status <name>` runs `health` if declared, else falls back to
-//!      a pgrep scan on the plugin name — useful for legacy agents that
-//!      ship no `health` hook.
+//!     a pgrep scan on the plugin name — useful for legacy agents that
+//!     ship no `health` hook.
 //!
 //! Every entrypoint command is executed via `/bin/sh -c <cmd>` with
 //! `cwd = plugin.root`. This matches how the daemon invokes them today

@@ -26,6 +26,8 @@ impl VerdictStatus {
         }
     }
 
+    // inherent from_str predates/!= std FromStr; intentional
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.trim().to_ascii_uppercase().as_str() {
             "PASS" => Some(VerdictStatus::Pass),

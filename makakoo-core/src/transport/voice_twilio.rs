@@ -87,6 +87,8 @@ struct TwilioAccountInfo {
     sid: String,
     #[serde(default)]
     friendly_name: Option<String>,
+    // deserialized from Twilio payload; retained for completeness
+    #[allow(dead_code)]
     #[serde(default)]
     status: Option<String>,
 }

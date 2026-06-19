@@ -10,7 +10,7 @@
 //!   * executable: `$MAKAKOO_HOME/plugins/skill-infrastructure-gmail-send/src/send.py`
 //!   * stdin: JSON `{"to": "...", "subject": "...", "body": "..."}`
 //!   * stdout: JSON `{"ok": true, "message_id": "..."}` on success,
-//!             `{"ok": false, "error": "..."}` on failure
+//!     `{"ok": false, "error": "..."}` on failure
 //!   * exit 0 on JSON success, exit != 0 on fatal error
 //!
 //! The plugin doesn't ship in v0.2 — this adapter is the call site so

@@ -34,6 +34,8 @@ use crate::context::CliContext;
 ///
 /// `home_override` is None in production; tests pass a TempDir so the
 /// registry walk operates on a controlled plugins/ tree.
+// cohesive parameter set; a params struct is a deferred refactor
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     pattern_name: &str,
     input: Option<String>,

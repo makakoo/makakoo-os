@@ -19,7 +19,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -64,7 +64,7 @@ fn hostname() -> String {
         })
 }
 
-fn heartbeat_path(home: &PathBuf) -> PathBuf {
+fn heartbeat_path(home: &Path) -> PathBuf {
     home.join("data").join(".sancho_heartbeat.jsonl")
 }
 

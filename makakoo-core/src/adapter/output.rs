@@ -201,8 +201,6 @@ fn heuristic_result(validator: &str, text: &str, duration: Duration) -> Validato
         (VerdictStatus::Fail, 0.5, truncate(text, 500))
     } else if lower.contains("needs fix") || lower.contains("needs_fix") {
         (VerdictStatus::NeedsFix, 0.5, truncate(text, 500))
-    } else if lower.contains("pass") {
-        (VerdictStatus::Pass, 0.5, truncate(text, 500))
     } else {
         (VerdictStatus::Pass, 0.5, truncate(text, 500))
     };
@@ -236,12 +234,8 @@ fn wrap(validator: &str, verdict: PhaseVerdict, raw: &str) -> ValidatorResult {
 fn clamp01(v: f64) -> f64 {
     if v.is_nan() {
         0.5
-    } else if v < 0.0 {
-        0.0
-    } else if v > 1.0 {
-        1.0
     } else {
-        v
+        v.clamp(0.0, 1.0)
     }
 }
 

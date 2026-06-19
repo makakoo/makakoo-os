@@ -7,9 +7,9 @@
 //! What each test proves:
 //!   - pi:            `pi` binary on PATH, responds to a stdin prompt.
 //!   - tytus-cli:     `tytus-mcp` on PATH, accepts MCP `tools/call` with
-//!                    a fan-out envelope `{"tool":"tytus_status"}`.
+//!     a fan-out envelope `{"tool":"tytus_status"}`.
 //!   - switchailocal: a SwitchAILocal gateway is listening on
-//!                    127.0.0.1:18080 with `AIL_API_KEY` in the env.
+//!     127.0.0.1:18080 with `AIL_API_KEY` in the env.
 //!
 //! Non-goals: verdict semantics, streaming, model choice. The bar is
 //! "the bridge successfully carried a prompt to the target and brought

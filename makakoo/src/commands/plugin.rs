@@ -309,6 +309,8 @@ fn info(ctx: &CliContext, name: &str) -> anyhow::Result<i32> {
     Ok(0)
 }
 
+// cohesive parameter set; a params struct is a deferred refactor
+#[allow(clippy::too_many_arguments)]
 fn install(
     ctx: &CliContext,
     source: &str,
@@ -914,6 +916,8 @@ fn pid_is_alive(_pid: u32) -> bool {
     true
 }
 
+// error type is a deliberately rich enum; boxing all Results is a tracked follow-up
+#[allow(clippy::result_large_err)]
 fn acquire_sync_lock(home: &Path, name: &str) -> Result<SyncLockGuard, InstallError> {
     let lock_dir = home.join("plugins").join(".stage").join("locks");
     if let Err(e) = std::fs::create_dir_all(&lock_dir) {

@@ -716,7 +716,7 @@ mod tests {
         fs::create_dir_all(&proj).unwrap();
         fs::create_dir_all(&home).unwrap();
         seed_dotdirs(&home, &[".config/opencode"]);
-        let r = dispatch_local(
+        let _r = dispatch_local(
             &proj,
             &home,
             LocalOptions {

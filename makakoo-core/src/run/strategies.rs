@@ -57,11 +57,7 @@ pub fn load_strategy(
     let home = home_override
         .map(|p| p.to_path_buf())
         .unwrap_or_else(data_dir);
-    let override_path = if home_override.is_some() {
-        home.join("strategies").join(format!("{name}.md"))
-    } else {
-        home.join("strategies").join(format!("{name}.md"))
-    };
+    let override_path = home.join("strategies").join(format!("{name}.md"));
     if override_path.exists() {
         return std::fs::read_to_string(&override_path).map_err(|source| {
             StrategyLoadError::Io {

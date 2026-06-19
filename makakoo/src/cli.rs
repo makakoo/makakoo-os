@@ -896,6 +896,8 @@ pub enum HandleCmd {
 }
 
 /// `makakoo agent <subcommand>`.
+// variant size disparity accepted; boxing is a tracked follow-up
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 pub enum AgentCmd {
     /// Run the plugin's `[entrypoint].start` script.

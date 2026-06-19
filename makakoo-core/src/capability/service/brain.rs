@@ -10,7 +10,7 @@
 //!    `$MAKAKOO_HOME/data/superbrain.db`. Primary read path; gives
 //!    plugins fast keyword + semantic search.
 //! 2. **Plain markdown** — `$MAKAKOO_HOME/data/Brain/journals/YYYY_MM_DD.md`
-//!    + `$MAKAKOO_HOME/data/Brain/pages/*.md`. Source of truth; the
+//!    plus `$MAKAKOO_HOME/data/Brain/pages/*.md`. Source of truth; the
 //!    Superbrain is an index over these.
 //!
 //! This handler serves reads out of Superbrain (fast) and writes into

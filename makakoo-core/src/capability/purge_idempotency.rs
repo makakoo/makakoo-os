@@ -157,6 +157,9 @@ pub fn check_and_record(home: &Path, now: DateTime<Utc>) -> PurgeCheck {
     }
     let lock_fd = match OpenOptions::new()
         .create(true)
+        // flock sentinel only — its bytes are never read or written, so
+        // preserve the original no-truncate behavior.
+        .truncate(false)
         .write(true)
         .open(&lock_path)
     {

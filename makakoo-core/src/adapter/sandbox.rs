@@ -428,8 +428,7 @@ requires_filesystem = ["write:/tmp/x"]"#,
     #[test]
     fn isolated_rejects_non_empty_allowed_hosts() {
         let body = NETWORK_IO_MANIFEST
-            .replace(r#"sandbox_profile = "network-io""#, r#"sandbox_profile = "isolated""#)
-            .replace(r#"requires_network = true"#, r#"requires_network = true"#);
+            .replace(r#"sandbox_profile = "network-io""#, r#"sandbox_profile = "isolated""#);
         let m = Manifest::parse_str(&body).unwrap();
         let spec = ProfileSpec::from_manifest(&m, PathBuf::from("/tmp/x"));
         let err = assert_manifest_self_consistent(&spec).unwrap_err();

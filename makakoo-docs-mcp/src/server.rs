@@ -25,6 +25,9 @@ use crate::tools::{
 #[derive(Clone)]
 pub struct DocsServer {
     pub index: Index,
+    // read by the `#[tool_handler]` macro expansion below; the dead_code
+    // pass can't see through the proc-macro, so the allow is required.
+    #[allow(dead_code)]
     tool_router: ToolRouter<DocsServer>,
 }
 

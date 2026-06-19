@@ -146,6 +146,8 @@ struct ChatPostMessage<'a> {
 /// One inbound Events API envelope as delivered over Socket Mode.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct SlackEnvelope {
+    // deserialized from Slack payload; retained for completeness
+    #[allow(dead_code)]
     pub envelope_id: Option<String>,
     pub payload: SlackEventPayload,
 }
@@ -186,6 +188,8 @@ pub(crate) struct SlackMessageEvent {
 
 /// Socket Mode envelope wrapper used both for inbound payloads and
 /// the `acknowledge` outbound.  We tag-decode on the `type` field.
+// variant size disparity accepted; boxing is a tracked follow-up
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SocketFrame {
@@ -194,6 +198,8 @@ enum SocketFrame {
         payload: SlackEventPayload,
     },
     Hello {
+        // deserialized from Slack payload; retained for completeness
+        #[allow(dead_code)]
         #[serde(default)]
         debug_info: Option<serde_json::Value>,
     },
@@ -698,6 +704,8 @@ mod tests {
         }
     }
 
+    // cohesive parameter set; a params struct is a deferred refactor
+    #[allow(clippy::too_many_arguments)]
     fn envelope(
         team_id: &str,
         channel: &str,

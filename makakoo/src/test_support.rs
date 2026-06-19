@@ -9,9 +9,8 @@
 //! tests run sequentially without needing `--test-threads=1`.
 //!
 //! This module is `#[cfg(test)]` only — no production code ever imports
-//! anything from here.
-
-#![cfg(test)]
+//! anything from here. (The `mod test_support;` declaration in `main.rs`
+//! carries the `#[cfg(test)]` gate.)
 
 use std::sync::Mutex;
 

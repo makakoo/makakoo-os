@@ -386,6 +386,7 @@ pub struct PatternTable {
     ///   * `external` or `polished` — opts the pattern OUT of the MCP
     ///     caveman default. Use for patterns that produce contracts,
     ///     emails, posts, or any prose where voice and rhythm matter.
+    ///
     /// All other tag values are free-form and surface in `plugin list`.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -1617,7 +1618,7 @@ command = ".venv/bin/pytest"
     #[test]
     fn parse_never_panics_on_random_bodies() {
         // Deterministic seed so a CI failure is reproducible by line number.
-        let mut rng = PseudoRng(0xC0FFEE_DEAD_BEEF);
+        let mut rng = PseudoRng(0x00C0_FFEE_DEAD_BEEF);
         let origin = p();
         for i in 0..10_000 {
             let body = random_body(&mut rng);
