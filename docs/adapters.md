@@ -1,6 +1,6 @@
 # Adapters — Makakoo OS Universal Bridge
 
-This doc is for **users** of Makakoo adapters — people who want to plug an external AI agent (OpenClaw, OpenRouter, Ollama, Claude API, a private pod, a custom CLI) into lope validation, Harvey chat delegation, or SANCHO swarm dispatch.
+This doc is for **users** of Makakoo adapters — people who want to plug an external AI agent (OpenClaw, OpenRouter, Ollama, Claude API, a private pod, a custom CLI) into lope validation, Harvey chat delegation, SANCHO swarm dispatch, or **autonomous `lope flow` graphs** (where the same adapter-fed validator pool drives the nodes of a declarative agent workflow — see *See also*).
 
 If you want to **publish** your own adapter, see `docs/adapter-publishing.md`.
 
@@ -193,3 +193,4 @@ Every `makakoo adapter update` diffs the new manifest against this snapshot. Any
 - `spec/ADAPTER_MANIFEST.md` — canonical schema v1 (or `makakoo adapter spec`)
 - `docs/adapter-publishing.md` — how to write + sign + publish your own
 - `development/sprints/MAKAKOO-OS-V0.3-UNIVERSAL-BRIDGE/SPRINT.md` — full rationale, security research, phase breakdown
+- **`lope flow`** (lope ≥ v0.11) — run your adapters/validators as nodes of a declarative DOT **graph** workflow: fan-out proposers, ensemble review, judge-routers, autonomous fix-loops, bounded by visit caps. `lope flow init consensus` to start; see the lope repo's `docs/reference.md → Flow` and the `lope-flow` skill. Same validator pool as `lope negotiate`, so any adapter you register here is usable as a flow node.
