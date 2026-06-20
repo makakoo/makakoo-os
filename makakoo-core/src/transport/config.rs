@@ -616,11 +616,11 @@ impl TransportEntry {
 /// validation + same-kind guards.
 ///
 /// Schema-level guards (Q11):
-/// - duplicate `transport.id` within a slot → reject (any kind);
+/// - duplicate `transport.id` within a slot → reject (any kind).
 ///
-/// Network-level guards live in the adapter `verify_credentials`
-/// step (duplicate Telegram `getMe.id`, duplicate Slack `bot_token`
-/// in same `team_id`).  See `TransportRouter::verify_no_duplicate_identities`.
+/// This is config-only validation. There is no network-level
+/// identity probe — the live gateway authenticates against each
+/// provider when it starts.
 pub fn validate_transport_list(entries: &[TransportEntry]) -> Result<()> {
     let mut seen_ids = std::collections::HashSet::new();
     for entry in entries {

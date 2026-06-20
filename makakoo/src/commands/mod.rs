@@ -23,6 +23,7 @@ pub mod docs;
 pub mod docs_mcp;
 pub mod dream;
 pub mod flag;
+pub mod flue_scaffold;
 pub mod handle;
 pub mod install;
 pub mod lifecycle;

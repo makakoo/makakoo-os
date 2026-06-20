@@ -10,10 +10,7 @@ use std::path::PathBuf;
 
 use makakoo_core::agents::{slot_path, AgentRegistry, AgentSlot};
 use makakoo_core::transport::config::{TelegramConfig, TransportConfig, TransportEntry};
-use makakoo_core::transport::{
-    config::SlackConfig, secrets::SecretsAdapter, slack::SlackAdapter, telegram::TelegramAdapter,
-    Transport, TransportContext,
-};
+use makakoo_core::transport::{config::SlackConfig, secrets::SecretsAdapter};
 
 use crate::context::CliContext;
 use crate::output;
@@ -99,8 +96,10 @@ pub fn show(ctx: &CliContext, slot_id: &str, json: bool) -> anyhow::Result<i32> 
     Ok(0)
 }
 
-/// `makakoo agent validate <slot>` — run per-transport credential
-/// verifiers WITHOUT starting the agent. Reports first failure.
+/// `makakoo agent validate <slot>` — config-only validation of each
+/// transport: confirms the entry parses and its secret references
+/// resolve from the local secret store, WITHOUT a network call or
+/// starting the agent. Reports first failure.
 pub fn validate(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
     let path = slot_path(ctx.home(), slot_id);
     if !path.exists() {
@@ -154,62 +153,45 @@ pub fn validate(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
     })
 }
 
+/// Config-only validation of a single transport entry.
+///
+/// Confirms the entry's secret references resolve from the local
+/// secret store (catches a missing or blank token before
+/// `agent start`). Makes NO network call: the live `getMe` /
+/// `auth.test` probe was removed together with the unused Rust
+/// transport runtime — the live gateway (the Python harveychat
+/// path) is what actually authenticates against the provider at
+/// start. Returns a placeholder identity so the caller's display
+/// stays uniform across transport kinds.
 async fn verify_one(
-    slot_id: &str,
+    _slot_id: &str,
     entry: &TransportEntry,
 ) -> anyhow::Result<(String, Option<String>)> {
     let secrets = makakoo_core::transport::secrets::KeyringSecrets;
-    let ctx_inner = TransportContext {
-        slot_id: slot_id.to_string(),
-        transport_id: entry.id.clone(),
-    };
     match &entry.config {
-        TransportConfig::Telegram(cfg) => {
-            let bot_token = secrets
+        TransportConfig::Telegram(_) => {
+            secrets
                 .resolve(&entry.bot_token_ref())
                 .map_err(|e| anyhow::anyhow!("resolve bot token: {}", e))?;
-            let adapter = TelegramAdapter::new(
-                ctx_inner,
-                cfg.clone(),
-                bot_token.value,
-                entry.allowed_users.clone(),
-            );
-            let id = adapter
-                .verify_credentials()
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            Ok((id.account_id, id.tenant_id))
+            Ok((format!("config-ok-{}", entry.id), None))
         }
-        TransportConfig::Slack(cfg) => {
-            let bot_token = secrets
+        TransportConfig::Slack(_) => {
+            secrets
                 .resolve(&entry.bot_token_ref())
                 .map_err(|e| anyhow::anyhow!("resolve slack bot token: {}", e))?;
-            let app_token = secrets
+            secrets
                 .resolve(&entry.app_token_ref())
                 .map_err(|e| anyhow::anyhow!("resolve slack app token: {}", e))?;
-            let adapter = SlackAdapter::new(
-                ctx_inner,
-                cfg.clone(),
-                bot_token.value,
-                app_token.value,
-                entry.allowed_users.clone(),
-            );
-            let id = adapter
-                .verify_credentials()
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            Ok((id.account_id, id.tenant_id))
+            Ok((format!("config-ok-{}", entry.id), None))
         }
         TransportConfig::Discord(_)
         | TransportConfig::WhatsApp(_)
         | TransportConfig::Web(_)
         | TransportConfig::VoiceTwilio(_)
         | TransportConfig::Email(_) => {
-            // Phase 7-11 transports verify credentials via their own
-            // adapters; the simplified registry path here doesn't run
-            // a network probe yet (Phase 13 wires per-kind verifiers).
-            // Return the identity placeholder so duplicate-detection
-            // skips them.
+            // These kinds carry no secret-ref check in the simplified
+            // registry path. Return the placeholder so duplicate
+            // detection skips them.
             Ok((format!("v2-pending-{}", entry.id), None))
         }
     }
@@ -297,11 +279,13 @@ pub struct CreateArgs {
     pub slack_team: Option<String>,
     pub slack_allowed: Vec<String>,
     pub skip_credential_check: bool,
+    pub runtime: crate::cli::AgentRuntime,
+    pub out: Option<PathBuf>,
 }
 
 /// `makakoo agent create <slot> ...` — write a new TOML to the
-/// registry. Pre-validates credentials via the per-transport
-/// verifier (unless --skip-credential-check) BEFORE writing files.
+/// registry. Pre-validates each transport's config + secret
+/// references (unless --skip-credential-check) BEFORE writing files.
 pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
     makakoo_core::agents::validate_slot_id(&args.slot)?;
     let target = slot_path(ctx.home(), &args.slot);
@@ -356,7 +340,8 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         build_slot_from_flags(&args)?
     };
 
-    if !args.skip_credential_check {
+    let is_flue = matches!(args.runtime, crate::cli::AgentRuntime::Flue);
+    if !args.skip_credential_check && !is_flue {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 for entry in slot.transports.iter().filter(|t| t.enabled) {
@@ -380,10 +365,26 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         slot.slot_id,
         target.display()
     ));
-    println!(
-        "Next: `makakoo agent validate {}` then `makakoo agent start {}`.",
-        slot.slot_id, slot.slot_id
-    );
+    if is_flue {
+        let out_dir = args
+            .out
+            .clone()
+            .unwrap_or_else(|| ctx.home().join("agents-flue").join(&slot.slot_id));
+        crate::commands::flue_scaffold::scaffold_flue_project(&slot, &out_dir)?;
+        output::print_info(format!(
+            "flue agent project scaffolded at {}",
+            out_dir.display()
+        ));
+        println!(
+            "Next: cd {} && npm install; fill .env from `makakoo secret`; then `npm run proxy` + `npx flue dev`. See README.md.",
+            out_dir.display()
+        );
+    } else {
+        println!(
+            "Next: `makakoo agent validate {}` then `makakoo agent start {}`.",
+            slot.slot_id, slot.slot_id
+        );
+    }
     Ok(0)
 }
 

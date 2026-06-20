@@ -895,6 +895,17 @@ pub enum HandleCmd {
     },
 }
 
+/// Runtime backing a slot created by `makakoo agent create`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum AgentRuntime {
+    /// Native Makakoo slot — control-plane config only (identity, scope, secrets).
+    #[default]
+    Native,
+    /// Also scaffold a Flue (TypeScript) agent project wired to Makakoo's MCP
+    /// server + the @flue/telegram channel — the runnable channel agent.
+    Flue,
+}
+
 /// `makakoo agent <subcommand>`.
 // variant size disparity accepted; boxing is a tracked follow-up
 #[allow(clippy::large_enum_variant)]
@@ -937,8 +948,9 @@ pub enum AgentCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Run per-transport credential verifiers WITHOUT starting the
-    /// agent process. Useful before `start` to surface bad credentials.
+    /// Config-only validation of each transport (parse + resolve its
+    /// secret references) WITHOUT a network call or starting the agent.
+    /// Useful before `start` to surface a missing token or bad config.
     Validate {
         /// Slot id.
         slot: String,
@@ -1001,11 +1013,21 @@ pub enum AgentCmd {
         /// Slack allowed_users (comma-separated `U…` ids).
         #[arg(long, value_name = "USERS", value_delimiter = ',')]
         slack_allowed: Vec<String>,
-        /// Skip the `getMe` / `auth.test` credential probe.  Use
-        /// only for offline scaffold of a slot whose tokens you'll
-        /// fix up afterward.
+        /// Skip the config-only credential check (secret-reference
+        /// resolution). Use for offline scaffold of a slot whose
+        /// tokens you'll fix up afterward.
         #[arg(long)]
         skip_credential_check: bool,
+        /// Agent runtime. `native` writes a Makakoo slot config only;
+        /// `flue` additionally scaffolds a Flue (TypeScript) agent
+        /// project wired to Makakoo's MCP server + the @flue/telegram
+        /// channel (the runnable channel agent).
+        #[arg(long, value_enum, default_value_t = AgentRuntime::Native)]
+        runtime: AgentRuntime,
+        /// Output dir for the scaffolded Flue project (only with
+        /// --runtime flue). Defaults to $MAKAKOO_HOME/agents-flue/<slot>.
+        #[arg(long, value_name = "DIR")]
+        out: Option<std::path::PathBuf>,
     },
 
     /// Migrate the legacy HarveyChat (`Olibia`) bot from
