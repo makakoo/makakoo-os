@@ -28,6 +28,7 @@ Your notes, your decisions, your arguments with yourself from three months ago �
 | Superbrain search — FTS5 + vector + LLM synthesis | ✅ |
 | Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ 38 plugins in `plugins-core/`, 32 fully self-contained (Python bundled) |
 | SANCHO proactive task engine (8 native + plugin tasks) | ✅ |
+| Chat-channel agents — `makakoo agent create <slot>` builds a bot reachable over Telegram / Slack / Discord; `--runtime flue` also scaffolds a runnable standalone TypeScript ([Flue](https://flueframework.com)) agent | ✅ native slots + Flue scaffolder |
 | Unix domain socket + Windows named-pipe IPC for plugins | ✅ |
 | 5 distros published (minimal, core, sebastian, creator, trader) | ✅ |
 | Shell completion (bash, zsh, fish, elvish, powershell) | ✅ |
@@ -117,6 +118,7 @@ rm -rf ~/.makakoo ~/MAKAKOO
 | Understand the setup wizard's 6 sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
 | Look up a specific `makakoo` subcommand | [`docs/user-manual/`](docs/user-manual/index.md) |
 | Run durable child-agent work without transcript floods | [`docs/user-manual/makakoo-agent-session.md`](docs/user-manual/makakoo-agent-session.md) |
+| Build a chat bot — native slots, or a runnable Flue agent in one command | [`docs/user-manual/agent.md`](docs/user-manual/agent.md), [`docs/walkthroughs/flue-telegram-bot.md`](docs/walkthroughs/flue-telegram-bot.md) |
 | Fix something that broke | [`docs/troubleshooting/`](docs/troubleshooting/index.md) |
 | Understand architecture / internals | [`docs/concepts/`](docs/concepts/) and [`spec/`](spec/) |
 | Write or publish an adapter | [`docs/adapters.md`](docs/adapters.md), [`docs/adapter-publishing.md`](docs/adapter-publishing.md) |
