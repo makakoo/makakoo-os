@@ -1982,7 +1982,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "makakoo"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "makakoo-client"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "base64",
  "makakoo-core",
@@ -2034,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "makakoo-core"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2076,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "makakoo-docs-mcp"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "makakoo-mcp"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "makakoo-platform"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "auto-launch",
