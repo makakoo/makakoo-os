@@ -44,6 +44,8 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 - **`failed to run skillspector scan for JSON: {e}`** — Makakoo found SkillSpector but could not execute the JSON scan. Check the executable path, Python venv health, and platform script permissions.
 - **`failed to run skillspector scan for SARIF: {e}`** — Makakoo found SkillSpector but could not execute the SARIF scan. Check the executable path, Python venv health, and platform script permissions.
 - **`failed to write bootstrap cache: <error>`** — The infect cache path isn't writable. `~/MAKAKOO/cache/infect/` must be writable by your user.
+- **`flue output dir {} already exists and is non-empty — refusing to overwrite`** — The `flue` command-line utility was asked to generate or scaffold files in a folder that is not empty. Clean the directory or choose another location.
+
 
 ## G
 
