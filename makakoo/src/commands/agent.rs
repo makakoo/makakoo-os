@@ -90,6 +90,8 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             slack_team,
             slack_allowed,
             skip_credential_check,
+            runtime,
+            out,
         } => crate::commands::agent_slot::create(
             ctx,
             crate::commands::agent_slot::CreateArgs {
@@ -107,6 +109,8 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 slack_team,
                 slack_allowed,
                 skip_credential_check,
+                runtime,
+                out,
             },
         ),
         AgentCmd::MigrateHarveychat => crate::commands::agent_slot::migrate_harveychat(ctx),

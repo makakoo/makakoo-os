@@ -297,6 +297,8 @@ pub struct CreateArgs {
     pub slack_team: Option<String>,
     pub slack_allowed: Vec<String>,
     pub skip_credential_check: bool,
+    pub runtime: crate::cli::AgentRuntime,
+    pub out: Option<PathBuf>,
 }
 
 /// `makakoo agent create <slot> ...` — write a new TOML to the
@@ -356,7 +358,8 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         build_slot_from_flags(&args)?
     };
 
-    if !args.skip_credential_check {
+    let is_flue = matches!(args.runtime, crate::cli::AgentRuntime::Flue);
+    if !args.skip_credential_check && !is_flue {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 for entry in slot.transports.iter().filter(|t| t.enabled) {
@@ -380,10 +383,26 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         slot.slot_id,
         target.display()
     ));
-    println!(
-        "Next: `makakoo agent validate {}` then `makakoo agent start {}`.",
-        slot.slot_id, slot.slot_id
-    );
+    if is_flue {
+        let out_dir = args
+            .out
+            .clone()
+            .unwrap_or_else(|| ctx.home().join("agents-flue").join(&slot.slot_id));
+        crate::commands::flue_scaffold::scaffold_flue_project(&slot, &out_dir)?;
+        output::print_info(format!(
+            "flue agent project scaffolded at {}",
+            out_dir.display()
+        ));
+        println!(
+            "Next: cd {} && npm install; fill .env from `makakoo secret`; then `npm run proxy` + `npx flue dev`. See README.md.",
+            out_dir.display()
+        );
+    } else {
+        println!(
+            "Next: `makakoo agent validate {}` then `makakoo agent start {}`.",
+            slot.slot_id, slot.slot_id
+        );
+    }
     Ok(0)
 }
 
