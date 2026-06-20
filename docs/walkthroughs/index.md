@@ -84,6 +84,7 @@ slots end-to-end with one slot dual-homed on Telegram + Slack.
 
 | Walkthrough | What you'll do | Time |
 |---|---|---|
+| [Telegram bot with Flue (`--runtime flue`)](./flue-telegram-bot.md) | Scaffold a **runnable** standalone TypeScript Telegram agent in one command. Makakoo owns identity/scope/secrets; Flue runs the loop; MCP bridges every `mcp__harvey__*` tool. | ~15 min |
 | [Multi-transport subagents (flagship)](./multi-transport-subagents.md) | Three slots — `harveychat` (legacy migrate), `secretary` (Telegram + Slack), `career` (Telegram-only). End-to-end live dogfood. | ~25 min |
 | [Discord bot](./discord-bot.md) | Stand up a Discord-bound slot. Per-guild allowlist; MESSAGE_CONTENT intent default OFF. | ~10 min |
 | [WhatsApp Business](./whatsapp-business.md) | Wire a WhatsApp Cloud API number into a slot via the shared webhook router. | ~12 min |

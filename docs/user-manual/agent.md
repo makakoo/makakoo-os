@@ -8,7 +8,7 @@ more chat-transport attachments (Telegram, Slack, …).
 
 | Command | Purpose |
 |---|---|
-| `makakoo agent create <slot> [flags|--from-toml]` | Create a new slot. Pre-validates credentials before writing. |
+| `makakoo agent create <slot> [flags|--from-toml] [--runtime native|flue]` | Create a new slot. Config-only credential check before writing. `--runtime flue` also scaffolds a runnable TypeScript channel agent. |
 | `makakoo agent list [--json]` | Enumerate every slot in `~/MAKAKOO/config/agents/*.toml`. |
 | `makakoo agent show <slot> [--json]` | Print the resolved TOML with all secrets redacted. |
 | `makakoo agent validate <slot>` | Run per-transport credential verifiers WITHOUT starting the agent. |
@@ -93,6 +93,58 @@ Tiering and curation methodology are documented in
 `--slack-bot-token`. The CLI's `--allowed-paths`, `--forbidden-paths`,
 `--tools`, `--persona`, `--name` flags override the source file
 when explicitly passed.
+
+## Agent runtime: `native` vs `flue`
+
+`agent create` takes an orthogonal `--runtime` flag (default `native`)
+that decides **what gets written** alongside the slot config. The slot
+itself — identity, scope, allowed paths/tools, secret references — is
+identical in both cases; Makakoo always owns that control plane.
+
+| `--runtime` | What it writes | When to use |
+|---|---|---|
+| `native` (default) | Slot TOML only. The slot runs inside Makakoo's own gateway (`makakoo agent start`). | You want a bot supervised by Makakoo's launchd/systemd lifecycle. |
+| `flue` | Slot TOML **plus** a runnable [Flue](https://flueframework.com) (TypeScript) agent project wired to Makakoo's MCP server and the `@flue/telegram` channel. | You want a standalone channel agent you run/deploy yourself, with full access to every Makakoo tool over MCP. |
+
+With `--runtime flue`, Makakoo stays the **control plane** (identity,
+scope, secrets, registry — the slot) and Flue becomes the **data plane**
+(the agent loop + the Telegram webhook). The two are bridged by a
+generated `mcp-proxy.mjs`, which re-exposes the local `makakoo-mcp` stdio
+server over StreamableHTTP so the agent's `connectMcpServer()` can consume
+every Makakoo tool as `mcp__harvey__*`.
+
+```sh
+# Scaffold a native slot AND a runnable Flue Telegram agent next to it:
+makakoo agent create assistant \
+  --runtime flue \
+  --persona "Helpful Telegram assistant. Uses Makakoo's Brain + tools." \
+  --out ~/MAKAKOO/agents-flue/assistant
+```
+
+`--out` sets the scaffold directory (default
+`$MAKAKOO_HOME/agents-flue/<slot>`). The command refuses to overwrite a
+non-empty directory. The scaffolded project contains:
+
+| File | Purpose |
+|---|---|
+| `src/agents/assistant.ts` | The agent: model + instructions + Makakoo MCP tools. |
+| `src/channels/telegram.ts` | Signature-verified Telegram webhook → dispatch to the agent. |
+| `mcp-proxy.mjs` | stdio→StreamableHTTP bridge to the local `makakoo-mcp` binary. |
+| `instructions.txt` | The agent's system instructions (seeded from the slot `--persona`). |
+| `.env.example` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET_TOKEN`, `MAKAKOO_MCP_URL`, `AGENT_MODEL`. |
+| `package.json`, `.gitignore`, `README.md` | Standard project scaffolding. |
+
+Run it from the scaffold directory:
+
+```sh
+npm install
+cp .env.example .env          # fill TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET_TOKEN
+npm run proxy                 # terminal 1: makakoo-mcp over http://127.0.0.1:8808/mcp
+npx flue dev                  # terminal 2: agent + webhook locally
+```
+
+End-to-end recipe (bot token → live replies, calling the Brain):
+[`docs/walkthroughs/flue-telegram-bot.md`](../walkthroughs/flue-telegram-bot.md).
 
 ## Slot id rules
 

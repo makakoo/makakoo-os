@@ -10,6 +10,26 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-06-20
+
+### Added
+- Added `makakoo agent create <slot> --runtime flue` — scaffolds a runnable [Flue](https://flueframework.com) (TypeScript) channel agent next to the native slot. Makakoo keeps the control plane (identity, scope, secrets, registry) while Flue runs the data plane (agent loop + Telegram webhook); a generated `mcp-proxy.mjs` bridges the local `makakoo-mcp` stdio server to StreamableHTTP so the agent consumes every Makakoo tool as `mcp__harvey__*`. New `--out` flag sets the scaffold dir (default `$MAKAKOO_HOME/agents-flue/<slot>`). See `docs/walkthroughs/flue-telegram-bot.md`.
+
+### Changed
+- `makakoo agent validate` and the create-time credential check are now **config-only** (parse + resolve secret references); they no longer make a live network probe to the transport API.
+- Retired the never-assembled in-process Rust transport runtime (router/outbound/pairing/whatsapp/web/voice_twilio/email modules) that only ever ran under `#[cfg(test)]`; the live message loop runs in the Python harveychat gateway. The locked wire schema (`transport/frame.rs` + `ipc/`) and the telegram/slack/discord adapters are unchanged.
+
+## [0.1.30] - 2026-06-20
+
+### Added
+- Install scripts (`install.sh` / `install.ps1`) now verify the sha256 of each artifact before unpacking and **fail closed** on a missing or mismatched sidecar.
+- The release workflow publishes a combined `SHA256SUMS` manifest alongside the per-artifact `.sha256` sidecars.
+- Governance: added `CODEOWNERS`, `docs/MAINTAINERS.md`, and routed security reports through `SECURITY.md`.
+
+### Changed
+- Hardened CI: SHA-pinned all third-party GitHub Actions, and pinned rustfmt + clippy (`-D warnings`) to rustc 1.95.0.
+- Added a gitleaks secret-scanning gate with an audited allowlist (0 live secrets).
+
 ## [0.1.29] - 2026-06-14
 
 ### Added
