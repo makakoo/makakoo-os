@@ -948,8 +948,9 @@ pub enum AgentCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Run per-transport credential verifiers WITHOUT starting the
-    /// agent process. Useful before `start` to surface bad credentials.
+    /// Config-only validation of each transport (parse + resolve its
+    /// secret references) WITHOUT a network call or starting the agent.
+    /// Useful before `start` to surface a missing token or bad config.
     Validate {
         /// Slot id.
         slot: String,
@@ -1012,9 +1013,9 @@ pub enum AgentCmd {
         /// Slack allowed_users (comma-separated `U…` ids).
         #[arg(long, value_name = "USERS", value_delimiter = ',')]
         slack_allowed: Vec<String>,
-        /// Skip the `getMe` / `auth.test` credential probe.  Use
-        /// only for offline scaffold of a slot whose tokens you'll
-        /// fix up afterward.
+        /// Skip the config-only credential check (secret-reference
+        /// resolution). Use for offline scaffold of a slot whose
+        /// tokens you'll fix up afterward.
         #[arg(long)]
         skip_credential_check: bool,
         /// Agent runtime. `native` writes a Makakoo slot config only;

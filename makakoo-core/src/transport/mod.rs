@@ -2,16 +2,17 @@
 //!
 //! Locked by SPRINT-MULTI-BOT-SUBAGENTS Phase 0 / Q12: a Makakoo-native
 //! Rust contract INSPIRED BY OpenClaw's `ChannelPlugin` shape. The trait
-//! seams (gateway, outbound, config, secrets, status, pairing) mirror
-//! OpenClaw's responsibility split, but no source/binary compatibility
-//! is promised.
+//! seams (gateway, config, secrets, status) mirror OpenClaw's
+//! responsibility split, but no source/binary compatibility is promised.
 //!
-//! Optional handlers in OpenClaw map to default trait impls in Rust
-//! that return `Ok(())` and emit a `DEBUG` log so adapters opt in to
-//! the seams they actually need.
-//!
-//! v1 ships `Telegram` and `Slack` (Socket Mode). Discord, WhatsApp,
-//! and the deferred adapters listed in Q12 are post-v1.
+//! Scope note: the never-assembled in-process runtime (the router, the
+//! outbound/pairing sub-trait stubs, and the post-v1 adapter skeletons
+//! for WhatsApp / Web / Twilio voice / email) was retired. What remains
+//! is what production uses: the `config` + `secrets` parsing the slot
+//! registry and `agent validate` read, the `frame` wire schema shared
+//! with `ipc`, and the Telegram / Slack / Discord adapters that
+//! `channel_ops` wraps. The live message loop runs in the Python
+//! harveychat gateway, not here.
 
 use async_trait::async_trait;
 
@@ -19,22 +20,14 @@ use crate::Result;
 
 pub mod config;
 pub mod discord;
-pub mod email;
 pub mod frame;
 pub mod gateway;
-pub mod outbound;
-pub mod pairing;
-pub mod router;
 pub mod secrets;
 pub mod slack;
 pub mod status;
 pub mod telegram;
-pub mod voice_twilio;
-pub mod web;
-pub mod whatsapp;
 
 pub use frame::{MakakooFrame, MakakooInboundFrame, MakakooOutboundFrame, ThreadKind};
-pub use router::{RouterError, TransportRouter};
 pub use secrets::{ResolvedSecret, SecretRef, SecretsAdapter};
 
 /// Spawn context handed to a transport task at start. Carries the
@@ -46,22 +39,16 @@ pub struct TransportContext {
     pub transport_id: String,
 }
 
-/// The umbrella `Transport` trait. Every adapter (Telegram, Slack, …)
-/// implements this. The trait composes the smaller adapters from
-/// `gateway`, `outbound`, `config`, `secrets`, `status`, `pairing`
-/// modules — they are not required for v1 to be separate trait
-/// objects, just separate concern boundaries.
-///
-/// In v1 the umbrella trait directly exposes the methods needed by
-/// the router. Phase-3+ may split these into sub-traits as the
-/// surface grows.
+/// The umbrella `Transport` trait. The Telegram / Slack / Discord
+/// adapters implement it; `channel_ops` consumes those adapters
+/// concretely (not as `dyn Transport`). The trait pairs with the
+/// `gateway`, `config`, `secrets` and `status` concern boundaries.
 #[async_trait]
 pub trait Transport: Send + Sync {
     /// Stable type discriminator: `"telegram"`, `"slack"`, …
     fn kind(&self) -> &'static str;
 
-    /// The transport_id from the agent TOML. Used by the router to
-    /// match outbound frames back to their adapter instance.
+    /// The transport_id from the agent TOML.
     fn transport_id(&self) -> &str;
 
     /// Verify the credentials in the adapter's config (e.g. Telegram
@@ -75,10 +62,9 @@ pub trait Transport: Send + Sync {
     /// it (with WARN) if the format doesn't match.
     async fn send(&self, frame: &MakakooOutboundFrame) -> Result<()>;
 
-    /// Default no-op for optional OpenClaw seams that haven't been
-    /// implemented yet for this adapter. Adapters that need pairing
-    /// override `pairing::PairingAdapter` separately; this hook is a
-    /// placeholder for the trait-level handler-presence check.
+    /// Default no-op for optional OpenClaw seams an adapter does not
+    /// implement. Logs at `DEBUG` so adapters opt in only to the
+    /// seams they actually need.
     async fn on_unimplemented_handler(&self, name: &str) -> Result<()> {
         tracing::debug!(
             target: "makakoo_core::transport",
