@@ -10,6 +10,8 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-06-21
+
 ### Added
 - Added `makakoo update` as the primary self-update command, keeping `makakoo upgrade` as a legacy alias.
 - Added `makakoo setup updates` plus the bundled `sancho-task-makakoo-update` task so fresh Core setup can default to automatic 24h Makakoo OS updates while existing installs stay idle until `config/updates.toml` exists.
@@ -17,6 +19,7 @@ complement, focused on user-visible changes and migration notes.
 
 ### Changed
 - Improved the Brain setup picker so missing Obsidian now offers an app install when a supported package manager is available, instead of only printing manual instructions.
+- Refreshed the setup/manual/skill docs for `makakoo agent create`, `makakoo sync`, `makakoo memory`, Headroom-by-default, and the distinction between infected AI hosts and chat transports.
 
 ## [0.1.31] - 2026-06-20
 
