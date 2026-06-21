@@ -11,7 +11,7 @@ Authoritative runbook for cutting a new tagged release.
 | `iwr \| iex` installer (Windows) | `install/install.ps1` + `marketing/makakoo/site/install.ps1` | same |
 | Homebrew tap | `distribution/homebrew/makakoo.rb` (source of truth) AND live `traylinx/homebrew-tap/Formula/makakoo.rb` | manual mirror |
 | `cargo install` | `Cargo.toml` workspace version | implicit |
-| `makakoo upgrade` (end-user self-update) | nothing — auto-detects install method | already wired |
+| `makakoo update` (end-user self-update; `upgrade` legacy alias) | nothing — auto-detects install method | already wired |
 
 The repo's `distribution/install.sh` and `~/MAKAKOO/marketing/makakoo/site/install.sh` MUST stay byte-identical. Same for `.ps1`. The repo file is the source of truth; copy it to the marketing site at every release.
 
@@ -80,10 +80,10 @@ Once a new tag is published, end users get the new version via:
 | Their original install | Update command |
 |---|---|
 | `brew install traylinx/tap/makakoo` | `brew upgrade traylinx/tap/makakoo` |
-| `curl … install.sh \| sh` | `makakoo upgrade` (uses the curl-pipe re-install path) |
-| `cargo install --path makakoo` | `makakoo upgrade` (re-runs cargo install) |
+| `curl … install.sh \| sh` | `makakoo update` (uses the curl-pipe re-install path) |
+| `cargo install --path makakoo` | `makakoo update` (re-runs cargo install) |
 
-`makakoo upgrade` auto-detects which of the three install paths created the binary (resolves symlinks, recognises `/usr/local/Cellar/...` Homebrew Cellar paths since v0.1.4) and dispatches the matching update command. Users never need to remember which channel they used.
+`makakoo update` auto-detects which of the three install paths created the binary (resolves symlinks, recognises `/usr/local/Cellar/...` Homebrew Cellar paths since v0.1.4) and dispatches the matching update command. Users never need to remember which channel they used. `makakoo upgrade` remains a legacy alias for old scripts.
 
 ## Smoke tests
 

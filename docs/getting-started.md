@@ -204,14 +204,14 @@ install complete
     claude, gemini, codex, opencode
 
 → launching the setup wizard
-[1/6] Persona configuration
+[1/8] Persona configuration
 Persona name (what should I call myself?) [Harvey]:
 …
 ```
 
 The wizard hand-off is automatic in interactive shells. It walks you
-through six sections — persona, brain, CLI hosts, terminal, LLM
-provider, and a final infect pass. Press Enter to accept defaults at
+through the setup sections — persona, updates, brain, CLI hosts,
+terminal, Lope, LLM provider, and a final infect pass. Press Enter to accept defaults at
 any prompt; the wizard is fully idempotent and you can re-run any
 section later with `makakoo setup --only <section>`. See
 [Setup wizard](user-manual/setup-wizard.md) for what each section
@@ -293,7 +293,7 @@ Where to go next depends on what you want to do:
 |---|---|
 | See what Makakoo can do day-to-day | [Use cases](use-cases.md) |
 | Connect my Obsidian vault or Logseq graph | [Brain sources](user-manual/brain-sources.md) |
-| Understand the setup wizard's 6 sections | [Setup wizard](user-manual/setup-wizard.md) |
+| Understand the setup wizard's sections | [Setup wizard](user-manual/setup-wizard.md) |
 | Add pi (blessed CLI coding agent) or Ghostty (blessed terminal) | `makakoo setup cli-agent` / `makakoo setup terminal` |
 | Pick which LLM Makakoo routes through | [Model providers](user-manual/adapters.md) |
 | Connect this Brain to another Makakoo install | [Brain Network](user-manual/makakoo-network.md) / [Walkthrough 14](walkthroughs/14-brain-network.md) |

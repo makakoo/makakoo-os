@@ -10,7 +10,7 @@ for "I want to X" recipes.
 
 | Chapter | What it covers |
 |---|---|
-| [Setup wizard](setup-wizard.md) | The 6 sections (persona, brain, cli-agent, terminal, model-provider, infect) walked through end-to-end. |
+| [Setup wizard](setup-wizard.md) | The setup sections (persona, updates, brain, cli-agent, terminal, lope, model-provider, infect) walked through end-to-end. |
 | [Write-access grants (`makakoo perms`)](makakoo-perms.md) | Grant / revoke / audit runtime write permissions. |
 | [Multi-bot subagents (`makakoo agent`)](agent.md) | Create, run, and tear down per-transport subagent slots (Telegram / Slack / Discord / WhatsApp / Voice / Email / Web). |
 | [Agent sessions (`makakoo agent-session`)](makakoo-agent-session.md) | Durable child-agent work sessions with compact result handles and verification gates. |
@@ -175,28 +175,28 @@ makakoo infect --target claude,gemini
 makakoo uninfect --global
 ```
 
-### Upgrade
+### Update
 
 ```bash
-# Auto-detect install method + upgrade both binaries
-makakoo upgrade
+# Auto-detect install method + update both binaries
+makakoo update
 
 # Preview without spawning
-makakoo upgrade --dry-run
+makakoo update --dry-run
 
-# Upgrade + refresh bootstrap fragments in every infected CLI / IDE slot
-makakoo upgrade --reinfect
+# Update + refresh bootstrap fragments in every infected CLI / IDE slot
+makakoo update --reinfect
 
 # Force a specific method (rare — when auto-detect picks the wrong path)
-makakoo upgrade --method brew
-makakoo upgrade --method cargo
-makakoo upgrade --method curl-pipe
+makakoo update --method brew
+makakoo update --method cargo
+makakoo update --method curl-pipe
 
-# Upgrade Cargo install from a local checkout instead of the public repo
-makakoo upgrade --source ~/makakoo-os
+# Update Cargo install from a local checkout instead of the public repo
+makakoo update --source ~/makakoo-os
 ```
 
-Full reference: [makakoo-upgrade.md](makakoo-upgrade.md). Task-oriented walkthrough: [docs/upgrade.md](../upgrade.md).
+Full reference: [makakoo-upgrade.md](makakoo-upgrade.md). Task-oriented walkthrough: [docs/upgrade.md](../upgrade.md). `makakoo upgrade` remains a legacy alias.
 
 ### Write-access grants
 

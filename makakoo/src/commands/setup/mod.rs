@@ -15,8 +15,8 @@
 //!    - Map the [`SectionOutcome`] to a [`SectionStatus`] and persist.
 //! 5. Print a final summary table.
 //!
-//! Current registry: persona → brain → cli-agent → terminal →
-//! model-provider → infect.
+//! Current registry: persona → updates → brain → cli-agent → terminal →
+//! lope → model-provider → infect.
 
 use std::collections::HashSet;
 use std::io::{stdin, stdout};
@@ -28,10 +28,12 @@ pub mod brain;
 pub mod cli_agent;
 pub mod harness;
 pub mod infect_section;
+pub mod lope;
 pub mod model_provider;
 pub mod persona;
 pub mod state;
 pub mod terminal;
+pub mod updates;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -66,12 +68,14 @@ pub fn run(args: SetupArgs) -> anyhow::Result<i32> {
     }
 
     // Build the section registry in the canonical order: persona →
-    // brain → cli-agent → terminal → model-provider → infect.
+    // updates → brain → cli-agent → terminal → lope → model-provider → infect.
     let mut sections: Vec<Box<dyn Section>> = vec![
         Box::new(persona::PersonaSection::new(args.force)),
+        Box::new(updates::UpdatesSection::new()),
         Box::new(brain::BrainSection::new()),
         Box::new(cli_agent::CliAgentSection::new()),
         Box::new(terminal::TerminalSection::new()),
+        Box::new(lope::LopeSection::new()),
         Box::new(model_provider::ModelProviderSection::new()),
         Box::new(infect_section::InfectSection::new()),
     ];
@@ -274,9 +278,11 @@ mod tests {
     fn registry() -> Vec<Box<dyn Section>> {
         vec![
             Box::new(persona::PersonaSection::new(false)),
+            Box::new(updates::UpdatesSection::new()),
             Box::new(brain::BrainSection::new()),
             Box::new(cli_agent::CliAgentSection::new()),
             Box::new(terminal::TerminalSection::new()),
+            Box::new(lope::LopeSection::new()),
             Box::new(model_provider::ModelProviderSection::new()),
             Box::new(infect_section::InfectSection::new()),
         ]
@@ -305,7 +311,7 @@ mod tests {
             ..Default::default()
         };
         let sel = select_sections(&sections, &args).unwrap();
-        assert_eq!(sel, vec![1]);
+        assert_eq!(sel, vec![2]);
     }
 
     #[test]

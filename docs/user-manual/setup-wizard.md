@@ -1,9 +1,10 @@
 # `makakoo setup` — interactive wizard
 
 `makakoo setup` walks you through every one-time configuration step: naming
-the assistant, registering brain sources, bootstrapping the blessed CLI
-agent (pi) and terminal (Ghostty on macOS), picking a primary LLM adapter,
-and infecting local CLI hosts with the Makakoo bootstrap block.
+the assistant, choosing auto/manual Makakoo OS updates, registering brain
+sources, bootstrapping the blessed CLI agent (pi), terminal (Ghostty on macOS),
+and Lope validator ensemble, picking a primary LLM adapter, and infecting local
+CLI hosts with the Makakoo bootstrap block.
 
 Fresh installs are offered the wizard automatically at the end of
 `makakoo install`. You can also run it at any time — or re-run a single
@@ -34,9 +35,11 @@ same effect can be forced with `--non-interactive`.
 | Section          | What it does                                                                 | How status is decided                            |
 |------------------|-----------------------------------------------------------------------------|--------------------------------------------------|
 | `persona`        | Names your assistant + optional user name + pronoun + voice default; seeds persona registry/context when installed. | `config/persona.json` exists → already-satisfied |
+| `updates`        | Chooses Makakoo OS update mode. `auto` runs `makakoo update --reinfect` from SANCHO every 24h; `manual` only checks when the user runs it. | `config/updates.toml` has `mode = "auto"` or `mode = "manual"` |
 | `brain`          | Shells to the existing `skill-brain-multi-source` picker to register vaults.  | `config/brain_sources.json` has ≥1 non-default source |
 | `cli-agent`      | Installs pi (`@mariozechner/pi-coding-agent`) via `npm install -g`.          | `pi` is on `$PATH`                                |
 | `terminal`       | Installs Ghostty via `brew install --cask ghostty`. **macOS only.**           | `brew list --cask ghostty` exits 0                |
+| `lope`           | Installs Lope (`~/.lope`) and registers its skills/commands into detected AI CLI hosts. | `lope` is on `$PATH` or `~/.lope/lope/cli.py` exists |
 | `model-provider` | Writes `~/.makakoo/primary_adapter.toml` naming the default routing adapter. If no adapters are registered yet, it installs the bundled `switchailocal` adapter and selects it as the fresh-install default. | file exists and points to a registered adapter    |
 | `infect`         | Thin wrapper over `makakoo infect` — writes the bootstrap block to every    | `makakoo infect --verify` exits 0                 |
 |                  | detected CLI host config (NOT your shell dotfiles).                         |                                                  |
@@ -66,9 +69,11 @@ Sample contents after a successful full run:
   "version": 1,
   "sections": {
     "persona":        { "status": "Completed", "at": "2026-04-23T17:30:00Z" },
+    "updates":        { "status": "Completed", "at": "2026-04-23T17:30:30Z" },
     "brain":          { "status": "Skipped",   "at": "2026-04-23T17:31:12Z" },
     "cli-agent":      { "status": "Completed", "at": "2026-04-23T17:32:48Z" },
     "terminal":       { "status": "Completed", "at": "2026-04-23T17:33:19Z" },
+    "lope":           { "status": "Completed", "at": "2026-04-23T17:33:45Z" },
     "model-provider": { "status": "Completed", "at": "2026-04-23T17:34:02Z" },
     "infect":         { "status": "Completed", "at": "2026-04-23T17:34:55Z" }
   }
@@ -92,9 +97,15 @@ of the flag.
   install --cask` are only invoked after an explicit `Y`. If the required
   tool is missing (no npm, no brew), the section fails with a clear hint
   rather than silently doing nothing.
-- **Sancho tasks preserve the 24h update cadence.** The `sancho-task-cli-pi`
-  and `sancho-task-cli-ghostty` plugins keep installed tools current; they
-  nag (via the Brain journal) but never install without the wizard.
+- **Sancho tasks preserve the 24h update cadence.** `sancho-task-makakoo-update`
+  keeps Makakoo OS current when update mode is explicitly `auto` (the fresh
+  setup default). Missing config stays idle so existing installs do not silently
+  opt into unattended self-updates.
+  The `sancho-task-cli-pi` and `sancho-task-cli-ghostty` plugins keep installed
+  tools current; they nag (via the Brain journal) but never install missing
+  tools without the wizard.
+- **Lope is recommended, not mandatory.** The Lope section explains the value
+  of multi-CLI validator review and installs only after explicit consent.
 - **Persona is preserved across refactors.** The old `makakoo setup`
   was a one-shot persona picker; it now lives as the `persona` section
   inside this dispatcher. Fresh core installs also seed

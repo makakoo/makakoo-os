@@ -82,7 +82,7 @@ cargo install --path makakoo-mcp --force
 makakoo install         # re-runs distro + infect; idempotent
 ```
 
-Note: **MCP children don't auto-upgrade** — restart any open AI CLI session after upgrading `makakoo-mcp` so the new binary is loaded.
+Note: **MCP children don't auto-update** — restart any open AI CLI session after updating `makakoo-mcp` so the new binary is loaded.
 
 ---
 
@@ -154,7 +154,7 @@ Skip with `--no-setup` for unattended installs (CI, scripted provisioning). Non-
 
 `makakoo setup` is the interactive configuration tool. It runs after `makakoo install`, but you can run it any time — it picks up from where you left off (each section is independently committable).
 
-It has **six sections**. You can run all of them sequentially, or skip to one with `--only <name>`.
+It has **eight sections**. You can run all of them sequentially, or skip to one with `--only <name>`.
 
 ```sh
 makakoo setup                          # all sections, interactive
@@ -184,7 +184,21 @@ name context.
 
 **Use case**: you want the AI to call you by name and identify as your custom persona instead of "Harvey".
 
-### Section 2 — `brain`
+### Section 2 — `updates`
+
+Chooses how Makakoo OS updates itself.
+
+- `auto` (fresh setup default) lets the bundled `sancho-task-makakoo-update`
+  run `makakoo update --reinfect` every 24h.
+- `manual` keeps scheduled updates idle; you run `makakoo update` yourself.
+- Existing installs with no `$MAKAKOO_HOME/config/updates.toml` stay idle until
+  this section writes an explicit choice.
+
+Writes `$MAKAKOO_HOME/config/updates.toml`.
+
+**Use case**: you want normal software auto-updates, or you want to opt out and update manually.
+
+### Section 3 — `brain`
 
 Configures where your Brain lives. Logseq is the default (Markdown outliner format with `[[wikilinks]]`). You can also point at an existing Obsidian vault or a plain folder.
 
@@ -197,7 +211,7 @@ Initializes the journals dir + pages dir. You can add more vaults later with `ma
 
 **Use case**: you already use Obsidian for personal notes and want Makakoo to read/write into your existing vault instead of creating a new one.
 
-### Section 3 — `cli-agent`
+### Section 4 — `cli-agent`
 
 Tells Makakoo which AI CLI hosts to detect + infect. By default, every CLI present on PATH gets infected. You can opt-out individual CLIs here.
 
@@ -207,7 +221,7 @@ This section drives the `infect --global` step. Re-running it after installing a
 
 **Use case**: you have Codex installed but don't want Makakoo to touch it. Skip it here; infect will leave its slot alone forever.
 
-### Section 4 — `terminal`
+### Section 5 — `terminal`
 
 Optional: configures your terminal emulator (Ghostty preferred, but works with iTerm2, Alacritty, Warp, kitty) so Makakoo can open new tabs / panes for parallel agent runs.
 
@@ -219,7 +233,23 @@ Skip this section if you only ever run one Makakoo command at a time.
 
 **Use case**: you run multiple agents in parallel and want SANCHO/swarm to open new panes automatically.
 
-### Section 5 — `model-provider`
+### Section 6 — `lope`
+
+Offers to install [Lope](https://github.com/traylinx/lope), Makakoo's
+multi-CLI validator ensemble.
+
+The prompt explains why it matters: any CLI can implement, other CLIs validate,
+and modes like `review`, `vote`, `compare`, `negotiate`, and validator-in-the-loop
+sprints catch single-model blind spots. The installer is explicit-consent and
+defaults to **No** because it clones a remote checkout and executes Lope's
+installer.
+
+Writes/updates `~/.lope` (or `$LOPE_HOME`) only when the target is absent or is
+already the expected `traylinx/lope` checkout.
+
+**Use case**: you want Codex, Claude, pi, OpenCode, and other validators to check plans and PRs before you ship.
+
+### Section 7 — `model-provider`
 
 The most consequential section — without an LLM provider, `makakoo query`, `makakoo dream`, semantic memory, and most agents won't function.
 
@@ -239,7 +269,7 @@ After config is saved, the wizard runs a smoke test (`makakoo query "hello"`) an
 
 **Use case**: you don't have a local LLM gateway and want to use the Anthropic API directly. Pick option 2, paste your key, done.
 
-### Section 6 — `infect`
+### Section 8 — `infect`
 
 Runs `makakoo infect --global` against the CLIs you opted in to in §3.3. Reports what was added / updated / unchanged.
 
@@ -358,23 +388,23 @@ makakoo setup --reset            # clears stored answers, re-prompts everything
 makakoo setup --only model-provider --reset    # reset just one section
 ```
 
-### Upgrade
+### Update
 
-The fastest path is the built-in `makakoo upgrade` verb — it auto-detects how the binary was installed (curl-pipe / Homebrew / cargo) and dispatches the matching update command. Resolves symlinks, recognises Homebrew Cellar paths, prints a version delta on success.
+The fastest path is the built-in `makakoo update` verb — it auto-detects how the binary was installed (curl-pipe / Homebrew / cargo) and dispatches the matching update command. Resolves symlinks, recognises Homebrew Cellar paths, prints a version delta on success. `makakoo upgrade` remains a legacy alias.
 
 ```sh
-makakoo upgrade
+makakoo update
 ```
 
 If you prefer to drive the channel manually:
 
-| Original install | Manual upgrade |
+| Original install | Manual update |
 |---|---|
 | `curl …\| sh` | `curl -fsSL https://makakoo.com/install.sh \| bash` (re-runs latest) |
 | `brew install traylinx/tap/makakoo` | `brew upgrade traylinx/tap/makakoo` |
 | `cargo install --path makakoo` | `cd makakoo-os && git pull && cargo install --path makakoo --force && cargo install --path makakoo-mcp --force` |
 
-After any upgrade, run `makakoo install` once — it's idempotent, picks up new bootstrap versions, and refreshes infect pointers. Then **restart your AI CLIs** so they spawn the new `makakoo-mcp` child; pre-existing sessions keep running the old MCP binary until you do.
+After any update, run `makakoo install` once — it's idempotent, picks up new bootstrap versions, and refreshes infect pointers. Then **restart your AI CLIs** so they spawn the new `makakoo-mcp` child; pre-existing sessions keep running the old MCP binary until you do.
 
 If the bootstrap version bumped (v11 → v12 → v13...), all 8 slot pointers get rewritten on the next `makakoo infect --global` run. Old marker blocks are stripped cleanly.
 
@@ -513,7 +543,7 @@ This is what the user sees, end to end, in the default wizard run. Use it to kno
 ### Section 1 — persona
 
 ```
-[1/6] Persona configuration
+[1/8] Persona configuration
 
 Persona name (what should I call myself?) [Harvey]:
 Your name (what should I call you?) [Sebastian]:
@@ -522,10 +552,20 @@ Tone (sharp / blunt / casual / formal) [sharp]:
 ✓ Saved to ~/MAKAKOO/config/persona.json
 ```
 
-### Section 2 — brain
+### Section 2 — updates
 
 ```
-[2/6] Brain configuration
+[2/8] Makakoo OS updates
+
+Enable automatic Makakoo OS updates? You can switch to manual later by editing config/updates.toml. [Y/n/s]:
+
+✓ Saved mode to ~/MAKAKOO/config/updates.toml
+```
+
+### Section 3 — brain
+
+```
+[3/8] Brain configuration
 
 Brain location [~/MAKAKOO/data/Brain]:
 Format (logseq / obsidian / plain) [logseq]:
@@ -536,10 +576,10 @@ Seed with starter pages? (Y/n):
    - pages/     (entity wiki)
 ```
 
-### Section 3 — cli-agent
+### Section 4 — cli-agent
 
 ```
-[3/6] AI CLI hosts to infect
+[4/8] AI CLI hosts to infect
 
 Detected CLIs:
   ✓ claude (~/.claude/)
@@ -557,10 +597,10 @@ Include all detected CLIs? (Y/n):
 ✓ Will infect 6 CLIs on next run
 ```
 
-### Section 4 — terminal
+### Section 5 — terminal
 
 ```
-[4/6] Terminal emulator
+[5/8] Terminal emulator
 
 Detected: Ghostty (preferred)
 Use Ghostty for parallel agent panes? (Y/n):
@@ -570,10 +610,23 @@ Use Ghostty for parallel agent panes? (Y/n):
 ✓ Saved terminal preference
 ```
 
-### Section 5 — model-provider
+### Section 6 — lope
 
 ```
-[5/6] LLM model provider
+[6/8] Lope validator ensemble
+
+Lope catches single-model blind spots with multi-CLI review, vote, compare,
+negotiate, and validator-in-the-loop sprint execution.
+
+Install Lope now? This clones https://github.com/traylinx/lope to ~/.lope and executes its installer. [y/N/s]:
+
+✓ Lope installed / or skipped by choice
+```
+
+### Section 7 — model-provider
+
+```
+[7/8] LLM model provider
 
 Choose a provider:
   1. switchAILocal (recommended — local, free, fast)
@@ -595,10 +648,10 @@ Smoke test: makakoo query "hello"
 ✓ Provider configured
 ```
 
-### Section 6 — infect
+### Section 8 — infect
 
 ```
-[6/6] Infect AI CLI hosts
+[8/8] Infect AI CLI hosts
 
 Running: makakoo infect --global
   ✓ claude     installed   ~/.claude/CLAUDE.md

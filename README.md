@@ -91,13 +91,18 @@ makakoo install    # distro + daemon + infect + health, then hands off to the wi
 
 **First time using Makakoo?** After install, start at [Walkthrough 01 — Fresh install on a new Mac](docs/walkthroughs/01-fresh-install-mac.md). The walkthroughs are a 14-guide tour through every major feature — copy-paste runnable, dependency-chained, in plain language.
 
-**Upgrade** — one command, auto-detects how you installed:
+**Update** — one command, auto-detects how you installed:
 
 ```sh
-makakoo upgrade            # cargo / brew / curl-pipe — picks the right path
-makakoo upgrade --dry-run  # preview without spawning
-makakoo upgrade --reinfect # also rewrite + verify CLI bootstrap fragments
+makakoo update             # cargo / brew / curl-pipe — picks the right path
+makakoo update --dry-run   # preview without spawning
+makakoo update --reinfect  # also rewrite + verify CLI bootstrap fragments
+makakoo upgrade            # legacy alias
 ```
+
+Fresh setup defaults to automatic 24h Makakoo OS updates via SANCHO. Existing
+installs stay idle until `makakoo setup updates` writes
+`$MAKAKOO_HOME/config/updates.toml`; switch auto/manual there any time.
 
 See [`docs/upgrade.md`](docs/upgrade.md) for per-method details.
 
@@ -115,7 +120,7 @@ rm -rf ~/.makakoo ~/MAKAKOO
 |---|---|
 | Install Makakoo from zero (step-by-step, beginner-friendly) | [`docs/getting-started.md`](docs/getting-started.md) |
 | See what I can do with Makakoo day-to-day | [`docs/use-cases.md`](docs/use-cases.md) |
-| Understand the setup wizard's 6 sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
+| Understand the setup wizard's sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
 | Look up a specific `makakoo` subcommand | [`docs/user-manual/`](docs/user-manual/index.md) |
 | Run durable child-agent work without transcript floods | [`docs/user-manual/makakoo-agent-session.md`](docs/user-manual/makakoo-agent-session.md) |
 | Build a chat bot — native slots, or a runnable Flue agent in one command | [`docs/user-manual/agent.md`](docs/user-manual/agent.md), [`docs/walkthroughs/flue-telegram-bot.md`](docs/walkthroughs/flue-telegram-bot.md) |

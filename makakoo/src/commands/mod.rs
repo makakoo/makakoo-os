@@ -82,23 +82,15 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
         Commands::Memory { cmd } => memory::run(ctx, cmd).await,
         Commands::Promotions { threshold, limit } => promotions::run(ctx, threshold, limit),
         Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,
-        Commands::Upgrade {
-            dry_run,
-            reinfect,
-            method,
-            source,
-            install_script_url,
-            only_kernel,
-            only_mcp,
-        } => {
+        Commands::Update(args) | Commands::Upgrade(args) => {
             upgrade::run(
-                reinfect,
-                dry_run,
-                method,
-                source,
-                install_script_url,
-                only_kernel,
-                only_mcp,
+                args.reinfect,
+                args.dry_run,
+                args.method,
+                args.source,
+                args.install_script_url,
+                args.only_kernel,
+                args.only_mcp,
                 ctx,
             )
             .await

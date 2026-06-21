@@ -110,6 +110,34 @@ def add_source(entry: dict) -> Path:
     return save_registry(data)
 
 
+def apply_changes(adds: list[dict], default_name: str | None = None) -> Path:
+    """Apply a batch of source upserts plus optional default change in one atomic write."""
+    path = config_path()
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        data = _default_config()
+    data.setdefault("sources", [])
+
+    for entry in adds:
+        replaced = False
+        for i, existing in enumerate(data["sources"]):
+            if existing.get("name") == entry.get("name"):
+                data["sources"][i] = entry
+                replaced = True
+                break
+        if not replaced:
+            data["sources"].append(entry)
+
+    if default_name:
+        names = {s.get("name") for s in data.get("sources", [])}
+        if default_name not in names:
+            raise KeyError(f"no source named {default_name!r}")
+        data["default"] = default_name
+
+    return save_registry(data)
+
+
 def remove_source(name: str) -> Path:
     """Remove a source by name. Refuses to remove the default source."""
     path = config_path()

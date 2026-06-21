@@ -39,6 +39,7 @@ version = "^0.1"
 "tool-headroom" = { version = "*" }
 
 # CLI auto-update — default CLIs on fresh Makakoo OS.
+"sancho-task-makakoo-update" = { version = "*" }
 "sancho-task-plugin-update-check" = { version = "*" }
 "sancho-task-cli-pi" = { version = "*" }
 "sancho-task-cli-ghostty" = { version = "*" }  # macOS only; no-op on Linux/Windows
@@ -79,6 +80,7 @@ Makakoo Core installed. Plugins registered:
   - tool-headroom            — Headroom MCP compression for bulky tool output
   - agent-browser-harness     — harvey_browse for every CLI (needs Chrome with CDP)
   - agent-switchailocal       — LLM gateway on :18080 (all platforms)
+  - makakoo_os_update       (24h — auto-updates Makakoo OS when config/updates.toml mode=auto)
   - watchdog-switchailocal   (300s interval)
   - watchdog-postgres        (900s interval)
   - watchdog-infect          (21600s interval — catches + heals infect drift)

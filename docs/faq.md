@@ -102,16 +102,17 @@ Full guide: [Uninstall](troubleshooting/uninstall.md).
 ### How do I upgrade to a newer version?
 
 ```sh
-makakoo upgrade            # auto-detects how you installed (cargo / brew / curl-pipe)
-makakoo upgrade --dry-run  # preview the plan without spawning anything
-makakoo upgrade --reinfect # also rewrite + verify CLI bootstrap fragments after the binary swap
+makakoo update             # auto-detects how you installed (cargo / brew / curl-pipe)
+makakoo update --dry-run   # preview the plan without spawning anything
+makakoo update --reinfect  # also rewrite + verify CLI bootstrap fragments after the binary swap
 ```
 
 Available since v0.1.3 (2026-05-02). For pre-v0.1.3 binaries you'll first
 need a one-time manual upgrade — `brew upgrade traylinx/tap/makakoo`,
 `cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo`,
 or re-run the curl-pipe install script — to land v0.1.3+, after which
-`makakoo upgrade` is the one-command path forever after.
+`makakoo update` is the primary one-command path forever after. `makakoo upgrade`
+still works as a legacy alias.
 
 Full reference: [`docs/upgrade.md`](upgrade.md) and [`docs/user-manual/makakoo-upgrade.md`](user-manual/makakoo-upgrade.md).
 

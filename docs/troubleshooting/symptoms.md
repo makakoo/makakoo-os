@@ -15,7 +15,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## B
 
 - **`blake3 mismatch`** — [Plugin install failed → blake3 mismatch](./tree.md#plugin-install-failed).
-- **``bundled adapter `switchailocal` not found``** — The release-bundled adapter catalog could not be located. Re-run `makakoo upgrade --method curl-pipe` or reinstall from `https://makakoo.com/install.sh`; if running from a source checkout, run commands from the repo root or set `MAKAKOO_BUNDLED_ADAPTERS=<repo>/plugins-core/adapters`.
+- **``bundled adapter `switchailocal` not found``** — The release-bundled adapter catalog could not be located. Re-run `makakoo update --method curl-pipe` or reinstall from `https://makakoo.com/install.sh`; if running from a source checkout, run commands from the repo root or set `MAKAKOO_BUNDLED_ADAPTERS=<repo>/plugins-core/adapters`.
 
 ## C
 
@@ -58,7 +58,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## I
 
 - **`install.source is empty`** — Plugin manifest has no `[source]` section. Manifest schema violation — edit the plugin's `plugin.toml`.
-- **`install method is `Unknown` — running binary at <path> was installed in a way Makakoo cannot auto-upgrade.`** — `makakoo upgrade` couldn't classify the binary's install path. The full error lists supported methods. Either reinstall via cargo / homebrew / curl-pipe, or pass `--method <cargo\|brew\|curl-pipe>` to override. Dev builds (`target/debug/`, `target/release/`) are deliberately rejected — use `cargo install --path <checkout>/makakoo` instead.
+- **`install method is `Unknown` — running binary at <path> was installed in a way Makakoo cannot auto-update.`** — `makakoo update` couldn't classify the binary's install path. The full error lists supported methods. Either reinstall via cargo / homebrew / curl-pipe, or pass `--method <cargo\|brew\|curl-pipe>` to override. Dev builds (`target/debug/`, `target/release/`) are deliberately rejected — use `cargo install --path <checkout>/makakoo` instead.
 - **`Invalid API key`** (from the LLM gateway) — [Harvey / MCP not responding → rate limit / resource exhausted](./tree.md#harvey--mcp-not-responding). Specifically: the gateway's stable-key map isn't synced yet; wait 2 seconds or `tytus restart` / `makakoo daemon restart`.
 
 ## L
@@ -72,7 +72,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## N
 
 - **`no .py entry file in <path>`** — Python plugin entrypoint couldn't be located. `plugin.toml`'s `[entrypoint].start` references a missing file. Reinstall the plugin or edit the manifest.
-- **`non-HTTPS install script URL refused: <url>`** — `makakoo upgrade --install-script-url <url>` rejected a non-HTTPS URL. Pass an `https://...` URL; insecure URLs are deliberately blocked.
+- **`non-HTTPS install script URL refused: <url>`** — `makakoo update --install-script-url <url>` rejected a non-HTTPS URL. Pass an `https://...` URL; insecure URLs are deliberately blocked.
 - **`no $HOME`** — See `cannot resolve $HOME` above.
 - **`no current dir available: <error>`** — Your cwd was deleted out from under the process. `cd ~` and retry.
 - **`no grant matches path <p>`** — [I ran a command and got an error → `perms revoke` by path](./tree.md#i-ran-a-command-and-got-an-error). Use `makakoo perms list` to confirm the exact scope; revoke by id instead: `makakoo perms revoke <g_id>`.
@@ -121,7 +121,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 - **`skillspector scan JSON command failed`** — SkillSpector ran but did not produce a successful JSON report. Inspect the stderr above it, then rerun with `--no-cache` to rebuild the venv if needed.
 - **`skillspector scan SARIF command failed`** — SkillSpector ran but did not produce a successful SARIF report. Inspect the stderr above it, then rerun with `--no-cache` to rebuild the venv if needed.
 - **`staging error: target plugin dir already exists — uninstall first`** — [I ran a command and got an error → `staging error`](./tree.md#error-staging-error-target-plugin-dir-already-exists---uninstall-first).
-- **`subprocess failed: <label> (exit code <code>)`** — One of the actions queued by `makakoo upgrade` exited non-zero. The label tells you which (`cargo install …`, `brew upgrade …`, `curl … | sh`). Run the action manually to see the full output, fix the root cause, then retry. The chain aborts on first failure — partial upgrades are possible if the kernel succeeds but `makakoo-mcp` fails.
+- **`subprocess failed: <label> (exit code <code>)`** — One of the actions queued by `makakoo update` exited non-zero. The label tells you which (`cargo install …`, `brew upgrade …`, `curl … | sh`). Run the action manually to see the full output, fix the root cause, then retry. The chain aborts on first failure — partial updates are possible if the kernel succeeds but `makakoo-mcp` fails.
 - **`superbrain connection mutex poisoned`** — A thread crashed while holding the DB mutex. `makakoo daemon restart`.
 
 ## T
@@ -134,10 +134,10 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## U
 
 - **`unknown --format <other> (accepted: markdown, html, json)`** — You passed an unsupported output format. Use one of `markdown`, `html`, `json`.
-- **`error: unrecognized subcommand 'upgrade'`** — Your installed binary predates v0.1.3 and doesn't have the `upgrade` verb yet. First-install or `brew upgrade traylinx/tap/makakoo` (or `cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo`) to land v0.1.3+; from then on `makakoo upgrade` works.
+- **`error: unrecognized subcommand 'upgrade'`** — Your installed binary predates v0.1.3 and doesn't have the `upgrade` verb yet. First-install or `brew upgrade traylinx/tap/makakoo` (or `cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo`) to land v0.1.3+; from then on `makakoo update` works.
 - **`unknown provider for model <alias>`** — [I ran a command and got an error → `error: llm error`](./tree.md#error-llm-error-http-400-unknown-provider-for-model-alias).
 - **`unknown role '<other>'. Valid: validator, delegate, swarm_member`** — Adapter-manifest `[peer].role` expects one of the three listed values. Edit the manifest.
-- **`unknown section in --only: '<name>'. Valid: <list>`** — `makakoo setup --only <name>` was given a section that doesn't exist. Valid sections: `persona`, `brain`, `cli-agent`, `terminal` (macOS), `model-provider`, `infect`.
+- **`unknown section in --only: '<name>'. Valid: <list>`** — `makakoo setup --only <name>` was given a section that doesn't exist. Valid sections: `persona`, `updates`, `brain`, `cli-agent`, `terminal` (macOS), `lope`, `model-provider`, `infect`.
 - **`unknown template '<other>'. Valid: openai-compat, subprocess, mcp-stdio, peer-makakoo`** — `makakoo adapter gen` only knows the four listed templates. Pick one.
 - **`unrecognized subcommand '<name>'`** — [I ran a command and got an error → `error: unrecognized subcommand`](./tree.md#error-unrecognized-subcommand-name).
 - **`unsupported duration <value>; use 30m | 1h | 24h | 7d | permanent`** — `makakoo perms grant --for` got an unparseable value. Pass one of the listed units.
@@ -162,7 +162,7 @@ These are less common subsystem errors, but they are still searchable here so th
 
 - **`--from-toml file has slot_id '<file-slot>' but CLI requested slot '<slot>' - they must match`** - The agent-create TOML belongs to a different slot than the CLI flag. Use the slot id from the TOML, or edit the TOML and retry.
 - **`--from-toml is mutually exclusive with --telegram-token / --slack-bot-token`** - Pick one agent-create source: a TOML file, Telegram flags, or Slack flags. Do not mix them.
-- **`--only-kernel and --only-mcp are mutually exclusive`** - `makakoo upgrade` can target one component at a time. Pass only one flag, or omit both to upgrade both binaries.
+- **`--only-kernel and --only-mcp are mutually exclusive`** - `makakoo update` can target one component at a time. Pass only one flag, or omit both to update both binaries.
 - **`GitHub API returned <status>: <url>`** - GitHub rejected a release/API request. Check network, auth/rate limit, and that the release/tag exists.
 - **`Slack transport requires --slack-app-token`** - Agent creation for Slack needs the app-level token. Re-run with `--slack-app-token <xapp-...>`.
 - **`Slack transport requires --slack-bot-token`** - Agent creation for Slack needs the bot token. Re-run with `--slack-bot-token <xoxb-...>`.

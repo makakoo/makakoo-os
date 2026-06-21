@@ -1,8 +1,8 @@
-//! `makakoo upgrade` — self-update the kernel binaries.
+//! `makakoo update` / legacy `makakoo upgrade` — self-update the kernel binaries.
 //!
 //! SPRINT-MAKAKOO-UPGRADE-VERB. Detects install method, dispatches the
 //! matching update command, prints version delta, surfaces a manual
-//! `makakoo daemon restart` command (the upgrade verb itself still does not auto-restart).
+//! `makakoo daemon restart` command (the update verb itself still does not auto-restart).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -82,13 +82,13 @@ pub async fn run(
     // Print install method banner.
     println!("# install method: {}", describe_method(&resolved_method));
 
-    // Capture pre-upgrade version (best-effort).
+    // Capture pre-update version (best-effort).
     let pre_version = capture_version("makakoo");
 
     // Plan + (optionally) execute.
     let actions = if dry_run {
         let actions = plan_upgrade(&resolved_method, target, cargo_source_override, url)
-            .with_context(|| "planning upgrade")?;
+            .with_context(|| "planning update")?;
         println!("# DRY RUN — would execute:");
         for a in &actions {
             println!("  $ {}", a.render());
@@ -103,7 +103,7 @@ pub async fn run(
             false,
             |a| println!("$ {}", a.render()),
         )
-        .with_context(|| "running upgrade")?
+        .with_context(|| "running update")?
     };
 
     // Verify version delta (skip on dry-run).
@@ -122,7 +122,7 @@ pub async fn run(
                 println!("  after:  {post}");
             }
             _ => {
-                eprintln!("\n⚠ could not capture version banner — upgrade succeeded but verification skipped");
+                eprintln!("\n⚠ could not capture version banner — update succeeded but verification skipped");
             }
         }
     }
