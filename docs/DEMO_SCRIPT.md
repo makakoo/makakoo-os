@@ -67,7 +67,7 @@ Back to the shell:
 $ makakoo plugin list
 ```
 
-Scroll the 38 plugins. Narration:
+Scroll the installed plugin list. Narration:
 
 > "Every capability is a plugin manifest. Skills, watchdogs, mascots, agents. Capability-sandboxed, Unix-socket or named-pipe IPC, audit-logged."
 

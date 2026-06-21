@@ -13,22 +13,15 @@ New here? Start with [Getting started](getting-started.md) first.
 **Goal:** write a note once; have every AI CLI on your machine see it.
 
 ```sh
-makakoo journal add "Met with Ana from Acme. They want the Q3 demo before July 15. Follow up next Monday."
+mkdir -p ~/MAKAKOO/data/Brain/journals
+journal=~/MAKAKOO/data/Brain/journals/$(date +%Y_%m_%d).md
+printf -- '- Met with [[Ana]] from [[Acme]]. They want the Q3 demo before 2026-07-15. Follow up next Monday.\n' >> "$journal"
+makakoo sync --file "$journal"
 ```
 
-That line goes into today's journal at
-`~/MAKAKOO/data/Brain/journals/2026_04_23.md` (replace with the
-current date). Next time you open any AI CLI and ask *"what's
-happening with Acme?"*, it'll find the note.
+That line goes into today's journal. Next time you open any infected AI CLI and ask *"what's happening with Acme?"*, it can find the note.
 
-Add structure with [[double brackets]] to link entities:
-
-```sh
-makakoo journal add "Met with [[Ana]] from [[Acme]]. Demo target: 2026-07-15."
-```
-
-Now the `Ana` and `Acme` pages at `~/MAKAKOO/data/Brain/pages/` cross-
-reference each other.
+Use `[[double brackets]]` to link entities. Logseq and Makakoo both understand those links.
 
 ---
 
@@ -60,18 +53,17 @@ first-class Makakoo brain substrate.
 makakoo setup brain
 ```
 
-The interactive picker auto-detects common Obsidian paths
-(`~/Documents/Obsidian Vault`, `~/Documents/obsidian`, `~/Obsidian`).
-Say yes to the detected path, optionally change the write-default, and
-you're done.
+The interactive picker auto-detects common Obsidian paths (`~/Documents/Obsidian Vault`, `~/Documents/obsidian`, `~/Obsidian`). If the Obsidian app is missing, it offers to install it through Homebrew, Flatpak, or winget when available. The default is No. Say yes to a detected vault, optionally change the write-default, and you're done.
 
-**Also available:**
+**Advanced plugin CLI:**
+
+Until a Rust `makakoo brain` wrapper lands, the source registry CLI lives inside the bundled plugin:
 
 ```sh
-makakoo brain list                                  # show registered sources
-makakoo brain add personal obsidian ~/MyVault       # add a vault explicitly
-makakoo brain set-default personal                  # switch where Makakoo writes
-makakoo brain sync --name personal                  # scan + ingest into search
+python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" list
+python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" add personal obsidian ~/MyVault
+python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" set-default personal
+python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" sync --name personal
 ```
 
 Two scenarios to disambiguate before registering:
@@ -174,8 +166,8 @@ workers) and the daemon health.
 ```sh
 makakoo sancho status      # registered tasks + last-run state
 makakoo sancho tick        # force one tick now
-makakoo health --verbose   # daemon + plugin health report
-makakoo status             # short summary
+makakoo daemon status      # daemon health
+makakoo infect --verify    # CLI bootstrap drift check
 ```
 
 Log locations (if you need to grep):

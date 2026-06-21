@@ -123,7 +123,7 @@ Under the hood:
 
 - Rust kernel (843 tests, CI green on macOS + Linux + Windows)
 - Per-plugin capability socket (Unix domain socket / Windows named pipe, PID-verified)
-- Manifest-driven plugin system — 38 shipped
+- Manifest-driven plugin catalog — skills, agents, MCP tools, SANCHO tasks, and patterns
 - SANCHO proactive task engine running while you sleep
 
 **4/**

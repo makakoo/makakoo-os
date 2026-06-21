@@ -120,7 +120,7 @@ On a fresh laptop / VM:
 curl -fsSL https://makakoo.com/install | bash
 makakoo install
 makakoo sancho status    # expect 18+ tasks
-makakoo brain search test
+makakoo search test
 ```
 
 All four commands exit 0. Then tag:

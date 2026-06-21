@@ -193,7 +193,7 @@ install plan
     …
 
 [1/3] installing distro core…
-✓ 38 plugins installed
+✓ core distro installed
 [2/3] installing daemon…
 ✓ LaunchAgent registered
 [3/3] infecting 4 detected CLI host(s)…
@@ -210,8 +210,7 @@ Persona name (what should I call myself?) [Harvey]:
 ```
 
 The wizard hand-off is automatic in interactive shells. It walks you
-through the setup sections — persona, updates, brain, CLI hosts,
-terminal, Lope, LLM provider, and a final infect pass. Press Enter to accept defaults at
+through the setup sections: persona, updates, brain sources, pi, terminal, Lope, LLM provider, and a final infect pass. Press Enter to accept defaults at
 any prompt; the wizard is fully idempotent and you can re-run any
 section later with `makakoo setup --only <section>`. See
 [Setup wizard](user-manual/setup-wizard.md) for what each section
@@ -235,7 +234,8 @@ Run these three commands. All three should succeed:
 
 ```sh
 makakoo --version
-makakoo status
+makakoo daemon status
+makakoo sancho status
 makakoo query "hello"
 ```
 <!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
@@ -249,13 +249,13 @@ makakoo 0.1.6
 ```
 ✓ daemon running (pid 51234)
 ✓ 4 CLI hosts infected (claude, gemini, codex, opencode)
-✓ 38 plugins installed
+✓ core distro installed
 ✓ Brain at ~/MAKAKOO/data/Brain (0 journals, 0 pages — fresh install)
 ```
 
 ```
 I don't have any records yet — your Brain is empty. Try writing a
-journal entry with `makakoo journal add "<text>"`.
+journal entry in `~/MAKAKOO/data/Brain/journals/`, then run `makakoo sync`.
 ```
 
 If any command errors, jump to [Troubleshooting](troubleshooting/index.md).
@@ -292,12 +292,13 @@ Where to go next depends on what you want to do:
 | I want to... | Read |
 |---|---|
 | See what Makakoo can do day-to-day | [Use cases](use-cases.md) |
-| Connect my Obsidian vault or Logseq graph | [Brain sources](user-manual/brain-sources.md) |
+| Connect my Obsidian vault or Logseq graph | [Setup wizard: Brain](user-manual/setup-wizard.md#brain-and-obsidian), [Use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes) |
 | Understand the setup wizard's sections | [Setup wizard](user-manual/setup-wizard.md) |
-| Add pi (blessed CLI coding agent) or Ghostty (blessed terminal) | `makakoo setup cli-agent` / `makakoo setup terminal` |
-| Pick which LLM Makakoo routes through | [Model providers](user-manual/adapters.md) |
+| Add pi, Ghostty, or Lope | `makakoo setup cli-agent` / `makakoo setup terminal` / `makakoo setup lope` |
+| Pick which LLM Makakoo routes through | [Adapters](adapters.md), [`makakoo adapter`](user-manual/makakoo-adapter.md) |
 | Connect this Brain to another Makakoo install | [Brain Network](user-manual/makakoo-network.md) / [Walkthrough 14](walkthroughs/14-brain-network.md) |
 | Install a new plugin | [Plugins](plugins/index.md) |
+| Update Makakoo later | [Upgrade guide](upgrade.md), [`makakoo update`](user-manual/makakoo-update.md) |
 | Fix something that broke | [Troubleshooting](troubleshooting/index.md) |
 | Uninstall Makakoo cleanly | [Uninstall](troubleshooting/uninstall.md) |
 
@@ -307,9 +308,8 @@ Where to go next depends on what you want to do:
 
 - **Search the Troubleshooting page** first: [docs/troubleshooting/](troubleshooting/index.md).
   Common errors have explicit fixes.
-- **Run `makakoo status`** — shows which subsystems are healthy.
-- **Run `makakoo health --verbose`** — deeper self-check with links
-  to the failing subsystem's docs.
+- **Run `makakoo version`, `makakoo daemon status`, and `makakoo sancho status`** — the focused health checks.
+- **Run `makakoo infect --verify`** if an AI CLI is not picking up the bootstrap.
 - **Ask one of your infected AI CLIs directly.** Once infected, every
   AI CLI knows how Makakoo works and can walk you through issues in
   plain language.

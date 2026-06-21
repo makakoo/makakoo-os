@@ -114,7 +114,7 @@ or re-run the curl-pipe install script — to land v0.1.3+, after which
 `makakoo update` is the primary one-command path forever after. `makakoo upgrade`
 still works as a legacy alias.
 
-Full reference: [`docs/upgrade.md`](upgrade.md) and [`docs/user-manual/makakoo-upgrade.md`](user-manual/makakoo-upgrade.md).
+Full reference: [`docs/upgrade.md`](upgrade.md) and [`docs/user-manual/makakoo-update.md`](user-manual/makakoo-update.md).
 
 ### My AI CLI session feels slower after infect. Why?
 
@@ -132,8 +132,7 @@ Logseq format by default. Two scenarios:
 - **Use Obsidian as a UI over the existing Brain.** No registration
   needed. Open Obsidian → `Open folder as vault` → point at
   `~/MAKAKOO/data/Brain/`. Same files, Obsidian UX.
-- **Connect a SEPARATE vault.** Run `makakoo setup brain` or
-  `makakoo brain add personal obsidian ~/Documents/MyVault`.
+- **Connect a separate vault.** Run `makakoo setup brain`. The picker can offer to install Obsidian first if the app is missing and Homebrew, Flatpak, or winget is available. Advanced users can run the plugin CLI directly: `python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" add personal obsidian ~/Documents/MyVault`.
 
 See [use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes).
 

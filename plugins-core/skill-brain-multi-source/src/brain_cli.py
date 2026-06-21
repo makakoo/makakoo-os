@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`makakoo brain ...` CLI surface for multi-source brain management.
+"""Helper CLI for multi-source Brain management.
 
 Subcommands:
   list                        — show every registered source + default
@@ -112,7 +112,7 @@ def cmd_init(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="makakoo brain", description="Multi-source brain management")
+    p = argparse.ArgumentParser(prog="brain_cli.py", description="Multi-source brain management")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_list = sub.add_parser("list", help="list registered sources")

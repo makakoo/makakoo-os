@@ -338,7 +338,7 @@ SANCHO runs these Brain tasks:
 > Remember that I use X for Y
 
 # Rebuild index
-makakoo sancho run index_rebuild
+makakoo sync --force
 ```
 
 ### Brain Not Accessible
@@ -349,7 +349,7 @@ ls -la ~/MAKAKOO/Brain/
 
 # Rebuild from scratch
 rm ~/MAKAKOO/Brain/superbrain.db
-makakoo sancho run index_rebuild
+makakoo sync --force
 ```
 
 ### Slow Searches
@@ -359,7 +359,7 @@ makakoo sancho run index_rebuild
 du -sh ~/MAKAKOO/Brain/superbrain.db
 
 # Optimize
-makakoo sancho run memory_consolidation
+makakoo sync --force
 ```
 
 ## API Reference

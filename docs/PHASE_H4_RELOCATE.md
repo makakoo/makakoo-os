@@ -68,7 +68,7 @@ tail -f ~/.makakoo/data/logs/makakoo.err.log
 # Expect `sancho tick: N/M tasks ok` within 5 min (or run
 # `makakoo sancho tick` once to force).
 
-makakoo brain search "<a phrase you know is indexed>"
+makakoo search "<a phrase you know is indexed>"
 # Expect hits — proves superbrain + Brain filesystem are intact.
 
 makakoo plugin list

@@ -20,7 +20,7 @@ One install. Many bodies, one mind. MIT. No VC. Local-first. No telemetry.
 - **`makakoo plugin enable/disable/update`** — soft lifecycle. Flip a plugin off without removing its directory; reinstall from the recorded source preserving the enabled state.
 - **`makakoo distro save`** — serialize the live install to a reproducible TOML snapshot pinned by exact version + blake3.
 - **Shell completion** — bash, zsh, fish, elvish, powershell via `makakoo completion <shell>`. Install guide at `install/completions/README.md`.
-- **5 distros** — minimal, core, sebastian (Harvey's dogfood), creator (writers + streamers), trader (market-facing agents).
+- **6 distros** — minimal, core, federation, sebastian (Harvey's dogfood), creator (writers + streamers), trader (market-facing workflows).
 - **Tag-driven release pipeline** — pushing `v*` tags triggers `.github/workflows/release.yml`. Builds 5 targets, uploads tar.gz/zip + SHA-256 to the GitHub Release, auto-generates notes.
 
 ## Platform coverage

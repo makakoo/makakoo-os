@@ -254,7 +254,7 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Restrict to a comma-separated subset of targets
-        /// (claude,gemini,codex,opencode,vibe,qwen,cursor).
+        /// (claude,gemini,codex,opencode,vibe,qwen,cursor,pi,kimi).
         #[arg(long, value_delimiter = ',')]
         target: Vec<String>,
         /// Project-scoped infect: write .harvey/context.md + per-CLI
@@ -295,7 +295,7 @@ pub enum Commands {
     /// preserves any prose the user wrote around the block.
     Uninfect {
         /// Restrict to a comma-separated subset of targets
-        /// (claude,gemini,codex,opencode,vibe,qwen,cursor).
+        /// (claude,gemini,codex,opencode,vibe,qwen,cursor,pi,kimi).
         #[arg(long, value_delimiter = ',')]
         target: Vec<String>,
 

@@ -19,8 +19,8 @@ Plugins are capability-sandboxed modules that add functionality:
 # List all installed
 makakoo plugin list
 
-# List core plugins
-makakoo plugin list --core
+# Machine-readable output
+makakoo plugin list --json
 
 # Show details
 makakoo plugin info <name>
@@ -45,17 +45,17 @@ makakoo plugin install arbitrage --core
 
 ```bash
 # Install from git
-makakoo plugin install https://github.com/user/makakoo-plugin
+makakoo plugin install git+https://github.com/user/makakoo-plugin@v1.2.0
 
-# Install specific version
-makakoo plugin install https://github.com/user/makakoo-plugin --version 1.2.0
+# Development branches require an explicit risk flag
+makakoo plugin install git+https://github.com/user/makakoo-plugin@main --allow-unstable-ref
 ```
 
 ### From Local Path
 
 ```bash
 # Install from local directory
-makakoo plugin install ./my-plugin --allow-unsigned
+makakoo plugin install ./my-plugin
 ```
 
 ## Managing Plugins
@@ -73,8 +73,8 @@ makakoo plugin enable <name>
 ### Update
 
 ```bash
-# Update all plugins
-makakoo plugin update
+# Update all updatable plugins
+makakoo plugin update --all
 
 # Update specific plugin
 makakoo plugin update <name>
@@ -89,7 +89,7 @@ makakoo plugin uninstall <name>
 
 ## Core Plugins
 
-Makakoo ships with 38 plugins:
+Makakoo ships a large core catalog. The default `core` distro installs the pieces most users need first: memory, browser automation, Headroom compression, update checks, LLM gateway, watchdogs, mascot GYM, and shared storage. Use `makakoo plugin list` for what is installed on this machine, or `makakoo distro install core --dry-run` to preview the default core bundle before installing it.
 
 ### Agents
 
@@ -120,6 +120,7 @@ Makakoo ships with 38 plugins:
 | `watchdog-postgres` | Database monitoring |
 | `watchdog-switchailocal` | LLM gateway monitoring |
 | `watchdog-infect` | Infection status |
+| `sancho-task-makakoo-update` | Runs the 24h Makakoo OS update check when `config/updates.toml` says `mode = "auto"` |
 
 ### Other
 
@@ -128,6 +129,8 @@ Makakoo ships with 38 plugins:
 | `mascot-gym` | Error classification |
 | `skill-meta-loops` | Proactive improvement |
 | `skill-meta-memory-retrieval` | Memory optimization |
+| `tool-headroom` | Default Headroom MCP compression for bulky tool output |
+| `skill-brain-multi-source` | Logseq, Obsidian, and plain-folder Brain sources |
 
 ## Plugin Configuration
 
@@ -212,7 +215,7 @@ makakoo plugin info <name> | grep -A 20 grants
 makakoo sancho status
 
 # See task history
-makakoo sancho history --task <task-name>
+makakoo daemon logs -l 200
 ```
 
 ---

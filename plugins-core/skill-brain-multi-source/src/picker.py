@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interactive first-run picker for brain sources.
 
-Runs once during install (or any time via `makakoo brain init`). Asks the user
+Runs once during install (or any time via `brain_cli.py init`). Asks the user
 which knowledge substrate they already use — Logseq, Obsidian, both, neither —
 and registers whichever sources they pick.
 
@@ -392,7 +392,7 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
             print(f"  {_dry_sync(name)}")
 
     print(f"\nDone. Config saved to {cfg.config_path()}")
-    print("Change anything later with: makakoo brain {list|add|remove|set-default}\n")
+    print("Change anything later with the plugin helper: python3 .../brain_cli.py {list|add|remove|set-default}\n")
     return 0
 
 

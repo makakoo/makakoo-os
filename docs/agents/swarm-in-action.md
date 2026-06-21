@@ -117,9 +117,9 @@ v0.7 now has a clear theme.
 
 ```bash
 # 1. Install the three v0.6 bundled adapters into the local registry.
-makakoo adapter install pi            --bundled --allow-unsigned --skip-health-check
-makakoo adapter install switchailocal --bundled --allow-unsigned --skip-health-check
-makakoo adapter install tytus-cli     --bundled --allow-unsigned --skip-health-check
+makakoo adapter install pi            --bundled --skip-health-check
+makakoo adapter install switchailocal --bundled --skip-health-check
+makakoo adapter install tytus-cli     --bundled --skip-health-check
 
 # 2. Confirm they're wired.
 makakoo adapter list

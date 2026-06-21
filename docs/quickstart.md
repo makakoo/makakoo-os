@@ -157,7 +157,8 @@ makakoo search "keywords"
 
 ```bash
 # Check system health
-makakoo health
+makakoo daemon status
+makakoo sancho status
 
 # View running tasks
 makakoo sancho status

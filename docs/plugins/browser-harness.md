@@ -1,6 +1,6 @@
 # `agent-browser-harness` — Chrome CDP driver for every CLI
 
-`agent-browser-harness` is the flagship git-sourced plugin that ships with v0.4. It wraps [browser-use/browser-harness](https://github.com/browser-use/browser-harness) so every MCP-capable CLI (Claude Code, Gemini CLI, Codex, OpenCode, Vibe, Cursor, Qwen) can drive your local Chrome through the Chrome DevTools Protocol.
+`agent-browser-harness` is the flagship git-sourced plugin that ships with v0.4. It wraps [browser-use/browser-harness](https://github.com/browser-use/browser-harness) so every MCP-capable CLI (Claude Code, Gemini CLI, Codex, OpenCode, Vibe, Cursor, Qwen, Kimi, pi) can drive your local Chrome through the Chrome DevTools Protocol.
 
 Upstream code is NOT vendored. The wrapper is ~150 lines (`plugin.toml` + `install.sh` + `daemon_admin.py`). `install.sh` shallow-clones `browser-use/browser-harness` at install time; `makakoo plugin update agent-browser-harness` refetches.
 
@@ -25,7 +25,7 @@ makakoo agent start agent-browser-harness
 #    session will see harvey_browse in its tool list.
 
 # 5. From any MCP-capable CLI (Claude Code, Gemini, Codex, OpenCode,
-#    Vibe, Cursor, Qwen, pi):
+#    Vibe, Cursor, Qwen, Kimi, pi):
 harvey_browse code="goto('https://example.com'); print(page_info())"
 ```
 

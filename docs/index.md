@@ -2,172 +2,67 @@
 
 > **Many bodies. One mind.**
 
-Welcome to Makakoo OS documentation! Give every AI CLI on your machine the same persistent brain.
+Makakoo gives your AI work one local home: Brain, tools, rules, plugins,
+agent slots, and maintenance tasks. Local AI CLIs and IDE agents can be
+infected with Makakoo instructions. Chat systems such as Telegram,
+Discord, Slack, email, voice, and web connect through agent slots. Same
+Brain. Different doorway.
 
----
+## Start here
 
-## 📚 Complete Documentation Map
+| Goal | Read |
+|---|---|
+| Install from zero | [Getting started](getting-started.md) |
+| See the main daily workflows | [Use cases](use-cases.md) |
+| Understand every setup prompt | [Setup wizard](user-manual/setup-wizard.md) |
+| Update Makakoo later | [Upgrade guide](upgrade.md), [`makakoo update`](user-manual/makakoo-update.md) |
+| Look up a command | [User manual](user-manual/index.md) |
+| Fix a failure | [Troubleshooting](troubleshooting/index.md) |
 
-```
-📚 Documentation
-│
-├── 🚀 Getting Started
-│   ├── getting-started.md          ✅ Install in 5 minutes
-│   ├── quickstart.md             ✅ 15-minute guide
-│   └── walkthroughs/index.md      ✅ 12 copy-paste end-to-end guides
-│
-├── 🧠 Concepts
-│   ├── concepts/index.md         ✅ Architecture overview
-│   ├── concepts/sancho.md        ✅ Proactive tasks (SANCHO)
-│   ├── concepts/distros.md        ✅ Distribution bundles
-│   ├── concepts/ide-integration.md ✅ IDE integrations
-│   ├── concepts/architecture.md    ✅ Deep-dive diagrams
-│   └── concepts/shared-storage.md  ✅ Shared S3 (garagetytus)
-│
-├── 🧠💾 Brain
-│   ├── brain/index.md            ✅ Memory system guide
-│   └── user-manual/makakoo-network.md ✅ Opt-in multi-machine Brain Network
-│
-├── 💻 User Manual
-│   └── user-manual/index.md      ✅ All CLI commands, including agent sessions
-│
-├── 🔌 Plugins
-│   ├── plugins/index.md         ✅ Using plugins
-│   └── plugins/writing.md      ✅ Creating plugins
-│
-├── 🤖 Agents
-│   └── agents/index.md          ✅ Per-agent manuals + Agent Sessions
-│
-├── 🦊 Mascots
-│   └── mascots/index.md         ✅ Pixel, Cinder, Ziggy, Glimmer, Olibia
-│
-├── 📡 API Reference
-│   └── api/mcp-tools.md         ✅ MCP tools reference
-│
-├── 🔧 Troubleshooting
-│   ├── troubleshooting/index.md   ✅ Common issues
-│   └── troubleshooting/uninstall.md ✅ Clean removal
-│
-└── 👨‍💻 Development
-    ├── development/contributing.md ✅ How to contribute
-    └── development/changelog.md  ✅ Version history
-```
+## What Makakoo does
 
-## 📖 Complete Documentation (20 Files)
+| Area | What to read |
+|---|---|
+| Brain and search | [Brain guide](brain/index.md), [`makakoo query`](user-manual/makakoo-query.md), [`makakoo search`](user-manual/makakoo-search.md) |
+| CLI and IDE infection | [`makakoo infect`](user-manual/makakoo-infect.md), [IDE integration](concepts/ide-integration.md) |
+| Agent slots and transports | [`makakoo agent`](user-manual/agent.md), [multi-transport walkthrough](walkthroughs/multi-transport-subagents.md) |
+| Durable child-agent work | [`makakoo agent-session`](user-manual/makakoo-agent-session.md), [`makakoo handle`](user-manual/makakoo-handle.md) |
+| Plugins and skills | [Plugin guide](plugins/index.md), [Writing plugins](plugins/writing.md) |
+| SANCHO background tasks | [SANCHO concept](concepts/sancho.md), [`makakoo sancho`](user-manual/makakoo-sancho.md) |
+| Write-access grants | [`makakoo perms`](user-manual/makakoo-perms.md) |
+| Model adapters | [Adapters](adapters.md), [`makakoo adapter`](user-manual/makakoo-adapter.md) |
+| Brain Network federation | [`makakoo network`](user-manual/makakoo-network.md) |
 
-| Category | Doc | Lines | Status |
-|----------|-----|-------|--------|
-| **Getting Started** | getting-started.md | 120 | ✅ |
-| **Quickstart** | quickstart.md | 150 | ✅ |
-| **Concepts** | concepts/index.md | 200 | ✅ |
-| **Concepts** | concepts/sancho.md | 380 | ✅ |
-| **Concepts** | concepts/distros.md | 350 | ✅ |
-| **Concepts** | concepts/ide-integration.md | 200 | ✅ |
-| **Concepts** | concepts/architecture.md | 600 | ✅ |
-| **Concepts** | concepts/shared-storage.md | 200 | ✅ |
-| **Brain** | brain/index.md | 280 | ✅ |
-| **User Manual** | user-manual/index.md | 140 | ✅ |
-| **Plugins** | plugins/index.md | 200 | ✅ |
-| **Plugins** | plugins/writing.md | 480 | ✅ |
-| **API** | api/mcp-tools.md | 500 | ✅ |
-| **Troubleshooting** | troubleshooting/index.md | 296 | ✅ |
-| **Troubleshooting** | troubleshooting/uninstall.md | 155 | ✅ |
-| **Development** | development/contributing.md | 200 | ✅ |
-| **Development** | development/changelog.md | 100 | ✅ |
+## Setup surfaces worth knowing
 
-**Total: 4,451 lines of documentation** ✅
+- `makakoo setup updates` chooses auto or manual Makakoo OS updates. Fresh setup defaults to auto. Existing installs stay idle until this config exists.
+- `makakoo update` is the primary update command. `makakoo upgrade` is only a legacy alias.
+- `makakoo setup brain` registers Logseq, Obsidian, or plain markdown sources. If Obsidian is missing, the picker can offer to install it first when Homebrew, Flatpak, or winget is available.
+- `makakoo setup lope` offers Lope, Makakoo's optional in-house companion for validator ensembles for reviews, votes, compares, negotiated plans, and validator-in-the-loop sprints.
+- Headroom ships in the default core distro through `tool-headroom`. It compresses bulky tool and MCP output without making users manage another setup step.
 
-## 🔑 Quick Navigation
+## Architecture in one picture
 
-### New to Makakoo?
-1. [Install](getting-started.md) → 5 minutes
-2. [Quickstart](quickstart.md) → 15 minutes
-3. [Concepts](concepts/index.md) → Understand the system
-
-### Using Daily?
-1. [CLI Reference](user-manual/index.md) → All commands
-2. [Brain Guide](brain/index.md) → Memory system
-3. [Brain Network](user-manual/makakoo-network.md) → Connect multiple Makakoo installs
-4. [HarveyChat Cortex Memory](agents/harveychat-cortex-memory.md) → Chat long-term recall
-5. [SANCHO Guide](concepts/sancho.md) → Proactive tasks
-
-### Extending?
-1. [Plugin Guide](plugins/index.md) → Using plugins
-2. [Plugin Writing](plugins/writing.md) → Create plugins
-3. [MCP Tools](api/mcp-tools.md) → API reference
-
-### Problems?
-1. [Troubleshooting FAQ](troubleshooting/index.md) → Common issues
-2. [Uninstall](troubleshooting/uninstall.md) → Clean removal
-
-## 🏗️ System Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         YOU                                             │
-│                    Claude / Gemini / OpenCode / etc.                   │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │ INFECTED
-                             ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        MAKAKOO OS                                      │
-│                                                                      │
-│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐    │
-│   │    Brain     │  │   SANCHO     │  │      Plugins         │    │
-│   │  (memory)    │  │  (tasks)     │  │   (capabilities)     │    │
-│   └──────────────┘  └──────────────┘  └──────────────────────┘    │
-│                                                                      │
-│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐    │
-│   │ Superbrain   │  │     MCP      │  │    Daemon           │    │
-│   │  (search)    │  │   (tools)    │  │   (auto-start)      │    │
-│   └──────────────┘  └──────────────┘  └──────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+Local AI CLIs and IDE agents
+  Claude Code, Codex, OpenCode, Gemini, Vibe, Cursor, Qwen, Kimi, pi
+        │
+        │ makakoo infect
+        ▼
+Makakoo OS
+  Brain + Superbrain + MCP tools + plugins + SANCHO + Headroom + optional Lope integration
+        ▲
+        │ makakoo agent create <slot>
+        │
+Chat transports
+  Telegram, Slack, Discord, WhatsApp, voice, email, web
 ```
 
-## ✨ Key Features
-
-| Feature | Description |
-|---------|-------------|
-| **Infection** | One command infects 7+ AI CLIs |
-| **Brain** | Persistent journals + pages |
-| **Superbrain** | FTS5 + vector search + LLM |
-| **SANCHO** | Proactive tasks while you sleep |
-| **Brain Network** | Opt-in signed remote Brain search across Makakoo installs |
-| **Plugins** | 38 built-in, extensible |
-| **Agent Sessions** | Durable child-agent sessions with compact result/log handles |
-| **Capabilities** | Security sandboxing |
-| **Any Model** | Claude, Gemini, GPT, local |
-
-## 🚀 Quick Start
-
-```bash
-# Install — drops binaries, runs `makakoo install`, lands you in the wizard
-curl -fsSL https://makakoo.com/install.sh | bash
-
-# Query your brain (the wizard already infected every detected CLI)
-makakoo query "what did I work on yesterday?"
-```
-
-## 📦 Distros
-
-Choose your setup:
-
-| Distro | Plugins | Best For |
-|--------|---------|----------|
-| minimal | 5 | Beginners |
-| core | 15 | Most users |
-| sebastian | 25 | Power users |
-| federation | core + 2 | Multi-machine Brain Network |
-| creator | 20 | Writers/creators |
-| trader | 20 | Traders |
-
-## 🔗 Resources
+## Resources
 
 - [GitHub](https://github.com/makakoo/makakoo-os)
 - [Issues](https://github.com/makakoo/makakoo-os/issues)
 - [Discussions](https://github.com/makakoo/makakoo-os/discussions)
 - [Discord](https://discord.gg/makakoo)
 
-## 📄 License
-
-MIT · Open Source · No telemetry · Local-first
+MIT licensed. Local-first. No telemetry by default.

@@ -3,7 +3,7 @@ name: makakoo
 version: 1.0.0
 description: |
   Drop-in onboarding for any AI CLI (Claude Code, Codex, Gemini, OpenCode,
-  Cursor, Vibe, Qwen, pi) running on a machine that has Makakoo OS
+  Cursor, Vibe, Qwen, Kimi, pi) running on a machine that has Makakoo OS
   installed. Read this file once and you know:
     - what `makakoo` is (a persistent shared-Brain layer for every AI CLI)
     - which commands actually exist (vs the ones documentation drifted on)
@@ -29,7 +29,7 @@ canonical-url: https://raw.githubusercontent.com/makakoo/makakoo-os/main/.agents
 
 ## What Makakoo OS is (in one paragraph)
 
-Makakoo OS is a **persistent shared-Brain layer** that gives every AI CLI on the user's machine the same memory: journals, pages, MCP tools, a proactive task engine. The user's CLI choice (Claude Code, Codex, Gemini, OpenCode, Cursor, Vibe, Qwen, pi) is interchangeable; the Brain is shared. Persona is "Harvey" by default. The platform name is "Makakoo OS"; the AI persona is "Harvey" — both names are correct in different contexts.
+Makakoo OS is a **persistent shared-Brain layer** that gives every local AI CLI and IDE agent on the user's machine the same memory: journals, pages, MCP tools, plugins, and proactive tasks. The user's CLI choice (Claude Code, Codex, Gemini, OpenCode, Cursor, Vibe, Qwen, Kimi, pi) is interchangeable; the Brain is shared. Telegram, Slack, Discord, WhatsApp, voice, email, and web are not infected hosts — they attach through scoped `makakoo agent create` slots. Persona is "Harvey" by default. The platform name is "Makakoo OS"; the AI persona is "Harvey" — both names are correct in different contexts.
 
 ## Hard rules for the AI (you)
 
@@ -38,31 +38,39 @@ Makakoo OS is a **persistent shared-Brain layer** that gives every AI CLI on the
 - **Never run destructive commands** (`rm -rf`, `git reset --hard`, `git push --force`) without explicit user approval.
 - **The user is the boss.** You are the user's autonomous extension, not an independent agent.
 
-## Real `makakoo` subcommands (verified 2026-04-25)
+## Real `makakoo` subcommands (verified 2026-06-21)
 
-The full subcommand surface — **only these exist**; do not invoke ones that look plausible but aren't on this list:
+Primary command surface — these are real. For the long tail, run `makakoo --help` instead of guessing.
 
 | Subcommand | Purpose |
 |---|---|
 | `makakoo --version` | Print binary version |
+| `makakoo mcp` | Run the MCP stdio server |
 | `makakoo version` | Version + persona + `$MAKAKOO_HOME` path |
 | `makakoo install` | One-shot: distro install + daemon register + global infect |
-| `makakoo setup` | Interactive setup wizard (sections: persona, brain, cli-agent, terminal, model-provider, infect) |
+| `makakoo update` | Primary self-update command. Auto-detects cargo / Homebrew / curl-pipe installs. |
+| `makakoo upgrade` | Legacy alias for `makakoo update`; prefer `update` in new docs. |
+| `makakoo setup` | Interactive setup wizard (sections: persona, updates, brain, cli-agent, terminal, lope, model-provider, infect) |
 | `makakoo infect` | Write the Makakoo bootstrap block into every detected CLI's global slot |
 | `makakoo infect --verify` | Audit-only: report drift across all CLIs (exit 1 on drift) |
-| `makakoo infect --local` | Project-scoped: write `.harvey/context.md` + `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` / `QWEN.md` / `.cursor/rules/makakoo.mdc` / `.vibe/context.md` into the nearest project root (the dir containing `.git/` or `.harvey/`, walking up from cwd) |
+| `makakoo infect --local` | Project-scoped: write `.harvey/context.md` plus `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` / `QWEN.md` / `.cursor/rules/makakoo.mdc` / `.vibe/context.md` into the nearest project root |
 | `makakoo infect --local --dir <PATH>` | Project-scoped, but pin the target explicitly |
-| `makakoo infect --local --target codex` | Project-scoped, write ONLY the named CLI's derivative (e.g. `codex` → `AGENTS.md`). Comma-separated for multiple. Tokens: `claude`, `gemini`, `codex`, `opencode`, `qwen`, `cursor`, `vibe`. |
+| `makakoo infect --local --target codex` | Project-scoped, write only the named derivative. Local tokens: `claude`, `gemini`, `codex`, `opencode`, `qwen`, `cursor`, `vibe`. |
 | `makakoo infect --local --dry-run` | Preview without writing |
 | `makakoo uninfect` | Strip Makakoo bootstrap from every detected CLI's global slot |
 | `makakoo plugin list` | Every installed plugin (table or `--json`) |
 | `makakoo plugin info <name>` | Manifest + lock entry for one plugin |
-| `makakoo plugin install <source>` | Install — accepts `path/to/dir`, `git+<url>[@ref]`, `https://…/x.tar.gz --sha256 <hash>`, or `--core <name>` from a checkout |
-| `makakoo plugin enable <name>` / `disable <name>` | Soft toggle |
-| `makakoo plugin uninstall <name> [--purge]` | Remove |
-| `makakoo agent {start,stop,status,health} <plugin>` | Drive an agent's `[entrypoint]` lifecycle (or pgrep fallback) |
+| `makakoo plugin install <source>` | Install from local path, `git+<url>[@ref]`, tarball + hash, or bare name with `--core` |
+| `makakoo plugin enable <name>` / `disable <name>` | Soft toggle without deleting files |
+| `makakoo plugin update <name>` / `outdated` | Update from recorded source / dry-run upstream drift list |
+| `makakoo plugin {start,stop,status,restart} <name>` | Drive service-kind or agent-kind plugin entrypoints |
+| `makakoo plugin uninstall <name> [--purge]` | Remove a plugin |
+| `makakoo agent create <slot>` | Create a scoped chat-channel agent slot. Flag mode has first-class Telegram/Slack shortcuts; `--from-toml` handles Discord, WhatsApp, voice, email, web, or multi-transport configs. `--runtime flue` also scaffolds a runnable TypeScript/Flue agent. |
+| `makakoo agent {list,show,validate,inventory,start,stop,restart,status,health,destroy,audit,test-faults}` | Manage scoped agent slots and legacy agent plugin lifecycles. |
+| `makakoo agent-session {open,eval,read,gate}` | Durable child-agent sessions with compact handles and verification gates |
+| `makakoo handle read <handle>` | Bounded reads from Makakoo handles such as `agent-artifact://...` |
 | `makakoo daemon {install,uninstall,status,logs,run,restart}` | LaunchAgent / systemd unit lifecycle |
-| `makakoo sancho {tick,status}` | Proactive task engine — fire eligible / inspect |
+| `makakoo sancho {tick,status}` | Proactive task engine — fire eligible tasks / inspect registry |
 | `makakoo nursery {list,hatch}` | Mascot registry |
 | `makakoo buddy status` | Active mascot's ASCII frame + state |
 | `makakoo dream` | Force a Brain consolidation pass |
@@ -72,13 +80,17 @@ The full subcommand surface — **only these exist**; do not invoke ones that lo
 | `makakoo memory stats` | Recall log + promotion candidates |
 | `makakoo promotions [--threshold N] [--limit N]` | Memory-promoter candidates |
 | `makakoo flag <reason> [--skill <s>]` | Manual GYM error funnel entry |
-| `makakoo octopus {bootstrap,invite,join,trust,doctor}` | Signed-MCP peer federation (read DOGFOOD-FINDINGS for known gotchas) |
+| `makakoo octopus {bootstrap,invite,join,trust,doctor}` | Signed-MCP peer federation |
+| `makakoo network {activate,deactivate,status,...}` | Opt-in Brain Network federation |
 | `makakoo perms {grant,revoke,list,audit,purge,show}` | Runtime write-permission grants |
 | `makakoo session {…}` | JSONL session-tree management (gated, default off) |
 | `makakoo adapter {list,info,spec,gen,…}` | External-AI adapter management |
-| `makakoo skill <name>` | Run a Python skill by name (NOT a subcommand-style — name is positional) |
-| `makakoo secret {set,get,remove,list}` | Keyring-backed secrets |
-| `makakoo distro {list,install,info}` | Distro management (curated plugin bundles) |
+| `makakoo skill <name>` | Run a Python skill by name (not a subcommand-style `skill run`) |
+| `makakoo secret {set,get,delete}` | Keyring-backed secrets |
+| `makakoo distro {list,install,save}` | Distro management (curated plugin bundles) |
+| `makakoo bucket {create,grant,revoke,expire}` / `makakoo s3 bootstrap` | Shared S3/Garage storage helpers |
+| `makakoo docs` / `makakoo docs-mcp` | Manage and serve the docs corpus over MCP |
+| `makakoo completion <shell>` | Emit shell completions |
 | `makakoo migrate [--dry-run]` | Prepare `$MAKAKOO_HOME` for kernel use |
 
 **Subcommands that DO NOT exist** (despite older docs / batch-migrated SKILL.md mentions):
@@ -91,7 +103,7 @@ The full subcommand surface — **only these exist**; do not invoke ones that lo
 This is the right answer **99% of the time**, including when a fresh AI CLI session pastes the magic-URL line and is told to set itself up. It writes Makakoo's bootstrap into the **CLI's global config slot** so the CLI knows about Makakoo system-wide. Does NOT touch the current folder. Does NOT need a folder. Does NOT walk up the filesystem.
 
 ```sh
-makakoo infect --global --target codex      # writes ~/AGENTS.md (Codex walks up from cwd)
+makakoo infect --global --target codex      # writes ~/AGENTS.md + ~/.codex/config.toml model_instructions_file
 makakoo infect --global --target claude     # writes ~/.claude/CLAUDE.md
 makakoo infect --global --target gemini     # writes ~/.gemini/GEMINI.md
 makakoo infect --global --target qwen       # writes ~/.qwen/QWEN.md
@@ -99,11 +111,14 @@ makakoo infect --global --target opencode   # writes ~/.config/opencode/opencode
 makakoo infect --global --target cursor     # writes ~/.cursor/rules.md
 makakoo infect --global --target vibe       # writes ~/.vibe/instructions.md
 makakoo infect --global --target pi         # writes ~/.pi/AGENTS.md
+makakoo infect --global --target kimi       # writes ~/.kimi/agents/makakoo/agent.yaml
 makakoo infect --global                     # writes ALL of the above
 makakoo infect --global --target codex,gemini   # comma-separated subset
 ```
 
-Tokens: `claude`, `gemini`, `codex`, `opencode`, `qwen`, `cursor`, `vibe`, `pi`.
+Global target tokens: `claude`, `gemini`, `codex`, `opencode`, `qwen`, `cursor`, `vibe`, `pi`, `kimi`.
+
+Project-local derivative tokens: `claude`, `gemini`, `codex`, `opencode`, `qwen`, `cursor`, `vibe`. Local infect writes repository files, not chat transports and not Kimi/pi global slots.
 
 ### v12 architecture (since 2026-04-25)
 
@@ -171,8 +186,8 @@ Verbatim error-string index at `docs/troubleshooting/symptoms.md`.
 
 ## Deeper references in the repo
 
-- `docs/walkthroughs/` — 12 dependency-chained end-to-end guides covering every major feature.
-- `docs/agents/` — per-agent manuals (15 agents).
+- `docs/walkthroughs/` — numbered tour guides plus standalone transport recipes.
+- `docs/agents/` — per-agent manuals and related agent integration docs.
 - `docs/mascots/` — per-mascot manuals (5 mascots).
 - `docs/user-manual/` — per-CLI-subcommand reference.
 - `docs/concepts/` — architecture, distros, IDE integration.
@@ -192,7 +207,7 @@ These are all reachable on the local filesystem under `<makakoo-os-checkout>/doc
 If the user has Makakoo installed (`which makakoo` returns a path), every command above works. If they don't, point them at:
 
 ```sh
-curl -fsSL https://makakoo.com/install | sh   # public path, post-v0.1.0
+curl -fsSL https://makakoo.com/install.sh | bash   # public path, post-v0.1.0
 # or from source:
 git clone https://github.com/makakoo/makakoo-os && cd makakoo-os && \
   cargo install --path makakoo && cargo install --path makakoo-mcp && \

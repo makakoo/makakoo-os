@@ -36,10 +36,10 @@ same effect can be forced with `--non-interactive`.
 |------------------|-----------------------------------------------------------------------------|--------------------------------------------------|
 | `persona`        | Names your assistant + optional user name + pronoun + voice default; seeds persona registry/context when installed. | `config/persona.json` exists → already-satisfied |
 | `updates`        | Chooses Makakoo OS update mode. `auto` runs `makakoo update --reinfect` from SANCHO every 24h; `manual` only checks when the user runs it. | `config/updates.toml` has `mode = "auto"` or `mode = "manual"` |
-| `brain`          | Shells to the existing `skill-brain-multi-source` picker to register vaults.  | `config/brain_sources.json` has ≥1 non-default source |
+| `brain`          | Shells to the existing `skill-brain-multi-source` picker to register vaults. If the Obsidian app is missing and a supported package manager exists, the picker offers to install it first. | `config/brain_sources.json` has ≥1 non-default source |
 | `cli-agent`      | Installs pi (`@mariozechner/pi-coding-agent`) via `npm install -g`.          | `pi` is on `$PATH`                                |
 | `terminal`       | Installs Ghostty via `brew install --cask ghostty`. **macOS only.**           | `brew list --cask ghostty` exits 0                |
-| `lope`           | Installs Lope (`~/.lope`) and registers its skills/commands into detected AI CLI hosts. | `lope` is on `$PATH` or `~/.lope/lope/cli.py` exists |
+| `lope`           | Offers Makakoo's optional in-house Lope validator ensemble. It clones `traylinx/lope` to `~/.lope` or `$LOPE_HOME`, runs Lope's installer, and registers its skills/commands into detected AI CLI hosts. Defaults to No because it runs a remote installer. | `lope` is on `$PATH` or `~/.lope/lope/cli.py` exists |
 | `model-provider` | Writes `~/.makakoo/primary_adapter.toml` naming the default routing adapter. If no adapters are registered yet, it installs the bundled `switchailocal` adapter and selects it as the fresh-install default. | file exists and points to a registered adapter    |
 | `infect`         | Thin wrapper over `makakoo infect` — writes the bootstrap block to every    | `makakoo infect --verify` exits 0                 |
 |                  | detected CLI host config (NOT your shell dotfiles).                         |                                                  |
@@ -54,6 +54,45 @@ Every `Y/n/s` prompt accepts:
 - `y` / `yes` / Enter on a Y-default prompt → proceed
 - `n` / `no` → decline this run (re-ask on the next `setup`)
 - `s` / `skip` → record as skipped so the wizard doesn't re-ask
+
+
+### Brain and Obsidian
+
+The Brain section always seeds the default Logseq-style Brain at
+`$MAKAKOO_HOME/data/Brain/`. If you already use Obsidian, there are two
+paths:
+
+- Open the default Brain folder as an Obsidian vault. No Makakoo config
+  change needed.
+- Register a separate Obsidian vault so Makakoo can read it as another
+  source.
+
+When you choose the separate-vault path and the Obsidian app is not
+detected, the picker offers to install Obsidian with the available package
+manager: Homebrew on macOS, Flatpak on Linux, or winget on Windows. The
+default answer is No. If no package manager is available, it prints the
+manual install links and still lets you register an existing vault path.
+
+### Lope
+
+Lope is optional, but it is one of the best things to install on a Makakoo
+machine. It is the in-house validator ensemble: one CLI drafts, the rest
+review independently. Use it for `review`, `vote`, `compare`, negotiated
+plans, and validator-in-the-loop sprints. It is especially useful before a
+PR, a migration, a release, or any decision where one model should not be
+the only judge.
+
+The setup section defaults to No because it clones `https://github.com/traylinx/lope`
+and executes Lope's installer. Say Yes if you want the full multi-CLI
+review loop. Say Skip if you want Makakoo to stop asking until `--reset`.
+
+### Headroom
+
+Headroom is not a wizard section. It ships in the default core distro as
+`tool-headroom`. Fresh installs try `headroom-ai[mcp]` first, then fall
+back to the Docker-native wrapper when Python wheels are unavailable. Use
+`headroom mcp status` after install if you want to confirm the MCP server
+was registered for your host.
 
 ## State file
 

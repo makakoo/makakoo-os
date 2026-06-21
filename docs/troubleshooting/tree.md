@@ -36,7 +36,7 @@ You typed a subcommand that doesn't exist. Either:
 
 - **Typo** → `makakoo --help` to see the real list.
 - **You're thinking of a subcommand from an older version** → `makakoo --version`. If below `0.1.3`, upgrade — `makakoo update` itself is one of the verbs you'd be missing pre-0.1.3.
-- **You're thinking of a subcommand that the v1 sprint draft mentioned but was never implemented** (e.g. `makakoo doctor`, `makakoo agent start`) → see DOGFOOD-FINDINGS in the grandma-docs sprint workspace.
+- **You're thinking of a subcommand that the v1 sprint draft mentioned but was never implemented** (e.g. `makakoo doctor`) → see current command docs before running guessed verbs.
 
 ### `makakoo update` fails or refuses to run
 

@@ -92,12 +92,13 @@ Note: **MCP children don't auto-update** — restart any open AI CLI session aft
 
 ### Step 1 — distro install
 
-A distro is a curated bundle of plugins. The default is `core` (~30 plugins: brain tools, search, MCP server, mascot system). Other choices: `minimal`, `sebastian`, `creator`, `trader`. `makakoo install` picks `core` unless you've already chosen one.
+A distro is a curated bundle of plugins. The default is `core`: Brain source picker, browser harness, Headroom, update tasks, switchAILocal, watchdogs, mascot GYM, dreams, and shared storage. Other choices: `minimal`, `federation`, `sebastian`, `creator`, and `trader`. `makakoo install` picks `core` unless you choose another distro.
 
 ```sh
 makakoo install                       # uses default distro 'core'
-makakoo install --distro minimal      # ~10 plugins, no mascots, no SANCHO tasks
-makakoo install --distro sebastian    # personal full-stack (CV, career, arbitrage)
+makakoo install --distro minimal      # bare kernel, no extra plugin bundle
+makakoo install --distro federation   # core + Brain Network peer support
+makakoo install --distro sebastian    # personal full-stack dogfood rig
 makakoo distro list                   # see what's available
 ```
 
@@ -127,6 +128,7 @@ Writes the bootstrap pointer block into every CLI's global instructions slot. v1
 | Cursor | `~/.cursor/rules.md` | Markdown |
 | Qwen Code | `~/.qwen/QWEN.md` | Markdown |
 | pi (badlogic) | `~/.pi/AGENTS.md` | Markdown |
+| Kimi | `~/.kimi/agents/makakoo/agent.yaml` | YAML slot |
 
 For Codex specifically, the pointer block alone is not enough — Codex doesn't walk up to `~/AGENTS.md` from arbitrary cwds. So infect ALSO sets `model_instructions_file = "$MAKAKOO_HOME/bootstrap/global.md"` in `~/.codex/config.toml`. That key is Codex's official "load custom system instructions every session" knob (replacing the deprecated `experimental_instructions_file`).
 
@@ -207,19 +209,19 @@ Asks:
 - Format (logseq / obsidian / plain — default `logseq`)
 - Whether to seed with starter pages (default: yes)
 
-Initializes the journals dir + pages dir. You can add more vaults later with `makakoo brain add <path>`.
+Initializes the journals dir + pages dir. You can add more vaults later by re-running `makakoo setup brain` or by using the installed plugin CLI at `$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py`.
+
+If the Obsidian app is missing, the picker offers to install it with Homebrew, Flatpak, or winget when one of those package managers is available. The default is No. If install is skipped or unavailable, it prints manual install links and still lets you register an existing vault path.
 
 **Use case**: you already use Obsidian for personal notes and want Makakoo to read/write into your existing vault instead of creating a new one.
 
 ### Section 4 — `cli-agent`
 
-Tells Makakoo which AI CLI hosts to detect + infect. By default, every CLI present on PATH gets infected. You can opt-out individual CLIs here.
+Offers to install the blessed CLI coding agent, pi (`@mariozechner/pi-coding-agent`), through npm. This is not the infect step. It is about making the `pi` binary available on the machine.
 
-Asks for each detected CLI: include or skip?
+Asks whether to install pi if it is missing. The default is Yes on the full wizard path, but it still requires explicit confirmation before running `npm install -g`.
 
-This section drives the `infect --global` step. Re-running it after installing a new CLI (e.g. you just installed Cursor) re-detects and adds it to the infected set.
-
-**Use case**: you have Codex installed but don't want Makakoo to touch it. Skip it here; infect will leave its slot alone forever.
+**Use case**: you want Pi available as another local AI body that Makakoo can infect and that Lope can use as a validator.
 
 ### Section 5 — `terminal`
 
@@ -238,11 +240,7 @@ Skip this section if you only ever run one Makakoo command at a time.
 Offers to install [Lope](https://github.com/traylinx/lope), Makakoo's
 multi-CLI validator ensemble.
 
-The prompt explains why it matters: any CLI can implement, other CLIs validate,
-and modes like `review`, `vote`, `compare`, `negotiate`, and validator-in-the-loop
-sprints catch single-model blind spots. The installer is explicit-consent and
-defaults to **No** because it clones a remote checkout and executes Lope's
-installer.
+The prompt explains why it matters: Lope is Makakoo's optional in-house validator ensemble. Any CLI can draft, other CLIs validate, and modes like `review`, `vote`, `compare`, `negotiate`, `deliberate`, and validator-in-the-loop sprints catch single-model blind spots. The installer is explicit-consent and defaults to **No** because it clones a remote checkout and executes Lope's installer.
 
 Writes/updates `~/.lope` (or `$LOPE_HOME`) only when the target is absent or is
 already the expected `traylinx/lope` checkout.
@@ -271,9 +269,9 @@ After config is saved, the wizard runs a smoke test (`makakoo query "hello"`) an
 
 ### Section 8 — `infect`
 
-Runs `makakoo infect --global` against the CLIs you opted in to in §3.3. Reports what was added / updated / unchanged.
+Runs `makakoo infect --global` against detected local agentic hosts: AI CLIs and IDE assistants that can load Makakoo bootstrap instructions. Reports what was added, updated, and unchanged.
 
-This section is mostly informational at this point — `makakoo install` already ran infect. But if you changed CLI selection in §3.3, this re-applies the change.
+This section is mostly informational at this point because `makakoo install` already ran infect. Re-run it after installing a new AI CLI or IDE assistant.
 
 Also runs the daemon GYM-hook installer for the AI CLIs that support hooks (Claude/Gemini/OpenCode), so cross-session error funneling works.
 
@@ -295,6 +293,7 @@ Each AI CLI has different conventions about *where* to load global instructions 
 | **Cursor** | `~/.cursor/rules.md` (auto) | Strong but project-rules override | Rules also load via `.cursor/rules/*.mdc` per-project |
 | **Qwen Code** | `~/.qwen/QWEN.md` (auto) | Strong | Same shape as Claude/Gemini |
 | **pi (badlogic)** | `~/.pi/AGENTS.md` (auto) | Strong | pi reads AGENTS.md from any anchor dir |
+| **Kimi** | `~/.kimi/agents/makakoo/agent.yaml` (auto) | Strong | YAML slot under `agent.system_prompt_args.ROLE_ADDITIONAL` |
 
 ### Codex special case — why "what is your name?" still says "Codex"
 
@@ -317,10 +316,10 @@ You can scope `infect` to one CLI:
 ```sh
 makakoo infect --global --target codex             # only ~/AGENTS.md + .codex/config.toml
 makakoo infect --global --target claude,gemini     # comma-separated for multi
-makakoo infect --global --target qwen,vibe,pi      # any subset
+makakoo infect --global --target qwen,vibe,pi,kimi # any subset
 ```
 
-Tokens accepted: `claude`, `gemini`, `codex`, `opencode`, `vibe`, `cursor`, `qwen`, `pi`.
+Tokens accepted: `claude`, `gemini`, `codex`, `opencode`, `vibe`, `cursor`, `qwen`, `pi`, `kimi`.
 
 ### What `--local` does (rarely needed)
 
@@ -404,9 +403,9 @@ If you prefer to drive the channel manually:
 | `brew install traylinx/tap/makakoo` | `brew upgrade traylinx/tap/makakoo` |
 | `cargo install --path makakoo` | `cd makakoo-os && git pull && cargo install --path makakoo --force && cargo install --path makakoo-mcp --force` |
 
-After any update, run `makakoo install` once — it's idempotent, picks up new bootstrap versions, and refreshes infect pointers. Then **restart your AI CLIs** so they spawn the new `makakoo-mcp` child; pre-existing sessions keep running the old MCP binary until you do.
+After any update, restart your AI CLIs so they spawn the new `makakoo-mcp` child. Pre-existing sessions keep running the old MCP binary until you do. If release notes mention bootstrap, persona, Headroom, or MCP instruction changes, use `makakoo update --reinfect` or run `makakoo infect --global` after the binary update.
 
-If the bootstrap version bumped (v11 → v12 → v13...), all 8 slot pointers get rewritten on the next `makakoo infect --global` run. Old marker blocks are stripped cleanly.
+If the bootstrap version bumps, every detected global host slot gets rewritten on the next `makakoo infect --global` run. Old marker blocks are stripped cleanly.
 
 ### Uninstall — symmetric inverse
 
@@ -579,22 +578,14 @@ Seed with starter pages? (Y/n):
 ### Section 4 — cli-agent
 
 ```
-[4/8] AI CLI hosts to infect
+[4/8] Blessed CLI coding agent
 
-Detected CLIs:
-  ✓ claude (~/.claude/)
-  ✓ gemini (~/.gemini/)
-  ✓ codex  (~/.codex/)
-  ✗ opencode (not installed)
-  ✗ vibe (not installed)
-  ✓ cursor (~/.cursor/)
-  ✓ qwen (~/.qwen/)
-  ✓ pi (~/.pi/)
+pi is the local coding-agent CLI Makakoo recommends for agent-to-agent work.
+It is optional, but useful as another infected host and Lope validator.
 
-Include all detected CLIs? (Y/n):
-[If 'n']: Skip which CLIs? (comma-separated tokens):
+Install pi now? Runs: npm install -g @mariozechner/pi-coding-agent [Y/n/s]:
 
-✓ Will infect 6 CLIs on next run
+✓ pi installed / or skipped by choice
 ```
 
 ### Section 5 — terminal
@@ -660,6 +651,7 @@ Running: makakoo infect --global
   ✓ cursor     installed   ~/.cursor/rules.md
   ✓ qwen       installed   ~/.qwen/QWEN.md
   ✓ pi         installed   ~/.pi/AGENTS.md
+  ✓ kimi       installed   ~/.kimi/agents/makakoo/agent.yaml
 
 Running: makakoo daemon gym-hook install
   ✓ claude/gemini/opencode hooks installed

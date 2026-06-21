@@ -50,7 +50,7 @@ signed_by        = "me"
 Validate it locally:
 
 ```bash
-makakoo adapter install ./myprovider-adapter --allow-unsigned --skip-health-check
+makakoo adapter install ./myprovider-adapter --skip-health-check
 makakoo adapter info myprovider
 ```
 
