@@ -35,16 +35,16 @@ Verify: `which makakoo` should return a path.
 You typed a subcommand that doesn't exist. Either:
 
 - **Typo** → `makakoo --help` to see the real list.
-- **You're thinking of a subcommand from an older version** → `makakoo --version`. If below `0.1.3`, upgrade — `makakoo upgrade` itself is one of the verbs you'd be missing pre-0.1.3.
-- **You're thinking of a subcommand that the v1 sprint draft mentioned but was never implemented** (e.g. `makakoo doctor`, `makakoo agent start`) → see DOGFOOD-FINDINGS in the grandma-docs sprint workspace.
+- **You're thinking of a subcommand from an older version** → `makakoo --version`. If below `0.1.3`, upgrade — `makakoo update` itself is one of the verbs you'd be missing pre-0.1.3.
+- **You're thinking of a subcommand that the v1 sprint draft mentioned but was never implemented** (e.g. `makakoo doctor`) → see current command docs before running guessed verbs.
 
-### `makakoo upgrade` fails or refuses to run
+### `makakoo update` fails or refuses to run
 
-Three failure modes, all from the upgrade dispatcher:
+Three failure modes, all from the update dispatcher:
 
-- **`install method is "Unknown" — running binary at <path> was installed in a way Makakoo cannot auto-upgrade`** — the detector saw a binary path it doesn't recognise (custom prefix, manually-copied binary, dev build under `target/debug` or `target/release`). Either reinstall via cargo / brew / `install.sh`, or pass `--method <cargo|brew|curl-pipe>` to override the detector. For developers running from a checkout: use `cargo install --path <checkout>/makakoo --locked --force` directly instead of `makakoo upgrade`.
+- **`install method is "Unknown" — running binary at <path> was installed in a way Makakoo cannot auto-update`** — the detector saw a binary path it doesn't recognise (custom prefix, manually-copied binary, dev build under `target/debug` or `target/release`). Either reinstall via cargo / brew / `install.sh`, or pass `--method <cargo|brew|curl-pipe>` to override the detector. For developers running from a checkout: use `cargo install --path <checkout>/makakoo --locked --force` directly instead of `makakoo update`.
 - **`non-HTTPS install script URL refused: <url>`** — `--install-script-url` only accepts `https://...`. Insecure URLs are deliberately blocked. Pass an HTTPS URL.
-- **`subprocess failed: <label> (exit code <code>)`** — one of the queued actions exited non-zero. The label says which: `cargo install …`, `brew update`, `brew upgrade …`, or `curl … | sh`. Run that exact action manually (it's printed in the plan) to surface the underlying error. The chain aborts on first failure; if the kernel succeeded but `makakoo-mcp` didn't, run `makakoo upgrade --only-mcp` after fixing the root cause.
+- **`subprocess failed: <label> (exit code <code>)`** — one of the queued actions exited non-zero. The label says which: `cargo install …`, `brew update`, `brew upgrade …`, or `curl … | sh`. Run that exact action manually (it's printed in the plan) to surface the underlying error. The chain aborts on first failure; if the kernel succeeded but `makakoo-mcp` didn't, run `makakoo update --only-mcp` after fixing the root cause.
 
 After any successful upgrade:
 
@@ -402,7 +402,7 @@ If your CLI doesn't render the citation as a link, that's an MCP-host UI issue, 
 
 ### `version too old` or schema mismatch on cache load
 
-The cache file at `~/.makakoo/docs-cache/index.db` is version-gated by `meta.built_for_version`. After a `makakoo` upgrade where the FTS5 schema or tokenizer changed, the cache silently falls back to baked corpus until you re-run:
+The cache file at `~/.makakoo/docs-cache/index.db` is version-gated by `meta.built_for_version`. After a `makakoo` update where the FTS5 schema or tokenizer changed, the cache silently falls back to baked corpus until you re-run:
 
 ```sh
 makakoo docs update --from-github

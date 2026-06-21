@@ -4,6 +4,12 @@ The `agent` subcommand group manages multi-bot subagents. Each
 subagent ("slot") has its own persona, tools, paths, and one or
 more chat-transport attachments (Telegram, Slack, …).
 
+
+Important distinction: `makakoo infect` is for local agentic hosts that can
+load Makakoo instructions and MCP tools. Telegram, Slack, Discord, WhatsApp,
+voice, email, and web are transports. They do not get infected. They attach
+to a scoped agent slot.
+
 ## Slot lifecycle
 
 | Command | Purpose |

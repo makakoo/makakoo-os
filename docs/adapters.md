@@ -45,11 +45,11 @@ Makakoo ships 8 reference adapters at `plugins-core/adapters/`:
 Install the whole pack in one shot:
 
 ```bash
-makakoo adapter install plugins-core/adapters --pack --allow-unsigned --skip-health-check
+makakoo adapter install plugins-core/adapters --pack --skip-health-check
 makakoo adapter list
 ```
 
-`--pack` walks every `<subdir>/adapter.toml` under the given path and installs each. `--allow-unsigned` is required for local paths without a detached `.sig` file; the main `makakoo-adapters-core` GitHub distribution will ship signed manifests.
+`--pack` walks every `<subdir>/adapter.toml` under the given path and installs each. Local paths are allowed for development; URL installs without signatures require the explicit `--allow-unsigned` flag.
 
 Install one at a time (bundled reference adapters):
 
@@ -86,7 +86,7 @@ makakoo adapter update openclaw --accept-re-trust  # override
 ### Flow 3 — unsigned local adapter (dev loop)
 
 ```bash
-makakoo adapter install ./my-experimental-adapter --allow-unsigned --skip-health-check
+makakoo adapter install ./my-experimental-adapter --skip-health-check
 ```
 
 ### Flow 4 — broken adapter after an OS upgrade

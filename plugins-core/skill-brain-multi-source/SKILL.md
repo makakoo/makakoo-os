@@ -1,6 +1,6 @@
 ---
 name: brain-multi-source
-description: Use this skill whenever the user asks to connect, register, add, or change a knowledge vault (Logseq, Obsidian, or a plain markdown folder) that Harvey should read from or write into. Trigger phrases include "connect brain to obsidian", "add my obsidian vault", "use my logseq graph", "connect my notes", "register a vault", "switch default brain", "where does harvey save notes", "list brain sources", "what vaults am I using". Routes through the `makakoo brain` CLI (list / add / remove / set-default / sync / init) to edit `$MAKAKOO_HOME/config/brain_sources.json`. NEVER edit the config by hand; always go through the CLI so the picker's validation and atomic writes apply.
+description: Use this skill whenever the user asks to connect, register, add, or change a knowledge vault (Logseq, Obsidian, or a plain markdown folder) that Harvey should read from or write into. Trigger phrases include "connect brain to obsidian", "add my obsidian vault", "use my logseq graph", "connect my notes", "register a vault", "switch default brain", "where does harvey save notes", "list brain sources", "what vaults am I using". Routes through the bundled `brain_cli.py` helper (list / add / remove / set-default / sync / init) to edit `$MAKAKOO_HOME/config/brain_sources.json`. NEVER edit the config by hand; always go through the helper so validation and atomic writes apply. A future Rust `makakoo brain` wrapper may expose the same commands, but do not promise it until it exists in `makakoo --help`.
 ---
 
 # Brain Multi-Source
@@ -92,6 +92,7 @@ Caveat to mention for Scenario A: the existing Brain uses Logseq outliner format
    - Prints a banner noting that if the user just wants Obsidian as a UI over the existing Brain, no registration is needed (Scenario A — open the Brain dir as a vault).
    - Seeds the default Logseq source if missing (baseline guarantee, outside the batched flow).
    - Asks about a separate Obsidian vault (auto-detects common paths: `~/Documents/Obsidian Vault`, `~/Documents/obsidian`, `~/Obsidian`).
+   - If the Obsidian app is missing, offers to install it through Homebrew, Flatpak, or winget when available. The default is No; skipping install still allows registering an existing vault path.
    - Asks about any other plain markdown folder (name + writable toggle).
    - If >1 source will exist, asks whether to change the write-default.
    - **Shows a "Pending changes" summary** listing every registration + default change.

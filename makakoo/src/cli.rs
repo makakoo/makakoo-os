@@ -4,7 +4,7 @@
 //! and `Infect` variants — keep this file touchable as a shared edit
 //! boundary across waves 5 and 6.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -132,40 +132,13 @@ pub enum Commands {
         args: Vec<String>,
     },
 
-    /// Self-upgrade the makakoo + makakoo-mcp binaries by detecting
-    /// the install method (cargo / homebrew / curl-pipe) and running
-    /// the matching update command. Prints the version delta and a
-    /// `makakoo daemon restart` hint. The upgrade verb does not auto-restart
-    /// the daemon — copy-paste the printed command if needed.
-    Upgrade {
-        /// Print the upgrade plan without spawning anything.
-        #[arg(long)]
-        dry_run: bool,
-        /// After a successful upgrade, run `makakoo infect --global`
-        /// and verify drift so every CLI host reloads bootstrap fragments.
-        #[arg(long)]
-        reinfect: bool,
-        /// Override auto-detection. Valid: `cargo`, `brew`,
-        /// `curl-pipe`. Use only if the detector picks the wrong
-        /// method.
-        #[arg(long)]
-        method: Option<String>,
-        /// For Cargo upgrades: explicit local source path. Falls back
-        /// to `MAKAKOO_SOURCE_PATH` env var, then defaults to the
-        /// public Git repo.
-        #[arg(long)]
-        source: Option<String>,
-        /// For curl-pipe upgrades: override the install script URL.
-        /// Default: https://makakoo.com/install.sh
-        #[arg(long)]
-        install_script_url: Option<String>,
-        /// Upgrade only the `makakoo` kernel binary, not `makakoo-mcp`.
-        #[arg(long, conflicts_with = "only_mcp")]
-        only_kernel: bool,
-        /// Upgrade only the `makakoo-mcp` binary, not the kernel.
-        #[arg(long)]
-        only_mcp: bool,
-    },
+    /// Update Makakoo OS by detecting the install method (cargo /
+    /// homebrew / curl-pipe) and running the matching updater. Prints
+    /// the version delta and a `makakoo daemon restart` hint.
+    Update(UpgradeArgs),
+
+    /// Legacy spelling for `makakoo update`.
+    Upgrade(UpgradeArgs),
 
     /// Run a pattern — one-shot LLM dispatch with strategy + mascot
     /// composition. Pattern primitive shipped by
@@ -212,14 +185,14 @@ pub enum Commands {
     Version,
 
     /// Interactive setup wizard — a re-runnable dispatcher with one
-    /// section per configurable area (persona, brain, cli-agent,
-    /// terminal, model-provider, infect). Run with no args to walk
+    /// section per configurable area (persona, updates, brain, cli-agent,
+    /// terminal, lope, model-provider, infect). Run with no args to walk
     /// every section in order; pass a section name to run just one;
     /// or use `--only` / `--skip` to scope.
     Setup {
         /// Run only this section. If omitted, every section runs in
-        /// order. Valid names: `persona`, `brain`, `cli-agent`,
-        /// `terminal` (macOS only), `model-provider`, `infect`.
+        /// order. Valid names: `persona`, `updates`, `brain`, `cli-agent`,
+        /// `terminal` (macOS only), `lope`, `model-provider`, `infect`.
         section: Option<String>,
         /// Run only the given sections (comma-separated or repeat).
         /// Wins over `--skip` when both are set.
@@ -281,7 +254,7 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Restrict to a comma-separated subset of targets
-        /// (claude,gemini,codex,opencode,vibe,qwen,cursor).
+        /// (claude,gemini,codex,opencode,vibe,qwen,cursor,pi,kimi).
         #[arg(long, value_delimiter = ',')]
         target: Vec<String>,
         /// Project-scoped infect: write .harvey/context.md + per-CLI
@@ -322,7 +295,7 @@ pub enum Commands {
     /// preserves any prose the user wrote around the block.
     Uninfect {
         /// Restrict to a comma-separated subset of targets
-        /// (claude,gemini,codex,opencode,vibe,qwen,cursor).
+        /// (claude,gemini,codex,opencode,vibe,qwen,cursor,pi,kimi).
         #[arg(long, value_delimiter = ',')]
         target: Vec<String>,
 
@@ -575,6 +548,37 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: DocsCmd,
     },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct UpgradeArgs {
+    /// Print the update plan without spawning anything.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// After a successful update, run `makakoo infect --global`
+    /// and verify drift so every CLI host reloads bootstrap fragments.
+    #[arg(long)]
+    pub reinfect: bool,
+    /// Override auto-detection. Valid: `cargo`, `brew`,
+    /// `curl-pipe`. Use only if the detector picks the wrong
+    /// method.
+    #[arg(long)]
+    pub method: Option<String>,
+    /// For Cargo updates: explicit local source path. Falls back
+    /// to `MAKAKOO_SOURCE_PATH` env var, then defaults to the
+    /// public Git repo.
+    #[arg(long)]
+    pub source: Option<String>,
+    /// For curl-pipe updates: override the install script URL.
+    /// Default: https://makakoo.com/install.sh
+    #[arg(long)]
+    pub install_script_url: Option<String>,
+    /// Update only the `makakoo` kernel binary, not `makakoo-mcp`.
+    #[arg(long, conflicts_with = "only_mcp")]
+    pub only_kernel: bool,
+    /// Update only the `makakoo-mcp` binary, not the kernel.
+    #[arg(long)]
+    pub only_mcp: bool,
 }
 
 /// `makakoo docs <subcommand>`.
@@ -2556,6 +2560,39 @@ mod tests {
             assert!(dry_run);
         } else {
             panic!("expected Distro::Install");
+        }
+    }
+
+    #[test]
+    fn parse_update_primary_command() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "update",
+            "--dry-run",
+            "--reinfect",
+            "--method",
+            "curl-pipe",
+            "--only-kernel",
+        ])
+        .unwrap();
+        if let Commands::Update(args) = cli.command.unwrap() {
+            assert!(args.dry_run);
+            assert!(args.reinfect);
+            assert_eq!(args.method.as_deref(), Some("curl-pipe"));
+            assert!(args.only_kernel);
+            assert!(!args.only_mcp);
+        } else {
+            panic!("expected Update");
+        }
+    }
+
+    #[test]
+    fn parse_upgrade_legacy_command() {
+        let cli = Cli::try_parse_from(["makakoo", "upgrade", "--dry-run"]).unwrap();
+        if let Commands::Upgrade(args) = cli.command.unwrap() {
+            assert!(args.dry_run);
+        } else {
+            panic!("expected Upgrade");
         }
     }
 

@@ -1,0 +1,44 @@
+[plugin]
+name = "sancho-task-makakoo-update"
+version = "0.1.0"
+kind = "sancho-task"
+language = "python"
+summary = "Auto-update Makakoo OS every 24h when config/updates.toml mode is auto."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/sancho-task-makakoo-update"
+
+[abi]
+sancho-task = "^1.0"
+
+[depends]
+python = ">=3.9"
+binaries = ["makakoo"]
+
+[install]
+unix = "install.sh"
+windows = "install.ps1"
+
+[entrypoint]
+run = "python3 -u src/tick.py"
+
+[capabilities]
+grants = [
+    "fs/read:$MAKAKOO_HOME/config",
+    "fs/read:$MAKAKOO_HOME/data/Brain",
+    "fs/write:$MAKAKOO_HOME/data/Brain",
+    "fs/read:$MAKAKOO_HOME/state/sancho-task-makakoo-update",
+    "fs/write:$MAKAKOO_HOME/state/sancho-task-makakoo-update",
+    "exec/binary:makakoo",
+    "net/http:github.com",
+    "net/http:makakoo.com",
+]
+
+[sancho]
+tasks = [{ name = "makakoo_os_update", interval = "24h" }]
+
+[state]
+dir = "$MAKAKOO_HOME/state/sancho-task-makakoo-update"
+retention = "keep"

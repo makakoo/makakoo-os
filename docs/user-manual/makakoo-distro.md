@@ -6,9 +6,7 @@ blake3-pinned versions. This is also how you reproduce an exact working
 environment on a second machine: `distro save` serializes what you have;
 `distro install --from` replays it.
 
-Shipped distros: `minimal` (kernel only), `core` (default, general-purpose),
-`sebastian` (the owner's personal stack), `creator` (writing + research),
-`trader` (arbitrage + Polymarket).
+Shipped distros: `minimal` (kernel only), `core` (default, general-purpose), `federation` (Brain Network), `sebastian` (the owner's personal stack), `creator` (writing + research), and `trader` (market-facing workflows and future trading agents; trading-native plugins are still TODO).
 
 ## Subcommand overview
 
@@ -52,7 +50,7 @@ plus optional `[include]` references to other distros. Run
 ## Related commands
 
 - [`makakoo-plugin.md`](makakoo-plugin.md) — install individual plugins not in any distro
-- [`makakoo-daemon.md`](makakoo-daemon.md) — restart the daemon after a distro switch
+- [`makakoo-daemon.md`](makakoo-daemon.md) — restart the daemon after a distro change
 - [`../plugins/index.md`](../plugins/) — plugin authoring and the plugin ecosystem
 - [`setup-wizard.md`](setup-wizard.md) — the setup wizard uses `core` distro by default
 

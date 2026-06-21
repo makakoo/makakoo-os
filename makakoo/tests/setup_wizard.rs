@@ -169,7 +169,7 @@ fn setup_skip_every_registered_section_errors() {
         &[
             "setup",
             "--skip",
-            "persona,brain,cli-agent,terminal,model-provider,infect",
+            "persona,updates,brain,cli-agent,terminal,lope,model-provider,infect",
             "--non-interactive",
         ],
     );
@@ -178,6 +178,36 @@ fn setup_skip_every_registered_section_errors() {
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("no sections matched"));
+}
+
+#[test]
+fn setup_updates_non_interactive_on_fresh_home_reports_not_started() {
+    let home = fresh_home();
+    let out = run(&home, &["setup", "updates", "--non-interactive"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("updates"));
+    assert!(stdout.contains("not-started"));
+}
+
+#[test]
+fn setup_lope_section_is_reachable() {
+    let home = fresh_home();
+    let out = Command::new(binary_path())
+        .env("MAKAKOO_HOME", home.path())
+        .env("MAKAKOO_FORCE_TTY", "0")
+        .env("LOPE_HOME", home.path().join("missing-lope"))
+        .env("PATH", "/var/empty")
+        .args(["setup", "lope", "--non-interactive"])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("lope"));
+    assert!(
+        stdout.contains("not-started"),
+        "expected not-started when lope absent; got: {stdout}"
+    );
 }
 
 #[test]

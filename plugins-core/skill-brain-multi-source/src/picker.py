@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interactive first-run picker for brain sources.
 
-Runs once during install (or any time via `makakoo brain init`). Asks the user
+Runs once during install (or any time via `brain_cli.py init`). Asks the user
 which knowledge substrate they already use — Logseq, Obsidian, both, neither —
 and registers whichever sources they pick.
 
@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -42,13 +43,17 @@ DEFAULT_OBSIDIAN_GUESSES = [
 NO_PATH_SENTINELS = {"n", "no", "none", "skip", "s"}
 
 
+class _InputInterrupted(Exception):
+    """User aborted an interactive picker prompt."""
+
+
 def _prompt(label: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
     try:
         answer = input(f"{label}{suffix}: ").strip()
     except (EOFError, KeyboardInterrupt):
         print()  # newline after ^C
-        return default
+        raise _InputInterrupted
     return answer or default
 
 
@@ -58,7 +63,7 @@ def _yes_no(label: str, default: bool = False) -> bool:
         raw = input(f"{label} [{d}]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        return default
+        raise _InputInterrupted
     if not raw:
         return default
     return raw.startswith("y")
@@ -112,6 +117,54 @@ def _detect_obsidian_app() -> tuple[bool, str]:
     return False, "not detected"
 
 
+def _obsidian_install_command() -> list[str] | None:
+    """Best-effort desktop Obsidian installer for the current platform."""
+    system = platform.system().lower()
+    if system == "darwin" and shutil.which("brew"):
+        return ["brew", "install", "--cask", "obsidian"]
+    if system == "linux":
+        if shutil.which("flatpak"):
+            return ["flatpak", "install", "-y", "flathub", "md.obsidian.Obsidian"]
+    if system == "windows":
+        if shutil.which("winget"):
+            return ["winget", "install", "-e", "--id", "Obsidian.Obsidian"]
+    return None
+
+
+def _install_obsidian_app() -> bool:
+    """Prompt path already consented; run the platform installer with live output."""
+    cmd = _obsidian_install_command()
+    if not cmd:
+        return False
+    print(f"Installing Obsidian: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+        return result.returncode == 0
+    except KeyboardInterrupt:
+        print("Obsidian install cancelled.")
+        raise _InputInterrupted
+    except OSError as e:
+        print(f"Obsidian install failed to start: {e}")
+        return False
+
+
+def _manual_obsidian_install_lines() -> list[str]:
+    system = platform.system().lower()
+    if system == "darwin":
+        if shutil.which("brew"):
+            return ["macOS: brew install --cask obsidian"]
+        return ["macOS: download Obsidian from https://obsidian.md/download"]
+    if system == "linux":
+        if shutil.which("flatpak"):
+            return ["Linux: flatpak install flathub md.obsidian.Obsidian"]
+        return ["Linux: install from https://obsidian.md/download, Flatpak, Snap, or AppImage"]
+    if system == "windows":
+        if shutil.which("winget"):
+            return ["Windows: winget install -e --id Obsidian.Obsidian"]
+        return ["Windows: download Obsidian from https://obsidian.md/download"]
+    return ["Download Obsidian from https://obsidian.md/download"]
+
+
 def _normalize_optional_path(raw: str) -> str:
     value = raw.strip()
     if value.lower() in NO_PATH_SENTINELS:
@@ -120,8 +173,11 @@ def _normalize_optional_path(raw: str) -> str:
 
 
 def _prompt_obsidian_path(default: str = "") -> str:
+    label = "  Obsidian vault path (no = skip)"
+    if default:
+        label = "  Obsidian vault path (Enter = detected vault, no = skip)"
     path = _normalize_optional_path(
-        _prompt("  Obsidian vault path (blank / no = skip)", default=default)
+        _prompt(label, default=default)
     )
     if not path:
         print("  Skipping Obsidian source registration.")
@@ -151,13 +207,16 @@ def _ensure_default_logseq() -> None:
     registry = cfg.load_registry()
     if "default" in registry.names():
         return
+    previous_names = set(registry.names())
+    previous_default = registry.default_name
     cfg.add_source({
         "name": "default",
         "type": "logseq",
         "path": DEFAULT_LOGSEQ_PATH,
         "writable": True,
     })
-    cfg.set_default("default")
+    if previous_default not in previous_names:
+        cfg.set_default("default")
 
 
 def _dry_sync(name: str) -> str:
@@ -180,6 +239,17 @@ def _dry_sync(name: str) -> str:
 
 
 def run_interactive(non_interactive: bool = False) -> int:
+    try:
+        return _run_interactive_impl(non_interactive=non_interactive)
+    except _InputInterrupted:
+        print("Aborted. No changes written.")
+        return 0
+    except Exception as e:
+        print(f"Brain setup failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _run_interactive_impl(non_interactive: bool = False) -> int:
     print("\nMakakoo brain setup\n" + "=" * 20)
     print("Your knowledge can live in multiple places. The default is a Logseq-style")
     print(f"graph at {DEFAULT_LOGSEQ_PATH}. You can also connect a SEPARATE Obsidian")
@@ -203,28 +273,48 @@ def run_interactive(non_interactive: bool = False) -> int:
     add_obsidian = _yes_no(
         "Do you already have a separate Obsidian vault folder to register?"
         + (f" (detected vault: {guess})" if guess else ""),
-        default=bool(guess),
+        default=False,
     )
     if add_obsidian:
         if not obsidian_installed:
             print("\nObsidian app was not detected on this machine.")
-            print("Install Obsidian first if you want the desktop app here:")
-            print("  macOS:  brew install --cask obsidian")
-            print("  Linux:  install from https://obsidian.md/download, Flatpak, Snap, or AppImage")
+            installer = _obsidian_install_command()
+            installer_finished = False
+            if installer:
+                if _yes_no(f"Install Obsidian now? Runs: {' '.join(installer)}", default=False):
+                    if _install_obsidian_app():
+                        print("Obsidian installer finished.")
+                        installer_finished = True
+                    else:
+                        print("Obsidian install failed or was cancelled.")
+                    obsidian_installed, obsidian_where = _detect_obsidian_app()
+                    if obsidian_installed:
+                        print(f"Obsidian app detected: {obsidian_where}")
+            else:
+                print("No supported package manager was detected for automatic install.")
+            if not obsidian_installed:
+                if installer_finished:
+                    print("Installer finished, but Makakoo could not detect the app yet.")
+                else:
+                    print("Install Obsidian manually if you want the desktop app here:")
+                    for line in _manual_obsidian_install_lines():
+                        print(f"  {line}")
             print("You can also skip this and later open the default Brain as an Obsidian vault:")
             print(f"  {DEFAULT_LOGSEQ_PATH}\n")
-            add_obsidian = _yes_no("Register an existing Obsidian vault path anyway?", default=False)
+            if not obsidian_installed:
+                add_obsidian = _yes_no("Register an existing Obsidian vault path anyway?", default=True)
         else:
             print(f"Obsidian app detected: {obsidian_where}")
 
     if add_obsidian:
         path = _prompt_obsidian_path(default=guess or "")
         if path:
+            writable = _yes_no("  Allow Harvey to write into this Obsidian vault?", default=False)
             pending_adds.append({
                 "name": "obsidian",
                 "type": "obsidian",
                 "path": str(path),
-                "writable": True,
+                "writable": writable,
             })
 
     # Prompt 2 — any other plain-markdown folder?
@@ -245,7 +335,10 @@ def run_interactive(non_interactive: bool = False) -> int:
     existing_names = set(cfg.load_registry().names())
     projected_names = existing_names | {entry["name"] for entry in pending_adds}
     if len(projected_names) > 1:
-        current_default = cfg.load_registry().default_name
+        registry = cfg.load_registry()
+        current_default = registry.default_name
+        writable_by_name = {src.name: src.writable for src in registry.sources}
+        writable_by_name.update({entry["name"]: bool(entry.get("writable")) for entry in pending_adds})
         print(f"\nAfter these changes, sources will be: {', '.join(sorted(projected_names))}")
         print(f"Current write-default: {current_default}")
         new_default = _prompt(
@@ -253,7 +346,10 @@ def run_interactive(non_interactive: bool = False) -> int:
             default="",
         )
         if new_default and new_default in projected_names and new_default != current_default:
-            pending_default = new_default
+            if writable_by_name.get(new_default, False):
+                pending_default = new_default
+            else:
+                print(f"  {new_default!r} is read-only; keeping current write-default.")
 
     # Summary + final confirmation
     if not pending_adds and pending_default is None:
@@ -273,22 +369,20 @@ def run_interactive(non_interactive: bool = False) -> int:
         print("Aborted. No changes written.")
         return 0
 
-    # Commit phase
-    committed: list[str] = []
-    for entry in pending_adds:
-        try:
-            cfg.add_source(entry)
-            committed.append(entry["name"])
-            print(f"  Registered {entry['name']!r}")
-        except Exception as e:
-            print(f"  Failed to register {entry['name']!r}: {e}", file=sys.stderr)
+    # Commit phase — one atomic config write for the whole batch.
+    try:
+        cfg.apply_changes(pending_adds, pending_default)
+    except Exception as e:
+        print(f"  Failed to save Brain source changes: {e}", file=sys.stderr)
+        print("\nBrain setup finished with errors:", file=sys.stderr)
+        print(f"  - {e}", file=sys.stderr)
+        return 1
 
+    committed = [entry["name"] for entry in pending_adds]
+    for name in committed:
+        print(f"  Registered {name!r}")
     if pending_default:
-        try:
-            cfg.set_default(pending_default)
-            print(f"  Write-default → {pending_default}")
-        except Exception as e:
-            print(f"  Failed to set default: {e}", file=sys.stderr)
+        print(f"  Write-default → {pending_default}")
 
     # Post-write sync — walk each newly-registered source so the user sees counts
     if committed:
@@ -298,7 +392,7 @@ def run_interactive(non_interactive: bool = False) -> int:
             print(f"  {_dry_sync(name)}")
 
     print(f"\nDone. Config saved to {cfg.config_path()}")
-    print("Change anything later with: makakoo brain {list|add|remove|set-default}\n")
+    print("Change anything later with the plugin helper: python3 .../brain_cli.py {list|add|remove|set-default}\n")
     return 0
 
 

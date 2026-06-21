@@ -10,9 +10,9 @@ for "I want to X" recipes.
 
 | Chapter | What it covers |
 |---|---|
-| [Setup wizard](setup-wizard.md) | The 6 sections (persona, brain, cli-agent, terminal, model-provider, infect) walked through end-to-end. |
+| [Setup wizard](setup-wizard.md) | The setup sections (persona, updates, brain, cli-agent, terminal, lope, model-provider, infect) walked through end-to-end. |
 | [Write-access grants (`makakoo perms`)](makakoo-perms.md) | Grant / revoke / audit runtime write permissions. |
-| [Multi-bot subagents (`makakoo agent`)](agent.md) | Create, run, and tear down per-transport subagent slots (Telegram / Slack / Discord / WhatsApp / Voice / Email / Web). |
+| [Multi-bot subagents (`makakoo agent`)](agent.md) | Create, run, and tear down scoped agent slots. Telegram, Slack, Discord, WhatsApp, Voice, Email, and Web are transports, not infected hosts. |
 | [Agent sessions (`makakoo agent-session`)](makakoo-agent-session.md) | Durable child-agent work sessions with compact result handles and verification gates. |
 | [Handle reads (`makakoo handle`)](makakoo-handle.md) | Bounded reads from durable Makakoo handles such as `agent-artifact://...`. |
 | [Skill security & auditing](makakoo-skill-security.md) | Plugin preflight security scans, overrides, and manual SkillSpector audits. |
@@ -33,9 +33,10 @@ makakoo <command> [options] [arguments]
 
 | Command | Description |
 |---------|-------------|
-| [setup](setup-wizard.md) | Interactive re-runnable wizard (persona / brain / cli-agent / terminal / model-provider / infect) |
+| [setup](setup-wizard.md) | Interactive re-runnable wizard (persona / updates / brain / cli-agent / terminal / lope / model-provider / infect) |
 | [install](../getting-started.md) | One-shot installer umbrella — distro + daemon + infect + health + optional setup |
-| [upgrade](makakoo-upgrade.md) | Self-update the kernel + MCP binaries — auto-detects cargo / brew / curl-pipe install (since v0.1.3) |
+| [update](makakoo-update.md) | Primary self-update command. Auto-detects cargo / brew / curl-pipe and updates `makakoo` + `makakoo-mcp`. |
+| [upgrade](makakoo-upgrade.md) | Legacy alias for `makakoo update`. |
 | [query](makakoo-query.md) | Search the Brain with LLM synthesis |
 | [search](makakoo-search.md) | Full-text search the Brain |
 | [infect](makakoo-infect.md) | Infect AI CLIs with shared brain |
@@ -46,7 +47,8 @@ makakoo <command> [options] [arguments]
 | [distro](makakoo-distro.md) | Manage distro bundles |
 | [secret](makakoo-secret.md) | Manage secrets |
 | [perms](makakoo-perms.md) | Runtime write-access grants (v0.3 / hardened in v0.3.1-v0.3.2) |
-| [brain](setup-wizard.md#sections) | Multi-source brain registry (`list / add / remove / set-default / sync / init`) |
+| [sync](makakoo-sync.md) | Index on-disk Brain journals, pages, and auto-memory into FTS5. Use after manual file edits. |
+| [memory](makakoo-memory.md) | Memory diagnostics and maintenance. |
 | [skill](makakoo-skill-security.md) | Run a plugin skill or execute security audits |
 | [status](makakoo-status.md) | Show system status |
 | [completion](makakoo-completion.md) | Shell completion setup |
@@ -96,8 +98,9 @@ makakoo plugin list
 # Install a plugin
 makakoo plugin install skill-research-arxiv --core
 
-# Update plugins
-makakoo plugin update
+# Update one plugin, or every updatable plugin
+makakoo plugin update <name>
+makakoo plugin update --all
 
 # Disable/enable
 makakoo plugin disable my-plugin
@@ -126,11 +129,8 @@ Full reference: [makakoo-agent-session.md](makakoo-agent-session.md) and [makako
 # Show all tasks
 makakoo sancho status
 
-# Trigger a task manually
-makakoo sancho run dream
-
-# Show task history
-makakoo sancho history --limit 20
+# Trigger due tasks once
+makakoo sancho tick
 ```
 
 ### Secrets
@@ -138,9 +138,6 @@ makakoo sancho history --limit 20
 ```bash
 # Set a secret
 makakoo secret set POLYMARKET_API_KEY
-
-# List secrets
-makakoo secret list
 
 # Delete a secret
 makakoo secret delete POLYMARKET_API_KEY
@@ -175,28 +172,28 @@ makakoo infect --target claude,gemini
 makakoo uninfect --global
 ```
 
-### Upgrade
+### Update
 
 ```bash
-# Auto-detect install method + upgrade both binaries
-makakoo upgrade
+# Auto-detect install method + update both binaries
+makakoo update
 
 # Preview without spawning
-makakoo upgrade --dry-run
+makakoo update --dry-run
 
-# Upgrade + refresh bootstrap fragments in every infected CLI / IDE slot
-makakoo upgrade --reinfect
+# Update + refresh bootstrap fragments in every infected CLI / IDE slot
+makakoo update --reinfect
 
 # Force a specific method (rare — when auto-detect picks the wrong path)
-makakoo upgrade --method brew
-makakoo upgrade --method cargo
-makakoo upgrade --method curl-pipe
+makakoo update --method brew
+makakoo update --method cargo
+makakoo update --method curl-pipe
 
-# Upgrade Cargo install from a local checkout instead of the public repo
-makakoo upgrade --source ~/makakoo-os
+# Update Cargo install from a local checkout instead of the public repo
+makakoo update --source ~/makakoo-os
 ```
 
-Full reference: [makakoo-upgrade.md](makakoo-upgrade.md). Task-oriented walkthrough: [docs/upgrade.md](../upgrade.md).
+Full reference: [makakoo-update.md](makakoo-update.md). Task-oriented walkthrough: [docs/upgrade.md](../upgrade.md). `makakoo upgrade` remains a legacy alias.
 
 ### Write-access grants
 

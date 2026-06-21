@@ -1,10 +1,12 @@
 # Upgrading Makakoo
 
-`makakoo upgrade` self-updates the `makakoo` + `makakoo-mcp` binaries by detecting how you installed Makakoo and running the matching update command.
+`makakoo update` self-updates the `makakoo` + `makakoo-mcp` binaries by detecting how you installed Makakoo and running the matching update command.
 
 ```
-makakoo upgrade [--dry-run] [--reinfect] [--method ...] [--source ...] [--install-script-url ...] [--only-kernel] [--only-mcp]
+makakoo update [--dry-run] [--reinfect] [--method ...] [--source ...] [--install-script-url ...] [--only-kernel] [--only-mcp]
 ```
+`makakoo upgrade` remains as a legacy alias for scripts and old runbooks, but new docs and UI should say `makakoo update`.
+
 
 ## What it does
 
@@ -13,7 +15,7 @@ makakoo upgrade [--dry-run] [--reinfect] [--method ...] [--source ...] [--instal
    - `/opt/homebrew/bin/makakoo`, `/usr/local/bin/makakoo`, or `/home/linuxbrew/.linuxbrew/bin/makakoo` → **Homebrew**
    - `$HOME/.local/bin/makakoo` (or `$MAKAKOO_PREFIX/bin/makakoo`) → **curl-pipe** (`install.sh`)
    - Anything else (including `target/debug/` dev builds) → **Unknown** — the verb refuses and points you at the right install path.
-2. **Plans the upgrade actions** — printed line-by-line so you see exactly what will run.
+2. **Plans the update actions** — printed line-by-line so you see exactly what will run.
 3. **Spawns the actions sequentially** (skip with `--dry-run`).
 4. **Compares versions** before and after; warns if unchanged.
 5. **Prints a daemon-restart hint** so any running daemon picks up the new binary.
@@ -21,41 +23,53 @@ makakoo upgrade [--dry-run] [--reinfect] [--method ...] [--source ...] [--instal
 ## Quick reference
 
 ```bash
-# upgrade everything via the auto-detected method
-makakoo upgrade
+# update everything via the auto-detected method
+makakoo update
 
 # preview without spawning
-makakoo upgrade --dry-run
+makakoo update --dry-run
 
 # also refresh bootstrap fragments in every infected CLI
-makakoo upgrade --reinfect
+makakoo update --reinfect
 
 # force a specific method (e.g. you have both brew and cargo installs)
-makakoo upgrade --method brew
-makakoo upgrade --method cargo
-makakoo upgrade --method curl-pipe
+makakoo update --method brew
+makakoo update --method cargo
+makakoo update --method curl-pipe
 
-# upgrade Cargo install from a local checkout instead of the public repo
-makakoo upgrade --source /path/to/makakoo-os
-MAKAKOO_SOURCE_PATH=/path/to/makakoo-os makakoo upgrade
+# update Cargo install from a local checkout instead of the public repo
+makakoo update --source /path/to/makakoo-os
+MAKAKOO_SOURCE_PATH=/path/to/makakoo-os makakoo update
 
-# upgrade only one binary
-makakoo upgrade --only-kernel
-makakoo upgrade --only-mcp
+# update only one binary
+makakoo update --only-kernel
+makakoo update --only-mcp
 ```
+
+
+## Automatic updates
+
+Fresh `core` installs include the `sancho-task-makakoo-update` task. It runs every 24h and reads `$MAKAKOO_HOME/config/updates.toml`:
+
+```toml
+mode = "auto"    # default; run `makakoo update --reinfect`
+# mode = "manual" # do not update automatically
+```
+
+Use `makakoo setup updates` to choose the mode interactively. Fresh setup defaults the prompt to `auto`, but a missing/malformed config stays idle so existing installs do not silently opt into unattended self-updates. The auto-updater does not restart the daemon from inside itself; when a version delta is detected it logs a Brain reminder to run `makakoo daemon restart`.
 
 ## What runs per install method
 
 ### Cargo
 
-By default, `makakoo upgrade` pulls fresh source from the public repo:
+By default, `makakoo update` pulls fresh source from the public repo:
 
 ```bash
 cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo
 cargo install --git https://github.com/makakoo/makakoo-os --locked --force makakoo-mcp
 ```
 
-Pass `--source <path>` (or set `MAKAKOO_SOURCE_PATH=<path>`) to upgrade from a local checkout instead:
+Pass `--source <path>` (or set `MAKAKOO_SOURCE_PATH=<path>`) to update from a local checkout instead:
 
 ```bash
 cargo install --path <path>/makakoo --locked --force
@@ -81,15 +95,15 @@ Override the URL with `--install-script-url <url>` if needed. **The verb refuses
 
 ### VPS / server quick path
 
-SSH into the server and run the same upgrade verb. Most headless installs use the curl-pipe layout under `$HOME/.local`, so the method is usually `curl-pipe`:
+SSH into the server and run the same update verb. Most headless installs use the curl-pipe layout under `$HOME/.local`, so the method is usually `curl-pipe`:
 
 ```bash
 ssh makakoo-vps
 export MAKAKOO_HOME=$HOME/MAKAKOO HARVEY_HOME=$HOME/MAKAKOO
 export PATH=$HOME/.local/bin:$PATH
 
-makakoo upgrade --dry-run
-makakoo upgrade --method curl-pipe --reinfect
+makakoo update --dry-run
+makakoo update --method curl-pipe --reinfect
 makakoo daemon restart
 
 makakoo --version
@@ -105,23 +119,23 @@ If the binary lives somewhere the detector doesn't recognize (custom prefix, man
 
 ## Daemon restart
 
-The Makakoo daemon (auto-start service registered via `makakoo daemon install`) keeps running with the old binary loaded into memory until you restart it. After a successful upgrade, `makakoo upgrade` prints the restart command to do this:
+The Makakoo daemon (auto-start service registered via `makakoo daemon install`) keeps running with the old binary loaded into memory until you restart it. After a successful update, `makakoo update` prints the restart command to do this:
 
 - **macOS:** `makakoo daemon restart`
 - **Linux (systemd):** `makakoo daemon restart`
 
-`makakoo upgrade` does not auto-restart the daemon automatically. Run the printed `makakoo daemon restart` command if a daemon is installed or running; it re-registers the service descriptor so Homebrew/installer path changes are picked up.
+`makakoo update` does not auto-restart the daemon automatically. Run the printed `makakoo daemon restart` command if a daemon is installed or running; it re-registers the service descriptor so Homebrew/installer path changes are picked up.
 
 ## MCP child staleness
 
-When any AI CLI (Claude Code, Gemini, OpenCode, etc.) spawns a `makakoo-mcp` child via stdio, that child runs the binary that was on `PATH` at session-start. **Restart the host CLI session** after `makakoo upgrade` so it spawns the new MCP child. Without a restart, your CLI keeps talking to the old `makakoo-mcp` binary forever, even after the upgrade.
+When any AI CLI (Claude Code, Gemini, OpenCode, etc.) spawns a `makakoo-mcp` child via stdio, that child runs the binary that was on `PATH` at session-start. **Restart the host CLI session** after `makakoo update` so it spawns the new MCP child. Without a restart, your CLI keeps talking to the old `makakoo-mcp` binary forever, even after the update.
 
 ## Re-infect after upgrade
 
 If a release ships new bootstrap fragments (Harvey persona changes, new MCP tool names, slot-format additions), pass `--reinfect` to refresh every infected CLI's global slot:
 
 ```bash
-makakoo upgrade --reinfect
+makakoo update --reinfect
 ```
 
 This runs `makakoo infect --global` after the binary swap completes, then verifies with `makakoo infect --verify`. Most upgrades do not need it, but use it when the release notes mention CLI bootstrap, caveman, Headroom, persona, or MCP-tool instruction changes.
@@ -132,7 +146,7 @@ This runs `makakoo infect --global` after the binary swap completes, then verifi
 makakoo version
 ```
 
-The first line shows `makakoo X.Y.Z (gitsha)` — confirm the version bumped from what was installed before. `makakoo upgrade` already prints this automatically; the manual command is for after a CLI restart.
+The first line shows `makakoo X.Y.Z (gitsha)` — confirm the version bumped from what was installed before. `makakoo update` already prints this automatically; the manual command is for after a CLI restart.
 
 ## Troubleshooting
 
@@ -141,8 +155,8 @@ The first line shows `makakoo X.Y.Z (gitsha)` — confirm the version bumped fro
 | `Unknown install` error | Binary under custom prefix or dev build | Reinstall via cargo / brew / install.sh, or pass `--method` to override |
 | Version unchanged after upgrade | Already at latest | No action needed; the warning is informational |
 | `cargo install` fails with non-exhaustive match errors | Pulling main branch with unfinished feature work | Pin to a specific tag: `cargo install --git https://github.com/makakoo/makakoo-os --tag <release> ...` |
-| `brew upgrade` says no formula | `traylinx/tap` not added | `brew tap traylinx/tap && makakoo upgrade` |
-| MCP tools still showing old behavior after upgrade | Host CLI is still spawning the old child | Restart the host CLI session |
+| `brew upgrade` says no formula | `traylinx/tap` not added | `brew tap traylinx/tap && makakoo update` |
+| MCP tools still showing old behavior after update | Host CLI is still spawning the old child | Restart the host CLI session |
 | Daemon still running old binary | Daemon process kept the old executable mapped | Run the printed `launchctl` / `systemctl` command |
 
 ## See also
@@ -150,4 +164,4 @@ The first line shows `makakoo X.Y.Z (gitsha)` — confirm the version bumped fro
 - `makakoo install` — initial install (distro + daemon + infect)
 - `makakoo plugin update <name>` — update a single plugin from its recorded source
 - `makakoo docs update` — refresh the docs corpus consumed by `makakoo docs-mcp`
-- `makakoo infect --global` — re-render bootstrap fragments without a binary upgrade
+- `makakoo infect --global` — re-render bootstrap fragments without a binary update

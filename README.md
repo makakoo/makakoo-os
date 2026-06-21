@@ -14,9 +14,9 @@
 
 AI agents don't remember. And they definitely don't share memory with each other. Every Claude session starts from zero. Every Gemini conversation is a goldfish. Every CLI has its own fishbowl.
 
-Makakoo OS fixes this. One install, one set of tools, one cognitive model across every AI CLI on your machine — Claude Code, Gemini CLI, Codex, OpenCode, Vibe, Cursor, Qwen, Kimi (and more as the ecosystem grows) — plus IDE assistants (VSCode Copilot, Continue, Cline, JetBrains AI). Persistent Logseq-backed memory, capability-sandboxed plugin architecture, proactive maintenance tasks that run while you sleep.
+Makakoo OS fixes this. One install gives the agentic hosts on your machine the same home: Claude Code, Gemini CLI, Codex, OpenCode, Vibe, Cursor, Qwen, Kimi, pi, and IDE assistants like VSCode Copilot, Continue, Cline, and JetBrains AI. Chat systems such as Telegram, Discord, Slack, email, voice, and web are not infected hosts. They connect through agent slots and transports. Same Brain, same rules, same tools, different doorway.
 
-Your notes, your decisions, your arguments with yourself from three months ago — all retrievable by the next assistant you open, in the same terminal or a different one, without a context-reset ceremony.
+Your notes, your decisions, your arguments with yourself from three months ago are retrievable by the next assistant you open. No context-reset ceremony.
 
 ## What's in v0.1
 
@@ -26,11 +26,14 @@ Your notes, your decisions, your arguments with yourself from three months ago �
 | 4 IDE-assistant hosts (Copilot / Continue / Cline / JetBrains) | ✅ detection + writers |
 | Persistent Brain (Logseq journals + pages) | ✅ |
 | Superbrain search — FTS5 + vector + LLM synthesis | ✅ |
-| Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ 38 plugins in `plugins-core/`, 32 fully self-contained (Python bundled) |
-| SANCHO proactive task engine (8 native + plugin tasks) | ✅ |
-| Chat-channel agents — `makakoo agent create <slot>` builds a bot reachable over Telegram / Slack / Discord; `--runtime flue` also scaffolds a runnable standalone TypeScript ([Flue](https://flueframework.com)) agent | ✅ native slots + Flue scaffolder |
+| Headroom context compression for bulky tool output | ✅ included in the default core distro via `tool-headroom` |
+| Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ core catalog with skills, agents, MCP tools, SANCHO tasks, and patterns |
+| Lope validator ensemble | ✅ optional in-house companion project, offered by `makakoo setup lope` |
+| SANCHO proactive task engine | ✅ native + plugin tasks, including optional auto-update checks |
+| Makakoo OS updates | ✅ `makakoo update`, plus auto/manual mode in `makakoo setup updates` |
+| Chat-channel agents — `makakoo agent create <slot>` creates a scoped agent slot for transports like Telegram, Slack, Discord, WhatsApp, voice, email, or web; `--runtime flue` can also scaffold a runnable TypeScript ([Flue](https://flueframework.com)) agent | ✅ native slots + Flue scaffolder |
 | Unix domain socket + Windows named-pipe IPC for plugins | ✅ |
-| 5 distros published (minimal, core, sebastian, creator, trader) | ✅ |
+| 6 distros published (minimal, core, federation, sebastian, creator, trader) | ✅ |
 | Shell completion (bash, zsh, fish, elvish, powershell) | ✅ |
 | Signed release artifacts (Apple notarization + Authenticode) | 🟡 runbook ready, certs pending |
 | Homebrew tap / winget submission | 🟡 manifests drafted, submission post-launch |
@@ -39,7 +42,7 @@ Your notes, your decisions, your arguments with yourself from three months ago �
 ## Tell any AI CLI about Makakoo (zero install)
 
 Already running an AI CLI (Claude Code, Codex, Gemini CLI, OpenCode,
-Cursor, Vibe, Qwen, pi)? Paste this single line into the chat — the AI
+Cursor, Vibe, Qwen, Kimi, pi)? Paste this single line into the chat — the AI
 fetches one URL, learns every real `makakoo` command, the Brain layout,
 the troubleshooting tree, and what _not_ to do, all from one canonical
 SKILL.md. No filesystem grepping, no guessing:
@@ -91,15 +94,20 @@ makakoo install    # distro + daemon + infect + health, then hands off to the wi
 
 **First time using Makakoo?** After install, start at [Walkthrough 01 — Fresh install on a new Mac](docs/walkthroughs/01-fresh-install-mac.md). The walkthroughs are a 14-guide tour through every major feature — copy-paste runnable, dependency-chained, in plain language.
 
-**Upgrade** — one command, auto-detects how you installed:
+**Update** — one command, auto-detects how you installed:
 
 ```sh
-makakoo upgrade            # cargo / brew / curl-pipe — picks the right path
-makakoo upgrade --dry-run  # preview without spawning
-makakoo upgrade --reinfect # also rewrite + verify CLI bootstrap fragments
+makakoo update             # cargo / brew / curl-pipe — picks the right path
+makakoo update --dry-run   # preview without spawning
+makakoo update --reinfect  # also rewrite + verify CLI bootstrap fragments
+makakoo upgrade            # legacy alias
 ```
 
-See [`docs/upgrade.md`](docs/upgrade.md) for per-method details.
+Fresh setup defaults to automatic 24h Makakoo OS updates via SANCHO. Existing
+installs stay idle until `makakoo setup updates` writes
+`$MAKAKOO_HOME/config/updates.toml`; switch auto/manual there any time.
+
+See [`docs/upgrade.md`](docs/upgrade.md) for the walkthrough and [`docs/user-manual/makakoo-update.md`](docs/user-manual/makakoo-update.md) for flags.
 
 **Uninstall** — symmetric inverse:
 
@@ -115,10 +123,12 @@ rm -rf ~/.makakoo ~/MAKAKOO
 |---|---|
 | Install Makakoo from zero (step-by-step, beginner-friendly) | [`docs/getting-started.md`](docs/getting-started.md) |
 | See what I can do with Makakoo day-to-day | [`docs/use-cases.md`](docs/use-cases.md) |
-| Understand the setup wizard's 6 sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
+| Understand the setup wizard's sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
+| Update Makakoo safely, manually or automatically | [`docs/upgrade.md`](docs/upgrade.md), [`docs/user-manual/makakoo-update.md`](docs/user-manual/makakoo-update.md) |
 | Look up a specific `makakoo` subcommand | [`docs/user-manual/`](docs/user-manual/index.md) |
 | Run durable child-agent work without transcript floods | [`docs/user-manual/makakoo-agent-session.md`](docs/user-manual/makakoo-agent-session.md) |
-| Build a chat bot — native slots, or a runnable Flue agent in one command | [`docs/user-manual/agent.md`](docs/user-manual/agent.md), [`docs/walkthroughs/flue-telegram-bot.md`](docs/walkthroughs/flue-telegram-bot.md) |
+| Use Lope for multi-model review, votes, compare, and sprints | [`docs/user-manual/setup-wizard.md#sections`](docs/user-manual/setup-wizard.md#sections) |
+| Build a chat bot through agent slots and transports | [`docs/user-manual/agent.md`](docs/user-manual/agent.md), [`docs/walkthroughs/flue-telegram-bot.md`](docs/walkthroughs/flue-telegram-bot.md) |
 | Fix something that broke | [`docs/troubleshooting/`](docs/troubleshooting/index.md) |
 | Understand architecture / internals | [`docs/concepts/`](docs/concepts/) and [`spec/`](spec/) |
 | Write or publish an adapter | [`docs/adapters.md`](docs/adapters.md), [`docs/adapter-publishing.md`](docs/adapter-publishing.md) |
@@ -171,8 +181,8 @@ and the structured `list --json` envelope).
 | `makakoo/` | CLI binary — search, query, sancho, plugin, distro, daemon, infect, uninfect, skill, secret, mcp, completion, agent-session, handle |
 | `makakoo-platform/` | Per-OS adapter — launchd (macOS), systemd (Linux), auto-launch (Windows), POSIX symlinks + Windows Dev Mode symlinks |
 | `makakoo-client/` + `makakoo-client-py/` | Plugin client libraries (Rust + Python) over the capability socket |
-| `plugins-core/` | 38 shipped plugin manifests — skills, watchdogs, monitors, mascot GYM, agent-dreams |
-| `distros/` | 5 distro bundles — minimal, core, sebastian, creator, trader |
+| `plugins-core/` | Shipped plugin catalog — skills, agents, MCP tools, SANCHO tasks, patterns, and bootstrap fragments |
+| `distros/` | 6 distro bundles — minimal, core, federation, sebastian, creator, trader |
 | `install/` | `install.sh` / `install.ps1` + shell completion guide |
 | `distribution/` | Packaging metadata — Homebrew formula, winget manifest, cargo-dist config |
 | `spec/` | Frozen v0.1 architecture + ABI contracts |

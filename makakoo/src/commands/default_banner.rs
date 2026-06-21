@@ -48,10 +48,10 @@ fn print_first_run() {
     println!();
     println!("  Get set up in 5 minutes:");
     println!("    \x1b[1mmakakoo install\x1b[0m       Install the daemon + base distro");
-    println!("    \x1b[1mmakakoo setup\x1b[0m         Interactive wizard (persona, brain, AI CLI, model)");
+    println!("    \x1b[1mmakakoo setup\x1b[0m         Wizard: persona, updates, brain, pi, Lope, model, infect");
     println!();
-    println!("  After setup, your AI CLIs (Claude Code, Gemini, OpenCode, …)");
-    println!("  share memory through Makakoo. Run any tool — Makakoo remembers.");
+    println!("  After setup, your AI CLIs and IDE agents share memory through Makakoo.");
+    println!("  Chat systems connect through scoped agent slots when you want a bot.");
     println!();
 }
 
@@ -64,6 +64,7 @@ fn print_returning_user() {
     );
     println!("    \x1b[1mmakakoo plugin list\x1b[0m       Show installed plugins");
     println!("    \x1b[1mmakakoo sancho status\x1b[0m     Background watchdog state");
+    println!("    \x1b[1mmakakoo update\x1b[0m            Update Makakoo OS");
     println!("    \x1b[1mmakakoo sync\x1b[0m              Re-index Brain + auto-memory");
     println!();
 }

@@ -10,6 +10,14 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added
+- Added `makakoo update` as the primary self-update command, keeping `makakoo upgrade` as a legacy alias.
+- Added `makakoo setup updates` plus the bundled `sancho-task-makakoo-update` task so fresh Core setup can default to automatic 24h Makakoo OS updates while existing installs stay idle until `config/updates.toml` exists.
+- Added `makakoo setup lope`, an explicit Lope installer/pitch that clones or updates `~/.lope` and registers Lope skills/commands into detected AI CLI hosts after consent.
+
+### Changed
+- Improved the Brain setup picker so missing Obsidian now offers an app install when a supported package manager is available, instead of only printing manual instructions.
+
 ## [0.1.31] - 2026-06-20
 
 ### Added

@@ -71,7 +71,7 @@ if __name__ == "__main__":
 ### 3. Install
 
 ```bash
-makakoo plugin install ./my-plugin --allow-unsigned
+makakoo plugin install ./my-plugin
 ```
 
 ## Plugin Types
@@ -339,7 +339,7 @@ blake3 = "..."  # Hash of tree
 2. Test locally:
 
 ```bash
-makakoo plugin install ./my-package --allow-unsigned
+makakoo plugin install ./my-package
 ```
 
 3. Push to GitHub with tag:
@@ -454,23 +454,24 @@ if __name__ == "__main__":
 
 ```bash
 # Install locally
-makakoo plugin install ./my-plugin --allow-unsigned --skip-health-check
+makakoo plugin install ./my-plugin
 
 # Check it loaded
 makakoo plugin list
 
-# Run task manually
-makakoo sancho run my_check --force
+# Restart daemon so the new task is registered, then run one eligible-task tick
+makakoo daemon restart
+makakoo sancho tick
 ```
 
 ### Debug Mode
 
 ```bash
-# Run with verbose
-RUST_LOG=debug makakoo sancho run my_check
+# Run the daemon/tick with debug logs
+RUST_LOG=debug makakoo sancho tick
 
 # Check logs
-tail -f ~/.makakoo/logs/sancho/my_check/*.log
+makakoo daemon logs -l 200
 ```
 
 ## See Also

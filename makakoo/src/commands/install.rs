@@ -126,7 +126,7 @@ fn maybe_offer_setup(no_setup: bool) -> anyhow::Result<()> {
     if !crate::commands::setup::is_interactive_stdin() {
         return Ok(());
     }
-    print!("\nRun the setup wizard now? Configures persona, brain, pi, Ghostty, model provider, and CLI infect. [Y/n]: ");
+    print!("\nRun the setup wizard now? Configures persona, updates, brain, pi, Ghostty, Lope, model provider, and CLI infect. [Y/n]: ");
     use std::io::Write as _;
     std::io::stdout().flush()?;
     let mut line = String::new();

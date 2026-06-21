@@ -51,7 +51,7 @@ daemon install  → ~/Library/LaunchAgents/com.makakoo.daemon.plist
 infect          → claude, gemini, codex, opencode, vibe, cursor, qwen, pi (detected)
 ✓ install complete
 
-[1/6] Persona configuration
+[1/8] Persona configuration
 Persona name (what should I call myself?) [Harvey]:
 …
 ```
@@ -142,7 +142,7 @@ Zeros are healthy here — you haven't used Makakoo yet, so nothing has been rec
 The wizard ran automatically in step 2 as part of `curl | sh`. If you want to revisit any section — e.g. switch to a different LLM provider or point Makakoo at an Obsidian vault — invoke it directly:
 
 ```sh
-makakoo setup                          # walk all six sections
+makakoo setup                          # walk all setup sections
 makakoo setup --only model-provider    # just one section
 makakoo setup --reset                  # clear stored answers and re-prompt
 ```

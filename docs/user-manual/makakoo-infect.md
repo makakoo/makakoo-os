@@ -3,7 +3,7 @@
 `makakoo infect` writes the Makakoo bootstrap block into every AI CLI host's
 global instructions file — `~/.claude/CLAUDE.md` for Claude Code,
 `~/.gemini/GEMINI.md` for Gemini CLI, and equivalents for OpenCode, Codex,
-Vibe, Qwen, and Cursor. It also registers the `harvey` MCP server in each
+Vibe, Qwen, Cursor, pi, and Kimi. It also registers the `harvey` MCP server in each
 CLI's MCP config. Once infected, any of those CLIs loads the Harvey persona
 and has access to all Makakoo tools automatically.
 
@@ -23,7 +23,7 @@ shell dotfiles.
 | `--deep` | Extend `--verify` to also audit per-project entries, workspace `.mcp.json` files, and stale worktree records. |
 | `--repair` | With `--verify --deep`: apply canonical rewrites to every zombie entry found. |
 | `--dry-run` | Preview what would be written without touching any files. |
-| `--target <list>` | Restrict to a comma-separated subset: `claude,gemini,codex,opencode,vibe,qwen,cursor`. |
+| `--target <list>` | Restrict global infect to a comma-separated subset: `claude,gemini,codex,opencode,vibe,qwen,cursor,pi,kimi`. With `--local`, only project-derivative targets apply: `claude,gemini,codex,opencode,vibe,qwen,cursor`. |
 | `--local` | Project-scoped infect: write `.harvey/context.md` + per-CLI derivatives in the nearest project root. |
 | `--dir <path>` | Target directory for `--local` (defaults to cwd, walks up to find `.git/`). |
 | `--detect-installed-only` | With `--local`: only write derivatives for CLIs that have a `~/.<cli>/` dotdir. |
