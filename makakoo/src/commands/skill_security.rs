@@ -69,6 +69,7 @@ pub async fn run_audit(args: &[String], ctx: &CliContext) -> anyhow::Result<i32>
 
     let options = ScanOptions {
         target: target.clone(),
+        makakoo_home: Some(ctx.home().to_path_buf()),
         no_llm: !cli.llm || cli.no_llm,
         use_report_cache: true,
         no_cache: cli.no_cache,
@@ -93,7 +94,7 @@ pub async fn run_audit(args: &[String], ctx: &CliContext) -> anyhow::Result<i32>
     Ok(0)
 }
 
-pub async fn run_fleet_audit(cli: &AuditCli, _ctx: &CliContext) -> anyhow::Result<i32> {
+pub async fn run_fleet_audit(cli: &AuditCli, ctx: &CliContext) -> anyhow::Result<i32> {
     let home = makakoo_core::platform::makakoo_home();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
@@ -107,6 +108,7 @@ pub async fn run_fleet_audit(cli: &AuditCli, _ctx: &CliContext) -> anyhow::Resul
 
     let options = ScanOptions {
         target: "".to_string(),
+        makakoo_home: Some(ctx.home().to_path_buf()),
         no_llm: !cli.llm || cli.no_llm,
         use_report_cache: true,
         no_cache: cli.no_cache,

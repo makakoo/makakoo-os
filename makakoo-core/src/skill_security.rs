@@ -368,6 +368,11 @@ fn slugify(target: &str) -> String {
 
 pub struct ScanOptions {
     pub target: String,
+    /// Makakoo home used for reports, audit logs, and per-home security
+    /// configuration. CLI callers can leave this unset to use platform
+    /// resolution; install-time callers pass their already-resolved home so
+    /// tests and custom homes do not race through process-global env vars.
+    pub makakoo_home: Option<PathBuf>,
     pub no_llm: bool,
     /// Reuse an existing report for today's target slug when present.
     ///
@@ -383,10 +388,14 @@ pub struct ScanOptions {
 pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, PathBuf)> {
     let bin_path = get_skillspector_bin(options.no_cache)?;
 
-    let home = makakoo_home();
+    let home = options.makakoo_home.clone().unwrap_or_else(makakoo_home);
     let date_str = Utc::now().format("%Y-%m-%d").to_string();
     let slug = slugify(&options.target);
-    let config = SkillSecurityConfig::load();
+    let config = if options.makakoo_home.is_some() {
+        SkillSecurityConfig::load_from(&home.join("config").join("skill_security.toml"))
+    } else {
+        SkillSecurityConfig::load()
+    };
     let report_dir_raw = &config.skillspector.report_dir;
     let report_dir_base =
         PathBuf::from(report_dir_raw.replace("$MAKAKOO_HOME", &home.to_string_lossy()));
@@ -462,7 +471,13 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
     }
 
     // 3. Save audit log
-    save_audit_entry(&options.target, &report, &report_json_path, options.no_llm)?;
+    save_audit_entry(
+        &options.target,
+        &report,
+        &report_json_path,
+        options.no_llm,
+        &home,
+    )?;
 
     // 4. Copy SARIF to requested path if specified
     if let Some(user_sarif_path) = &options.sarif_path {
@@ -490,8 +505,8 @@ fn save_audit_entry(
     report: &SkillspectorReport,
     report_json_path: &Path,
     no_llm: bool,
+    home: &Path,
 ) -> anyhow::Result<()> {
-    let home = makakoo_home();
     let audit_log_path = home.join("logs").join("audit.jsonl");
     if let Some(parent) = audit_log_path.parent() {
         fs::create_dir_all(parent)?;
@@ -722,6 +737,7 @@ pub fn run_fleet_scan(
         let target_str = target_path.to_string_lossy().to_string();
         let target_opts = ScanOptions {
             target: target_str.clone(),
+            makakoo_home: options.makakoo_home.clone(),
             no_llm: options.no_llm,
             use_report_cache: options.use_report_cache,
             no_cache: options.no_cache,

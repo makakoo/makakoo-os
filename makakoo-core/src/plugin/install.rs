@@ -565,6 +565,7 @@ fn install_staged(
         } else {
             let options = ScanOptions {
                 target: stage_target.to_string_lossy().to_string(),
+                makakoo_home: Some(makakoo_home.to_path_buf()),
                 no_llm: true,
                 use_report_cache: false,
                 no_cache: false,
@@ -1820,7 +1821,6 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
         enable_skillspector(&home);
 
         // 1) Write mock skillspector binary
@@ -1873,7 +1873,6 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
         enable_skillspector(&home);
 
         // 1) Write mock skillspector binary returning HIGH risk
@@ -1928,7 +1927,6 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
         enable_skillspector(&home);
 
         let plugin = "stale-cache-plugin";
@@ -1996,7 +1994,6 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
         enable_skillspector(&home);
 
         // 1) Write mock skillspector binary returning HIGH risk
