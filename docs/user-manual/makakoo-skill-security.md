@@ -8,7 +8,9 @@ This page explains how the preflight gate behaves, how to override risk blocks w
 
 ## 1. Plugin Preflight Security Gate
 
-When you run `makakoo plugin install <source>`, Makakoo automatically runs a **preflight security scan** on the target directory before completing the installation.
+When you run `makakoo plugin install <source>`, Makakoo automatically runs a **preflight security scan** on the staged plugin directory before completing the installation. Install-time gates always scan the current staged bytes. If an older same-day report exists for that plugin name, Makakoo overwrites it instead of reusing it, so stale findings cannot block a fixed plugin and stale safe reports cannot approve changed code.
+
+Manual `makakoo skill audit` commands may reuse a same-day report for speed. Pass `--no-cache` when you need a fresh manual audit and SkillSpector bootstrap refresh.
 
 ### Risk Policy and Severity Levels
 SkillSpector assigns a numeric risk score (0 to 100) and a severity level to each target:
