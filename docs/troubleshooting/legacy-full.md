@@ -186,10 +186,10 @@ makakoo plugin info <plugin-name>
 1. Add information to your Brain:
    ```bash
    # Write to journal
-   echo "- Today I worked on X" >> ~/MAKAKOO/Brain/journals/$(date +%Y_%m_%d).md
+   echo "- Today I worked on X" >> ~/MAKAKOO/data/Brain/journals/$(date +%Y_%m_%d).md
    
    # Create a page
-   cat > ~/MAKAKOO/Brain/pages/my-project.md << 'EOF'
+   cat > ~/MAKAKOO/data/Brain/pages/my-project.md << 'EOF'
    # My Project
    
    ## Status
@@ -212,7 +212,7 @@ makakoo plugin info <plugin-name>
 **Fix:**
 ```bash
 # Check Brain directory
-ls -la ~/MAKAKOO/Brain/
+ls -la ~/MAKAKOO/data/Brain/
 
 # Rebuild index
 makakoo sync --force

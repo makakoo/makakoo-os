@@ -46,14 +46,14 @@ makakoo search "acme demo"
 
 ## 3. Connect my Obsidian vault (or a folder of notes)
 
-**Goal:** make an existing Obsidian vault or a plain markdown folder a
-first-class Makakoo brain substrate.
+**Goal:** make an existing Obsidian vault or a plain markdown folder searchable
+as labeled Makakoo Brain enrichment, without replacing the canonical Brain.
 
 ```sh
 makakoo setup brain
 ```
 
-The interactive picker auto-detects common Obsidian paths (`~/Documents/Obsidian Vault`, `~/Documents/obsidian`, `~/Obsidian`). If the Obsidian app is missing, it offers to install it through Homebrew, Flatpak, or winget when available. The default is No. Say yes to a detected vault, optionally change the write-default, and you're done.
+The interactive picker auto-detects common Obsidian paths (`~/Documents/Obsidian Vault`, `~/Documents/obsidian`, `~/Obsidian`). If the Obsidian app is missing, it offers to install it through Homebrew, Flatpak, or winget when available. The default is No. Say yes to a detected vault and it is registered as enrichment. The canonical Brain remains `$MAKAKOO_HOME/data/Brain`.
 
 **Advanced plugin CLI:**
 
@@ -62,14 +62,13 @@ Until a Rust `makakoo brain` wrapper lands, the source registry CLI lives inside
 ```sh
 python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" list
 python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" add personal obsidian ~/MyVault
-python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" set-default personal
 python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" sync --name personal
 ```
 
 Two scenarios to disambiguate before registering:
 
 - **A — you already have a separate Obsidian vault.** Use the commands
-  above. This registers it as an additional source Makakoo reads from.
+  above. This registers it as labeled enrichment context Makakoo indexes/searches from.
 - **B — you want Obsidian just as a nicer editor.** Don't register
   anything. Open Obsidian → `Open folder as vault` → point at
   `~/MAKAKOO/data/Brain/`. Same files, Obsidian UX. Zero config.

@@ -9,7 +9,7 @@ to users.
 
 | Channel | Install command |
 |---|---|
-| Homebrew (macOS + Linux) | `brew install makakoo/makakoo/makakoo` |
+| Homebrew (macOS + Linux) | `brew install traylinx/tap/makakoo` |
 | Shell installer (macOS + Linux) | `curl -fsSL https://makakoo.com/install.sh \| bash` |
 | Cargo (from source) | `cargo install --path makakoo` |
 
@@ -20,8 +20,8 @@ to users.
 | `aarch64-apple-darwin` | primary |
 | `x86_64-apple-darwin` | primary |
 | `x86_64-unknown-linux-gnu` | best-effort |
-| `aarch64-unknown-linux-gnu` | installer supports, not yet built |
-| `x86_64-pc-windows-msvc` | future sprint |
+| `aarch64-unknown-linux-gnu` | release workflow builds tarball |
+| `x86_64-pc-windows-msvc` | release workflow builds zip |
 
 ## Layout
 
@@ -34,9 +34,7 @@ distribution/
 ```
 
 The cargo-dist packaging metadata lives in `../Cargo.toml` under
-`[workspace.metadata.dist]`. CI generation is disabled (`ci = []`)
-for this sprint — when infra lands, flip it to `ci = ["github"]` and
-re-run `cargo dist init`.
+`[workspace.metadata.dist]`. Release CI is hand-written in `.github/workflows/release.yml`; the `cargo-dist` metadata is kept as packaging documentation and future signing/notarization input.
 
 ## Releasing a new version
 
@@ -47,10 +45,9 @@ re-run `cargo dist init`.
    per-target tarballs and uploads them to the GitHub Release.
 5. Take the generated SHA256s and write them into
    `homebrew/makakoo.rb`, replacing the `PLACEHOLDER_*` strings.
-6. Push the updated formula to the `makakoo/homebrew-makakoo` tap repo.
+6. Push the updated formula to the `traylinx/homebrew-tap` tap repo.
 
-Until infra lands, steps 2–5 are run by hand on a dev machine and the
-tarballs uploaded manually to the GitHub Release.
+The current `.github/workflows/release.yml` builds the release artifacts after the tag is pushed. Homebrew SHA updates happen after that workflow publishes the GitHub Release.
 
 ## Local validation
 

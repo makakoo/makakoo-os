@@ -119,9 +119,14 @@ fn prompt_name(ui: &mut Ui) -> anyhow::Result<String> {
             ui.line(format!("  {}. {}", i + 1, n))?;
         }
         ui.line(format!("  {}. (type your own)", SUGGESTED_NAMES.len() + 1))?;
-        ui.prompt_write(format!("\nPick 1-{}: ", SUGGESTED_NAMES.len() + 1))?;
+        ui.prompt_write(format!("\nPick 1-{} [1]: ", SUGGESTED_NAMES.len() + 1))?;
 
-        let choice = ui.read_line()?;
+        let raw_choice = ui.read_line()?;
+        let choice = if raw_choice.trim().is_empty() {
+            "1".to_string()
+        } else {
+            raw_choice
+        };
         let custom = if choice == format!("{}", SUGGESTED_NAMES.len() + 1) {
             ui.prompt_write("Custom name: ")?;
             Some(ui.read_line()?)
@@ -251,6 +256,14 @@ mod tests {
     fn prompts_resolve_suggested_name() {
         let input = b"1\nthey\n1\n".to_vec();
         let stdin = Cursor::new(input);
+        let mut ui = Ui::new(stdin, Vec::<u8>::new());
+        let name = prompt_name(&mut ui).unwrap();
+        assert_eq!(name, SUGGESTED_NAMES[0]);
+    }
+
+    #[test]
+    fn prompt_name_defaults_to_first_suggestion_on_empty() {
+        let stdin = Cursor::new(b"\n".to_vec());
         let mut ui = Ui::new(stdin, Vec::<u8>::new());
         let name = prompt_name(&mut ui).unwrap();
         assert_eq!(name, SUGGESTED_NAMES[0]);

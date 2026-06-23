@@ -5,7 +5,7 @@ Subcommands:
   list                        — show every registered source + default
   add <name> <type> <path>    — register a new source (type: logseq|obsidian|plain)
   remove <name>               — unregister (refuses to remove default)
-  set-default <name>          — switch which source is the write default
+  set-default <name>          — legacy; only canonical-role sources allowed
   sync [--name NAME]          — walk source(s) and print per-source doc counts (dry; true ingest lives in the SANCHO task)
   init                        — interactive picker (first-run wizard)
 
@@ -36,27 +36,33 @@ def cmd_list(args) -> int:
             "default": registry.default_name,
             "sources": [
                 {"name": s.name, "root": str(s.root), "writable": s.writable,
-                 "type": s.__class__.__name__}
+                 "type": s.__class__.__name__, "role": getattr(s, "role", "enrichment")}
                 for s in registry.sources
             ],
         }, indent=2))
         return 0
-    print(f"Brain sources ({len(registry.sources)} total, default: {registry.default_name}):\n")
+    print(f"Brain sources ({len(registry.sources)} total, canonical: {registry.default_name}):\n")
     for s in registry.sources:
         flag = "writable" if s.writable else "read-only"
         kind = s.__class__.__name__.replace("Source", "").lower()
-        star = " (default)" if s.name == registry.default_name else ""
-        print(f"  [{kind:9}] {s.name}{star}")
+        role = getattr(s, "role", "enrichment")
+        star = " (canonical)" if s.name == registry.default_name else ""
+        print(f"  [{kind:9}] {s.name}{star}  role={role}")
         print(f"             {s.root}  ({flag})")
     return 0
 
 
 def cmd_add(args) -> int:
+    role = "canonical" if args.name == "default" else "enrichment"
+    writable = True if role == "canonical" else bool(args.writable)
+    if args.read_only:
+        writable = False
     entry = {
         "name": args.name,
         "type": args.type,
         "path": args.path,
-        "writable": not args.read_only,
+        "writable": writable,
+        "role": role,
     }
     path = cfg.add_source(entry)
     print(f"Added source {args.name!r} ({args.type}) → {path}")
@@ -76,9 +82,9 @@ def cmd_remove(args) -> int:
 def cmd_set_default(args) -> int:
     try:
         path = cfg.set_default(args.name)
-        print(f"Default source → {args.name!r}. Config at {path}")
+        print(f"Canonical source → {args.name!r}. Config at {path}")
         return 0
-    except (KeyError, FileNotFoundError) as e:
+    except (KeyError, ValueError, FileNotFoundError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
@@ -102,7 +108,7 @@ def cmd_sync(args) -> int:
 
 
 def cmd_init(args) -> int:
-    """Interactive picker — register additional sources beyond the default Logseq."""
+    """Interactive picker — seed the default Brain and register optional sources."""
     try:
         from picker import run_interactive  # type: ignore
     except ImportError:
@@ -124,13 +130,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("type", choices=["logseq", "obsidian", "plain"])
     p_add.add_argument("path")
     p_add.add_argument("--read-only", action="store_true")
+    p_add.add_argument("--writable", action="store_true", help="allow writes into an enrichment source")
     p_add.set_defaults(fn=cmd_add)
 
     p_rm = sub.add_parser("remove", help="unregister a source")
     p_rm.add_argument("name")
     p_rm.set_defaults(fn=cmd_remove)
 
-    p_sd = sub.add_parser("set-default", help="change the write-default source")
+    p_sd = sub.add_parser("set-default", help="legacy: change canonical source only")
     p_sd.add_argument("name")
     p_sd.set_defaults(fn=cmd_set_default)
 

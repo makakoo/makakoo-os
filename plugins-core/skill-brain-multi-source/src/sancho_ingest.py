@@ -2,13 +2,9 @@
 """SANCHO multi-source brain ingest.
 
 Walks every registered brain source every N minutes, collects docs newer than
-the per-source cursor, and logs one summary line per source to today's journal.
-
-Actual document ingestion into brain_docs + embeddings is delegated to the
-existing `core.memory.brain_bridge` + Rust daemon pipeline — they already know
-how to accept a list of (path, content, source). This task is just the
-*dispatcher* that says "here are the new docs from each registered source,
-process them."
+the per-source cursor, and triggers the Rust `makakoo sync` indexer when
+anything changed. The Rust indexer owns the actual source-labeled writes into
+`brain_docs`; this task is only the scheduler/cursor layer.
 
 Cursor file: `$MAKAKOO_HOME/state/skill-brain-multi-source/cursors.json`
 Format: `{source_name: last_seen_mtime_epoch}`
@@ -23,6 +19,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -71,20 +69,35 @@ def _save_cursors(cursors: dict) -> None:
 
 
 def _dispatch_to_pipeline(source_name: str, docs: list) -> int:
-    """Hand new docs to the existing brain ingest pipeline.
-
-    Today this is a no-op stub — the Rust daemon already watches
-    $MAKAKOO_HOME/data/Brain and re-embeds on file changes, but doesn't yet
-    know about *other* sources. Wiring that extension is v0.2 Phase C work.
-    For now we journal the event so there's a receipt and operators can see
-    which sources are producing deltas.
-    """
-    # Best-effort: emit to bus_events table via existing Rust daemon if present.
-    # The actual "ingest this doc" code path lives in Rust and already fires
-    # for default/Logseq writes. Alternate sources would need the Rust
-    # daemon's file-watcher extended OR an explicit ingest bridge here.
-    # Deliberately conservative: log + return count, don't touch SQLite.
+    """Count new docs. Real pipeline runs once per tick via `_run_makakoo_sync`."""
     return len(docs)
+
+
+def _run_makakoo_sync() -> dict:
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"ran": False, "reason": "pytest"}
+    exe = shutil.which("makakoo")
+    if not exe:
+        return {"ran": False, "reason": "makakoo not on PATH"}
+    env = os.environ.copy()
+    env["MAKAKOO_HOME"] = str(_makakoo_home())
+    try:
+        proc = subprocess.run(
+            [exe, "sync"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except Exception as e:
+        return {"ran": False, "reason": str(e)}
+    return {
+        "ran": True,
+        "ok": proc.returncode == 0,
+        "code": proc.returncode,
+        "stdout": proc.stdout.strip()[-500:],
+        "stderr": proc.stderr.strip()[-500:],
+    }
 
 
 def tick() -> int:
@@ -126,11 +139,18 @@ def tick() -> int:
 
     _save_cursors(cursors)
 
+    sync_result = {"ran": False, "reason": "no new docs"}
+    if total_new > 0:
+        sync_result = _run_makakoo_sync()
+        if sync_result.get("ran") and not sync_result.get("ok", False):
+            errors.append({"source": "makakoo sync", "error": sync_result})
+
     result = {
         "status": "ok" if not errors else "partial",
         "sources": len(registry.sources),
         "new_docs_total": total_new,
         "per_source": per_source,
+        "sync": sync_result,
     }
     if errors:
         result["errors"] = errors

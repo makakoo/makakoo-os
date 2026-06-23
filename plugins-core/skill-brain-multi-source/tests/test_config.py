@@ -60,7 +60,7 @@ def test_remove_source(tmp_home):
 
 def test_cannot_remove_default(tmp_home):
     cfg.add_source({"name": "default", "type": "logseq", "path": "/tmp/d"})
-    with pytest.raises(ValueError, match="cannot remove default"):
+    with pytest.raises(ValueError, match="cannot remove canonical"):
         cfg.remove_source("default")
 
 
@@ -70,11 +70,13 @@ def test_remove_nonexistent_raises(tmp_home):
         cfg.remove_source("ghost")
 
 
-def test_set_default(tmp_home):
+def test_set_default_refuses_enrichment_source(tmp_home):
     cfg.add_source({"name": "vault", "type": "obsidian", "path": "/tmp/v"})
-    cfg.set_default("vault")
+    with pytest.raises(ValueError, match="enrichment"):
+        cfg.set_default("vault")
     registry = cfg.load_registry()
-    assert registry.default_name == "vault"
+    assert registry.default_name == "default"
+    assert registry.get("vault").role == "enrichment"
 
 
 def test_set_default_unknown_raises(tmp_home):

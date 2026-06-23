@@ -62,24 +62,30 @@ def _obsidian_missing(monkeypatch):
 def test_non_interactive_mode_seeds_default_only(tmp_home, capsys):
     rc = picker.run_interactive(non_interactive=True)
     assert rc == 0
+    assert cfg.config_path().exists()
     registry = cfg.load_registry()
     assert registry.names() == ["default"]
 
 
-def test_decline_all_prompts_leaves_only_default(tmp_home, monkeypatch, capsys):
-    _feed_inputs(monkeypatch, ["n", "n"])  # no obsidian, no plain folder
+def test_accept_defaults_leaves_only_default(tmp_home, monkeypatch, capsys):
+    _obsidian_available(monkeypatch)
+    _feed_inputs(monkeypatch, [
+        "",   # use default Brain as Obsidian editor folder
+        "",   # no additional Obsidian vault
+        "n",  # no plain folder
+    ])
     rc = picker.run_interactive()
     assert rc == 0
+    assert cfg.config_path().exists()
     registry = cfg.load_registry()
     assert registry.names() == ["default"]
 
 
-
-def test_obsidian_app_missing_warns_and_can_skip(tmp_home, monkeypatch, capsys):
-    _obsidian_missing(monkeypatch)
+def test_obsidian_app_missing_declined_skips_obsidian_setup(tmp_home, monkeypatch, capsys):
+    monkeypatch.setattr(picker, "_detect_obsidian_app", lambda: (False, "not detected"))
+    monkeypatch.setattr(picker, "_obsidian_install_command", lambda: ["brew", "install", "--cask", "obsidian"])
     _feed_inputs(monkeypatch, [
-        "y",  # asks to add Obsidian
-        "n",  # do not register a vault path anyway
+        "n",  # do not install Obsidian
         "n",  # no plain folder
     ])
     rc = picker.run_interactive()
@@ -88,7 +94,23 @@ def test_obsidian_app_missing_warns_and_can_skip(tmp_home, monkeypatch, capsys):
     assert registry.names() == ["default"]
     out = capsys.readouterr().out
     assert "Obsidian app was not detected" in out
-    assert "Register an existing Obsidian vault path anyway?" in out
+    assert "Install Obsidian now?" in out
+    assert "Obsidian setup skipped" in out
+    assert "Register an existing Obsidian vault path anyway?" not in out
+
+
+def test_obsidian_app_missing_no_installer_prints_manual_and_skips(tmp_home, monkeypatch, capsys):
+    _obsidian_missing(monkeypatch)
+    _feed_inputs(monkeypatch, [
+        "n",  # no plain folder
+    ])
+    rc = picker.run_interactive()
+    assert rc == 0
+    registry = cfg.load_registry()
+    assert registry.names() == ["default"]
+    out = capsys.readouterr().out
+    assert "No supported package manager was detected" in out
+    assert "Obsidian setup skipped" in out
 
 
 def test_final_confirmation_keyboard_interrupt_writes_no_pending_source(tmp_home, monkeypatch, capsys):
@@ -97,15 +119,15 @@ def test_final_confirmation_keyboard_interrupt_writes_no_pending_source(tmp_home
     vault.mkdir()
     (vault / ".obsidian").mkdir()
     _feed_inputs_with_interrupt(monkeypatch, [
-        "y",            # add obsidian
+        "",             # use default Brain as Obsidian editor folder
+        "y",            # add additional obsidian vault
         str(vault),     # vault path
         "n",            # do not allow writes
         "n",            # no plain folder
-        "",             # keep current default
         KeyboardInterrupt,
     ])
     rc = picker.run_interactive()
-    assert rc == 0
+    assert rc == picker.PICKER_ABORT_EXIT
     registry = cfg.load_registry()
     assert registry.names() == ["default"]
     out = capsys.readouterr().out
@@ -119,11 +141,12 @@ def test_obsidian_path_keyboard_interrupt_does_not_accept_default_guess(tmp_home
     (vault / ".obsidian").mkdir()
     monkeypatch.setattr(picker, "_guess_obsidian_vault", lambda: str(vault))
     _feed_inputs_with_interrupt(monkeypatch, [
-        "y",              # add obsidian
+        "",               # use default Brain as Obsidian editor folder
+        "y",              # add additional obsidian
         KeyboardInterrupt,
     ])
     rc = picker.run_interactive()
-    assert rc == 0
+    assert rc == picker.PICKER_ABORT_EXIT
     registry = cfg.load_registry()
     assert registry.names() == ["default"]
 
@@ -149,12 +172,12 @@ def test_obsidian_app_missing_offers_install(tmp_home, monkeypatch, capsys):
     (vault / ".obsidian").mkdir()
     (vault / "note.md").write_text("# hi")
     _feed_inputs(monkeypatch, [
-        "y",  # add obsidian
         "y",  # install app
+        "",   # use default Brain as Obsidian editor folder
+        "y",  # register additional Obsidian vault
         str(vault),
         "n",  # do not allow writes
         "n",  # no plain folder
-        "",   # keep current default
         "y",  # confirm
     ])
 
@@ -176,11 +199,10 @@ def test_obsidian_install_keyboard_interrupt_aborts_without_write(tmp_home, monk
 
     monkeypatch.setattr(picker.subprocess, "run", fake_run)
     _feed_inputs(monkeypatch, [
-        "y",  # add obsidian
         "y",  # try install app
     ])
     rc = picker.run_interactive()
-    assert rc == 0
+    assert rc == picker.PICKER_ABORT_EXIT
     registry = cfg.load_registry()
     assert registry.names() == ["default"]
     out = capsys.readouterr().out
@@ -191,7 +213,8 @@ def test_obsidian_install_keyboard_interrupt_aborts_without_write(tmp_home, monk
 def test_obsidian_path_no_is_treated_as_skip(tmp_home, monkeypatch, capsys):
     _obsidian_available(monkeypatch)
     _feed_inputs(monkeypatch, [
-        "y",  # add Obsidian
+        "",   # use default Brain as Obsidian editor folder
+        "y",  # add additional Obsidian
         "n",  # path prompt: no means skip, not a literal path named n
         "n",  # no plain folder
     ])
@@ -208,7 +231,8 @@ def test_missing_obsidian_path_requires_confirmation(tmp_home, monkeypatch, caps
     _obsidian_available(monkeypatch)
     missing = tmp_home / "missing_vault"
     _feed_inputs(monkeypatch, [
-        "y",              # add Obsidian
+        "",               # use default Brain as Obsidian editor folder
+        "y",              # add additional Obsidian
         str(missing),     # vault path does not exist
         "n",              # do not register missing path
         "n",              # no plain folder
@@ -228,11 +252,11 @@ def test_abort_at_final_confirmation_writes_nothing(tmp_home, monkeypatch, capsy
     (vault / ".obsidian").mkdir()
     (vault / "note.md").write_text("# hi")
     _feed_inputs(monkeypatch, [
-        "y",            # add obsidian
+        "",             # use default Brain as Obsidian editor folder
+        "y",            # add additional obsidian
         str(vault),     # vault path
         "n",            # do not allow writes
         "n",            # no plain folder
-        "",             # keep current default
         "n",            # abort at final confirmation
     ])
     rc = picker.run_interactive()
@@ -251,11 +275,11 @@ def test_commit_failure_returns_nonzero(tmp_home, monkeypatch, capsys):
     vault.mkdir()
     (vault / ".obsidian").mkdir()
     _feed_inputs(monkeypatch, [
-        "y",            # add obsidian
+        "",             # use default Brain as Obsidian editor folder
+        "y",            # add additional obsidian
         str(vault),     # vault path
         "n",            # do not allow writes
         "n",            # no plain folder
-        "",             # keep current default
         "y",            # confirm
     ])
 
@@ -277,11 +301,11 @@ def test_confirm_writes_all_pending_adds(tmp_home, monkeypatch, capsys):
     (vault / ".obsidian").mkdir()
     (vault / "note.md").write_text("# hi")
     _feed_inputs(monkeypatch, [
-        "y",            # add obsidian
+        "",             # use default Brain as Obsidian editor folder
+        "y",            # add additional obsidian
         str(vault),     # vault path
         "n",            # do not allow writes
         "n",            # no plain folder
-        "",             # blank = keep current default
         "y",            # confirm
     ])
     rc = picker.run_interactive()
@@ -297,11 +321,11 @@ def test_summary_shown_before_write(tmp_home, monkeypatch, capsys):
     vault.mkdir()
     (vault / ".obsidian").mkdir()
     _feed_inputs(monkeypatch, [
+        "",
         "y",
         str(vault),
         "n",
         "n",
-        "",
         "y",
     ])
     picker.run_interactive()
@@ -318,11 +342,11 @@ def test_post_write_sync_reports_counts(tmp_home, monkeypatch, capsys):
     (vault / "a.md").write_text("# a")
     (vault / "b.md").write_text("# b")
     _feed_inputs(monkeypatch, [
+        "",
         "y",
         str(vault),
         "n",
         "n",
-        "",
         "y",
     ])
     picker.run_interactive()
@@ -331,19 +355,36 @@ def test_post_write_sync_reports_counts(tmp_home, monkeypatch, capsys):
     assert "obsidian:" in out
 
 
-def test_change_default_via_picker(tmp_home, monkeypatch, capsys):
+def test_external_vault_never_becomes_default_via_picker(tmp_home, monkeypatch, capsys):
     _obsidian_available(monkeypatch)
     vault = tmp_home / "my_vault"
     vault.mkdir()
     (vault / ".obsidian").mkdir()
     _feed_inputs(monkeypatch, [
-        "y",              # add obsidian
+        "",               # use default Brain as Obsidian editor folder
+        "y",              # add additional obsidian
         str(vault),
-        "y",              # allow writes so it can become default
+        "y",              # allow writes, still enrichment only
         "n",              # no plain
-        "obsidian",       # change default to obsidian
         "y",              # confirm
     ])
     picker.run_interactive()
     registry = cfg.load_registry()
-    assert registry.default_name == "obsidian"
+    assert registry.default_name == "default"
+    assert registry.get("obsidian").role == "enrichment"
+
+
+def test_accept_default_brain_adds_obsidian_profile(tmp_home, monkeypatch, capsys):
+    _obsidian_available(monkeypatch)
+    _feed_inputs(monkeypatch, [
+        "",   # use default Brain as Obsidian editor folder
+        "",   # no additional Obsidian vault
+        "n",  # no plain folder
+    ])
+    rc = picker.run_interactive()
+    assert rc == 0
+    obsidian = tmp_home / "data" / "Brain" / ".obsidian"
+    assert (obsidian / "core-plugins.json").exists()
+    daily = json.loads((obsidian / "daily-notes.json").read_text())
+    assert daily["folder"] == "journals"
+    assert daily["format"] == "YYYY_MM_DD"

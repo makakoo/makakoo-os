@@ -99,6 +99,29 @@ fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
         "DELETE FROM brain_vectors WHERE doc_id NOT IN (SELECT id FROM brain_docs)",
         [],
     )?;
+    ensure_column(conn, "brain_docs", "source_name", "TEXT DEFAULT 'default'")?;
+    ensure_column(conn, "brain_docs", "source_type", "TEXT DEFAULT 'logseq'")?;
+    ensure_column(
+        conn,
+        "brain_docs",
+        "source_role",
+        "TEXT DEFAULT 'canonical'",
+    )?;
+    ensure_column(conn, "brain_docs", "relative_path", "TEXT")?;
+    Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|c| c == column) {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -150,6 +173,10 @@ CREATE TABLE IF NOT EXISTS brain_docs (
     content_hash TEXT NOT NULL,
     entities TEXT DEFAULT '[]',
     char_count INTEGER DEFAULT 0,
+    source_name TEXT DEFAULT 'default',
+    source_type TEXT DEFAULT 'logseq',
+    source_role TEXT DEFAULT 'canonical',
+    relative_path TEXT,
     updated_at TEXT DEFAULT (datetime('now'))
 );
 

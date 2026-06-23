@@ -19,6 +19,8 @@ makakoo update [--dry-run] [--reinfect] [--method ...] [--source ...] [--install
 3. **Spawns the actions sequentially** (skip with `--dry-run`).
 4. **Compares versions** before and after; warns if unchanged.
 5. **Prints a daemon-restart hint** so any running daemon picks up the new binary.
+6. **Optionally offers setup review** on interactive terminals. The prompt is
+   `[y/N]` so normal updates stay quiet unless you explicitly enter the wizard.
 
 ## Quick reference
 

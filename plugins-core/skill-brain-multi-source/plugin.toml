@@ -3,7 +3,7 @@ name = "skill-brain-multi-source"
 version = "0.1.0"
 kind = "sancho-task"
 language = "python"
-summary = "Multi-source brain adapter: Logseq + Obsidian + plain markdown. Pluggable knowledge substrates with a single unified search layer."
+summary = "Brain source enrichment adapter: canonical Makakoo Brain plus optional Obsidian/plain-markdown context sources."
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 

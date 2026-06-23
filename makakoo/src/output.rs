@@ -19,6 +19,7 @@ pub fn print_search_hits(hits: &[SearchHit]) {
     t.load_preset(UTF8_FULL);
     t.set_header(vec![
         Cell::new("doc_id").fg(TableColor::Cyan),
+        Cell::new("source").fg(TableColor::Cyan),
         Cell::new("type").fg(TableColor::Cyan),
         Cell::new("score").fg(TableColor::Cyan),
         Cell::new("snippet").fg(TableColor::Cyan),
@@ -27,6 +28,7 @@ pub fn print_search_hits(hits: &[SearchHit]) {
         let snippet: String = h.content.chars().take(80).collect();
         t.add_row(vec![
             Cell::new(&h.doc_id).fg(TableColor::White),
+            Cell::new(format!("{}:{}", h.source_role, h.source_name)).fg(TableColor::Blue),
             Cell::new(&h.doc_type).fg(TableColor::DarkYellow),
             Cell::new(format!("{:.3}", h.score)),
             Cell::new(snippet),
@@ -160,6 +162,10 @@ mod tests {
             doc_type: "page".into(),
             score: 0.99,
             metadata: Value::Null,
+            source_name: "default".into(),
+            source_type: "logseq".into(),
+            source_role: "canonical".into(),
+            relative_path: None,
         };
         print_search_hits(&[hit]);
     }

@@ -26,7 +26,7 @@ rm -rf ~/.makakoo ~/MAKAKOO
 cp -r ~/MAKAKOO ~/MAKAKOO-backup-$(date +%Y%m%d)
 
 # Or just the Brain
-cp -r ~/MAKAKOO/Brain ~/Brain-backup-$(date +%Y%m%d)
+cp -r ~/MAKAKOO/data/Brain ~/Brain-backup-$(date +%Y%m%d)
 ```
 
 ### 2. Uninfect All CLIs

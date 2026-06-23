@@ -37,7 +37,7 @@ Brain. Different doorway.
 
 - `makakoo setup updates` chooses auto or manual Makakoo OS updates. Fresh setup defaults to auto. Existing installs stay idle until this config exists.
 - `makakoo update` is the primary update command. `makakoo upgrade` is only a legacy alias.
-- `makakoo setup brain` registers Logseq, Obsidian, or plain markdown sources. If Obsidian is missing, the picker can offer to install it first when Homebrew, Flatpak, or winget is available.
+- `makakoo setup brain` seeds the canonical Brain at `$MAKAKOO_HOME/data/Brain` and can register separate Logseq, Obsidian, or plain-markdown folders as labeled enrichment sources. If Obsidian is missing, the picker can offer to install it first when Homebrew, Flatpak, or winget is available.
 - `makakoo setup lope` offers Lope, Makakoo's optional in-house companion for validator ensembles for reviews, votes, compares, negotiated plans, and validator-in-the-loop sprints.
 - Headroom ships in the default core distro through `tool-headroom`. It compresses bulky tool and MCP output without making users manage another setup step.
 

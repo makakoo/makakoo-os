@@ -2,8 +2,8 @@
 """
 Obsidian plugin for Makakoo OS.
 
-Read/write any Obsidian vault using Logseq markdown format.
-Point to any folder with markdown + wikilinks.
+Read/write one explicitly configured Obsidian vault.
+Point to any folder with Markdown notes and wikilinks. This direct utility is separate from the Brain enrichment registry.
 
 Usage:
     makakoo skill obsidian status

@@ -62,7 +62,7 @@ Makakoo "infects" AI CLIs by adding a bootstrap block to their configuration. Th
 The Brain isMakakoo's persistent memory system:
 
 ```
-~/MAKAKOO/Brain/
+~/MAKAKOO/data/Brain/
 ├── journals/           # Daily logs
 │   ├── 2026_04_20.md   # "Today I did X..."
 │   └── 2026_04_19.md
@@ -143,7 +143,7 @@ makakoo_mcp tool: brain_write
     ↓
 makakoo-core: append to journal
     ↓
-~/MAKAKOO/Brain/journals/2026_04_20.md
+~/MAKAKOO/data/Brain/journals/2026_04_20.md
 ```
 
 ### Querying Brain

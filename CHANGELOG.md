@@ -10,6 +10,20 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-06-23
+
+### Added
+- Added an optional Brain enrichment layer for separate Obsidian, Logseq, and plain-Markdown sources. The canonical Brain remains `$MAKAKOO_HOME/data/Brain`; enrichment sources are indexed with source labels and normal journal writes stay canonical.
+- Added Obsidian metadata extraction for tags, aliases, and Canvas graph hints so Superbrain search can surface richer context without treating external vaults as the source of truth.
+
+### Changed
+- Improved `makakoo setup brain` defaults: the canonical Makakoo Brain folder (`$MAKAKOO_HOME/data/Brain`) now counts as a completed setup, Obsidian app detection/install runs before separate-vault prompts, and declining Obsidian install cleanly skips Obsidian setup instead of asking for a vault path.
+- Made remaining setup picker prompts explicit about defaults: empty persona-name input selects suggestion 1, and empty model-provider input skips instead of erroring.
+- `makakoo update` / `makakoo upgrade` now offer an interactive, default-No setup review after successful updates so new defaults can be checked without forcing the full wizard on routine upgrades.
+
+### Fixed
+- Fixed `agent-browser-harness` SkillSpector preflight noise by keeping its Chrome doctor probe fixed to the documented local CDP endpoint instead of accepting an environment-provided URL.
+
 ## [0.1.32] - 2026-06-21
 
 ### Added

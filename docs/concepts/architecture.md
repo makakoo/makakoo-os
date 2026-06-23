@@ -140,7 +140,7 @@ User: "Remember I chose PostgreSQL"
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  Brain Writer                                         │  │
-│  │  ~/MAKAKOO/Brain/journals/2026_04_20.md              │  │
+│  │  ~/MAKAKOO/data/Brain/journals/2026_04_20.md              │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                          │                                  │
 │                          ▼                                  │
@@ -206,7 +206,7 @@ User: "Remember I chose PostgreSQL"
 │  │  │  - makakoo_sancho_status                      │ │   │
 │  │  │                                                 │ │   │
 │  │  │  ## Brain Location                            │ │   │
-│  │  │  ~/MAKAKOO/Brain/                             │ │   │
+│  │  │  ~/MAKAKOO/data/Brain/                             │ │   │
 │  │  └────────────────────────────────────────────────┘ │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                              │
