@@ -21,6 +21,8 @@ makakoo update [--dry-run] [--reinfect]
 4. Spawns the actions sequentially. First failure aborts the chain.
 5. Captures `makakoo version` before and after. Warns if unchanged.
 6. Prints a platform-specific daemon-restart hint.
+7. On an interactive terminal only, asks whether to review setup defaults /
+   newly-added setup sections. Default is No; press Enter to skip.
 
 ## Flags
 

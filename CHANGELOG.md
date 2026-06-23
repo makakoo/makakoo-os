@@ -10,6 +10,11 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Changed
+- Improved `makakoo setup brain` defaults: the canonical Makakoo Brain folder (`$MAKAKOO_HOME/data/Brain`) now counts as a completed setup, Obsidian app detection/install runs before separate-vault prompts, and declining Obsidian install cleanly skips Obsidian setup instead of asking for a vault path.
+- Made remaining setup picker prompts explicit about defaults: empty persona-name input selects suggestion 1, and empty model-provider input skips instead of erroring.
+- `makakoo update` / `makakoo upgrade` now offer an interactive, default-No setup review after successful updates so new defaults can be checked without forcing the full wizard on routine upgrades.
+
 ## [0.1.32] - 2026-06-21
 
 ### Added

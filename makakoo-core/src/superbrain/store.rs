@@ -61,6 +61,14 @@ pub struct SearchHit {
     pub score: f32,
     /// Deserialised entities/metadata JSON.
     pub metadata: Value,
+    /// Source registry label, e.g. `default` or `personal`.
+    pub source_name: String,
+    /// Source adapter type, e.g. `logseq`, `obsidian`, `plain`, `auto-memory`.
+    pub source_type: String,
+    /// `canonical` for `$MAKAKOO_HOME/data/Brain`, `enrichment` for extras.
+    pub source_role: String,
+    /// Path relative to the source root when known.
+    pub relative_path: Option<String>,
 }
 
 /// A ranked vector-similarity hit.
@@ -79,6 +87,29 @@ pub struct Document {
     pub doc_type: String,
     pub created_at: DateTime<Utc>,
     pub metadata: Value,
+    pub source_name: String,
+    pub source_type: String,
+    pub source_role: String,
+    pub relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceMetadata {
+    pub source_name: String,
+    pub source_type: String,
+    pub source_role: String,
+    pub relative_path: Option<String>,
+}
+
+impl SourceMetadata {
+    pub fn canonical(relative_path: Option<String>) -> Self {
+        Self {
+            source_name: "default".to_string(),
+            source_type: "logseq".to_string(),
+            source_role: "canonical".to_string(),
+            relative_path,
+        }
+    }
 }
 
 /// Aggregate stats for observability.
@@ -162,6 +193,7 @@ const STOP_WORDS: &[&str] = &[
     "most", "only", "than", "them", "then", "they", "each", "want", "need", "tell", "please",
     "really", "think", "using", "used", "use",
 ];
+const EDGE_ENTITY_PREFIX: &str = "__makakoo_edge__|";
 
 fn is_stop(w: &str) -> bool {
     let lower = w.to_ascii_lowercase();
@@ -379,8 +411,26 @@ impl SuperbrainStore {
         doc_type: &str,
         metadata: Value,
     ) -> Result<()> {
+        self.write_document_with_source(
+            doc_id,
+            content,
+            doc_type,
+            metadata,
+            SourceMetadata::canonical(None),
+        )
+    }
+
+    pub fn write_document_with_source(
+        &self,
+        doc_id: &str,
+        content: &str,
+        doc_type: &str,
+        metadata: Value,
+        source: SourceMetadata,
+    ) -> Result<()> {
         let entities = normalize_entities(&metadata, content);
         let entities_json = serde_json::to_string(&entities)?;
+        let fts_entities_json = entities_for_fts_json(&entities)?;
         let content_hash = blake3::hash(content.as_bytes()).to_hex().to_string();
         let name = derive_name(doc_id);
         let char_count = content.chars().count() as i64;
@@ -413,8 +463,10 @@ impl SuperbrainStore {
             )?;
         }
         tx.execute(
-            "INSERT INTO brain_docs (path, name, doc_type, content, content_hash, entities, char_count, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+            "INSERT INTO brain_docs
+                (path, name, doc_type, content, content_hash, entities, char_count,
+                 source_name, source_type, source_role, relative_path, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
              ON CONFLICT(path) DO UPDATE SET
                  name = excluded.name,
                  doc_type = excluded.doc_type,
@@ -422,8 +474,24 @@ impl SuperbrainStore {
                  content_hash = excluded.content_hash,
                  entities = excluded.entities,
                  char_count = excluded.char_count,
+                 source_name = excluded.source_name,
+                 source_type = excluded.source_type,
+                 source_role = excluded.source_role,
+                 relative_path = excluded.relative_path,
                  updated_at = excluded.updated_at",
-            params![doc_id, name, doc_type, content, content_hash, entities_json, char_count],
+            params![
+                doc_id,
+                name,
+                doc_type,
+                content,
+                content_hash,
+                entities_json,
+                char_count,
+                source.source_name,
+                source.source_type,
+                source.source_role,
+                source.relative_path,
+            ],
         )?;
         let rid: i64 = tx.query_row(
             "SELECT id FROM brain_docs WHERE path = ?1",
@@ -433,7 +501,7 @@ impl SuperbrainStore {
         tx.execute(
             "INSERT INTO brain_fts(rowid, name, content, entities)
              VALUES (?1, ?2, ?3, ?4)",
-            params![rid, name, content, entities_json],
+            params![rid, name, content, fts_entities_json],
         )?;
         tx.commit()?;
         Ok(())
@@ -480,7 +548,8 @@ impl SuperbrainStore {
         let conn = self.lock_conn()?;
         let row = conn
             .query_row(
-                "SELECT path, content, doc_type, updated_at, entities
+                "SELECT path, content, doc_type, updated_at, entities,
+                        source_name, source_type, source_role, relative_path
                  FROM brain_docs WHERE path = ?1",
                 params![doc_id],
                 row_to_document,
@@ -499,6 +568,7 @@ impl SuperbrainStore {
         }
         let conn = self.lock_conn()?;
         let sql = "SELECT d.path, d.doc_type, d.content, d.entities, d.name,
+                          d.source_name, d.source_type, d.source_role, d.relative_path,
                           bm25(brain_fts, 5.0, 1.0, 2.0) AS score
                    FROM brain_fts f
                    JOIN brain_docs d ON f.rowid = d.id
@@ -515,14 +585,40 @@ impl SuperbrainStore {
             let content: String = row.get(2)?;
             let entities: Option<String> = row.get(3)?;
             let name: String = row.get(4)?;
-            let raw_score: f64 = row.get(5)?;
-            Ok((path, doc_type, content, entities, name, raw_score))
+            let source_name: Option<String> = row.get(5)?;
+            let source_type: Option<String> = row.get(6)?;
+            let source_role: Option<String> = row.get(7)?;
+            let relative_path: Option<String> = row.get(8)?;
+            let raw_score: f64 = row.get(9)?;
+            Ok((
+                path,
+                doc_type,
+                content,
+                entities,
+                name,
+                source_name,
+                source_type,
+                source_role,
+                relative_path,
+                raw_score,
+            ))
         })?;
 
         let now = Utc::now();
         let mut hits: Vec<SearchHit> = Vec::new();
         for row in rows {
-            let (path, doc_type, content, entities, name, raw_score) = row?;
+            let (
+                path,
+                doc_type,
+                content,
+                entities,
+                name,
+                source_name,
+                source_type,
+                source_role,
+                relative_path,
+                raw_score,
+            ) = row?;
             // FTS5 BM25: raw is negative; flip so higher = better.
             let flipped = (-raw_score) as f32;
             let boosted = apply_recency_boost(flipped, &doc_type, &name, query, now);
@@ -536,6 +632,10 @@ impl SuperbrainStore {
                 doc_type,
                 score: boosted,
                 metadata,
+                source_name: source_name.unwrap_or_else(|| "default".to_string()),
+                source_type: source_type.unwrap_or_else(|| "logseq".to_string()),
+                source_role: source_role.unwrap_or_else(|| "canonical".to_string()),
+                relative_path,
             });
         }
         hits.sort_by(|a, b| {
@@ -553,13 +653,15 @@ impl SuperbrainStore {
         let conn = self.lock_conn()?;
         let (sql, params_vec): (&str, Vec<String>) = match doc_type {
             Some(dt) => (
-                "SELECT path, doc_type, content, entities, 0.0 AS score
+                "SELECT path, doc_type, content, entities, 0.0 AS score,
+                        source_name, source_type, source_role, relative_path
                  FROM brain_docs WHERE doc_type = ?1
                  ORDER BY updated_at DESC LIMIT ?2",
                 vec![dt.to_string(), limit.to_string()],
             ),
             None => (
-                "SELECT path, doc_type, content, entities, 0.0 AS score
+                "SELECT path, doc_type, content, entities, 0.0 AS score,
+                        source_name, source_type, source_role, relative_path
                  FROM brain_docs
                  ORDER BY updated_at DESC LIMIT ?1",
                 vec![limit.to_string()],
@@ -708,6 +810,19 @@ fn normalize_entities(metadata: &Value, content: &str) -> Vec<String> {
     extract_wikilinks(content)
 }
 
+fn entities_for_fts_json(entities: &[String]) -> Result<String> {
+    let searchable: Vec<String> = entities
+        .iter()
+        .map(|entity| {
+            entity
+                .strip_prefix(EDGE_ENTITY_PREFIX)
+                .and_then(|rest| rest.split_once('|').map(|(_, object)| object.to_string()))
+                .unwrap_or_else(|| entity.clone())
+        })
+        .collect();
+    Ok(serde_json::to_string(&searchable)?)
+}
+
 /// Find `[[Target]]` wikilinks in `content`, deduplicated, in first-seen
 /// order. Mirrors `WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")`.
 fn extract_wikilinks(content: &str) -> Vec<String> {
@@ -740,6 +855,10 @@ fn row_to_document(row: &Row<'_>) -> rusqlite::Result<Document> {
     let doc_type: String = row.get(2)?;
     let updated_at: String = row.get(3)?;
     let entities: Option<String> = row.get(4)?;
+    let source_name: Option<String> = row.get(5)?;
+    let source_type: Option<String> = row.get(6)?;
+    let source_role: Option<String> = row.get(7)?;
+    let relative_path: Option<String> = row.get(8)?;
     let created_at = parse_sqlite_datetime(&updated_at).unwrap_or_else(Utc::now);
     let metadata = entities
         .as_deref()
@@ -751,6 +870,10 @@ fn row_to_document(row: &Row<'_>) -> rusqlite::Result<Document> {
         doc_type,
         created_at,
         metadata,
+        source_name: source_name.unwrap_or_else(|| "default".to_string()),
+        source_type: source_type.unwrap_or_else(|| "logseq".to_string()),
+        source_role: source_role.unwrap_or_else(|| "canonical".to_string()),
+        relative_path,
     })
 }
 
@@ -760,6 +883,10 @@ fn row_to_search_hit(row: &Row<'_>) -> rusqlite::Result<SearchHit> {
     let content: String = row.get(2)?;
     let entities: Option<String> = row.get(3)?;
     let score: f64 = row.get(4)?;
+    let source_name: Option<String> = row.get(5)?;
+    let source_type: Option<String> = row.get(6)?;
+    let source_role: Option<String> = row.get(7)?;
+    let relative_path: Option<String> = row.get(8)?;
     let metadata = entities
         .as_deref()
         .and_then(|s| serde_json::from_str::<Value>(s).ok())
@@ -770,6 +897,10 @@ fn row_to_search_hit(row: &Row<'_>) -> rusqlite::Result<SearchHit> {
         doc_type,
         score: score as f32,
         metadata,
+        source_name: source_name.unwrap_or_else(|| "default".to_string()),
+        source_type: source_type.unwrap_or_else(|| "logseq".to_string()),
+        source_role: source_role.unwrap_or_else(|| "canonical".to_string()),
+        relative_path,
     })
 }
 

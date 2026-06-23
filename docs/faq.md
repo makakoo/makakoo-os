@@ -124,15 +124,14 @@ turn. After the first turn it's cached by the LLM provider. If you
 measure perceptible latency growth, run `makakoo infect --verify` —
 sometimes the block got written twice.
 
-### Can I use Makakoo with Obsidian / Logseq instead of its default Brain?
+### Can I use Makakoo with Obsidian / Logseq alongside its Brain?
 
-Yes. The Makakoo Brain at `~/MAKAKOO/data/Brain/` IS plain markdown —
-Logseq format by default. Two scenarios:
+Yes. The Makakoo Brain at `~/MAKAKOO/data/Brain/` is plain Markdown and remains canonical. Two scenarios:
 
 - **Use Obsidian as a UI over the existing Brain.** No registration
   needed. Open Obsidian → `Open folder as vault` → point at
   `~/MAKAKOO/data/Brain/`. Same files, Obsidian UX.
-- **Connect a separate vault.** Run `makakoo setup brain`. The picker can offer to install Obsidian first if the app is missing and Homebrew, Flatpak, or winget is available. Advanced users can run the plugin CLI directly: `python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" add personal obsidian ~/Documents/MyVault`.
+- **Connect a separate vault as enrichment.** Run `makakoo setup brain`. The picker can offer to install Obsidian first if the app is missing and Homebrew, Flatpak, or winget is available. Advanced users can run the plugin CLI directly: `python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" add personal obsidian ~/Documents/MyVault`. Normal journal writes still go to the canonical Brain.
 
 See [use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes).
 

@@ -44,6 +44,7 @@ class BrainSource(ABC):
     name: str
     root: Path
     writable: bool
+    role: str
 
     @abstractmethod
     def journal_path(self, d: date) -> Path:
@@ -109,10 +110,11 @@ class BrainSource(ABC):
 class LogseqSource(BrainSource):
     """Logseq-flavored brain: outliner bullets, journals named YYYY_MM_DD.md."""
 
-    def __init__(self, name: str, root: Path, writable: bool = True):
+    def __init__(self, name: str, root: Path, writable: bool = True, role: str = "enrichment"):
         self.name = name
         self.root = root
         self.writable = writable
+        self.role = role
 
     def journal_path(self, d: date) -> Path:
         return self.root / "journals" / f"{d.strftime('%Y_%m_%d')}.md"
@@ -136,10 +138,11 @@ class ObsidianSource(BrainSource):
     under the vault root if no config is found.
     """
 
-    def __init__(self, name: str, root: Path, writable: bool = True):
+    def __init__(self, name: str, root: Path, writable: bool = True, role: str = "enrichment"):
         self.name = name
         self.root = root
         self.writable = writable
+        self.role = role
         self._daily_format, self._daily_folder = self._read_daily_config()
 
     def _read_daily_config(self) -> tuple[str, str]:
@@ -185,10 +188,12 @@ class PlainMarkdownSource(BrainSource):
     """Fallback: any directory of markdown files, daily notes at root."""
 
     def __init__(self, name: str, root: Path, writable: bool = True,
+                 role: str = "enrichment",
                  daily_format: str = "%Y-%m-%d", write_style: str = "flat"):
         self.name = name
         self.root = root
         self.writable = writable
+        self.role = role
         self.daily_format = daily_format
         self.write_style = write_style
 
@@ -212,16 +217,18 @@ def build_source(entry: dict) -> BrainSource:
     path_str = os.path.expandvars(os.path.expanduser(entry.get("path", "")))
     root = Path(path_str)
     writable = bool(entry.get("writable", True))
+    role = entry.get("role") or ("canonical" if name == "default" else "enrichment")
 
     if stype == "logseq":
-        return LogseqSource(name=name, root=root, writable=writable)
+        return LogseqSource(name=name, root=root, writable=writable, role=role)
     if stype == "obsidian":
-        return ObsidianSource(name=name, root=root, writable=writable)
+        return ObsidianSource(name=name, root=root, writable=writable, role=role)
     if stype == "plain":
         return PlainMarkdownSource(
             name=name,
             root=root,
             writable=writable,
+            role=role,
             daily_format=entry.get("daily_format", "%Y-%m-%d"),
             write_style=entry.get("write_style", "flat"),
         )

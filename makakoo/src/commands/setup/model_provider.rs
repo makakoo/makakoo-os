@@ -132,21 +132,25 @@ impl Section for ModelProviderSection {
             "  {}. (skip — don't change the primary)",
             names.len() + 1
         ))?;
-        ui.prompt_write(format!("\nPick 1-{}: ", names.len() + 1))?;
+        ui.prompt_write(format!(
+            "\nPick 1-{} [{} = skip]: ",
+            names.len() + 1,
+            names.len() + 1
+        ))?;
 
         let raw = ui.read_line()?;
-        let Ok(n) = raw.parse::<usize>() else {
-            ui.line("(not a number — leaving primary unchanged)")?;
-            return Ok(SectionOutcome::Declined);
+        let chosen = match resolve_adapter_pick(&raw, names.len()) {
+            AdapterPick::Skip => return Ok(SectionOutcome::Skipped),
+            AdapterPick::Index(idx) => &names[idx],
+            AdapterPick::InvalidNumber => {
+                ui.line("(not a number — leaving primary unchanged)")?;
+                return Ok(SectionOutcome::Declined);
+            }
+            AdapterPick::OutOfRange => {
+                ui.line("(out of range — leaving primary unchanged)")?;
+                return Ok(SectionOutcome::Declined);
+            }
         };
-        if n == names.len() + 1 {
-            return Ok(SectionOutcome::Skipped);
-        }
-        if n < 1 || n > names.len() {
-            ui.line("(out of range — leaving primary unchanged)")?;
-            return Ok(SectionOutcome::Declined);
-        }
-        let chosen = &names[n - 1];
 
         match write_primary_adapter(chosen, &registry) {
             Ok(path) => {
@@ -176,6 +180,32 @@ impl Section for ModelProviderSection {
                 Ok(SectionOutcome::Failed(e.to_string()))
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdapterPick {
+    Index(usize),
+    Skip,
+    InvalidNumber,
+    OutOfRange,
+}
+
+fn resolve_adapter_pick(raw: &str, adapter_count: usize) -> AdapterPick {
+    let trimmed = raw.trim();
+    let skip_number = adapter_count + 1;
+    if trimmed.is_empty() {
+        return AdapterPick::Skip;
+    }
+    let Ok(n) = trimmed.parse::<usize>() else {
+        return AdapterPick::InvalidNumber;
+    };
+    if n == skip_number {
+        AdapterPick::Skip
+    } else if n < 1 || n > adapter_count {
+        AdapterPick::OutOfRange
+    } else {
+        AdapterPick::Index(n - 1)
     }
 }
 
@@ -212,5 +242,24 @@ mod tests {
         // the user's actual ~/.makakoo/) but never panic.
         let s = ModelProviderSection::new();
         let _ = s.status();
+    }
+
+    #[test]
+    fn adapter_pick_empty_defaults_to_skip() {
+        assert_eq!(resolve_adapter_pick("", 2), AdapterPick::Skip);
+        assert_eq!(resolve_adapter_pick("  ", 2), AdapterPick::Skip);
+    }
+
+    #[test]
+    fn adapter_pick_maps_one_based_index_to_zero_based() {
+        assert_eq!(resolve_adapter_pick("1", 2), AdapterPick::Index(0));
+        assert_eq!(resolve_adapter_pick("2", 2), AdapterPick::Index(1));
+    }
+
+    #[test]
+    fn adapter_pick_skip_and_invalid_paths() {
+        assert_eq!(resolve_adapter_pick("3", 2), AdapterPick::Skip);
+        assert_eq!(resolve_adapter_pick("4", 2), AdapterPick::OutOfRange);
+        assert_eq!(resolve_adapter_pick("nope", 2), AdapterPick::InvalidNumber);
     }
 }

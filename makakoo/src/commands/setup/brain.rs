@@ -5,8 +5,8 @@
 //! batched+confirm+post-sync flow shipped by SPRINT-BRAIN-MEMORY-UNIFIED
 //! (2026-04-23). This section is a wrapper that:
 //!
-//! 1. Detects whether the user already has non-default sources registered
-//!    (`status()` reads `brain_sources.json`).
+//! 1. Detects whether the default Brain source or any additional sources are
+//!    registered (`status()` reads `brain_sources.json`).
 //! 2. Spawns the picker with stdio inherited so the user drives it
 //!    directly.
 //! 3. Reports the outcome to the dispatcher based on the subprocess's
@@ -58,6 +58,10 @@ impl Default for BrainSection {
 #[derive(Debug, Deserialize)]
 struct BrainSourcesFile {
     #[serde(default)]
+    default: String,
+    #[serde(default)]
+    canonical: String,
+    #[serde(default)]
     sources: Vec<BrainSourceEntry>,
 }
 
@@ -104,13 +108,17 @@ impl Section for BrainSection {
             .status()?;
 
         if status.success() {
-            // Re-read config to tell "user added new sources" from "user skipped".
+            // Re-read config to tell "user accepted defaults / added sources" from
+            // "user skipped without writing config".
             match read_brain_status(&self.config_path()) {
                 SectionStatus::AlreadySatisfied => Ok(SectionOutcome::Installed),
                 _ => Ok(SectionOutcome::Declined),
             }
         } else {
             let code = status.code().unwrap_or(-1);
+            if code == 10 {
+                return Ok(SectionOutcome::Declined);
+            }
             Ok(SectionOutcome::Failed(format!(
                 "brain picker exited with code {code}"
             )))
@@ -133,16 +141,25 @@ fn read_brain_status(config_path: &Path) -> SectionStatus {
         Ok(p) => p,
         Err(_) => return SectionStatus::NotStarted,
     };
-    let non_default: Vec<&str> = parsed
+    let names: Vec<&str> = parsed
         .sources
         .iter()
         .map(|e| e.name.as_str())
-        .filter(|n| !n.is_empty() && *n != "default")
+        .filter(|n| !n.is_empty())
         .collect();
-    if non_default.is_empty() {
+    if names.is_empty() {
         SectionStatus::NotStarted
     } else {
-        SectionStatus::AlreadySatisfied
+        let canonical = if parsed.canonical.is_empty() {
+            parsed.default.as_str()
+        } else {
+            parsed.canonical.as_str()
+        };
+        if canonical.is_empty() || names.contains(&canonical) {
+            SectionStatus::AlreadySatisfied
+        } else {
+            SectionStatus::NotStarted
+        }
     }
 }
 
@@ -168,12 +185,12 @@ mod tests {
     }
 
     #[test]
-    fn status_is_notstarted_when_only_baseline_default() {
+    fn status_is_alreadysatisfied_when_only_baseline_default() {
         let tmp = home_with_config(
             r#"{"default":"default","sources":[{"name":"default","type":"logseq","path":"X"}]}"#,
         );
         let section = BrainSection::with_home(tmp.path().to_path_buf());
-        assert_eq!(section.status(), SectionStatus::NotStarted);
+        assert_eq!(section.status(), SectionStatus::AlreadySatisfied);
     }
 
     #[test]
@@ -198,6 +215,15 @@ mod tests {
     #[test]
     fn status_is_notstarted_on_empty_sources_array() {
         let tmp = home_with_config(r#"{"default":"default","sources":[]}"#);
+        let section = BrainSection::with_home(tmp.path().to_path_buf());
+        assert_eq!(section.status(), SectionStatus::NotStarted);
+    }
+
+    #[test]
+    fn status_is_notstarted_when_default_points_to_missing_source() {
+        let tmp = home_with_config(
+            r#"{"default":"missing","sources":[{"name":"default","type":"logseq","path":"X"}]}"#,
+        );
         let section = BrainSection::with_home(tmp.path().to_path_buf());
         assert_eq!(section.status(), SectionStatus::NotStarted);
     }

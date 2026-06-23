@@ -158,6 +158,10 @@ pub async fn run(
         }
     }
 
+    if !dry_run {
+        maybe_offer_setup_review()?;
+    }
+
     if dry_run {
         println!();
         println!(
@@ -167,6 +171,32 @@ pub async fn run(
     }
 
     Ok(0)
+}
+
+/// Updates should not force users through the full first-run wizard, but an
+/// interactive shell can offer a quick review for newly-added setup defaults.
+/// Enter keeps the safe update path quiet; explicit yes re-enters `makakoo setup`.
+fn maybe_offer_setup_review() -> anyhow::Result<()> {
+    if !crate::commands::setup::is_interactive_stdin() {
+        return Ok(());
+    }
+    print!("\nReview setup defaults / new sections now? [y/N]: ");
+    use std::io::Write as _;
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    let read = std::io::stdin().read_line(&mut line)?;
+    let trimmed = line.trim().to_lowercase();
+    if read > 0 && (trimmed == "y" || trimmed == "yes") {
+        println!();
+        let rc = crate::commands::setup::run(crate::commands::setup::SetupArgs::default())?;
+        if rc != 0 {
+            eprintln!("⚠ setup wizard returned non-zero exit code {rc}");
+        }
+    } else {
+        println!();
+        println!("# setup review skipped — run `makakoo setup` anytime");
+    }
+    Ok(())
 }
 
 fn describe_method(m: &InstallMethod) -> String {

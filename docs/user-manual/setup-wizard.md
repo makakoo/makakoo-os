@@ -36,7 +36,7 @@ same effect can be forced with `--non-interactive`.
 |------------------|-----------------------------------------------------------------------------|--------------------------------------------------|
 | `persona`        | Names your assistant + optional user name + pronoun + voice default; seeds persona registry/context when installed. | `config/persona.json` exists → already-satisfied |
 | `updates`        | Chooses Makakoo OS update mode. `auto` runs `makakoo update --reinfect` from SANCHO every 24h; `manual` only checks when the user runs it. | `config/updates.toml` has `mode = "auto"` or `mode = "manual"` |
-| `brain`          | Shells to the existing `skill-brain-multi-source` picker to register vaults. If the Obsidian app is missing and a supported package manager exists, the picker offers to install it first. | `config/brain_sources.json` has ≥1 non-default source |
+| `brain`          | Seeds the canonical Makakoo Brain at `$MAKAKOO_HOME/data/Brain`, checks whether Obsidian is installed, offers to install it when supported, and treats separate Obsidian/plain-markdown vaults as optional enrichment sources. | `config/brain_sources.json` has a valid canonical Brain source |
 | `cli-agent`      | Installs pi (`@mariozechner/pi-coding-agent`) via `npm install -g`.          | `pi` is on `$PATH`                                |
 | `terminal`       | Installs Ghostty via `brew install --cask ghostty`. **macOS only.**           | `brew list --cask ghostty` exits 0                |
 | `lope`           | Offers Makakoo's optional in-house Lope validator ensemble. It clones `traylinx/lope` to `~/.lope` or `$LOPE_HOME`, runs Lope's installer, and registers its skills/commands into detected AI CLI hosts. Defaults to No because it runs a remote installer. | `lope` is on `$PATH` or `~/.lope/lope/cli.py` exists |
@@ -55,23 +55,27 @@ Every `Y/n/s` prompt accepts:
 - `n` / `no` → decline this run (re-ask on the next `setup`)
 - `s` / `skip` → record as skipped so the wizard doesn't re-ask
 
+Non-yes/no prompts also show their default in brackets. Pressing Enter accepts
+that default, for example persona name `[1]`, pronoun `[they]`, voice `[1]`,
+or model-provider `[skip]`.
+
 
 ### Brain and Obsidian
 
-The Brain section always seeds the default Logseq-style Brain at
-`$MAKAKOO_HOME/data/Brain/`. If you already use Obsidian, there are two
-paths:
+The Brain section always seeds the canonical Makakoo Brain at
+`$MAKAKOO_HOME/data/Brain/`. If you use Obsidian, there are two paths:
 
-- Open the default Brain folder as an Obsidian vault. No Makakoo config
-  change needed.
-- Register a separate Obsidian vault so Makakoo can read it as another
-  source.
+- Open the canonical Brain folder as an Obsidian vault. No Brain replacement, no
+  source-of-truth change.
+- Register a separate Obsidian vault so Makakoo can index it as labeled
+  enrichment context.
 
-When you choose the separate-vault path and the Obsidian app is not
-detected, the picker offers to install Obsidian with the available package
+The picker checks for the Obsidian app before separate-vault prompts. If the
+app is missing, it offers to install Obsidian with the available package
 manager: Homebrew on macOS, Flatpak on Linux, or winget on Windows. The
-default answer is No. If no package manager is available, it prints the
-manual install links and still lets you register an existing vault path.
+default answer is No. Declining install skips Obsidian setup for this run; you
+can install later and open `$MAKAKOO_HOME/data/Brain/` directly. Normal
+Makakoo writes still go to the canonical Brain.
 
 ### Lope
 

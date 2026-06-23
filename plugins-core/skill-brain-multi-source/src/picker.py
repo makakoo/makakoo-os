@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Interactive first-run picker for brain sources.
 
-Runs once during install (or any time via `brain_cli.py init`). Asks the user
-which knowledge substrate they already use — Logseq, Obsidian, both, neither —
-and registers whichever sources they pick.
+Runs once during install (or any time via `brain_cli.py init`). Seeds the
+canonical Makakoo Brain folder, checks whether Obsidian is installed, and
+registers optional additional sources only when the user asks for them.
 
 Design principles:
-- **Optional**, not mandatory. Empty answer or Ctrl-C falls back to default
-  (Logseq-only at `$MAKAKOO_HOME/data/Brain`). Install flow never blocks.
+- **Optional**, not mandatory. Empty answers accept visible defaults. The
+  default Brain is `$MAKAKOO_HOME/data/Brain`. Install flow never blocks.
 - **Idempotent**. Running twice just re-presents options and edits the config.
 - **Batched + confirmed**. Answers collected in memory, summary shown, nothing
-  persisted until user approves at the final prompt. Ctrl-C before confirmation
-  leaves config untouched (other than the baseline default seed).
+  extra is persisted until user approves at the final prompt. Ctrl-C before
+  confirmation leaves pending source registrations untouched.
 - **Post-write sync**. After approval, dry-walks each newly-added source so the
   user sees doc counts immediately and knows the registration took.
 """
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import platform
+import json
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,11 @@ if str(HERE) not in sys.path:
 import config as cfg  # type: ignore
 
 
-DEFAULT_LOGSEQ_PATH = "$MAKAKOO_HOME/data/Brain"
+DEFAULT_BRAIN_PATH = "$MAKAKOO_HOME/data/Brain"
+# Back-compat name for the source type. The user-facing concept is now the
+# Makakoo Brain folder, which can also be opened directly as an Obsidian vault.
+DEFAULT_LOGSEQ_PATH = DEFAULT_BRAIN_PATH
+PICKER_ABORT_EXIT = 10
 DEFAULT_OBSIDIAN_GUESSES = [
     "~/Documents/Obsidian Vault",
     "~/Documents/obsidian",
@@ -41,6 +46,26 @@ DEFAULT_OBSIDIAN_GUESSES = [
 ]
 
 NO_PATH_SENTINELS = {"n", "no", "none", "skip", "s"}
+
+OBSIDIAN_CORE_PLUGINS = {
+    "file-explorer": True,
+    "global-search": True,
+    "switcher": True,
+    "graph": True,
+    "backlink": True,
+    "canvas": True,
+    "outgoing-link": True,
+    "tag-pane": True,
+    "properties": True,
+    "page-preview": True,
+    "daily-notes": True,
+    "templates": True,
+    "note-composer": True,
+    "command-palette": True,
+    "outline": True,
+    "file-recovery": True,
+    "bases": True,
+}
 
 
 class _InputInterrupted(Exception):
@@ -172,10 +197,15 @@ def _normalize_optional_path(raw: str) -> str:
     return value
 
 
+def _expanded_default_brain_path() -> Path:
+    home = cfg._makakoo_home()  # type: ignore[attr-defined]
+    return home / "data" / "Brain"
+
+
 def _prompt_obsidian_path(default: str = "") -> str:
-    label = "  Obsidian vault path (no = skip)"
+    label = "  Additional Obsidian vault path (no = skip)"
     if default:
-        label = "  Obsidian vault path (Enter = detected vault, no = skip)"
+        label = "  Additional Obsidian vault path (Enter = detected vault, no = skip)"
     path = _normalize_optional_path(
         _prompt(label, default=default)
     )
@@ -198,25 +228,85 @@ def _prompt_obsidian_path(default: str = "") -> str:
 
 
 def _ensure_default_logseq() -> None:
-    """Baseline guarantee: the Logseq default source is always present in config.
+    """Baseline guarantee: the Makakoo Brain default source is present on disk.
 
-    This is NOT a user choice — it's the filesystem invariant. Runs outside the
-    batched-confirmation flow so the config file always has a usable default
-    even if the user Ctrl-Cs before confirming their additions.
+    This is NOT a user choice — it's the filesystem invariant. Call this only
+    after a successful default-only flow, not before interactive prompts, so
+    Ctrl-C does not accidentally mark the setup section complete.
     """
-    registry = cfg.load_registry()
-    if "default" in registry.names():
-        return
-    previous_names = set(registry.names())
-    previous_default = registry.default_name
-    cfg.add_source({
+    path = cfg.config_path()
+    default_entry = {
         "name": "default",
+        "role": "canonical",
         "type": "logseq",
-        "path": DEFAULT_LOGSEQ_PATH,
+        "path": DEFAULT_BRAIN_PATH,
         "writable": True,
-    })
-    if previous_default not in previous_names:
-        cfg.set_default("default")
+    }
+    _expanded_default_brain_path().mkdir(parents=True, exist_ok=True)
+
+    if not path.exists():
+        cfg.save_registry({"canonical": "default", "default": "default", "sources": [default_entry]})
+        return
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        cfg.save_registry({"canonical": "default", "default": "default", "sources": [default_entry]})
+        return
+
+    sources = data.setdefault("sources", [])
+    names = {s.get("name") for s in sources if isinstance(s, dict)}
+    if "default" not in names:
+        sources.append(default_entry)
+        names.add("default")
+
+    if data.get("default") not in names:
+        data["default"] = "default"
+    if data.get("canonical") not in names:
+        data["canonical"] = "default"
+
+    cfg.save_registry(data)
+
+
+def _write_json_if_absent(path: Path, data: dict) -> bool:
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def _ensure_obsidian_profile() -> list[str]:
+    """Create safe Obsidian UI defaults for the canonical Brain, never overwrite."""
+    brain = _expanded_default_brain_path()
+    obsidian = brain / ".obsidian"
+    written: list[str] = []
+    if _write_json_if_absent(obsidian / "core-plugins.json", OBSIDIAN_CORE_PLUGINS):
+        written.append(".obsidian/core-plugins.json")
+    if _write_json_if_absent(
+        obsidian / "daily-notes.json",
+        {
+            "format": "YYYY_MM_DD",
+            "folder": "journals",
+            "template": "",
+        },
+    ):
+        written.append(".obsidian/daily-notes.json")
+    if _write_json_if_absent(
+        obsidian / "graph.json",
+        {
+            "showTags": True,
+            "showAttachments": False,
+            "hideUnresolved": False,
+            "showOrphans": True,
+            "showArrow": True,
+            "collapse-filter": False,
+            "search": "",
+            "colorGroups": [],
+        },
+    ):
+        written.append(".obsidian/graph.json")
+    return written
 
 
 def _dry_sync(name: str) -> str:
@@ -243,7 +333,7 @@ def run_interactive(non_interactive: bool = False) -> int:
         return _run_interactive_impl(non_interactive=non_interactive)
     except _InputInterrupted:
         print("Aborted. No changes written.")
-        return 0
+        return PICKER_ABORT_EXIT
     except Exception as e:
         print(f"Brain setup failed: {e}", file=sys.stderr)
         return 1
@@ -251,60 +341,72 @@ def run_interactive(non_interactive: bool = False) -> int:
 
 def _run_interactive_impl(non_interactive: bool = False) -> int:
     print("\nMakakoo brain setup\n" + "=" * 20)
-    print("Your knowledge can live in multiple places. The default is a Logseq-style")
-    print(f"graph at {DEFAULT_LOGSEQ_PATH}. You can also connect a SEPARATE Obsidian")
-    print("vault or a plain markdown folder. You can skip this and add sources later.\n")
-    print("Heads-up: if you just want to USE Obsidian as a nicer editor on top of the")
-    print(f"existing Brain, no setup is needed — open {DEFAULT_LOGSEQ_PATH} as a vault")
-    print("in Obsidian. This picker is for registering ADDITIONAL vaults.\n")
-
-    _ensure_default_logseq()
+    print("Default Brain folder:")
+    print(f"  {DEFAULT_BRAIN_PATH}")
+    print("Makakoo writes journals/pages there by default. Obsidian can use the same")
+    print("folder as an editor/vault; a separate Obsidian vault is optional.\n")
 
     if non_interactive:
-        print("Non-interactive mode: kept default Logseq source only.")
+        _ensure_default_logseq()
+        print("Non-interactive mode: kept default Makakoo Brain source only.")
         return 0
 
     pending_adds: list[dict] = []
-    pending_default: str | None = None
+    pending_obsidian_profile = False
 
-    # Prompt 1 — additional Obsidian vault?
-    guess = _guess_obsidian_vault()
+    # Prompt 1 — Obsidian app/editor setup for the default Brain folder.
     obsidian_installed, obsidian_where = _detect_obsidian_app()
-    add_obsidian = _yes_no(
-        "Do you already have a separate Obsidian vault folder to register?"
-        + (f" (detected vault: {guess})" if guess else ""),
-        default=False,
-    )
-    if add_obsidian:
-        if not obsidian_installed:
-            print("\nObsidian app was not detected on this machine.")
-            installer = _obsidian_install_command()
-            installer_finished = False
-            if installer:
-                if _yes_no(f"Install Obsidian now? Runs: {' '.join(installer)}", default=False):
-                    if _install_obsidian_app():
-                        print("Obsidian installer finished.")
-                        installer_finished = True
-                    else:
-                        print("Obsidian install failed or was cancelled.")
-                    obsidian_installed, obsidian_where = _detect_obsidian_app()
-                    if obsidian_installed:
-                        print(f"Obsidian app detected: {obsidian_where}")
-            else:
-                print("No supported package manager was detected for automatic install.")
-            if not obsidian_installed:
-                if installer_finished:
-                    print("Installer finished, but Makakoo could not detect the app yet.")
+    if not obsidian_installed:
+        print("Obsidian app was not detected on this machine.")
+        installer = _obsidian_install_command()
+        if installer:
+            if _yes_no(f"Install Obsidian now? Runs: {' '.join(installer)}", default=False):
+                if _install_obsidian_app():
+                    print("Obsidian installer finished.")
                 else:
-                    print("Install Obsidian manually if you want the desktop app here:")
-                    for line in _manual_obsidian_install_lines():
-                        print(f"  {line}")
-            print("You can also skip this and later open the default Brain as an Obsidian vault:")
-            print(f"  {DEFAULT_LOGSEQ_PATH}\n")
-            if not obsidian_installed:
-                add_obsidian = _yes_no("Register an existing Obsidian vault path anyway?", default=True)
+                    print("Obsidian install failed or was cancelled.")
+                obsidian_installed, obsidian_where = _detect_obsidian_app()
+                if obsidian_installed:
+                    print(f"Obsidian app detected: {obsidian_where}")
         else:
+            print("No supported package manager was detected for automatic install.")
+            print("Install Obsidian manually if you want the desktop app here:")
+            for line in _manual_obsidian_install_lines():
+                print(f"  {line}")
+
+        if not obsidian_installed:
+            print("Obsidian setup skipped. Later, install Obsidian and open this folder as a vault:")
+            print(f"  {DEFAULT_BRAIN_PATH}\n")
+
+    add_obsidian = False
+    if obsidian_installed:
+        if obsidian_where:
             print(f"Obsidian app detected: {obsidian_where}")
+        use_default_brain = _yes_no(
+            f"Use {DEFAULT_BRAIN_PATH} as your Obsidian vault/editor folder?",
+            default=True,
+        )
+        if use_default_brain:
+            print("  Good. No extra source registration needed for the default Brain.")
+            pending_obsidian_profile = True
+            print("  Obsidian UI defaults will be added if missing; existing config stays untouched.")
+            print(f"  Open this folder in Obsidian: {DEFAULT_BRAIN_PATH}\n")
+            guess = _guess_obsidian_vault()
+            add_obsidian = _yes_no(
+                "Register an additional existing Obsidian vault?"
+                + (f" (detected vault: {guess})" if guess else ""),
+                default=False,
+            )
+        else:
+            print("  Default Obsidian editor setup skipped.")
+            guess = _guess_obsidian_vault()
+            add_obsidian = _yes_no(
+                "Register a separate existing Obsidian vault instead?"
+                + (f" (detected vault: {guess})" if guess else ""),
+                default=False,
+            )
+    else:
+        guess = None
 
     if add_obsidian:
         path = _prompt_obsidian_path(default=guess or "")
@@ -312,6 +414,7 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
             writable = _yes_no("  Allow Harvey to write into this Obsidian vault?", default=False)
             pending_adds.append({
                 "name": "obsidian",
+                "role": "enrichment",
                 "type": "obsidian",
                 "path": str(path),
                 "writable": writable,
@@ -326,43 +429,33 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
             writable = _yes_no("  Allow Harvey to write into it?", default=False)
             pending_adds.append({
                 "name": name,
+                "role": "enrichment",
                 "type": "plain",
                 "path": path,
                 "writable": writable,
             })
 
-    # Prompt 3 — change default?
-    existing_names = set(cfg.load_registry().names())
-    projected_names = existing_names | {entry["name"] for entry in pending_adds}
-    if len(projected_names) > 1:
-        registry = cfg.load_registry()
-        current_default = registry.default_name
-        writable_by_name = {src.name: src.writable for src in registry.sources}
-        writable_by_name.update({entry["name"]: bool(entry.get("writable")) for entry in pending_adds})
-        print(f"\nAfter these changes, sources will be: {', '.join(sorted(projected_names))}")
-        print(f"Current write-default: {current_default}")
-        new_default = _prompt(
-            "  Change write-default? (blank to keep current)",
-            default="",
-        )
-        if new_default and new_default in projected_names and new_default != current_default:
-            if writable_by_name.get(new_default, False):
-                pending_default = new_default
-            else:
-                print(f"  {new_default!r} is read-only; keeping current write-default.")
-
     # Summary + final confirmation
-    if not pending_adds and pending_default is None:
-        print("\nNothing to change. Default Logseq source is registered and writable.")
+    if not pending_adds:
+        _ensure_default_logseq()
+        if pending_obsidian_profile:
+            written = _ensure_obsidian_profile()
+            if written:
+                print("Added Obsidian UI defaults:")
+                for rel in written:
+                    print(f"  - {rel}")
+            else:
+                print("Existing Obsidian config left untouched.")
+        print("\nNothing to change. Default Makakoo Brain source is registered and writable.")
         return 0
 
     print("\nPending changes")
     print("-" * 20)
     for entry in pending_adds:
         flag = "writable" if entry["writable"] else "read-only"
-        print(f"  + register {entry['name']!r} ({entry['type']}, {flag}) → {entry['path']}")
-    if pending_default:
-        print(f"  + write-default → {pending_default}")
+        print(f"  + register {entry['name']!r} ({entry['type']}, enrichment, {flag}) → {entry['path']}")
+    if pending_obsidian_profile:
+        print("  + add Obsidian UI defaults to canonical Brain if missing")
     print()
 
     if not _yes_no("Save these changes?", default=True):
@@ -371,7 +464,7 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
 
     # Commit phase — one atomic config write for the whole batch.
     try:
-        cfg.apply_changes(pending_adds, pending_default)
+        cfg.apply_changes(pending_adds, None)
     except Exception as e:
         print(f"  Failed to save Brain source changes: {e}", file=sys.stderr)
         print("\nBrain setup finished with errors:", file=sys.stderr)
@@ -381,8 +474,15 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
     committed = [entry["name"] for entry in pending_adds]
     for name in committed:
         print(f"  Registered {name!r}")
-    if pending_default:
-        print(f"  Write-default → {pending_default}")
+    print("  Canonical Brain remains 'default'. External sources are enrichment.")
+    if pending_obsidian_profile:
+        written = _ensure_obsidian_profile()
+        if written:
+            print("  Added Obsidian UI defaults:")
+            for rel in written:
+                print(f"    - {rel}")
+        else:
+            print("  Existing Obsidian config left untouched.")
 
     # Post-write sync — walk each newly-registered source so the user sees counts
     if committed:
