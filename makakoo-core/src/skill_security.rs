@@ -348,8 +348,8 @@ pub fn get_skillspector_bin(no_cache: bool) -> anyhow::Result<PathBuf> {
 }
 
 fn slugify(target: &str) -> String {
-    let cleaned = target.trim_end_matches('/');
-    let last_part = cleaned.split('/').next_back().unwrap_or("unknown");
+    let cleaned = target.trim_end_matches(['/', '\\']);
+    let last_part = cleaned.split(['/', '\\']).next_back().unwrap_or("unknown");
     let mut slug = String::new();
     for c in last_part.chars() {
         if c.is_alphanumeric() {
@@ -820,6 +820,10 @@ mod tests {
     fn test_slugify() {
         assert_eq!(slugify("gstack/browse"), "browse");
         assert_eq!(slugify("/Users/test/my-skill-plugin/"), "my-skill-plugin");
+        assert_eq!(
+            slugify(r"C:\Users\test\my-skill-plugin\"),
+            "my-skill-plugin"
+        );
         assert_eq!(
             slugify("https://github.com/nvidia/skillspector"),
             "skillspector"
