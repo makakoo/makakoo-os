@@ -22,8 +22,8 @@ pub mod staging;
 
 pub use install::{
     apply_update, drop_probe, install, install_from_git, install_from_path,
-    install_from_tarball_url, list_updatable, probe_upstream, uninstall, InstallError,
-    InstallRequest, PluginSource, ProbeDrift, UpstreamProbe,
+    install_from_tarball_url, install_with_options, list_updatable, probe_upstream, uninstall,
+    InstallError, InstallRequest, PluginSource, ProbeDrift, UpstreamProbe,
 };
 pub use lock::{lock_path, LockEntry, LockError, LockMeta, PluginsLock};
 pub use manifest::{

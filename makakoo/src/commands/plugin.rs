@@ -9,11 +9,11 @@ use serde_json::json;
 use std::io::{self, Write};
 
 use makakoo_core::capability::resolve_grants;
-use makakoo_core::plugin::staging::{hash_tree, StagingError};
+use makakoo_core::plugin::staging::StagingError;
 use makakoo_core::plugin::{
-    apply_update as core_apply_update, drop_probe, install as core_install, install_from_path,
-    list_updatable, probe_upstream, uninstall as core_uninstall, InstallError, InstallRequest,
-    LockEntry, Manifest, PluginRegistry, PluginSource, PluginsLock, ProbeDrift,
+    apply_update as core_apply_update, drop_probe, install_from_path, list_updatable,
+    probe_upstream, uninstall as core_uninstall, InstallError, InstallRequest, LockEntry, Manifest,
+    PluginRegistry, PluginSource, PluginsLock, ProbeDrift,
 };
 
 use crate::cli::PluginCmd;
@@ -362,25 +362,19 @@ fn install(
         }
     }
 
-    let expected_blake3 = match expected_blake3_for_install(&plugin_source, use_core, blake3) {
-        Ok(hash) => hash,
-        Err(e) => {
-            output::print_error(format!("compute core plugin blake3: {e}"));
-            return Ok(1);
-        }
-    };
-
     let req = InstallRequest {
         source: plugin_source,
-        expected_blake3,
+        expected_blake3: blake3,
     };
 
-    match core_install(
+    let warn_on_missing_blake3 = !use_core;
+    match makakoo_core::plugin::install_with_options(
         &req,
         allow_risk,
         risk_ack.as_deref(),
         no_skill_scan,
         ctx.home(),
+        warn_on_missing_blake3,
     ) {
         Ok(outcome) => {
             output::print_info(format!(
@@ -396,30 +390,6 @@ fn install(
             Ok(1)
         }
     }
-}
-
-/// Resolve the blake3 expected by the install pipeline.
-///
-/// User-supplied `--blake3` always wins. For `--core` installs, derive the
-/// expected digest from the bundled source tree before staging so the promoted
-/// copy is still verified without asking users to pin a self-referential
-/// `plugin.toml` hash. Ordinary path/git/tar installs keep the existing
-/// behavior: no implicit local trust unless the caller supplied a digest or the
-/// manifest declares one.
-fn expected_blake3_for_install(
-    source: &PluginSource,
-    use_core: bool,
-    cli_blake3: Option<String>,
-) -> Result<Option<String>, StagingError> {
-    if cli_blake3.is_some() {
-        return Ok(cli_blake3);
-    }
-    if use_core {
-        if let PluginSource::Path(path) = source {
-            return hash_tree(path).map(Some);
-        }
-    }
-    Ok(None)
 }
 
 /// Parse the `<source>` argument of `plugin install` into a `PluginSource`.
@@ -1175,46 +1145,6 @@ fn _assert_unused_manifest_import(_m: Manifest) {}
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    #[test]
-    fn core_install_derives_expected_blake3_from_source_tree() {
-        let tmp = TempDir::new().unwrap();
-        let src = tmp.path().join("core-plugin");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::write(src.join("plugin.toml"), b"[plugin]\nname='x'\n").unwrap();
-        std::fs::write(src.join("SKILL.md"), b"hello").unwrap();
-
-        let expected = hash_tree(&src).unwrap();
-        let actual = expected_blake3_for_install(&PluginSource::Path(src), true, None).unwrap();
-
-        assert_eq!(actual, Some(expected));
-    }
-
-    #[test]
-    fn explicit_blake3_overrides_core_source_tree_hash() {
-        let tmp = TempDir::new().unwrap();
-        let src = tmp.path().join("core-plugin");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::write(src.join("plugin.toml"), b"[plugin]\nname='x'\n").unwrap();
-        let explicit = "a".repeat(64);
-
-        let actual =
-            expected_blake3_for_install(&PluginSource::Path(src), true, Some(explicit.clone()))
-                .unwrap();
-
-        assert_eq!(actual, Some(explicit));
-    }
-
-    #[test]
-    fn non_core_path_install_stays_unpinned_without_cli_hash() {
-        let tmp = TempDir::new().unwrap();
-        let src = tmp.path().join("local-plugin");
-        std::fs::create_dir_all(&src).unwrap();
-
-        let actual = expected_blake3_for_install(&PluginSource::Path(src), false, None).unwrap();
-
-        assert_eq!(actual, None);
-    }
 
     /// Locking a plugin name once succeeds. Locking it again before
     /// the guard drops raises `ConcurrentSync`. Dropping the first

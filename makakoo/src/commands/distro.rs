@@ -12,8 +12,8 @@ use makakoo_core::distro::{
     resolve_distro, DistroFile, DistroTable, KernelTable, PluginPin, PluginPinFull,
 };
 use makakoo_core::plugin::{
-    install as install_plugin, resolve_load_order, InstallRequest, Manifest, PluginSource,
-    PluginsLock,
+    install_with_options as install_plugin_with_options, resolve_load_order, InstallRequest,
+    Manifest, PluginSource, PluginsLock,
 };
 
 use crate::cli::DistroCmd;
@@ -242,7 +242,7 @@ fn install(
         // Built-in distro plugins are already shipped inside the signed release archive.
         // Do not make first-run installs bootstrap SkillSpector before Makakoo itself is usable.
         // Manual `makakoo plugin install` and remote git/tarball installs still run the security gate.
-        match install_plugin(&req, false, None, true, ctx.home()) {
+        match install_plugin_with_options(&req, false, None, true, ctx.home(), false) {
             Ok(outcome) => {
                 output::print_info(format!(
                     "  installed {} (blake3: {})",
