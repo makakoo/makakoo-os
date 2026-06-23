@@ -109,7 +109,7 @@ Makakoo ships a large core catalog. The default `core` distro installs the piece
 | `skill-dev-orchestrator` | Multi-task coordination |
 | `skill-productivity-google-workspace` | Gmail/Calendar/Drive |
 | `skill-productivity-apple-notes` | Apple Notes integration |
-| `skill-productivity-obsidian` | Read/write Obsidian vault |
+| `skill-productivity-obsidian` | Direct Obsidian vault utility (separate from canonical Brain enrichment) |
 | `skill-productivity-notion` | Notion integration |
 | `skill-productivity-logseq` | Connect Logseq app to Brain |
 
@@ -130,7 +130,7 @@ Makakoo ships a large core catalog. The default `core` distro installs the piece
 | `skill-meta-loops` | Proactive improvement |
 | `skill-meta-memory-retrieval` | Memory optimization |
 | `tool-headroom` | Default Headroom MCP compression for bulky tool output |
-| `skill-brain-multi-source` | Logseq, Obsidian, and plain-folder Brain sources |
+| `skill-brain-multi-source` | Canonical Brain plus optional Logseq, Obsidian, and plain-folder enrichment sources |
 
 ## Plugin Configuration
 
@@ -276,15 +276,15 @@ Once connected:
 
 ## skill-productivity-obsidian
 
-Read, write, and sync any Obsidian vault.
+Direct utility for an Obsidian vault. This is separate from the canonical Makakoo Brain and separate from the `skill-brain-multi-source` enrichment registry.
 
 
 ### What it does
 
-Manage multiple knowledge bases:
-- Read/write any Obsidian vault
-- Sync from Makakoo Brain to Obsidian
-- Search across vaults
+Manage one explicitly configured Obsidian vault:
+- Read/write notes in that vault when you intentionally use the Obsidian skill
+- Search that vault directly
+- Optionally point `OBSIDIAN_VAULT_PATH` at `$MAKAKOO_HOME/data/Brain` if you want Obsidian-style commands over the canonical Brain
 
 ### Setup
 
@@ -318,17 +318,17 @@ makakoo skill obsidian create "New Note" "# Title\n\nContent here"
 # Add to journal
 makakoo skill obsidian journal "Did X today"
 
-# Sync from Brain to Obsidian vault
+# Run Obsidian-specific sync helper
 makakoo skill obsidian sync
 ```
 
 ### Vault Format
 
-Both use standard Logseq markdown:
-- Frontmatter: `key:: value`
+Makakoo search understands common Markdown note conventions:
+- YAML/frontmatter fields and Obsidian tags/aliases
 - Wikilinks: `[[Page Name]]`
 - Tags: `#tag`
-- Bullet points: `- item`
+- Logseq-style bullets in the canonical Brain
 
 ---
 

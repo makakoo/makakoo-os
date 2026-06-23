@@ -115,14 +115,14 @@ Inside the `windows-latest` matrix job, after `Package zip`:
 
 ## Homebrew tap
 
-Create `github.com/makakoo/homebrew-makakoo` with a single `Formula/`
+Use the live `github.com/traylinx/homebrew-tap` repo with its `Formula/`
 directory. On each release:
 
-1. Compute SHAs of the three macOS + Linux tarballs.
+1. Compute SHAs of the four macOS + Linux tarballs.
 2. Fill the `sha256` placeholders in `distribution/homebrew/makakoo.rb`.
 3. Commit + push to the tap repo under `Formula/makakoo.rb`.
 
-cargo-dist's `tap = "makakoo/homebrew-makakoo"` config automates this
+cargo-dist's `tap = "traylinx/homebrew-tap"` config documents this
 step once we run `cargo dist init` with the full signing flow. Until
 then, a small shell script can do it manually — see the "manual
 release" section of the CHANGELOG.

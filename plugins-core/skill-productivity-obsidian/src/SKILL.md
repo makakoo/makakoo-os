@@ -5,7 +5,7 @@ description: Read, search, and create notes in any Obsidian vault.
 
 # Obsidian Vault Plugin
 
-Read, search, and create notes in any Obsidian vault. Separate from Makakoo Brain.
+Read, search, and create notes in one explicitly configured Obsidian vault. This is a direct vault utility, not the Makakoo Brain source registry. For Brain search enrichment, use `makakoo setup brain` or `skill-brain-multi-source`.
 
 ## Configuration
 
@@ -13,7 +13,7 @@ Read, search, and create notes in any Obsidian vault. Separate from Makakoo Brai
 # Set your Obsidian vault path
 export OBSIDIAN_VAULT_PATH=~/Documents/MyVault
 
-# Or use Makakoo Brain as vault
+# Or intentionally run these Obsidian commands against the canonical Makakoo Brain
 export OBSIDIAN_VAULT_PATH=~/MAKAKOO/data/Brain
 ```
 

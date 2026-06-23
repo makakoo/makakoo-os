@@ -71,7 +71,10 @@ def cmd_health() -> int:
 
 
 def cmd_doctor() -> int:
-    url = os.environ.get("BU_CDP_URL", "http://127.0.0.1:9222/json/version")
+    # Keep this probe fixed to loopback. SkillSpector correctly treats
+    # environment-derived URLs flowing into network sinks as high risk, and
+    # this doctor only needs to verify the documented local Chrome CDP port.
+    url = "http://127.0.0.1:9222/json/version"
     try:
         with urllib.request.urlopen(url, timeout=2) as resp:
             body = resp.read().decode("utf-8", errors="replace")

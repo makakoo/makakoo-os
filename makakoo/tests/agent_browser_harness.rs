@@ -123,6 +123,20 @@ fn install_sh_references_venv_bootstrap_and_upstream_clone() {
 }
 
 #[test]
+fn doctor_probe_is_fixed_to_loopback_not_env_url() {
+    let admin = plugin_wrapper_dir().join("daemon_admin.py");
+    let body = std::fs::read_to_string(&admin).unwrap();
+    assert!(
+        body.contains("http://127.0.0.1:9222/json/version"),
+        "doctor must probe the documented local Chrome CDP endpoint"
+    );
+    assert!(
+        !body.contains("BU_CDP_URL"),
+        "doctor must not pipe environment-derived URLs into urlopen; SkillSpector flags that as exfiltration risk"
+    );
+}
+
+#[test]
 fn daemon_admin_has_start_stop_health_doctor_commands() {
     let admin = plugin_wrapper_dir().join("daemon_admin.py");
     let body = std::fs::read_to_string(&admin).unwrap();

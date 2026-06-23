@@ -24,7 +24,7 @@ Your notes, your decisions, your arguments with yourself from three months ago a
 |---|---|
 | Infect AI CLIs with a shared bootstrap block (open-ended roster — 9 today: Claude / Gemini / Codex / OpenCode / Vibe / Cursor / Qwen / Kimi / pi) | ✅ macOS + Linux + Windows |
 | 4 IDE-assistant hosts (Copilot / Continue / Cline / JetBrains) | ✅ detection + writers |
-| Persistent Brain (Logseq journals + pages) | ✅ |
+| Persistent Brain (canonical Logseq journals/pages + optional Obsidian/plain-markdown enrichment) | ✅ |
 | Superbrain search — FTS5 + vector + LLM synthesis | ✅ |
 | Headroom context compression for bulky tool output | ✅ included in the default core distro via `tool-headroom` |
 | Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ core catalog with skills, agents, MCP tools, SANCHO tasks, and patterns |

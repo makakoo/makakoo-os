@@ -26,7 +26,7 @@ This gets written to today's journal automatically.
 
 ```bash
 # Create a project page
-cat > ~/MAKAKOO/Brain/pages/projects/my-app.md << 'EOF'
+cat > ~/MAKAKOO/data/Brain/pages/projects/my-app.md << 'EOF'
 # My App
 
 ## Status
@@ -172,13 +172,13 @@ makakoo plugin list
 
 ```bash
 # See your journals
-ls ~/MAKAKOO/Brain/journals/
+ls ~/MAKAKOO/data/Brain/journals/
 
 # Browse pages
-ls ~/MAKAKOO/Brain/pages/
+ls ~/MAKAKOO/data/Brain/pages/
 
 # Read a journal
-cat ~/MAKAKOO/Brain/journals/$(date +%Y_%m_%d).md
+cat ~/MAKAKOO/data/Brain/journals/$(date +%Y_%m_%d).md
 ```
 <!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
@@ -201,7 +201,7 @@ The more you write to journals, the smarter Makakoo becomes:
 Pages are structured and searchable:
 
 ```
-~/MAKAKOO/Brain/pages/
+~/MAKAKOO/data/Brain/pages/
 ├── projects/
 │   ├── my-project.md
 │   └── other-project.md
@@ -248,7 +248,7 @@ Makakoo searches your brain...
 > Remember I'm starting a new project called "Atlas"
 Makakoo creates a journal entry...
 
-> Create a page at ~/MAKAKOO/Brain/pages/projects/atlas.md
+> Create a page at ~/MAKAKOO/data/Brain/pages/projects/atlas.md
 Makakoo creates the file...
 
 > What do I know about AI agents?

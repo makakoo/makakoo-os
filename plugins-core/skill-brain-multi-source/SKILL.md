@@ -5,7 +5,7 @@ description: Use this skill whenever the user asks to connect, register, add, or
 
 # Brain Multi-Source
 
-The Makakoo Brain stays canonical at `$MAKAKOO_HOME/data/Brain`. This skill registers optional enrichment sources — Obsidian vaults, Logseq graphs, and plain markdown folders — so Superbrain can index them with source labels. It does not replace the Brain or move normal journal writes.
+The Makakoo Brain stays canonical at `$MAKAKOO_HOME/data/Brain`. This skill registers optional enrichment sources — Obsidian vaults, Logseq graphs, and plain markdown folders — so Superbrain can index them with source labels, extracted tags/aliases, and Obsidian Canvas graph hints. It does not replace the Brain or move normal journal writes.
 
 ## When to use this skill
 
@@ -125,9 +125,10 @@ This skill is the user-facing documentation for `plugins-core/skill-brain-multi-
 - `picker.py` — interactive `init` wizard
 - `sancho_ingest.py` — 30-min SANCHO task that walks every registered source
 
-The sprint that shipped it: `development/sprints/SPRINT-BRAIN-MEMORY-UNIFIED/SPRINT.md`.
+The enrichment sprint that hardened the canonical-vs-enrichment contract: `development/sprints/queued/SPRINT-BRAIN-OBSIDIAN-ENRICHMENT-2026-06-23/SPRINT.md`.
 
 ## Known gaps (don't promise these)
 
+- Obsidian Canvas enrichment currently records document-to-canvas-target graph hints, not a full node-to-node visual graph.
 - Cross-source wikilinks (`[[vault:page]]` syntax) are not yet resolved — wikilinks work within-source only.
 - The UserPromptSubmit memory recall hook is grep-only (keyword match on MEMORY.md). Semantic / vector recall is queued.

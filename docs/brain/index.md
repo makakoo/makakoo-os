@@ -6,8 +6,10 @@ Makakoo's persistent memory system.
 
 The Brain is Makakoo's memory — all your notes, decisions, and knowledge in one place.
 
+The canonical Brain lives at `$MAKAKOO_HOME/data/Brain/`. Obsidian, Logseq, and plain Markdown folders can be added as optional enrichment sources, but they do not replace the canonical Brain. Normal journals and pages still write to `data/Brain/`; enrichment sources add searchable context with source labels.
+
 ```
-~/MAKAKOO/Brain/
+~/MAKAKOO/data/Brain/
 ├── journals/           # Daily logs
 │   ├── 2026_04_20.md  # Today
 │   ├── 2026_04_19.md
@@ -45,7 +47,7 @@ Structured documents for persistent knowledge.
 
 **File structure:**
 ```markdown
-~/MAKAKOO/Brain/pages/
+~/MAKAKOO/data/Brain/pages/
 ├── projects/
 │   ├── atlas.md
 │   └── web-app.md
@@ -75,10 +77,10 @@ When using an infected CLI, Makakoo writes automatically:
 
 ```bash
 # Add to today's journal
-echo "- [[timestamp]] Did X" >> ~/MAKAKOO/Brain/journals/$(date +%Y_%m_%d).md
+echo "- [[timestamp]] Did X" >> ~/MAKAKOO/data/Brain/journals/$(date +%Y_%m_%d).md
 
 # Create a page
-cat > ~/MAKAKOO/Brain/pages/projects/my-project.md << 'EOF'
+cat > ~/MAKAKOO/data/Brain/pages/projects/my-project.md << 'EOF'
 # My Project
 
 ## Status
@@ -137,8 +139,8 @@ Based on your journals and pages, you decided on:
    - Supports JSONB for flexible schemas
 
 Citations:
-- ~/MAKAKOO/Brain/pages/decisions/architecture.md
-- ~/MAKAKOO/Brain/journals/2026_04_20.md
+- ~/MAKAKOO/data/Brain/pages/decisions/architecture.md
+- ~/MAKAKOO/data/Brain/journals/2026_04_20.md
 ```
 
 ## Page Format
@@ -299,9 +301,9 @@ More entries = better answers:
 ### 3. Create Pages for Projects
 
 ```
-~/MAKAKOO/Brain/pages/projects/
-~/MAKAKOO/Brain/pages/decisions/
-~/MAKAKOO/Brain/pages/people/
+~/MAKAKOO/data/Brain/pages/projects/
+~/MAKAKOO/data/Brain/pages/decisions/
+~/MAKAKOO/data/Brain/pages/people/
 ```
 
 ### 4. Link Related Pages
@@ -316,7 +318,7 @@ More entries = better answers:
 
 ```bash
 # Read last week's journal
-cat ~/MAKAKOO/Brain/journals/2026_04_13.md
+cat ~/MAKAKOO/data/Brain/journals/2026_04_13.md
 ```
 
 ## Automatic Maintenance
@@ -345,10 +347,10 @@ makakoo sync --force
 
 ```bash
 # Check directory
-ls -la ~/MAKAKOO/Brain/
+ls -la ~/MAKAKOO/data/Brain/
 
 # Rebuild from scratch
-rm ~/MAKAKOO/Brain/superbrain.db
+rm ~/MAKAKOO/data/superbrain.db
 makakoo sync --force
 ```
 
@@ -356,7 +358,7 @@ makakoo sync --force
 
 ```bash
 # Check index size
-du -sh ~/MAKAKOO/Brain/superbrain.db
+du -sh ~/MAKAKOO/data/superbrain.db
 
 # Optimize
 makakoo sync --force

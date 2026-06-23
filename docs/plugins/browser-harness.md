@@ -58,9 +58,10 @@ Env overrides:
 | Variable | Default | Effect |
 |---|---|---|
 | `BROWSER_HARNESS_UPSTREAM` | `https://github.com/browser-use/browser-harness` | Swap the upstream fork |
-| `BROWSER_HARNESS_REF` | `main` | Pin to a tag or SHA (fork maintainer convention) |
+| `BROWSER_HARNESS_REF` | latest upstream release tag, fallback `main` | Pin to a tag or SHA (fork maintainer convention) |
 | `BU_NAME` | `default` | Name the daemon socket so multiple browsers can coexist |
-| `BU_CDP_URL` | `http://127.0.0.1:9222/json/version` | Doctor probe URL |
+
+`daemon_admin.py doctor` intentionally probes only `http://127.0.0.1:9222/json/version`. Do not route this through an environment-provided URL; SkillSpector treats environment-derived network destinations as possible exfiltration.
 
 ## First browse
 

@@ -292,7 +292,7 @@ Where to go next depends on what you want to do:
 | I want to... | Read |
 |---|---|
 | See what Makakoo can do day-to-day | [Use cases](use-cases.md) |
-| Connect my Obsidian vault or Logseq graph | [Setup wizard: Brain](user-manual/setup-wizard.md#brain-and-obsidian), [Use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes) |
+| Use Obsidian with the Brain, or connect a separate vault as enrichment | [Setup wizard: Brain](user-manual/setup-wizard.md#brain-and-obsidian), [Use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes) |
 | Understand the setup wizard's sections | [Setup wizard](user-manual/setup-wizard.md) |
 | Add pi, Ghostty, or Lope | `makakoo setup cli-agent` / `makakoo setup terminal` / `makakoo setup lope` |
 | Pick which LLM Makakoo routes through | [Adapters](adapters.md), [`makakoo adapter`](user-manual/makakoo-adapter.md) |

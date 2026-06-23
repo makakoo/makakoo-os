@@ -202,18 +202,19 @@ Writes `$MAKAKOO_HOME/config/updates.toml`.
 
 ### Section 3 — `brain`
 
-Configures where your Brain lives. Logseq is the default (Markdown outliner format with `[[wikilinks]]`). You can also point at an existing Obsidian vault or a plain folder.
+Seeds the canonical Makakoo Brain and optionally registers extra note folders as enrichment. The canonical Brain always stays at `$MAKAKOO_HOME/data/Brain` and uses Logseq-style Markdown outliner files (`journals/`, `pages/`, `[[wikilinks]]`).
 
 Asks:
-- Brain location (default: `$MAKAKOO_HOME/data/Brain`)
-- Format (logseq / obsidian / plain — default `logseq`)
-- Whether to seed with starter pages (default: yes)
+- Whether to use the default Brain folder (default: yes)
+- Whether Obsidian should be installed when the app is missing (default: no)
+- Whether to register a separate Obsidian vault as enrichment
+- Whether to register any other plain Markdown folder, and whether that folder should be writable
 
-Initializes the journals dir + pages dir. You can add more vaults later by re-running `makakoo setup brain` or by using the installed plugin CLI at `$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py`.
+Initializes the canonical journals dir + pages dir. Separate Obsidian/plain folders are indexed with source labels; normal journal writes still go to the canonical Brain. You can add more vaults later by re-running `makakoo setup brain` or by using the installed plugin CLI at `$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py`.
 
-If the Obsidian app is missing, the picker offers to install it with Homebrew, Flatpak, or winget when one of those package managers is available. The default is No. If install is skipped or unavailable, it prints manual install links and still lets you register an existing vault path.
+If the Obsidian app is missing, the picker offers to install it with Homebrew, Flatpak, or winget when one of those package managers is available. The default is No. If install is skipped or unavailable, Obsidian setup is skipped for this run; the canonical Brain remains ready and can be opened in Obsidian later.
 
-**Use case**: you already use Obsidian for personal notes and want Makakoo to read/write into your existing vault instead of creating a new one.
+**Use case**: you already use Obsidian for personal notes and want Makakoo to search that vault as extra context without replacing the canonical Brain.
 
 ### Section 4 — `cli-agent`
 
@@ -447,7 +448,7 @@ git clone https://github.com/makakoo/makakoo-os && cd makakoo-os && \
 
 ### "I already use Obsidian; I don't want a new Brain"
 
-Run `makakoo setup --only brain` and pick `obsidian` + point at your existing vault path. Makakoo will index it and write journals into it directly.
+Open `~/MAKAKOO/data/Brain/` directly in Obsidian if you only want the Obsidian UI on the canonical Brain. If you have a separate existing vault, run `makakoo setup --only brain` and register that vault as enrichment. Makakoo indexes it with a source label; normal journals still write to the canonical Brain.
 
 ### "I don't have a local LLM; I have an OpenAI key"
 
