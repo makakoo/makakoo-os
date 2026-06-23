@@ -10,6 +10,11 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-06-23
+
+### Fixed
+- Fixed plugin install security scans so install-time SkillSpector checks always scan the current staged plugin bytes instead of reusing a same-day cached report. This prevents stale findings from blocking fixed plugins and prevents stale safe reports from approving changed plugin code.
+
 ## [0.1.33] - 2026-06-23
 
 ### Added
