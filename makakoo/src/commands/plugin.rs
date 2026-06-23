@@ -11,9 +11,9 @@ use std::io::{self, Write};
 use makakoo_core::capability::resolve_grants;
 use makakoo_core::plugin::staging::StagingError;
 use makakoo_core::plugin::{
-    apply_update as core_apply_update, drop_probe, install as core_install, install_from_path,
-    list_updatable, probe_upstream, uninstall as core_uninstall, InstallError, InstallRequest,
-    LockEntry, Manifest, PluginRegistry, PluginSource, PluginsLock, ProbeDrift,
+    apply_update as core_apply_update, drop_probe, install_from_path, list_updatable,
+    probe_upstream, uninstall as core_uninstall, InstallError, InstallRequest, LockEntry, Manifest,
+    PluginRegistry, PluginSource, PluginsLock, ProbeDrift,
 };
 
 use crate::cli::PluginCmd;
@@ -367,12 +367,14 @@ fn install(
         expected_blake3: blake3,
     };
 
-    match core_install(
+    let warn_on_missing_blake3 = !use_core;
+    match makakoo_core::plugin::install_with_options(
         &req,
         allow_risk,
         risk_ack.as_deref(),
         no_skill_scan,
         ctx.home(),
+        warn_on_missing_blake3,
     ) {
         Ok(outcome) => {
             output::print_info(format!(

@@ -79,6 +79,19 @@ pub fn stage_and_install(
     makakoo_home: &Path,
     expected_blake3: Option<&str>,
 ) -> Result<InstallOutcome, StagingError> {
+    stage_and_install_with_options(staged, makakoo_home, expected_blake3, true)
+}
+
+/// Variant used by trusted built-in install flows that already got their
+/// plugin bytes from the signed Makakoo release bundle. It preserves hash
+/// verification when a digest exists, but can suppress the "please pin this"
+/// warning when that warning is only noise for shipped core plugins.
+pub fn stage_and_install_with_options(
+    staged: &Path,
+    makakoo_home: &Path,
+    expected_blake3: Option<&str>,
+    warn_on_missing_blake3: bool,
+) -> Result<InstallOutcome, StagingError> {
     if !staged.exists() {
         return Err(StagingError::MissingStage {
             path: staged.to_path_buf(),
@@ -107,9 +120,10 @@ pub fn stage_and_install(
                 actual: computed,
             });
         }
-    } else {
+    } else if warn_on_missing_blake3 {
         warn!(
-            "plugin {name} installed without declared blake3 — computed {computed} (pin this in [source].blake3)"
+            "plugin {name} installed without an expected blake3 — computed {computed} \
+             (pass --blake3 {computed} for repeat installs or pin this digest in distro/source metadata)"
         );
     }
 
@@ -284,6 +298,20 @@ run = "true"
         assert_eq!(outcome.final_dir, final_dir(home, "hello"));
         assert!(outcome.final_dir.exists());
         assert!(!staged.exists());
+        assert!(!outcome.computed_blake3.is_empty());
+    }
+
+    #[test]
+    fn stage_and_install_can_suppress_missing_hash_warning_for_trusted_sources() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let staged = stage_dir(home).join("trusted-core");
+        fs::create_dir_all(&staged).unwrap();
+        write_minimal_manifest(&staged, "trusted-core", None);
+
+        let outcome = stage_and_install_with_options(&staged, home, None, false).unwrap();
+        assert_eq!(outcome.name, "trusted-core");
+        assert!(outcome.final_dir.exists());
         assert!(!outcome.computed_blake3.is_empty());
     }
 

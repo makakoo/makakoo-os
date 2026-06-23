@@ -10,6 +10,12 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-06-23
+
+### Fixed
+- Removed the confusing unpinned-blake3 warning from trusted bundled core plugin installs while keeping user-installed local/git/tar plugins noisy unless they are explicitly pinned.
+- Clarified the remaining unpinned-plugin warning so user-installed plugins are told to pass `--blake3` or pin distro/source metadata instead of editing a self-referential manifest hash.
+
 ## [0.1.34] - 2026-06-23
 
 ### Fixed

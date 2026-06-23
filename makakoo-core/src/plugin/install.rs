@@ -22,7 +22,7 @@ use tracing::{debug, warn};
 
 use super::lock::{LockEntry, LockError, PluginsLock};
 use super::manifest::{Manifest, ManifestError};
-use super::staging::{stage_and_install, stage_dir, StagingError};
+use super::staging::{stage_and_install_with_options, stage_dir, StagingError};
 use crate::skill_security::{run_scan, RiskSeverity, ScanOptions, SkillSecurityConfig};
 use crate::source_fetch::{self, FetchError, SourceSpec};
 
@@ -158,6 +158,17 @@ pub fn install(
     no_skill_scan: bool,
     makakoo_home: &Path,
 ) -> Result<super::staging::InstallOutcome, InstallError> {
+    install_with_options(req, allow_risk, risk_ack, no_skill_scan, makakoo_home, true)
+}
+
+pub fn install_with_options(
+    req: &InstallRequest,
+    allow_risk: bool,
+    risk_ack: Option<&str>,
+    no_skill_scan: bool,
+    makakoo_home: &Path,
+    warn_on_missing_blake3: bool,
+) -> Result<super::staging::InstallOutcome, InstallError> {
     match &req.source {
         PluginSource::Path(p) => install_staged(
             p,
@@ -168,6 +179,7 @@ pub fn install(
             risk_ack,
             no_skill_scan,
             makakoo_home,
+            warn_on_missing_blake3,
         ),
         PluginSource::Git {
             url,
@@ -189,6 +201,7 @@ pub fn install(
                 risk_ack,
                 no_skill_scan,
                 makakoo_home,
+                warn_on_missing_blake3,
             );
             // Always clean the fetcher's tempdir — promotion above moves
             // content out of it already, but source_fetch::fetch() can
@@ -211,6 +224,7 @@ pub fn install(
                 risk_ack,
                 no_skill_scan,
                 makakoo_home,
+                warn_on_missing_blake3,
             );
             let _ = fs::remove_dir_all(&fetched.staging_dir);
             result
@@ -391,6 +405,7 @@ pub fn apply_update(
         None,
         false,
         makakoo_home,
+        true,
     )?;
 
     if !prior_enabled {
@@ -499,6 +514,7 @@ fn install_staged(
     risk_ack: Option<&str>,
     no_skill_scan: bool,
     makakoo_home: &Path,
+    warn_on_missing_blake3: bool,
 ) -> Result<super::staging::InstallOutcome, InstallError> {
     // 1) Basic sanity on the source tree.
     if !src_path.is_dir() {
@@ -640,7 +656,12 @@ fn install_staged(
     }
 
     // 3) Hand off to stage_and_install: verifies blake3, atomic rename.
-    let outcome = stage_and_install(&stage_target, makakoo_home, expected_blake3)?;
+    let outcome = stage_and_install_with_options(
+        &stage_target,
+        makakoo_home,
+        expected_blake3,
+        warn_on_missing_blake3,
+    )?;
 
     // 4) Run `[install].unix` if declared. Script sees CWD = promoted
     //    plugin dir, `$MAKAKOO_PLUGIN_DIR` = same, `$MAKAKOO_HOME` = root.
