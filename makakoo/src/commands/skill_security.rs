@@ -70,6 +70,7 @@ pub async fn run_audit(args: &[String], ctx: &CliContext) -> anyhow::Result<i32>
     let options = ScanOptions {
         target: target.clone(),
         no_llm: !cli.llm || cli.no_llm,
+        use_report_cache: true,
         no_cache: cli.no_cache,
         sarif_path: cli.sarif.clone().map(PathBuf::from),
     };
@@ -107,6 +108,7 @@ pub async fn run_fleet_audit(cli: &AuditCli, _ctx: &CliContext) -> anyhow::Resul
     let options = ScanOptions {
         target: "".to_string(),
         no_llm: !cli.llm || cli.no_llm,
+        use_report_cache: true,
         no_cache: cli.no_cache,
         sarif_path: None,
     };

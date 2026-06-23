@@ -369,6 +369,13 @@ fn slugify(target: &str) -> String {
 pub struct ScanOptions {
     pub target: String,
     pub no_llm: bool,
+    /// Reuse an existing report for today's target slug when present.
+    ///
+    /// Manual audits can opt into this for speed. Install-time security gates
+    /// must set this to false so a stale report for `plugins/.stage/<name>`
+    /// cannot block or bless changed plugin bytes.
+    pub use_report_cache: bool,
+    /// Force fresh SkillSpector bootstrap. Also bypasses report reuse.
     pub no_cache: bool,
     pub sarif_path: Option<PathBuf>,
 }
@@ -389,7 +396,7 @@ pub fn run_scan(options: &ScanOptions) -> anyhow::Result<(SkillspectorReport, Pa
     let report_json_path = daily_dir.join(format!("{}.json", slug));
     let report_sarif_path = daily_dir.join(format!("{}.sarif", slug));
 
-    if !options.no_cache && report_json_path.exists() {
+    if options.use_report_cache && !options.no_cache && report_json_path.exists() {
         if let Ok(json_content) = fs::read_to_string(&report_json_path) {
             if let Ok(report) = serde_json::from_str::<SkillspectorReport>(&json_content) {
                 if let Some(user_sarif_path) = &options.sarif_path {
@@ -716,6 +723,7 @@ pub fn run_fleet_scan(
         let target_opts = ScanOptions {
             target: target_str.clone(),
             no_llm: options.no_llm,
+            use_report_cache: options.use_report_cache,
             no_cache: options.no_cache,
             sarif_path: None,
         };

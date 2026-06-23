@@ -566,6 +566,7 @@ fn install_staged(
             let options = ScanOptions {
                 target: stage_target.to_string_lossy().to_string(),
                 no_llm: true,
+                use_report_cache: false,
                 no_cache: false,
                 sarif_path: None,
             };
@@ -1025,6 +1026,29 @@ elif fmt == "sarif":
         }
 
         wrapper_path
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(old) = &self.old {
+                std::env::set_var(self.key, old);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 
     #[test]
@@ -1796,6 +1820,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
         enable_skillspector(&home);
 
         // 1) Write mock skillspector binary
@@ -1811,7 +1836,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
   "issues": []
 }"#,
         );
-        std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
+        let _bin_guard = EnvVarGuard::set("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
 
         // 2) Run install
         let src = seed_source(tmp.path(), "safe-plugin");
@@ -1840,8 +1865,6 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let meta: serde_json::Value = serde_json::from_str(&meta_content).unwrap();
         assert_eq!(meta["scan_severity"], "LOW");
         assert_eq!(meta["override"].as_bool(), Some(false));
-
-        std::env::remove_var("MAKAKOO_TEST_SKILLSPECTOR_BIN");
     }
 
     #[test]
@@ -1850,6 +1873,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
         enable_skillspector(&home);
 
         // 1) Write mock skillspector binary returning HIGH risk
@@ -1872,7 +1896,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
   ]
 }"#,
         );
-        std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
+        let _bin_guard = EnvVarGuard::set("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
 
         // 2) Run install - must fail
         let src = seed_source(tmp.path(), "risky-plugin");
@@ -1896,8 +1920,74 @@ tasks = [{ name = "dream", interval = "3600s" }]
 
         // Verify plugin directory was NOT promoted
         assert!(!home.join("plugins").join("risky-plugin").exists());
+    }
 
-        std::env::remove_var("MAKAKOO_TEST_SKILLSPECTOR_BIN");
+    #[test]
+    fn test_preflight_scan_ignores_stale_daily_report_cache() {
+        let _guard = skillspector_env_lock();
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
+        enable_skillspector(&home);
+
+        let plugin = "stale-cache-plugin";
+        let date_str = Utc::now().format("%Y-%m-%d").to_string();
+        let report_dir = home
+            .join("data")
+            .join("reports")
+            .join("skillspector")
+            .join(date_str);
+        fs::create_dir_all(&report_dir).unwrap();
+        fs::write(
+            report_dir.join(format!("{plugin}.json")),
+            r#"{
+  "risk_assessment": {
+    "score": 85,
+    "severity": "HIGH",
+    "recommendation": "DO_NOT_INSTALL"
+  },
+  "issues": [
+    {"id":"STALE","severity":"HIGH","category":"Old Finding","location":"old.py:1"}
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let mock_bin = write_mock_skillspector(
+            &tmp,
+            "mock_skillspector_fresh",
+            r#"{
+  "risk_assessment": {
+    "score": 0,
+    "severity": "LOW",
+    "recommendation": "SAFE"
+  },
+  "issues": []
+}"#,
+        );
+        let _bin_guard = EnvVarGuard::set("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
+
+        let src = seed_source(tmp.path(), plugin);
+        let outcome = install(
+            &InstallRequest {
+                source: PluginSource::Path(src),
+                expected_blake3: None,
+            },
+            false,
+            None,
+            false,
+            &home,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.name, plugin);
+        assert!(outcome.final_dir.exists());
+        let report: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(report_dir.join(format!("{plugin}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["risk_assessment"]["severity"], "LOW");
     }
 
     #[test]
@@ -1906,6 +1996,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        let _home_guard = EnvVarGuard::set("MAKAKOO_HOME", &home);
         enable_skillspector(&home);
 
         // 1) Write mock skillspector binary returning HIGH risk
@@ -1928,7 +2019,7 @@ tasks = [{ name = "dream", interval = "3600s" }]
   ]
 }"#,
         );
-        std::env::set_var("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
+        let _bin_guard = EnvVarGuard::set("MAKAKOO_TEST_SKILLSPECTOR_BIN", &mock_bin);
 
         // 2) Run install with allow_risk and risk_ack
         let src = seed_source(tmp.path(), "risky-override-plugin");
@@ -1970,7 +2061,5 @@ tasks = [{ name = "dream", interval = "3600s" }]
         assert!(audit_content.contains("skillspector.override"));
         assert!(audit_content.contains("risky-override-plugin"));
         assert!(audit_content.contains("Reviewed report, known false positive"));
-
-        std::env::remove_var("MAKAKOO_TEST_SKILLSPECTOR_BIN");
     }
 }
