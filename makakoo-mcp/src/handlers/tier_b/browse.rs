@@ -6,15 +6,15 @@
 //!
 //! The handler shells into
 //! `$MAKAKOO_HOME/plugins/agent-browser-harness/.venv/bin/python
-//!  run.py` with the supplied Python snippet piped through stdin
+//!  -m browser_harness.run` with the supplied Python snippet piped through stdin
 //! and `BU_NAME` exported so the harness's daemon keys its socket
 //! path off a stable per-browser identifier.
 //!
 //! If the plugin isn't installed (or isn't started) the handler returns
 //! a clear RPC error pointing the caller at `makakoo plugin install
-//! agent-browser-harness`. No silent fallbacks, no partial success.
+//! --core agent-browser-harness`. No silent fallbacks, no partial success.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,8 +49,33 @@ impl HarveyBrowseHandler {
     }
 
     fn runner(&self) -> PathBuf {
-        // run.py lives in the upstream clone under <plugin_dir>/upstream/.
+        // Legacy browser-harness layout used flat upstream/run.py.
         self.plugin_dir().join("upstream").join("run.py")
+    }
+
+    fn packaged_runner(&self) -> PathBuf {
+        // browser-harness v0.1.3+ uses src/browser_harness/run.py and exposes
+        // the console entrypoint as python -m browser_harness.run.
+        self.plugin_dir()
+            .join("upstream")
+            .join("src")
+            .join("browser_harness")
+            .join("run.py")
+    }
+
+    fn upstream_src(&self) -> PathBuf {
+        self.plugin_dir().join("upstream").join("src")
+    }
+
+    fn prepend_pythonpath(cmd: &mut Command, path: &Path) {
+        let existing = std::env::var_os("PYTHONPATH");
+        let mut paths = vec![path.to_path_buf()];
+        if let Some(existing) = existing {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        if let Ok(joined) = std::env::join_paths(paths) {
+            cmd.env("PYTHONPATH", joined);
+        }
     }
 }
 
@@ -73,7 +98,7 @@ impl ToolHandler for HarveyBrowseHandler {
             "properties": {
                 "code": {
                     "type": "string",
-                    "description": "Python snippet executed by browser-harness's run.py. Has access to every helpers.py primitive: goto, click, read, fill, screenshot, etc."
+                    "description": "Python snippet executed by browser-harness. Has access to every helpers.py primitive: goto, click, read, fill, screenshot, etc."
                 },
                 "browser": {
                     "type": "string",
@@ -113,21 +138,32 @@ impl ToolHandler for HarveyBrowseHandler {
 
         if !python.is_file() {
             return Err(RpcError::internal(format!(
-                "agent-browser-harness venv python missing at {}. Run `makakoo plugin install agent-browser-harness`.",
+                "agent-browser-harness venv python missing at {}. Run `makakoo plugin install --core agent-browser-harness`.",
                 python.display()
             )));
         }
-        if !runner.is_file() {
+        let packaged_runner = self.packaged_runner();
+        if !packaged_runner.is_file() && !runner.is_file() {
             return Err(RpcError::internal(format!(
-                "agent-browser-harness upstream run.py missing at {}. Re-run `makakoo plugin install agent-browser-harness` to refresh upstream clone.",
+                "agent-browser-harness upstream runner missing. Checked {} and {}. Re-run `makakoo plugin install --core agent-browser-harness` to refresh upstream clone.",
+                packaged_runner.display(),
                 runner.display()
             )));
         }
 
         let mut cmd = Command::new(&python);
-        cmd.arg(&runner);
+        if packaged_runner.is_file() {
+            cmd.arg("-m").arg("browser_harness.run");
+            Self::prepend_pythonpath(&mut cmd, &self.upstream_src());
+        } else {
+            cmd.arg(&runner);
+        }
         cmd.env("BU_NAME", &browser);
         cmd.env("MAKAKOO_PLUGIN_DIR", self.plugin_dir());
+        cmd.env(
+            "BH_AGENT_WORKSPACE",
+            self.plugin_dir().join("upstream").join("agent-workspace"),
+        );
         cmd.current_dir(self.plugin_dir().join("upstream"));
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());

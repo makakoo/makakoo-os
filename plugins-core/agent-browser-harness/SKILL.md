@@ -80,12 +80,12 @@ Response:
 ```
 
 **Non-MCP runtime (any agent, any host)** — the same Python snippet runs
-inside upstream's `run.py`, which reads stdin:
+inside upstream's `browser-harness` console script, which reads stdin:
 
 ```bash
 BU_NAME=default \
-  /path/to/.venv/bin/python \
-  /path/to/agent-browser-harness/upstream/run.py <<'PY'
+BH_AGENT_WORKSPACE=/path/to/agent-browser-harness/upstream/agent-workspace \
+  /path/to/agent-browser-harness/.venv/bin/browser-harness <<'PY'
 goto('https://example.com')
 print(page_info())
 PY
@@ -130,9 +130,10 @@ If the tool returns:
 
 - **`agent-browser-harness venv python missing at …`** — plugin isn't
   installed. Run step 1 above.
-- **`run.py missing at …/upstream/run.py`** — upstream clone didn't
-  land. Re-run `makakoo plugin install agent-browser-harness` to
-  refresh the clone.
+- **`upstream runner missing`** or **`run.py missing at …/upstream/run.py`** —
+  upstream clone didn't land, or the MCP child is still using an older
+  flat-file wrapper. Re-run `makakoo plugin install --core agent-browser-harness`
+  to refresh the clone.
 - **Timeout after Ns** — Chrome isn't responding on CDP port 9222, or
   the snippet hung. Verify step 2, then retry with a larger
   `timeout_s`.
@@ -152,8 +153,7 @@ runtime that supports Python tool calls:
 1. `git clone https://github.com/browser-use/browser-harness`
 2. `python -m venv .venv && .venv/bin/pip install -e browser-harness/`
 3. Expose a tool named `browse` whose implementation calls
-   `.venv/bin/python browser-harness/run.py` with the user's Python
-   snippet piped via stdin.
+   `.venv/bin/browser-harness` with the user's Python snippet piped via stdin.
 4. Set `BU_NAME=<your-agent>` env so the daemon socket is unique.
 5. Prereq: user's Chrome must be running with
    `--remote-debugging-port=9222`.

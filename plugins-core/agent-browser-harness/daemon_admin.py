@@ -36,12 +36,23 @@ def _load_upstream():
     if not upstream.is_dir():
         print(
             f"upstream not cloned at {upstream}. "
-            "Re-run `makakoo plugin install agent-browser-harness`.",
+            "Re-run `makakoo plugin install --core agent-browser-harness`.",
             file=sys.stderr,
         )
         sys.exit(1)
+    # browser-use/browser-harness v0.1.3 moved from flat files
+    # (`upstream/admin.py`, `upstream/run.py`) to a packaged layout under
+    # `upstream/src/browser_harness/`. Keep the old flat import as fallback so
+    # pinned older upstream refs still work.
+    sys.path.insert(0, str(upstream / "src"))
+    try:
+        from browser_harness import admin  # noqa: E402
+        return admin
+    except ModuleNotFoundError as e:
+        if e.name != "browser_harness":
+            raise
     sys.path.insert(0, str(upstream))
-    import admin  # noqa: E402  (must happen after sys.path fixup)
+    import admin  # noqa: E402  (legacy flat upstream layout)
     return admin
 
 

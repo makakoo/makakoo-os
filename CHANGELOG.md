@@ -10,6 +10,12 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-06-23
+
+### Fixed
+- Fixed `agent-browser-harness` against upstream `browser-harness` v0.1.3 by supporting the packaged `src/browser_harness/` layout, restoring compatibility shims for older MCP children, and documenting the required `--core` install form.
+- Restored the documented `harvey_browse` helper aliases (`goto`, `read`, `click`, `fill`, `screenshot`) via the plugin agent workspace so existing Makakoo snippets keep working after the upstream helper rename.
+
 ## [0.1.35] - 2026-06-23
 
 ### Fixed

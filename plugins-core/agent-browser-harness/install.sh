@@ -84,6 +84,115 @@ export MAKAKOO_VENV_PYTHON="${PYTHON_BIN}"
 # Pass the editable target via --spec so `pip install -e <dir>` runs.
 makakoo-venv-bootstrap pip "-e ${UPSTREAM_DIR}"
 
+echo "→ [agent-browser-harness] writing compatibility shims"
+# Older Makakoo MCP/agent wrappers looked for flat upstream/run.py and
+# upstream/admin.py. browser-harness v0.1.3 is packaged under
+# src/browser_harness/. Keep tiny shims so existing MCP stdio children keep
+# working until their binary/session is refreshed.
+cat >"${UPSTREAM_DIR}/run.py" <<'PY'
+"""Compatibility shim for Makakoo wrappers expecting upstream/run.py."""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+os.environ.setdefault("BH_AGENT_WORKSPACE", str(ROOT / "agent-workspace"))
+sys.path.insert(0, str(ROOT / "src"))
+
+from browser_harness.run import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()
+PY
+
+cat >"${UPSTREAM_DIR}/admin.py" <<'PY'
+"""Compatibility shim for Makakoo wrappers expecting upstream/admin.py."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from browser_harness.admin import *  # noqa: F401,F403,E402
+PY
+
+AGENT_HELPERS="${UPSTREAM_DIR}/agent-workspace/agent_helpers.py"
+mkdir -p "$(dirname "${AGENT_HELPERS}")"
+touch "${AGENT_HELPERS}"
+python3 - "${AGENT_HELPERS}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+start = "# --- Makakoo compatibility aliases START ---"
+end = "# --- Makakoo compatibility aliases END ---"
+block = """# --- Makakoo compatibility aliases START ---
+# Makakoo's global bootstrap historically promised concise helpers named
+# goto/read/click/fill/screenshot. browser-harness v0.1.3 exposes the lower-level
+# names goto_url/click_at_xy/fill_input/capture_screenshot. Keep the old names
+# here so existing CLI prompts and MCP snippets do not break on upstream drift.
+def goto(url, wait_for=True, timeout=15.0):
+    from browser_harness.helpers import goto_url, wait_for_load
+    result = goto_url(url)
+    if wait_for:
+        wait_for_load(timeout=timeout)
+    return result
+
+
+def read(selector="body", max_chars=None):
+    import json
+    from browser_harness.helpers import js
+    text = js(
+        "(()=>{const e=document.querySelector("
+        + json.dumps(selector)
+        + "); return e ? (e.innerText || e.textContent || '') : '';})()"
+    ) or ""
+    return text[:max_chars] if max_chars else text
+
+
+def click(selector_or_x, y=None, button="left", clicks=1, timeout=0.0):
+    import json
+    from browser_harness.helpers import click_at_xy, js, wait_for_element
+    if y is not None:
+        return click_at_xy(selector_or_x, y, button=button, clicks=clicks)
+    selector = selector_or_x
+    if timeout:
+        wait_for_element(selector, timeout=timeout, visible=True)
+    rect = js(
+        "(()=>{const e=document.querySelector("
+        + json.dumps(selector)
+        + "); if(!e)return null; const r=e.getBoundingClientRect();"
+        + "return {x:r.left+r.width/2,y:r.top+r.height/2};})()"
+    )
+    if not rect:
+        raise RuntimeError(f"click: element not found: {selector!r}")
+    return click_at_xy(rect["x"], rect["y"], button=button, clicks=clicks)
+
+
+def fill(selector, text, **kwargs):
+    from browser_harness.helpers import fill_input
+    return fill_input(selector, text, **kwargs)
+
+
+def screenshot(path=None, full=False, max_dim=None):
+    from browser_harness.helpers import capture_screenshot
+    return capture_screenshot(path=path, full=full, max_dim=max_dim)
+# --- Makakoo compatibility aliases END ---
+"""
+
+text = path.read_text() if path.exists() else ""
+if start in text and end in text:
+    before, rest = text.split(start, 1)
+    _, after = rest.split(end, 1)
+    text = before.rstrip() + "\n\n" + block + after
+else:
+    text = text.rstrip() + "\n\n" + block + "\n"
+path.write_text(text)
+PY
+
 echo "→ [agent-browser-harness] running doctor (non-fatal)"
 if ! "${MAKAKOO_PLUGIN_DIR}/.venv/bin/python" "${MAKAKOO_PLUGIN_DIR}/daemon_admin.py" doctor; then
     cat <<'NOTE'
