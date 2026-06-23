@@ -98,6 +98,13 @@ struct SourceSpec {
     root: PathBuf,
 }
 
+struct SyncDirState<'a> {
+    existing: &'a HashSet<String>,
+    force: bool,
+    report: &'a mut SyncReport,
+    seen: &'a mut HashSet<String>,
+}
+
 impl IngestEngine {
     /// Build an engine rooted at `home`. Brain root resolves to
     /// `home/data/Brain`; auto-memory to `home/data/auto-memory`.
@@ -147,45 +154,39 @@ impl IngestEngine {
             }
             if source.role == "canonical" {
                 let pages_dir = source.root.join("pages");
-                if pages_dir.exists() {
-                    if self.sync_dir(
-                        &pages_dir,
-                        "page",
-                        &source,
-                        &existing,
-                        opts.force,
-                        &mut report,
-                        &mut seen,
-                    )? {
-                        prune_scopes.insert((source.name.clone(), "page".to_string()));
-                    }
-                }
-                let journals_dir = source.root.join("journals");
-                if journals_dir.exists() {
-                    if self.sync_dir(
-                        &journals_dir,
-                        "journal",
-                        &source,
-                        &existing,
-                        opts.force,
-                        &mut report,
-                        &mut seen,
-                    )? {
-                        prune_scopes.insert((source.name.clone(), "journal".to_string()));
-                    }
-                }
-            } else {
-                if self.sync_dir(
-                    &source.root,
-                    "page",
-                    &source,
-                    &existing,
-                    opts.force,
-                    &mut report,
-                    &mut seen,
-                )? {
+                let mut state = SyncDirState {
+                    existing: &existing,
+                    force: opts.force,
+                    report: &mut report,
+                    seen: &mut seen,
+                };
+                if pages_dir.exists() && self.sync_dir(&pages_dir, "page", &source, &mut state)? {
                     prune_scopes.insert((source.name.clone(), "page".to_string()));
                 }
+                let journals_dir = source.root.join("journals");
+                let mut state = SyncDirState {
+                    existing: &existing,
+                    force: opts.force,
+                    report: &mut report,
+                    seen: &mut seen,
+                };
+                if journals_dir.exists()
+                    && self.sync_dir(&journals_dir, "journal", &source, &mut state)?
+                {
+                    prune_scopes.insert((source.name.clone(), "journal".to_string()));
+                }
+            } else if self.sync_dir(
+                &source.root,
+                "page",
+                &source,
+                &mut SyncDirState {
+                    existing: &existing,
+                    force: opts.force,
+                    report: &mut report,
+                    seen: &mut seen,
+                },
+            )? {
+                prune_scopes.insert((source.name.clone(), "page".to_string()));
             }
         }
         if opts.include_auto_memory && self.auto_memory_dir.exists() {
@@ -199,10 +200,12 @@ impl IngestEngine {
                 &self.auto_memory_dir,
                 "memory",
                 &memory_source,
-                &existing,
-                opts.force,
-                &mut report,
-                &mut seen,
+                &mut SyncDirState {
+                    existing: &existing,
+                    force: opts.force,
+                    report: &mut report,
+                    seen: &mut seen,
+                },
             )? {
                 prune_scopes.insert((memory_source.name.clone(), "memory".to_string()));
             }
@@ -317,10 +320,7 @@ impl IngestEngine {
         dir: &Path,
         doc_type: &'static str,
         source: &SourceSpec,
-        existing: &HashSet<String>,
-        force: bool,
-        report: &mut SyncReport,
-        seen: &mut HashSet<String>,
+        state: &mut SyncDirState<'_>,
     ) -> Result<bool> {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
@@ -349,7 +349,7 @@ impl IngestEngine {
                         continue;
                     }
                 }
-                if !self.sync_dir(&path, doc_type, source, existing, force, report, seen)? {
+                if !self.sync_dir(&path, doc_type, source, state)? {
                     fully_enumerated = false;
                 }
                 continue;
@@ -358,18 +358,18 @@ impl IngestEngine {
                 continue;
             }
             let path_str = path.to_string_lossy().to_string();
-            seen.insert(path_str.clone());
-            let known = if force {
+            state.seen.insert(path_str.clone());
+            let known = if state.force {
                 false
             } else {
-                existing.contains(&path_str)
+                state.existing.contains(&path_str)
             };
-            match self.ingest_one(&path, doc_type, source, Some(known), force)? {
-                IngestResult::Page => report.pages += 1,
-                IngestResult::Journal => report.journals += 1,
-                IngestResult::Memory => report.memories += 1,
-                IngestResult::Skipped => report.skipped += 1,
-                IngestResult::Errors => report.errors += 1,
+            match self.ingest_one(&path, doc_type, source, Some(known), state.force)? {
+                IngestResult::Page => state.report.pages += 1,
+                IngestResult::Journal => state.report.journals += 1,
+                IngestResult::Memory => state.report.memories += 1,
+                IngestResult::Skipped => state.report.skipped += 1,
+                IngestResult::Errors => state.report.errors += 1,
             }
         }
         Ok(fully_enumerated)

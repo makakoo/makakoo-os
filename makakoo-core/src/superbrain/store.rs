@@ -785,8 +785,8 @@ impl SuperbrainStore {
 /// column. Mirrors Python's `file_path.stem`. For non-path doc_ids the
 /// trailing segment is used verbatim.
 fn derive_name(doc_id: &str) -> String {
-    let trimmed = doc_id.trim_end_matches('/');
-    let segment = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    let trimmed = doc_id.trim_end_matches(['/', '\\']);
+    let segment = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     // Strip a single `.md`/`.txt`/etc. extension.
     match segment.rsplit_once('.') {
         Some((stem, _)) if !stem.is_empty() => stem.to_string(),
@@ -1039,6 +1039,14 @@ mod tests {
         assert!(
             hits[0].score > 0.0,
             "BM25 score must be positive after flip"
+        );
+    }
+
+    #[test]
+    fn write_document_derives_name_from_windows_paths() {
+        assert_eq!(
+            derive_name(r"C:\Users\runner\MAKAKOO\data\Brain\pages\Roadmap.canvas"),
+            "Roadmap"
         );
     }
 
