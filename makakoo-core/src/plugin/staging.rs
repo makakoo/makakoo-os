@@ -109,7 +109,8 @@ pub fn stage_and_install(
         }
     } else {
         warn!(
-            "plugin {name} installed without declared blake3 — computed {computed} (pin this in [source].blake3)"
+            "plugin {name} installed without an expected blake3 — computed {computed} \
+             (pass --blake3 {computed} for repeat installs or pin this digest in distro/source metadata)"
         );
     }
 
