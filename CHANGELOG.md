@@ -10,6 +10,12 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-06-28
+
+### Added
+- Added `skill-dev-lazy-build`, a Makakoo-native YAGNI/minimality discipline adapted from the useful Ponytail prompt pattern. It gives Harvey a reusable ladder for building the smallest safe change, reviewing over-engineering, and fixing shared root causes without dropping security, validation, accessibility, error handling, or explicit requirements.
+- Bundled `skill-dev-lazy-build` in the Sebastian distro for dogfood before wider default promotion.
+
 ## [0.1.36] - 2026-06-23
 
 ### Fixed

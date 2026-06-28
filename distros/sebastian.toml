@@ -54,6 +54,9 @@ version = "^0.1"
 # AC2 so the bundling intent is obvious from sebastian.toml standalone).
 "garage-store"                               = { version = "*" }
 
+# Ponytail-inspired minimality discipline — dogfood in Sebastian before core-default promotion.
+"skill-dev-lazy-build"                    = { version = "*" }
+
 [defaults]
 voice = "caveman"
 persona_name = "Harvey"
@@ -73,11 +76,11 @@ harvey-os skills shipped so far:
   - skill-dev-dev-orchestrator              (parallel dev tasks, 'makakoo skill dev-orchestrator')
   - skill-meta-loops                        (session summary + watchdog, 'makakoo skill loops')
   - skill-productivity-fts5-search          (Brain FTS5 search, 'makakoo skill fts5-search')
+  - skill-dev-lazy-build                    (minimality ladder + over-engineering review rubric)
 
 Persona locked to: Harvey (voice=caveman, pronoun=he/him).
 
 Sprint 002 batch 3. Library plugin lib-hte ships with core.
-19 plugins total in this distro.
 
 Browser + CLI setup:
   1. open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-cdp

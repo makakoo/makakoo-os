@@ -1,0 +1,27 @@
+[plugin]
+name = "skill-dev-lazy-build"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+summary = "YAGNI/minimality discipline for safe implementation and over-engineering review. Use when code may be overbuilt, duplicated, dependency-heavy, abstracted too early, or when the smallest safe solution is desired."
+authors = ["Makakoo OS contributors"]
+license = "MIT"
+
+[source]
+path = "plugins-core/skill-dev-lazy-build"
+
+[abi]
+skill = "^1.0"
+
+[depends]
+python = ">=3.8"
+
+[entrypoint]
+run = "python3 -u -m src.__main__"
+
+[capabilities]
+grants = []
+
+[state]
+dir = "$MAKAKOO_HOME/state/skill-dev-lazy-build"
+retention = "keep"
