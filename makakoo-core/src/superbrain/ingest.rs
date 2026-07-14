@@ -513,7 +513,7 @@ impl IngestEngine {
             }
             push_unique(
                 &mut extracted_entities,
-                format!("#okf-type/{}", sanitize_predicate(&okf_type)),
+                format!("#okf-type/{}", okf_type_tag(&okf_type)),
             );
         }
         let entities_meta = serde_json::Value::Array(
@@ -816,6 +816,28 @@ fn percent_decode_path_component(raw: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn okf_type_tag(raw: &str) -> String {
+    let mut output = String::new();
+    let mut separator = false;
+    for character in raw.chars() {
+        if character.is_ascii_alphanumeric() {
+            if separator && !output.is_empty() {
+                output.push('-');
+            }
+            separator = false;
+            output.push(character.to_ascii_lowercase());
+        } else {
+            separator = true;
+        }
+    }
+    let output = output.trim_matches('-');
+    if output.is_empty() {
+        "concept".to_string()
+    } else {
+        output.to_string()
+    }
 }
 
 fn is_canvas_file(path: &Path) -> bool {
@@ -1492,6 +1514,12 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "customers"));
+        assert!(hits[0]
+            .metadata
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "#okf-type/bigquery-table"));
         assert!(engine
             .store
             .search("Creation catalog", 10)

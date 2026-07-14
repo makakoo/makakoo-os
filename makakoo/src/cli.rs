@@ -107,6 +107,12 @@ pub enum Commands {
         file: Option<std::path::PathBuf>,
     },
 
+    /// Manage Brain sources and portable Open Knowledge Format bundles.
+    Brain {
+        #[command(subcommand)]
+        cmd: BrainCmd,
+    },
+
     /// Memory subsystem diagnostics and maintenance.
     Memory {
         #[command(subcommand)]
@@ -1412,6 +1418,57 @@ pub enum SecretCmd {
     },
 }
 
+/// `makakoo brain <subcommand>`.
+#[derive(Subcommand, Debug)]
+pub enum BrainCmd {
+    /// List registered canonical and enrichment sources.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Register a local Logseq, Obsidian, plain-Markdown, or OKF source.
+    Add {
+        name: String,
+        #[arg(value_parser = ["logseq", "obsidian", "plain", "okf"])]
+        source_type: String,
+        path: std::path::PathBuf,
+        /// Register the source read-only. OKF sources are always read-only.
+        #[arg(long)]
+        read_only: bool,
+    },
+    /// Unregister a source without deleting its files.
+    Remove { name: String },
+    /// Export a registered source as an OKF v0.1 bundle.
+    Export {
+        #[arg(long, default_value = "okf", value_parser = ["okf"])]
+        format: String,
+        #[arg(long, default_value = "default")]
+        source: String,
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// Include canonical daily journals. Excluded by default.
+        #[arg(long)]
+        include_journals: bool,
+        /// Exclude durable auto-memory from canonical exports.
+        #[arg(long)]
+        no_auto_memory: bool,
+        /// Export only documents explicitly marked visibility: public.
+        #[arg(long)]
+        public: bool,
+        /// Replace an existing non-empty output directory atomically.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate an OKF v0.1 bundle. Broken internal links are warnings.
+    Validate {
+        bundle: std::path::PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 pub enum MemoryCmd {
     /// Rewrite legacy `/Users/sebastian/HARVEY/` paths in `recall_log`,
@@ -1903,6 +1960,64 @@ mod tests {
             assert_eq!(limit, 5);
         } else {
             panic!("expected Search");
+        }
+    }
+
+    #[test]
+    fn parse_brain_export_okf_defaults() {
+        let cli =
+            Cli::try_parse_from(["makakoo", "brain", "export", "--out", "/tmp/bundle"]).unwrap();
+        match cli.command.unwrap() {
+            Commands::Brain {
+                cmd:
+                    BrainCmd::Export {
+                        format,
+                        source,
+                        include_journals,
+                        no_auto_memory,
+                        public,
+                        force,
+                        ..
+                    },
+            } => {
+                assert_eq!(format, "okf");
+                assert_eq!(source, "default");
+                assert!(!include_journals);
+                assert!(!no_auto_memory);
+                assert!(!public);
+                assert!(!force);
+            }
+            _ => panic!("expected Brain::Export"),
+        }
+    }
+
+    #[test]
+    fn parse_brain_add_okf() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "brain",
+            "add",
+            "catalog",
+            "okf",
+            "/tmp/catalog",
+            "--read-only",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Commands::Brain {
+                cmd:
+                    BrainCmd::Add {
+                        name,
+                        source_type,
+                        read_only,
+                        ..
+                    },
+            } => {
+                assert_eq!(name, "catalog");
+                assert_eq!(source_type, "okf");
+                assert!(read_only);
+            }
+            _ => panic!("expected Brain::Add"),
         }
     }
 

@@ -15,6 +15,7 @@ pub mod agent_lifecycle;
 pub mod agent_session;
 pub mod agent_slot;
 pub mod agent_test_faults;
+pub mod brain;
 pub mod bucket;
 pub mod buddy;
 pub mod default_banner;
@@ -79,6 +80,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             embed_limit,
             file,
         } => sync::run(ctx, force, embed, no_auto_memory, embed_limit, file).await,
+        Commands::Brain { cmd } => brain::run(ctx, cmd),
         Commands::Memory { cmd } => memory::run(ctx, cmd).await,
         Commands::Promotions { threshold, limit } => promotions::run(ctx, threshold, limit),
         Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,

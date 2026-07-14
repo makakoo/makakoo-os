@@ -25,6 +25,7 @@ mod context;
 mod daemon;
 mod detect;
 mod infect;
+mod okf;
 mod output;
 mod secrets;
 mod skill_runner;
