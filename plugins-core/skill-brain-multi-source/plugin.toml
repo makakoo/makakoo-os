@@ -1,9 +1,9 @@
 [plugin]
 name = "skill-brain-multi-source"
-version = "0.1.0"
+version = "0.2.0"
 kind = "sancho-task"
 language = "python"
-summary = "Brain source enrichment adapter: canonical Makakoo Brain plus optional Obsidian/plain-markdown context sources."
+summary = "Brain source enrichment adapter: canonical Makakoo Brain plus optional Obsidian, plain-Markdown, and OKF context sources."
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 

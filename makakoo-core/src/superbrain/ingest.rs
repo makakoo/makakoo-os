@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use serde_yaml_ng::Value as YamlValue;
 
 use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
@@ -354,7 +355,7 @@ impl IngestEngine {
                 }
                 continue;
             }
-            if !is_indexable_md(&path) {
+            if !is_indexable_for_source(&path, source) {
                 continue;
             }
             let path_str = path.to_string_lossy().to_string();
@@ -462,6 +463,17 @@ impl IngestEngine {
             Ok(c) => c,
             Err(_) => return Ok(IngestResult::Errors),
         };
+        let okf_type = if source.source_type.eq_ignore_ascii_case("okf") {
+            match validate_okf_concept(&raw_content) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "skipping invalid OKF concept");
+                    return Ok(IngestResult::Errors);
+                }
+            }
+        } else {
+            None
+        };
         let (content, entities) = if is_canvas_file(path) {
             render_canvas_for_index(&raw_content, path)
                 .unwrap_or_else(|| (raw_content.clone(), extract_entities(&raw_content)))
@@ -490,15 +502,25 @@ impl IngestEngine {
         }
 
         let path_str = path.to_string_lossy().to_string();
-        let entities_meta = serde_json::Value::Array(
-            if entities.is_empty() {
-                extract_entities(&content)
-            } else {
-                entities
+        let mut extracted_entities = if entities.is_empty() {
+            extract_entities(&content)
+        } else {
+            entities
+        };
+        if let Some(okf_type) = okf_type {
+            for entity in extract_markdown_link_entities(&content) {
+                push_unique(&mut extracted_entities, entity);
             }
-            .into_iter()
-            .map(serde_json::Value::String)
-            .collect(),
+            push_unique(
+                &mut extracted_entities,
+                format!("#okf-type/{}", sanitize_predicate(&okf_type)),
+            );
+        }
+        let entities_meta = serde_json::Value::Array(
+            extracted_entities
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
         );
         let relative_path = path
             .strip_prefix(&source.root)
@@ -680,6 +702,120 @@ fn is_indexable_md(path: &Path) -> bool {
         }
     }
     true
+}
+
+fn is_indexable_for_source(path: &Path, source: &SourceSpec) -> bool {
+    if !is_indexable_md(path) {
+        return false;
+    }
+    if source.source_type.eq_ignore_ascii_case("okf") {
+        return !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("index.md") || name.eq_ignore_ascii_case("log.md")
+            });
+    }
+    true
+}
+
+fn split_yaml_frontmatter(content: &str) -> std::result::Result<&str, String> {
+    let mut offset = 0usize;
+    let mut yaml_start = None;
+    for (line_number, line) in content.split_inclusive('\n').enumerate() {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if line_number == 0 {
+            if trimmed != "---" {
+                return Err("concept must start with YAML frontmatter".to_string());
+            }
+            yaml_start = Some(line.len());
+        } else if trimmed == "---" {
+            let start = yaml_start.unwrap_or(0);
+            return Ok(&content[start..offset]);
+        }
+        offset += line.len();
+    }
+    Err("frontmatter closing delimiter is missing".to_string())
+}
+
+fn validate_okf_concept(content: &str) -> std::result::Result<String, String> {
+    let yaml = split_yaml_frontmatter(content)?;
+    let value: YamlValue = serde_yaml_ng::from_str(yaml)
+        .map_err(|error| format!("frontmatter is not parseable YAML: {error}"))?;
+    let mapping = value
+        .as_mapping()
+        .ok_or_else(|| "frontmatter must be a YAML mapping".to_string())?;
+    let concept_type = mapping
+        .get(&YamlValue::String("type".to_string()))
+        .and_then(YamlValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "frontmatter requires a non-empty string 'type'".to_string())?;
+    Ok(concept_type.to_string())
+}
+
+fn extract_markdown_link_entities(content: &str) -> Vec<String> {
+    static LINK_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r#"!?\[[^\]]*\]\(([^)]+)\)"#).expect("markdown link regex")
+    });
+
+    let mut out = Vec::new();
+    for captures in LINK_RE.captures_iter(content) {
+        let full = captures.get(0).map(|m| m.as_str()).unwrap_or("");
+        if full.starts_with('!') {
+            continue;
+        }
+        let mut target = captures.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+        if target.starts_with('<') && target.ends_with('>') {
+            target = &target[1..target.len() - 1];
+        } else if let Some((path, _title)) = target.split_once(char::is_whitespace) {
+            target = path;
+        }
+        if target.is_empty()
+            || target.starts_with('#')
+            || target.starts_with("//")
+            || target.contains("://")
+            || target.starts_with("mailto:")
+            || target.starts_with("data:")
+        {
+            continue;
+        }
+        let target = target
+            .split(['#', '?'])
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        if !target.to_ascii_lowercase().ends_with(".md") {
+            continue;
+        }
+        let Some(stem) = Path::new(target).file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let label = percent_decode_path_component(stem);
+        if !label.is_empty() {
+            push_unique(&mut out, label);
+        }
+    }
+    out
+}
+
+fn percent_decode_path_component(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = &raw[i + 1..i + 3];
+            if let Ok(value) = u8::from_str_radix(hex, 16) {
+                decoded.push(value);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn is_canvas_file(path: &Path) -> bool {
@@ -1069,6 +1205,26 @@ mod tests {
     }
 
     #[test]
+    fn validate_okf_concept_requires_parseable_nonempty_type() {
+        let valid = "---\r\ntype: Playbook\r\ntags: [ops]\r\n---\r\n# Restart\r\n";
+        assert_eq!(validate_okf_concept(valid).unwrap(), "Playbook");
+        assert!(validate_okf_concept("# Missing frontmatter").is_err());
+        assert!(validate_okf_concept("---\ntitle: Missing type\n---\nbody").is_err());
+        assert!(validate_okf_concept("---\ntype: [not, a, string]\n---\nbody").is_err());
+    }
+
+    #[test]
+    fn okf_markdown_links_become_graph_entities() {
+        let body = concat!(
+            "See [Customers](/tables/customers.md) and ",
+            "[Weekly active users](../metrics/weekly%20active%20users.md#definition). ",
+            "Ignore [Google](https://google.com) and ![diagram](diagram.md)."
+        );
+        let out = extract_markdown_link_entities(body);
+        assert_eq!(out, vec!["customers", "weekly active users"]);
+    }
+
+    #[test]
     fn doc_type_for_recognises_path_segments() {
         assert_eq!(
             doc_type_for(Path::new("/x/data/Brain/pages/a.md")),
@@ -1285,6 +1441,67 @@ mod tests {
         assert_eq!(hits[0].source_type, "obsidian");
         assert_eq!(hits[0].source_role, "enrichment");
         assert_eq!(hits[0].relative_path.as_deref(), Some("External.md"));
+    }
+
+    #[test]
+    fn sync_indexes_only_valid_okf_concepts_and_skips_reserved_files() {
+        let (dir, engine) = make_engine();
+        let bundle = dir.path().join("Imported OKF");
+        let cfg = dir.path().join("config");
+        fs::create_dir_all(&cfg).unwrap();
+        let config = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "catalog", "role": "enrichment", "type": "okf", "path": bundle.to_string_lossy(), "writable": false}
+            ]
+        });
+        fs::write(
+            cfg.join("brain_sources.json"),
+            serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        write(
+            &bundle.join("index.md"),
+            "# Catalog\n\n* [Orders](tables/orders.md)\n",
+        );
+        write(
+            &bundle.join("log.md"),
+            "# Log\n\n## 2026-07-14\n* Creation: catalog\n",
+        );
+        write(
+            &bundle.join("tables").join("orders.md"),
+            "---\ntype: BigQuery Table\ntitle: Orders\ntags: [sales]\n---\n# Orders\n\nSee [Customers](/tables/customers.md).",
+        );
+        write(
+            &bundle.join("tables").join("invalid.md"),
+            "---\ntitle: Missing type\n---\n# Invalid\n\ninvalid-only-marker must not be indexed.",
+        );
+
+        let report = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(report.pages, 1);
+        assert_eq!(report.errors, 1);
+        let hits = engine.store.search("Orders", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source_name, "catalog");
+        assert_eq!(hits[0].source_type, "okf");
+        assert_eq!(hits[0].source_role, "enrichment");
+        assert!(hits[0]
+            .metadata
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "customers"));
+        assert!(engine
+            .store
+            .search("Creation catalog", 10)
+            .unwrap()
+            .is_empty());
+        assert!(engine
+            .store
+            .search("invalid-only-marker", 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

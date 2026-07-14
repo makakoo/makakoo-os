@@ -210,6 +210,33 @@ class PlainMarkdownSource(BrainSource):
         return self.root / f"{safe}.md"
 
 
+class OkfSource(PlainMarkdownSource):
+    """Read-only Open Knowledge Format v0.1 bundle.
+
+    OKF reserves ``index.md`` and ``log.md`` for navigation/history rather
+    than concepts.  The Rust sync pipeline performs full conformance checks;
+    this adapter only exposes concept documents to the legacy Python helper.
+    """
+
+    RESERVED_FILENAMES = {"index.md", "log.md"}
+
+    def __init__(self, name: str, root: Path, role: str = "enrichment"):
+        super().__init__(
+            name=name,
+            root=root,
+            writable=False,
+            role=role,
+            daily_format="%Y-%m-%d",
+            write_style="flat",
+        )
+
+    def iter_docs(self) -> Iterator[BrainDoc]:
+        for doc in super().iter_docs():
+            if doc.absolute_path.name.lower() in self.RESERVED_FILENAMES:
+                continue
+            yield doc
+
+
 def build_source(entry: dict) -> BrainSource:
     """Factory: build a BrainSource from a brain_sources.json entry."""
     stype = entry.get("type", "logseq")
@@ -232,4 +259,6 @@ def build_source(entry: dict) -> BrainSource:
             daily_format=entry.get("daily_format", "%Y-%m-%d"),
             write_style=entry.get("write_style", "flat"),
         )
+    if stype == "okf":
+        return OkfSource(name=name, root=root, role=role)
     raise ValueError(f"unknown brain source type: {stype!r}")

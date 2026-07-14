@@ -3,7 +3,7 @@
 
 Subcommands:
   list                        — show every registered source + default
-  add <name> <type> <path>    — register a new source (type: logseq|obsidian|plain)
+  add <name> <type> <path>    — register a new source (type: logseq|obsidian|plain|okf)
   remove <name>               — unregister (refuses to remove default)
   set-default <name>          — legacy; only canonical-role sources allowed
   sync [--name NAME]          — walk source(s) and print per-source doc counts (dry; true ingest lives in the SANCHO task)
@@ -55,6 +55,8 @@ def cmd_list(args) -> int:
 def cmd_add(args) -> int:
     role = "canonical" if args.name == "default" else "enrichment"
     writable = True if role == "canonical" else bool(args.writable)
+    if args.type == "okf":
+        writable = False
     if args.read_only:
         writable = False
     entry = {
@@ -127,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_add = sub.add_parser("add", help="register a new source")
     p_add.add_argument("name")
-    p_add.add_argument("type", choices=["logseq", "obsidian", "plain"])
+    p_add.add_argument("type", choices=["logseq", "obsidian", "plain", "okf"])
     p_add.add_argument("path")
     p_add.add_argument("--read-only", action="store_true")
     p_add.add_argument("--writable", action="store_true", help="allow writes into an enrichment source")

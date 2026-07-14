@@ -16,6 +16,7 @@ from brain_source import (  # noqa: E402
     BrainSource,
     LogseqSource,
     ObsidianSource,
+    OkfSource,
     PlainMarkdownSource,
     build_source,
 )
@@ -143,9 +144,21 @@ def test_build_source_factory(tmp_path):
     logseq = build_source({"name": "a", "type": "logseq", "path": str(tmp_path)})
     obsidian = build_source({"name": "b", "type": "obsidian", "path": str(tmp_path)})
     plain = build_source({"name": "c", "type": "plain", "path": str(tmp_path)})
+    okf = build_source({"name": "d", "type": "okf", "path": str(tmp_path), "writable": True})
     assert isinstance(logseq, LogseqSource)
     assert isinstance(obsidian, ObsidianSource)
     assert isinstance(plain, PlainMarkdownSource)
+    assert isinstance(okf, OkfSource)
+    assert okf.writable is False
+
+
+def test_okf_source_skips_reserved_files(tmp_path):
+    (tmp_path / "index.md").write_text("# Bundle\n")
+    (tmp_path / "log.md").write_text("# Log\n")
+    (tmp_path / "concept.md").write_text("---\ntype: Topic\n---\n# Concept\n")
+    src = OkfSource(name="bundle", root=tmp_path)
+    docs = list(src.iter_docs())
+    assert [doc.relative_path for doc in docs] == ["concept.md"]
 
 
 def test_build_source_unknown_type_raises(tmp_path):
