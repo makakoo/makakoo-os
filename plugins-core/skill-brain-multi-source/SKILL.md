@@ -1,11 +1,11 @@
 ---
 name: brain-multi-source
-description: Use this skill whenever the user asks to connect, register, add, or inspect an Obsidian vault, Logseq graph, or plain markdown folder as Makakoo Brain enrichment. Trigger phrases include "connect brain to obsidian", "add my obsidian vault", "use my logseq graph", "connect my notes", "register a vault", "where does harvey save notes", "list brain sources", "what vaults am I using". Routes through the bundled `brain_cli.py` helper (list / add / remove / sync / init) to edit `$MAKAKOO_HOME/config/brain_sources.json`. NEVER edit the config by hand; always go through the helper so validation and atomic writes apply. A future Rust `makakoo brain` wrapper may expose the same commands, but do not promise it until it exists in `makakoo --help`.
+description: Use this skill whenever the user asks to connect, register, add, inspect, import, export, or validate a Brain source or Open Knowledge Format bundle. Supports Logseq, Obsidian, plain Markdown, and read-only OKF v0.1 enrichment through `makakoo brain`. Never edit `brain_sources.json` directly and never publish an export without explicit approval.
 ---
 
 # Brain Multi-Source
 
-The Makakoo Brain stays canonical at `$MAKAKOO_HOME/data/Brain`. This skill registers optional enrichment sources — Obsidian vaults, Logseq graphs, and plain markdown folders — so Superbrain can index them with source labels, extracted tags/aliases, and Obsidian Canvas graph hints. It does not replace the Brain or move normal journal writes.
+The Makakoo Brain stays canonical at `$MAKAKOO_HOME/data/Brain`. This skill registers optional enrichment sources and produces portable OKF v0.1 bundles. OKF is an interchange boundary, never a second canonical Brain.
 
 ## When to use this skill
 
@@ -16,6 +16,8 @@ Trigger phrases (match any):
 - "use my logseq graph" / "point harvey at my logseq"
 - "connect my notes folder"
 - "register a vault"
+- "import this OKF bundle" / "add this knowledge bundle"
+- "export the Brain" / "export as OKF" / "validate this OKF bundle"
 - "where does harvey save notes" / "what vault is default"
 - "list brain sources" / "what vaults am I using"
 - "remove the obsidian vault"
@@ -23,41 +25,36 @@ Trigger phrases (match any):
 
 ## How to run
 
-The canonical CLI is at:
-
-```
-python3 ~/makakoo-os/plugins-core/skill-brain-multi-source/src/brain_cli.py <subcommand>
-```
-
-Or the runtime-installed copy (same contents):
-
-```
-python3 ~/MAKAKOO/plugins/skill-brain-multi-source/src/brain_cli.py <subcommand>
-```
+Use the native CLI. The Python helper remains a compatibility surface for the setup picker and SANCHO task.
 
 ### Subcommands
 
 ```bash
 # List every registered source + the canonical Brain
-python3 .../brain_cli.py list
-python3 .../brain_cli.py list --json    # machine-readable
+makakoo brain list
+makakoo brain list --json
 
 # Register a new source
-python3 .../brain_cli.py add <name> <type> <path> [--writable|--read-only]
-#   types: logseq | obsidian | plain
+makakoo brain add <name> <type> <path> [--read-only]
+#   types: logseq | obsidian | plain | okf
 #   examples:
-python3 .../brain_cli.py add personal obsidian ~/Documents/MyVault          # enrichment, read-only default
-python3 .../brain_cli.py add notes plain ~/scratch-notes --writable        # explicit writes
+makakoo brain add personal obsidian ~/Documents/MyVault --read-only
+makakoo brain add catalog okf ~/knowledge/catalog
 
 # Unregister (refuses the canonical source)
-python3 .../brain_cli.py remove <name>
+makakoo brain remove <name>
 
-# Walk a source and report doc count + mtime range (dry, no DB writes)
-python3 .../brain_cli.py sync --name <name>
-python3 .../brain_cli.py sync              # all sources
+# Export pages + durable auto-memory. Journals are opt-in.
+makakoo brain export --format okf --source default --out ~/exports/makakoo-okf
+makakoo brain export --out ~/exports/public-okf --public
+makakoo brain export --out ~/exports/full-okf --include-journals
 
-# Interactive first-run wizard — asks about Obsidian, plain folder, default
-python3 .../brain_cli.py init
+# Validate before registering or sharing a bundle.
+makakoo brain validate ~/exports/makakoo-okf
+makakoo brain validate ~/exports/makakoo-okf --json
+
+# Interactive source setup remains in the setup wizard.
+makakoo setup brain
 ```
 
 ### Common flows
@@ -77,7 +74,7 @@ Caveat to mention for Scenario A: the existing Brain uses Logseq outliner format
 **Only if they explicitly say "separate vault" / name a different path → Scenario B:**
 
 1. Ask for the vault path (or offer to auto-detect common locations: `~/Documents/Obsidian Vault`, `~/Documents/obsidian`, `~/Obsidian`).
-2. Run: `python3 .../brain_cli.py add <chosen-name> obsidian <path>` (default name: `obsidian` or `personal`).
+2. Run: `makakoo brain add <chosen-name> obsidian <path> --read-only` (default name: `obsidian` or `personal`).
 3. Confirm with `list` and show the user the new registry state.
 4. Keep it as enrichment. Do not make a separate vault the Brain.
 
@@ -114,12 +111,15 @@ Caveat to mention for Scenario A: the existing Brain uses Logseq outliner format
 - **First-run picker is optional**, not a blocker. If the user says "skip" or "no", leave them with the canonical Makakoo Brain source only.
 - **NEVER call `add obsidian <path>` without first disambiguating Scenario A vs B** (see "Common flows" above). Assuming "connect obsidian" always means a separate vault is the single most common miss — the Brain directory is already plain markdown and opens in Obsidian with zero config. Ask which scenario before acting.
 - **Never say a separate Obsidian vault replaces the Brain.** It is enrichment context, read-only by default, and normal journal writes stay canonical.
+- **OKF sources are always read-only enrichment.** Validate them before registration; `makakoo brain add ... okf ...` enforces both rules.
+- **Never publish automatically.** Export writes only to the requested local directory. `--public` requires `visibility: public` and refuses credential-shaped content, but publication still needs explicit approval.
+- **Journals are excluded by default.** Only pass `--include-journals` when the user explicitly wants chronological history in the bundle.
 
 ## Underlying plugin
 
 This skill is the user-facing documentation for `plugins-core/skill-brain-multi-source/`. The plugin ships:
 
-- `brain_source.py` — adapter classes (LogseqSource / ObsidianSource / PlainMarkdownSource)
+- `brain_source.py` — adapter classes (LogseqSource / ObsidianSource / PlainMarkdownSource / OkfSource)
 - `config.py` — JSON config loader + atomic writer
 - `brain_cli.py` — what this skill drives
 - `picker.py` — interactive `init` wizard
@@ -131,4 +131,5 @@ The enrichment sprint that hardened the canonical-vs-enrichment contract: `devel
 
 - Obsidian Canvas enrichment currently records document-to-canvas-target graph hints, not a full node-to-node visual graph.
 - Cross-source wikilinks (`[[vault:page]]` syntax) are not yet resolved — wikilinks work within-source only.
+- OKF v0.1 does not define ACLs, encryption, conflict resolution, or typed link predicates. Makakoo does not invent them in the interchange layer.
 - The UserPromptSubmit memory recall hook is grep-only (keyword match on MEMORY.md). Semantic / vector recall is queued.

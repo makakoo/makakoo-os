@@ -130,7 +130,7 @@ Makakoo ships a large core catalog. The default `core` distro installs the piece
 | `skill-meta-loops` | Proactive improvement |
 | `skill-meta-memory-retrieval` | Memory optimization |
 | `tool-headroom` | Default Headroom MCP compression for bulky tool output |
-| `skill-brain-multi-source` | Canonical Brain plus optional Logseq, Obsidian, and plain-folder enrichment sources |
+| `skill-brain-multi-source` | Canonical Brain plus optional Logseq, Obsidian, plain-folder, and OKF enrichment sources |
 
 ## Plugin Configuration
 

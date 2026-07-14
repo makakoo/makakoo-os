@@ -55,14 +55,12 @@ makakoo setup brain
 
 The interactive picker auto-detects common Obsidian paths (`~/Documents/Obsidian Vault`, `~/Documents/obsidian`, `~/Obsidian`). If the Obsidian app is missing, it offers to install it through Homebrew, Flatpak, or winget when available. The default is No. Say yes to a detected vault and it is registered as enrichment. The canonical Brain remains `$MAKAKOO_HOME/data/Brain`.
 
-**Advanced plugin CLI:**
-
-Until a Rust `makakoo brain` wrapper lands, the source registry CLI lives inside the bundled plugin:
+**Source registry CLI:**
 
 ```sh
-python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" list
-python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" add personal obsidian ~/MyVault
-python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" sync --name personal
+makakoo brain list
+makakoo brain add personal obsidian ~/MyVault --read-only
+makakoo sync
 ```
 
 Two scenarios to disambiguate before registering:

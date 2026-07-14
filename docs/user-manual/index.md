@@ -18,10 +18,9 @@ for "I want to X" recipes.
 | [Skill security & auditing](makakoo-skill-security.md) | Plugin preflight security scans, overrides, and manual SkillSpector audits. |
 | [HarveyChat Cortex Memory](../agents/harveychat-cortex-memory.md) | Configure long-term memory and cross-channel aliases for HarveyChat. |
 | [Brain Network (`makakoo network`)](makakoo-network.md) | Opt-in Makakoo-to-Makakoo Brain federation via Octopus signed MCP. |
+| [Brain sources and OKF (`makakoo brain`)](makakoo-brain.md) | Register enrichment sources; export and validate portable OKF v0.1 bundles. |
 
-*(More task-oriented chapters coming — brain sources, adapter
-selection, plugin authoring. Until those land, look up the individual
-command below.)*
+*(More task-oriented chapters coming for adapter selection and plugin authoring.)*
 
 ## Synopsis
 
@@ -48,6 +47,7 @@ makakoo <command> [options] [arguments]
 | [secret](makakoo-secret.md) | Manage secrets |
 | [perms](makakoo-perms.md) | Runtime write-access grants (v0.3 / hardened in v0.3.1-v0.3.2) |
 | [sync](makakoo-sync.md) | Index on-disk Brain journals, pages, and auto-memory into FTS5. Use after manual file edits. |
+| [brain](makakoo-brain.md) | Manage knowledge sources and OKF v0.1 import/export. |
 | [memory](makakoo-memory.md) | Memory diagnostics and maintenance. |
 | [skill](makakoo-skill-security.md) | Run a plugin skill or execute security audits |
 | [status](makakoo-status.md) | Show system status |
