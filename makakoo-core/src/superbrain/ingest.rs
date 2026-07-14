@@ -746,7 +746,7 @@ fn validate_okf_concept(content: &str) -> std::result::Result<String, String> {
         .as_mapping()
         .ok_or_else(|| "frontmatter must be a YAML mapping".to_string())?;
     let concept_type = mapping
-        .get(&YamlValue::String("type".to_string()))
+        .get(YamlValue::String("type".to_string()))
         .and_then(YamlValue::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

@@ -587,7 +587,7 @@ fn extract_logseq_properties(body: &str) -> HashMap<String, String> {
 
 fn metadata_string(mapping: &Mapping, key: &str) -> Option<String> {
     mapping
-        .get(&Value::String(key.to_string()))
+        .get(Value::String(key.to_string()))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -634,7 +634,7 @@ fn nested_metadata_string(
     metadata
         .get(parent)
         .and_then(Value::as_mapping)
-        .and_then(|mapping| mapping.get(&Value::String(key.to_string())))
+        .and_then(|mapping| mapping.get(Value::String(key.to_string())))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -691,6 +691,8 @@ fn first_h1(body: &str) -> Option<String> {
 }
 
 fn derive_description(body: &str, title: &str) -> String {
+    let wikilink =
+        Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").expect("description wikilink regex");
     for line in body.lines() {
         let line = line
             .trim()
@@ -700,9 +702,7 @@ fn derive_description(body: &str, title: &str) -> String {
         if line.is_empty() || line == title || line.contains("::") {
             continue;
         }
-        let line = Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
-            .expect("description wikilink regex")
-            .replace_all(line, "$1");
+        let line = wikilink.replace_all(line, "$1");
         return line.chars().take(240).collect();
     }
     format!("Knowledge about {title}.")
