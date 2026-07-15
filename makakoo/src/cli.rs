@@ -1433,8 +1433,11 @@ pub enum BrainCmd {
         source_type: String,
         path: std::path::PathBuf,
         /// Register the source read-only. OKF sources are always read-only.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "writable")]
         read_only: bool,
+        /// Allow writes into a non-OKF enrichment source. Read-only is the default.
+        #[arg(long, conflicts_with = "read_only")]
+        writable: bool,
     },
     /// Unregister a source without deleting its files.
     Remove { name: String },
@@ -1455,7 +1458,7 @@ pub enum BrainCmd {
         /// Export only documents explicitly marked visibility: public.
         #[arg(long)]
         public: bool,
-        /// Replace an existing non-empty output directory atomically.
+        /// Replace an existing non-empty output using staged crash recovery.
         #[arg(long)]
         force: bool,
         #[arg(long)]
@@ -2010,12 +2013,14 @@ mod tests {
                         name,
                         source_type,
                         read_only,
+                        writable,
                         ..
                     },
             } => {
                 assert_eq!(name, "catalog");
                 assert_eq!(source_type, "okf");
                 assert!(read_only);
+                assert!(!writable);
             }
             _ => panic!("expected Brain::Add"),
         }

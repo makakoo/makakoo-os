@@ -9,6 +9,7 @@
 pub mod adapter;
 pub mod agent_session;
 pub mod agents;
+pub mod brain_sources_registry;
 pub mod capability;
 pub mod channel_ops;
 pub mod chat;
@@ -23,6 +24,7 @@ pub mod gym;
 pub mod ipc;
 pub mod kernel_config;
 pub mod llm;
+pub mod markdown;
 pub mod memory;
 pub mod nursery;
 pub mod outbound;

@@ -35,11 +35,12 @@ makakoo brain list
 makakoo brain list --json
 
 # Register a new source
-makakoo brain add <name> <type> <path> [--read-only]
+makakoo brain add <name> <type> <path> [--read-only|--writable]
 #   types: logseq | obsidian | plain | okf
 #   examples:
 makakoo brain add personal obsidian ~/Documents/MyVault --read-only
 makakoo brain add catalog okf ~/knowledge/catalog
+makakoo brain add working-notes plain ~/Documents/working-notes --writable
 
 # Unregister (refuses the canonical source)
 makakoo brain remove <name>
@@ -105,7 +106,7 @@ Caveat to mention for Scenario A: the existing Brain uses Logseq outliner format
 
 ## Critical rules
 
-- **Never edit `$MAKAKOO_HOME/config/brain_sources.json` directly.** Always route through the CLI — it does atomic writes and enforces the default-source guard.
+- **Never edit `$MAKAKOO_HOME/config/brain_sources.json` directly.** Always route through the CLI. Rust and Python share one cross-process lock and owned crash-recovery protocol; unowned temp/backup collisions fail closed.
 - **Never delete a registered path on disk** just because the user unregisters a source. Removing a source from the registry = stop indexing. Files stay where they are.
 - **Always `list` before destructive subcommands** so the user can see state.
 - **First-run picker is optional**, not a blocker. If the user says "skip" or "no", leave them with the canonical Makakoo Brain source only.
@@ -120,7 +121,7 @@ Caveat to mention for Scenario A: the existing Brain uses Logseq outliner format
 This skill is the user-facing documentation for `plugins-core/skill-brain-multi-source/`. The plugin ships:
 
 - `brain_source.py` — adapter classes (LogseqSource / ObsidianSource / PlainMarkdownSource / OkfSource)
-- `config.py` — JSON config loader + atomic writer
+- `config.py` — JSON config loader + cross-process locked, crash-recoverable writer
 - `brain_cli.py` — what this skill drives
 - `picker.py` — interactive `init` wizard
 - `sancho_ingest.py` — 30-min SANCHO task that walks every registered source

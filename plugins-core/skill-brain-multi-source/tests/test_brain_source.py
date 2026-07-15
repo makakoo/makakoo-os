@@ -144,7 +144,7 @@ def test_build_source_factory(tmp_path):
     logseq = build_source({"name": "a", "type": "logseq", "path": str(tmp_path)})
     obsidian = build_source({"name": "b", "type": "obsidian", "path": str(tmp_path)})
     plain = build_source({"name": "c", "type": "plain", "path": str(tmp_path)})
-    okf = build_source({"name": "d", "type": "okf", "path": str(tmp_path), "writable": True})
+    okf = build_source({"name": "d", "type": " OKF ", "path": str(tmp_path), "writable": True})
     assert isinstance(logseq, LogseqSource)
     assert isinstance(obsidian, ObsidianSource)
     assert isinstance(plain, PlainMarkdownSource)
@@ -152,13 +152,34 @@ def test_build_source_factory(tmp_path):
     assert okf.writable is False
 
 
+def test_build_source_resolves_both_home_aliases(tmp_path, monkeypatch):
+    monkeypatch.delenv("MAKAKOO_HOME", raising=False)
+    monkeypatch.setenv("HARVEY_HOME", str(tmp_path))
+
+    source = build_source({
+        "name": "default",
+        "type": "logseq",
+        "path": "$MAKAKOO_HOME/data/Brain",
+    })
+
+    assert source.root == (tmp_path / "data/Brain").resolve(strict=False)
+
+
 def test_okf_source_skips_reserved_files(tmp_path):
     (tmp_path / "index.md").write_text("# Bundle\n")
     (tmp_path / "log.md").write_text("# Log\n")
     (tmp_path / "concept.md").write_text("---\ntype: Topic\n---\n# Concept\n")
+    (tmp_path / "upper-index").mkdir()
+    (tmp_path / "upper-index" / "INDEX.md").write_text("---\ntype: Topic\n---\n# Upper index\n")
+    (tmp_path / "upper-log").mkdir()
+    (tmp_path / "upper-log" / "LOG.md").write_text("---\ntype: Topic\n---\n# Upper log\n")
     src = OkfSource(name="bundle", root=tmp_path)
     docs = list(src.iter_docs())
-    assert [doc.relative_path for doc in docs] == ["concept.md"]
+    assert [doc.relative_path for doc in docs] == [
+        "concept.md",
+        "upper-index/INDEX.md",
+        "upper-log/LOG.md",
+    ]
 
 
 def test_build_source_unknown_type_raises(tmp_path):

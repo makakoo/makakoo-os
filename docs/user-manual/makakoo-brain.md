@@ -17,9 +17,11 @@ makakoo brain list --json
 makakoo brain add personal obsidian ~/Documents/MyVault --read-only
 makakoo brain add notes plain ~/Documents/notes --read-only
 makakoo brain add catalog okf ~/knowledge/catalog
+# Explicit opt-in when Makakoo should write into an enrichment source
+makakoo brain add working-notes plain ~/Documents/working-notes --writable
 ```
 
-Supported types are `logseq`, `obsidian`, `plain`, and `okf`. An OKF source must validate before registration and is always read-only.
+Supported types are `logseq`, `obsidian`, `plain`, and `okf`. Enrichment sources default to read-only; writes require `--writable`. An OKF source must validate before registration and is always read-only.
 
 Unregistering does not delete source files:
 
@@ -53,7 +55,7 @@ makakoo brain export --out ~/exports/makakoo-okf --force
 makakoo brain export --out ~/exports/makakoo-okf --json
 ```
 
-Export is local-only and atomic. It never uploads or publishes anything. The exporter:
+Export is local-only. It builds in a locked sibling staging directory and uses owned recovery markers plus a verified backup when `--force` replaces an existing bundle. Unrelated files that collide with an internal recovery name are never deleted automatically. It never uploads or publishes anything. The exporter:
 
 - synthesizes required `type` metadata when a Brain page has none;
 - preserves existing YAML metadata;
@@ -79,7 +81,9 @@ makakoo brain validate ~/exports/makakoo-okf
 makakoo brain validate ~/exports/makakoo-okf --json
 ```
 
-Validation checks UTF-8 Markdown, YAML frontmatter, required non-empty `type`, reserved `index.md` and `log.md` structure, version declarations, symlinks, and internal links. Broken internal links are warnings because OKF v0.1 explicitly permits incomplete bundles. Structural violations return exit code 1.
+Validation checks UTF-8 Markdown, YAML frontmatter, required non-empty `type`, and the exact case-sensitive reserved names `index.md` and `log.md`. Index entries must be Markdown list links grouped beneath section headings. Log dates must be real `YYYY-MM-DD` dates in newest-first order, with at least one flat list entry per date; indented prose continuations are allowed.
+
+An empty directory is conformant with warnings. Broken internal links, untraversed symlinks, and unknown declared OKF versions are also warnings because OKF v0.1 requires permissive, best-effort consumption. Structural violations return exit code 1.
 
 ## Deliberate boundaries
 

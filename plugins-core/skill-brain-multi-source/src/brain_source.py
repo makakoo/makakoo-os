@@ -25,6 +25,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
 
+SUPPORTED_SOURCE_TYPES = frozenset({"logseq", "obsidian", "plain", "okf"})
+SOURCE_PATH_VARIABLE_RE = re.compile(
+    r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))"
+)
+
 
 @dataclass
 class BrainDoc:
@@ -232,17 +237,38 @@ class OkfSource(PlainMarkdownSource):
 
     def iter_docs(self) -> Iterator[BrainDoc]:
         for doc in super().iter_docs():
-            if doc.absolute_path.name.lower() in self.RESERVED_FILENAMES:
+            if doc.absolute_path.name in self.RESERVED_FILENAMES:
                 continue
             yield doc
 
 
+def resolve_source_root(raw: object, home: Path | None = None) -> Path:
+    """Resolve registry paths exactly once across both Python entrypoints."""
+    if home is None:
+        configured = os.environ.get("MAKAKOO_HOME") or os.environ.get("HARVEY_HOME")
+        home = Path(configured).expanduser() if configured else Path.home() / "MAKAKOO"
+    home = home.resolve(strict=False)
+    value = str(raw or "")
+
+    def expand_variable(match: re.Match[str]) -> str:
+        name = match.group("braced") or match.group("plain")
+        if name in {"MAKAKOO_HOME", "HARVEY_HOME"}:
+            return str(home)
+        return os.environ.get(name, match.group(0))
+
+    path = Path(SOURCE_PATH_VARIABLE_RE.sub(expand_variable, value)).expanduser()
+    if not path.is_absolute():
+        path = home / path
+    return path.resolve(strict=False)
+
+
 def build_source(entry: dict) -> BrainSource:
     """Factory: build a BrainSource from a brain_sources.json entry."""
-    stype = entry.get("type", "logseq")
+    stype = str(entry.get("type") or "logseq").strip().lower()
+    if stype not in SUPPORTED_SOURCE_TYPES:
+        raise ValueError(f"unknown brain source type: {stype!r}")
     name = entry.get("name", stype)
-    path_str = os.path.expandvars(os.path.expanduser(entry.get("path", "")))
-    root = Path(path_str)
+    root = resolve_source_root(entry.get("path", ""))
     writable = bool(entry.get("writable", True))
     role = entry.get("role") or ("canonical" if name == "default" else "enrichment")
 
@@ -261,4 +287,4 @@ def build_source(entry: dict) -> BrainSource:
         )
     if stype == "okf":
         return OkfSource(name=name, root=root, role=role)
-    raise ValueError(f"unknown brain source type: {stype!r}")
+    raise AssertionError(f"unhandled brain source type: {stype!r}")

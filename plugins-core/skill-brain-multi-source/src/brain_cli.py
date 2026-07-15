@@ -53,8 +53,22 @@ def cmd_list(args) -> int:
 
 
 def cmd_add(args) -> int:
-    role = "canonical" if args.name == "default" else "enrichment"
-    writable = True if role == "canonical" else bool(args.writable)
+    if args.name == "default":
+        print(
+            "Error: canonical source 'default' is fixed at "
+            "$MAKAKOO_HOME/data/Brain and cannot be replaced",
+            file=sys.stderr,
+        )
+        return 2
+    if args.type == "okf":
+        print(
+            "Error: OKF registration requires native validation; use "
+            "'makakoo brain add <name> okf <path>'",
+            file=sys.stderr,
+        )
+        return 2
+    role = "enrichment"
+    writable = bool(args.writable)
     if args.type == "okf":
         writable = False
     if args.read_only:

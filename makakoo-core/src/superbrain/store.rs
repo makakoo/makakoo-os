@@ -456,10 +456,11 @@ impl SuperbrainStore {
             )
             .optional()?;
         if let Some((rid, old_name, old_content, old_entities)) = &existing {
+            let old_fts_entities = stored_entities_for_fts_json(old_entities)?;
             tx.execute(
                 "INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
                  VALUES ('delete', ?1, ?2, ?3, ?4)",
-                params![rid, old_name, old_content, old_entities],
+                params![rid, old_name, old_content, old_fts_entities],
             )?;
         }
         tx.execute(
@@ -529,10 +530,11 @@ impl SuperbrainStore {
             )
             .optional()?;
         if let Some((rid, name, content, entities)) = existing {
+            let fts_entities = stored_entities_for_fts_json(&entities)?;
             tx.execute(
                 "INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
                  VALUES ('delete', ?1, ?2, ?3, ?4)",
-                params![rid, name, content, entities],
+                params![rid, name, content, fts_entities],
             )?;
             tx.execute("DELETE FROM brain_vectors WHERE doc_id = ?1", params![rid])?;
         }
@@ -823,6 +825,11 @@ fn entities_for_fts_json(entities: &[String]) -> Result<String> {
     Ok(serde_json::to_string(&searchable)?)
 }
 
+fn stored_entities_for_fts_json(raw: &str) -> Result<String> {
+    let entities: Vec<String> = serde_json::from_str(raw)?;
+    entities_for_fts_json(&entities)
+}
+
 /// Find `[[Target]]` wikilinks in `content`, deduplicated, in first-seen
 /// order. Mirrors `WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")`.
 fn extract_wikilinks(content: &str) -> Vec<String> {
@@ -1012,6 +1019,34 @@ mod tests {
         store.delete_document("doc1").unwrap();
         assert_eq!(store.count().unwrap(), 0);
         assert_eq!(store.stats().unwrap().vector_count, 0);
+    }
+
+    #[test]
+    fn transformed_graph_entities_are_deleted_from_fts_exactly() {
+        let (_dir, store) = tmp_store();
+        store
+            .write_document(
+                "doc1",
+                "first body",
+                "page",
+                json!(["__makakoo_edge__|depends_on|OldTarget"]),
+            )
+            .unwrap();
+        assert_eq!(store.search("OldTarget", 10).unwrap().len(), 1);
+
+        store
+            .write_document(
+                "doc1",
+                "second body",
+                "page",
+                json!(["__makakoo_edge__|depends_on|NewTarget"]),
+            )
+            .unwrap();
+        assert!(store.search("OldTarget", 10).unwrap().is_empty());
+        assert_eq!(store.search("NewTarget", 10).unwrap().len(), 1);
+
+        store.delete_document("doc1").unwrap();
+        assert!(store.search("NewTarget", 10).unwrap().is_empty());
     }
 
     #[test]

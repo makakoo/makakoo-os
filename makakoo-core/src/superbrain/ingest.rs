@@ -13,10 +13,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value as YamlValue;
 
+use crate::brain_sources_registry::BrainSourcesRegistry;
 use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 use crate::superbrain::graph::GraphStore;
@@ -106,6 +107,26 @@ struct SyncDirState<'a> {
     seen: &'a mut HashSet<String>,
 }
 
+struct StoredIngestState {
+    content_hash: String,
+    doc_type: String,
+    entities: String,
+    source_name: String,
+    source_type: String,
+    source_role: String,
+    relative_path: Option<String>,
+}
+
+struct GraphSourceRow {
+    name: String,
+    doc_type: String,
+    entities: String,
+    path: String,
+    source_name: String,
+    source_type: String,
+    relative_path: Option<String>,
+}
+
 impl IngestEngine {
     /// Build an engine rooted at `home`. Brain root resolves to
     /// `home/data/Brain`; auto-memory to `home/data/auto-memory`.
@@ -148,8 +169,14 @@ impl IngestEngine {
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut prune_scopes: HashSet<(String, String)> = HashSet::new();
+        let sources = self.load_sources()?;
+        let mut active_sources: HashSet<String> =
+            sources.iter().map(|source| source.name.clone()).collect();
+        // Auto-memory is opt-in per sync, not removable through the registry.
+        // Preserve its rows when a caller performs a Brain-only sync.
+        active_sources.insert("auto-memory".to_string());
 
-        for source in self.load_sources()? {
+        for source in sources {
             if !source.root.exists() {
                 continue;
             }
@@ -212,7 +239,7 @@ impl IngestEngine {
             }
         }
 
-        report.removed = self.prune_unseen(&seen, &prune_scopes)?;
+        report.removed = self.prune_unseen(&seen, &prune_scopes, &active_sources)?;
         self.rebuild_triples()?;
         let (n, e) = self.graph.rebuild_from_entity_graph()?;
         report.graph_nodes = n;
@@ -229,27 +256,43 @@ impl IngestEngine {
         let mut conn = conn.lock().expect("ingest conn poisoned");
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM entity_graph", [])?;
-        let rows: Vec<(String, String, String, String)> = {
-            let mut stmt = tx.prepare("SELECT name, doc_type, entities, path FROM brain_docs")?;
+        let rows: Vec<GraphSourceRow> = {
+            let mut stmt = tx.prepare(
+                "SELECT name, doc_type, entities, path, source_name, source_type, relative_path
+                 FROM brain_docs",
+            )?;
             let r = stmt
                 .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
+                    Ok(GraphSourceRow {
+                        name: r.get(0)?,
+                        doc_type: r.get(1)?,
+                        entities: r.get(2)?,
+                        path: r.get(3)?,
+                        source_name: r.get(4)?,
+                        source_type: r.get(5)?,
+                        relative_path: r.get(6)?,
+                    })
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             r
         };
-        for (name, doc_type, entities_json, path) in rows {
-            let entities: Vec<String> = serde_json::from_str(&entities_json).unwrap_or_default();
-            let valid_from = if doc_type == "journal" {
-                let stem: String = name.replace('_', "-").chars().take(10).collect();
+        for row in rows {
+            let entities: Vec<String> = serde_json::from_str(&row.entities).unwrap_or_default();
+            let valid_from = if row.doc_type == "journal" {
+                let stem: String = row.name.replace('_', "-").chars().take(10).collect();
                 Some(stem)
             } else {
                 None
+            };
+            let subject = if row.source_type.eq_ignore_ascii_case("okf") {
+                row.relative_path
+                    .as_deref()
+                    .and_then(|relative| {
+                        qualified_okf_concept_id(&row.source_name, Path::new(relative))
+                    })
+                    .unwrap_or(row.name)
+            } else {
+                row.name
             };
             for ent in entities {
                 let (predicate, object) = decode_edge_entity(&ent)
@@ -258,7 +301,7 @@ impl IngestEngine {
                     "INSERT INTO entity_graph
                      (subject, predicate, object, valid_from, valid_to, confidence, source)
                      VALUES (?1, ?2, ?3, ?4, NULL, 1.0, ?5)",
-                    params![name, predicate, object, valid_from, path],
+                    params![subject, predicate, object, valid_from, row.path],
                 )?;
             }
         }
@@ -337,7 +380,19 @@ impl IngestEngine {
                 }
             };
             let path = entry.path();
-            if path.is_dir() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => {
+                    fully_enumerated = false;
+                    continue;
+                }
+            };
+            // Match OKF validation: symlinks are reported but never followed.
+            // This also prevents any enrichment source from escaping its root.
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 // Recurse into subdirectories (e.g. pages/ai-impact/).
                 // Skip app/VCS internals.
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -353,6 +408,9 @@ impl IngestEngine {
                 if !self.sync_dir(&path, doc_type, source, state)? {
                     fully_enumerated = false;
                 }
+                continue;
+            }
+            if !file_type.is_file() {
                 continue;
             }
             if !is_indexable_for_source(&path, source) {
@@ -377,43 +435,57 @@ impl IngestEngine {
     }
 
     fn load_sources(&self) -> Result<Vec<SourceSpec>> {
-        let config_path = self.home.join("config").join("brain_sources.json");
         let mut sources = Vec::new();
         let mut seen = HashSet::new();
         let canonical_root = self.brain_dir.clone();
 
-        if config_path.exists() {
-            let raw = std::fs::read_to_string(&config_path)?;
-            if let Ok(file) = serde_json::from_str::<BrainSourcesFile>(&raw) {
-                let canonical_name = file
-                    .canonical
-                    .or(file.default)
-                    .unwrap_or_else(|| "default".to_string());
-                for entry in file.sources {
-                    if entry.name.is_empty() || entry.path.is_empty() {
-                        continue;
-                    }
-                    let root = expand_path(&entry.path, &self.home);
-                    let role = if entry.name == "default"
-                        || (entry.name == canonical_name && same_pathish(&root, &canonical_root))
-                    {
-                        "canonical".to_string()
-                    } else {
-                        entry.role.unwrap_or_else(|| "enrichment".to_string())
-                    };
-                    let source_type = if entry.source_type.is_empty() {
-                        "plain".to_string()
-                    } else {
-                        entry.source_type
-                    };
-                    if seen.insert(entry.name.clone()) {
-                        sources.push(SourceSpec {
-                            name: entry.name,
-                            role,
-                            source_type,
-                            root,
-                        });
-                    }
+        let registry = BrainSourcesRegistry::acquire(&self.home)
+            .map_err(|error| MakakooError::Config(error.to_string()))?;
+        if let Some(raw) = registry
+            .read_text()
+            .map_err(|error| MakakooError::Config(error.to_string()))?
+        {
+            let file = serde_json::from_str::<BrainSourcesFile>(&raw)?;
+            let canonical_name = file
+                .canonical
+                .or(file.default)
+                .unwrap_or_else(|| "default".to_string());
+            for entry in file.sources {
+                if entry.name.is_empty() || entry.path.is_empty() {
+                    continue;
+                }
+                let root = expand_path(&entry.path, &self.home);
+                let role = if entry.name == "default"
+                    || (entry.name == canonical_name && same_pathish(&root, &canonical_root))
+                {
+                    "canonical".to_string()
+                } else {
+                    entry.role.unwrap_or_else(|| "enrichment".to_string())
+                };
+                let source_type = entry.source_type.trim().to_ascii_lowercase();
+                let source_type = if source_type.is_empty() {
+                    "plain".to_string()
+                } else {
+                    source_type
+                };
+                if entry.name != "default"
+                    && !matches!(
+                        source_type.as_str(),
+                        "logseq" | "obsidian" | "plain" | "okf"
+                    )
+                {
+                    return Err(MakakooError::Config(format!(
+                        "unsupported brain source type {:?} for source {:?}",
+                        source_type, entry.name
+                    )));
+                }
+                if seen.insert(entry.name.clone()) {
+                    sources.push(SourceSpec {
+                        name: entry.name,
+                        role,
+                        source_type,
+                        root,
+                    });
                 }
             }
         }
@@ -440,11 +512,19 @@ impl IngestEngine {
                 source.role = "enrichment".to_string();
             }
         }
-        sources.retain(|source| {
-            source.name == "default"
-                || source.role == "canonical"
-                || !paths_overlapish(&source.root, &self.brain_dir)
-        });
+        for (index, source) in sources.iter().enumerate() {
+            for other in sources.iter().skip(index + 1) {
+                if paths_overlapish(&source.root, &other.root) {
+                    return Err(MakakooError::Config(format!(
+                        "brain source roots overlap: {:?} ({}) and {:?} ({})",
+                        source.name,
+                        source.root.display(),
+                        other.name,
+                        other.root.display()
+                    )));
+                }
+            }
+        }
         Ok(sources)
     }
 
@@ -461,13 +541,38 @@ impl IngestEngine {
     ) -> Result<IngestResult> {
         let raw_content = match std::fs::read_to_string(path) {
             Ok(c) => c,
-            Err(_) => return Ok(IngestResult::Errors),
+            Err(error) => {
+                if source.source_type.eq_ignore_ascii_case("okf") {
+                    tracing::warn!(
+                        path = %path.display(),
+                        %error,
+                        "skipping unreadable OKF concept"
+                    );
+                    let path_str = path.to_string_lossy().to_string();
+                    if let Err(delete_error) = self.store.delete_document(&path_str) {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %delete_error,
+                            "failed to remove stale unreadable OKF concept"
+                        );
+                    }
+                }
+                return Ok(IngestResult::Errors);
+            }
         };
         let okf_type = if source.source_type.eq_ignore_ascii_case("okf") {
             match validate_okf_concept(&raw_content) {
                 Ok(value) => Some(value),
                 Err(error) => {
                     tracing::warn!(path = %path.display(), %error, "skipping invalid OKF concept");
+                    let path_str = path.to_string_lossy().to_string();
+                    if let Err(delete_error) = self.store.delete_document(&path_str) {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %delete_error,
+                            "failed to remove stale invalid OKF concept"
+                        );
+                    }
                     return Ok(IngestResult::Errors);
                 }
             }
@@ -480,27 +585,12 @@ impl IngestEngine {
         } else {
             (raw_content, Vec::new())
         };
-        if content.trim().chars().count() < MIN_CONTENT_CHARS {
+        if okf_type.is_none() && content.trim().chars().count() < MIN_CONTENT_CHARS {
             return Ok(IngestResult::Skipped);
         }
-        // Match `SuperbrainStore::write_document` exactly so the hash we
-        // compare here is the same one it persists. Otherwise every
-        // second sync run would re-write every doc.
+        // Match `SuperbrainStore::write_document` exactly so the hash and
+        // entity JSON compared below are the same values it persists.
         let content_hash = blake3::hash(content.as_bytes()).to_hex().to_string();
-
-        if !force {
-            let path_str = path.to_string_lossy().to_string();
-            let stored = self.stored_hash(&path_str)?;
-            if let Some(h) = stored {
-                if h == content_hash {
-                    return Ok(IngestResult::Skipped);
-                }
-            } else if existed_hint == Some(true) {
-                // We thought it existed but the hash row was missing —
-                // fall through and re-write.
-            }
-        }
-
         let path_str = path.to_string_lossy().to_string();
         let mut extracted_entities = if entities.is_empty() {
             extract_entities(&content)
@@ -508,7 +598,8 @@ impl IngestEngine {
             entities
         };
         if let Some(okf_type) = okf_type {
-            for entity in extract_markdown_link_entities(&content) {
+            for entity in extract_markdown_link_entities(&content, path, &source.root, &source.name)
+            {
                 push_unique(&mut extracted_entities, entity);
             }
             push_unique(
@@ -516,6 +607,7 @@ impl IngestEngine {
                 format!("#okf-type/{}", okf_type_tag(&okf_type)),
             );
         }
+        let entities_json = serde_json::to_string(&extracted_entities)?;
         let entities_meta = serde_json::Value::Array(
             extracted_entities
                 .into_iter()
@@ -526,6 +618,22 @@ impl IngestEngine {
             .strip_prefix(&source.root)
             .ok()
             .map(|p| p.to_string_lossy().to_string());
+
+        if !force && existed_hint != Some(false) {
+            if let Some(stored) = self.stored_ingest_state(&path_str)? {
+                if stored.content_hash == content_hash
+                    && stored.doc_type == doc_type
+                    && stored.entities == entities_json
+                    && stored.source_name == source.name
+                    && stored.source_type == source.source_type
+                    && stored.source_role == source.role
+                    && stored.relative_path == relative_path
+                {
+                    return Ok(IngestResult::Skipped);
+                }
+            }
+        }
+
         self.store.write_document_with_source(
             &path_str,
             &content,
@@ -557,62 +665,66 @@ impl IngestEngine {
         Ok(rows.into_iter().collect())
     }
 
-    fn stored_hash(&self, path: &str) -> Result<Option<String>> {
+    fn stored_ingest_state(&self, path: &str) -> Result<Option<StoredIngestState>> {
         let conn = self.store.conn_arc();
         let conn = conn.lock().expect("ingest conn poisoned");
-        let mut stmt = conn.prepare("SELECT content_hash FROM brain_docs WHERE path = ?1")?;
-        let mut rows = stmt.query(params![path])?;
-        if let Some(r) = rows.next()? {
-            Ok(Some(r.get::<_, String>(0)?))
-        } else {
-            Ok(None)
-        }
+        conn.query_row(
+            "SELECT content_hash, doc_type, entities, source_name, source_type,
+                    source_role, relative_path
+             FROM brain_docs WHERE path = ?1",
+            params![path],
+            |row| {
+                Ok(StoredIngestState {
+                    content_hash: row.get(0)?,
+                    doc_type: row.get(1)?,
+                    entities: row.get(2)?,
+                    source_name: row.get(3)?,
+                    source_type: row.get(4)?,
+                    source_role: row.get(5)?,
+                    relative_path: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
     }
 
     fn prune_unseen(
         &self,
         seen: &HashSet<String>,
         prune_scopes: &HashSet<(String, String)>,
+        active_sources: &HashSet<String>,
     ) -> Result<usize> {
-        if prune_scopes.is_empty() {
-            return Ok(0);
-        }
         let conn = self.store.conn_arc();
         let conn = conn.lock().expect("ingest conn poisoned");
-        let all: Vec<(i64, String, String, String, String, String, String)> = {
-            let mut stmt = conn.prepare(
-                "SELECT id, path, name, content, entities, source_name, doc_type FROM brain_docs",
-            )?;
+        let all: Vec<(String, String, String)> = {
+            let mut stmt = conn.prepare("SELECT path, source_name, doc_type FROM brain_docs")?;
             let rows = stmt
                 .query_map([], |r| {
                     Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
-                        r.get::<_, Option<String>>(5)?
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?
                             .unwrap_or_else(|| "default".to_string()),
-                        r.get::<_, String>(6)?,
+                        r.get::<_, String>(2)?,
                     ))
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows
         };
+        drop(conn);
+        let stale: Vec<String> = all
+            .into_iter()
+            .filter_map(|(path, source_name, doc_type)| {
+                let source_removed = !active_sources.contains(&source_name);
+                let file_removed =
+                    prune_scopes.contains(&(source_name, doc_type)) && !seen.contains(&path);
+                (source_removed || file_removed).then_some(path)
+            })
+            .collect();
         let mut removed = 0usize;
-        for (id, path, name, content, entities, source_name, doc_type) in all {
-            if prune_scopes.contains(&(source_name, doc_type)) && !seen.contains(&path) {
-                // Mirror the delete into the external-content FTS5 shadow,
-                // clear the FK-dependent vector row, then drop the doc.
-                conn.execute(
-                    "INSERT INTO brain_fts(brain_fts, rowid, name, content, entities)
-                     VALUES ('delete', ?1, ?2, ?3, ?4)",
-                    params![id, name, content, entities],
-                )?;
-                conn.execute("DELETE FROM brain_vectors WHERE doc_id = ?1", params![id])?;
-                conn.execute("DELETE FROM brain_docs WHERE path = ?1", params![path])?;
-                removed += 1;
-            }
+        for path in stale {
+            self.store.delete_document(&path)?;
+            removed += 1;
         }
         Ok(removed)
     }
@@ -634,11 +746,7 @@ fn doc_type_for(path: &Path) -> Option<&'static str> {
 }
 
 fn expand_path(raw: &str, home: &Path) -> PathBuf {
-    let mut s = raw.to_string();
-    if let Some(home_s) = home.to_str() {
-        s = s.replace("$MAKAKOO_HOME", home_s);
-        s = s.replace("$HARVEY_HOME", home_s);
-    }
+    let s = expand_environment_variables(raw, home);
     if s == "~" {
         return std::env::var("HOME")
             .map(PathBuf::from)
@@ -657,6 +765,26 @@ fn expand_path(raw: &str, home: &Path) -> PathBuf {
     }
 }
 
+fn expand_environment_variables(raw: &str, home: &Path) -> String {
+    let variables = regex::Regex::new(
+        r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
+    )
+    .expect("environment variable regex");
+    variables
+        .replace_all(raw, |captures: &regex::Captures<'_>| {
+            let name = captures
+                .name("braced")
+                .or_else(|| captures.name("plain"))
+                .expect("environment variable capture")
+                .as_str();
+            if name == "MAKAKOO_HOME" || name == "HARVEY_HOME" {
+                return home.to_string_lossy().into_owned();
+            }
+            std::env::var(name).unwrap_or_else(|_| captures[0].to_string())
+        })
+        .into_owned()
+}
+
 fn same_pathish(a: &Path, b: &Path) -> bool {
     if a == b {
         return true;
@@ -668,11 +796,8 @@ fn same_pathish(a: &Path, b: &Path) -> bool {
 }
 
 fn paths_overlapish(a: &Path, b: &Path) -> bool {
-    if same_pathish(a, b) {
-        return true;
-    }
-    let a = normalize_pathish(a);
-    let b = normalize_pathish(b);
+    let a = a.canonicalize().unwrap_or_else(|_| normalize_pathish(a));
+    let b = b.canonicalize().unwrap_or_else(|_| normalize_pathish(b));
     a.starts_with(&b) || b.starts_with(&a)
 }
 
@@ -712,14 +837,12 @@ fn is_indexable_for_source(path: &Path, source: &SourceSpec) -> bool {
         return !path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                name.eq_ignore_ascii_case("index.md") || name.eq_ignore_ascii_case("log.md")
-            });
+            .is_some_and(|name| name == "index.md" || name == "log.md");
     }
     true
 }
 
-fn split_yaml_frontmatter(content: &str) -> std::result::Result<&str, String> {
+fn split_yaml_frontmatter_parts(content: &str) -> std::result::Result<(&str, &str), String> {
     let mut offset = 0usize;
     let mut yaml_start = None;
     for (line_number, line) in content.split_inclusive('\n').enumerate() {
@@ -731,11 +854,15 @@ fn split_yaml_frontmatter(content: &str) -> std::result::Result<&str, String> {
             yaml_start = Some(line.len());
         } else if trimmed == "---" {
             let start = yaml_start.unwrap_or(0);
-            return Ok(&content[start..offset]);
+            return Ok((&content[start..offset], &content[offset + line.len()..]));
         }
         offset += line.len();
     }
     Err("frontmatter closing delimiter is missing".to_string())
+}
+
+fn split_yaml_frontmatter(content: &str) -> std::result::Result<&str, String> {
+    split_yaml_frontmatter_parts(content).map(|(yaml, _)| yaml)
 }
 
 fn validate_okf_concept(content: &str) -> std::result::Result<String, String> {
@@ -754,23 +881,21 @@ fn validate_okf_concept(content: &str) -> std::result::Result<String, String> {
     Ok(concept_type.to_string())
 }
 
-fn extract_markdown_link_entities(content: &str) -> Vec<String> {
-    static LINK_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r#"!?\[[^\]]*\]\(([^)]+)\)"#).expect("markdown link regex")
-    });
-
+fn extract_markdown_link_entities(
+    content: &str,
+    concept_path: &Path,
+    bundle_root: &Path,
+    source_name: &str,
+) -> Vec<String> {
+    // OKF relationships live in the Markdown body. Frontmatter values and
+    // examples inside code spans/blocks are metadata or literal text, not
+    // relationship assertions under OKF section 5.3.
+    let content = split_yaml_frontmatter_parts(content)
+        .map(|(_, body)| body)
+        .unwrap_or(content);
     let mut out = Vec::new();
-    for captures in LINK_RE.captures_iter(content) {
-        let full = captures.get(0).map(|m| m.as_str()).unwrap_or("");
-        if full.starts_with('!') {
-            continue;
-        }
-        let mut target = captures.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-        if target.starts_with('<') && target.ends_with('>') {
-            target = &target[1..target.len() - 1];
-        } else if let Some((path, _title)) = target.split_once(char::is_whitespace) {
-            target = path;
-        }
+    for target in crate::markdown::link_destinations(content) {
+        let target = target.as_str();
         if target.is_empty()
             || target.starts_with('#')
             || target.starts_with("//")
@@ -785,18 +910,46 @@ fn extract_markdown_link_entities(content: &str) -> Vec<String> {
             .next()
             .unwrap_or("")
             .trim_end_matches('/');
-        if !target.to_ascii_lowercase().ends_with(".md") {
+        let target = percent_decode_path_component(target);
+        if Path::new(&target)
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some("md")
+        {
             continue;
         }
-        let Some(stem) = Path::new(target).file_stem().and_then(|stem| stem.to_str()) else {
+        let candidate = if target.starts_with('/') {
+            bundle_root.join(target.trim_start_matches('/'))
+        } else {
+            concept_path.parent().unwrap_or(bundle_root).join(&target)
+        };
+        let root = normalize_pathish(bundle_root);
+        let candidate = normalize_pathish(&candidate);
+        let Ok(relative) = candidate.strip_prefix(&root) else {
             continue;
         };
-        let label = percent_decode_path_component(stem);
-        if !label.is_empty() {
-            push_unique(&mut out, label);
+        if let Some(entity) = qualified_okf_concept_id(source_name, relative) {
+            push_unique(&mut out, entity);
         }
     }
     out
+}
+
+fn qualified_okf_concept_id(source_name: &str, relative_path: &Path) -> Option<String> {
+    if relative_path.extension().and_then(|value| value.to_str()) != Some("md") {
+        return None;
+    }
+    let concept_id = relative_path
+        .with_extension("")
+        .to_string_lossy()
+        .replace('\\', "/");
+    if concept_id.is_empty() {
+        None
+    } else {
+        // Concept IDs are bundle-relative. Makakoo combines multiple bundles
+        // in one graph, so qualify the spec ID with the registry source name.
+        Some(format!("{source_name}::{concept_id}"))
+    }
 }
 
 fn percent_decode_path_component(raw: &str) -> String {
@@ -1167,6 +1320,10 @@ fn extract_frontmatter_values(content: &str, keys: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::brain_sources_registry::{
+        config_backup_path, config_path, config_recovery_marker_path,
+        REGISTRY_RECOVERY_MARKER_PREFIX,
+    };
     use crate::db::{open_db, run_migrations};
     use std::fs;
     use tempfile::tempdir;
@@ -1209,6 +1366,225 @@ mod tests {
     }
 
     #[test]
+    fn sync_recovers_interrupted_registry_before_reading_sources() {
+        let (dir, engine) = make_engine();
+        let external = dir.path().join("Recovered Source");
+        write(
+            &external.join("Recovered.md"),
+            "# Recovered\n\nregistry-recovery-index-marker",
+        );
+        let body = serde_json::to_string_pretty(&serde_json::json!({
+            "canonical": "default",
+            "default": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "recovered", "role": "enrichment", "type": "plain", "path": external.to_string_lossy(), "writable": false}
+            ]
+        }))
+        .unwrap()
+            + "\n";
+        fs::create_dir_all(dir.path().join("config")).unwrap();
+        fs::write(config_backup_path(dir.path()), &body).unwrap();
+        fs::write(
+            config_recovery_marker_path(dir.path()),
+            format!("{REGISTRY_RECOVERY_MARKER_PREFIX}{body}"),
+        )
+        .unwrap();
+
+        let report = engine.sync(SyncOptions::default()).unwrap();
+
+        assert_eq!(report.pages, 1);
+        assert_eq!(
+            engine
+                .store
+                .search("registry-recovery-index-marker", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(fs::read_to_string(config_path(dir.path())).unwrap(), body);
+        assert!(!config_backup_path(dir.path()).exists());
+        assert!(!config_recovery_marker_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn sync_rejects_overlapping_enrichment_roots() {
+        let (dir, engine) = make_engine();
+        let external = dir.path().join("Shared Source");
+        write(&external.join("Concept.md"), "# Concept\n\noverlap-marker");
+        let config = serde_json::json!({
+            "canonical": "default",
+            "default": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "plain", "role": "enrichment", "type": "plain", "path": external.to_string_lossy(), "writable": false},
+                {"name": "catalog", "role": "enrichment", "type": "okf", "path": external.to_string_lossy(), "writable": false}
+            ]
+        });
+        write(
+            &dir.path().join("config/brain_sources.json"),
+            &serde_json::to_string_pretty(&config).unwrap(),
+        );
+
+        let error = engine.sync(SyncOptions::default()).unwrap_err().to_string();
+
+        assert!(error.contains("brain source roots overlap"));
+        assert!(engine
+            .store
+            .search("overlap-marker", 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn sync_rejects_unknown_registry_source_type() {
+        let (dir, engine) = make_engine();
+        let external = dir.path().join("Typo Source");
+        write(
+            &external.join("Concept.md"),
+            "# Concept\n\ntype-typo-marker",
+        );
+        let config = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "typo", "role": "enrichment", "type": "plian", "path": external.to_string_lossy(), "writable": false}
+            ]
+        });
+        write(
+            &dir.path().join("config/brain_sources.json"),
+            &serde_json::to_string_pretty(&config).unwrap(),
+        );
+
+        let error = engine.sync(SyncOptions::default()).unwrap_err().to_string();
+
+        assert!(error.contains("unsupported brain source type"));
+        assert!(engine
+            .store
+            .search("type-typo-marker", 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn unchanged_content_reindexes_when_source_semantics_change() {
+        let (dir, engine) = make_engine();
+        let bundle = dir.path().join("Reclassified Source");
+        let concept = bundle.join("tables/orders.md");
+        write(
+            &concept,
+            "---\ntype: Table\n---\n# Orders\n\nSee [Users](/tables/users.md).",
+        );
+        let config_path = dir.path().join("config/brain_sources.json");
+        let legacy = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "legacy", "role": "enrichment", "type": "plain", "path": bundle.to_string_lossy(), "writable": false}
+            ]
+        });
+        write(
+            &config_path,
+            &serde_json::to_string_pretty(&legacy).unwrap(),
+        );
+        engine.sync(SyncOptions::default()).unwrap();
+        let before = engine.store.search("Orders", 10).unwrap();
+        assert_eq!(before[0].source_name, "legacy");
+        assert!(!before[0]
+            .metadata
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "#okf-type/table"));
+
+        let reclassified = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "catalog", "role": "enrichment", "type": "okf", "path": bundle.to_string_lossy(), "writable": false}
+            ]
+        });
+        write(
+            &config_path,
+            &serde_json::to_string_pretty(&reclassified).unwrap(),
+        );
+
+        let report = engine.sync(SyncOptions::default()).unwrap();
+
+        assert_eq!(report.pages, 1);
+        let after = engine.store.search("Orders", 10).unwrap();
+        assert_eq!(after[0].source_name, "catalog");
+        assert_eq!(after[0].source_type, "okf");
+        assert!(after[0]
+            .metadata
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "catalog::tables/users"));
+        let edge_count: i64 = engine
+            .store
+            .conn_arc()
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM entity_graph
+                 WHERE subject = 'catalog::tables/orders'
+                   AND object = 'catalog::tables/users'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(edge_count, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn okf_sync_never_traverses_directory_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let (dir, engine) = make_engine();
+        let bundle = dir.path().join("Symlink Bundle");
+        let outside = dir.path().join("Outside Secrets");
+        write(
+            &bundle.join("inside.md"),
+            "---\ntype: Topic\n---\n# Inside\n\ninsidebundlesentinel",
+        );
+        write(
+            &outside.join("secret.md"),
+            "---\ntype: Secret\n---\n# Secret\n\nsymlinkescapesentinel",
+        );
+        symlink(&outside, bundle.join("linked-outside")).unwrap();
+        let config = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "catalog", "role": "enrichment", "type": "okf", "path": bundle.to_string_lossy(), "writable": false}
+            ]
+        });
+        write(
+            &dir.path().join("config/brain_sources.json"),
+            &serde_json::to_string_pretty(&config).unwrap(),
+        );
+
+        let report = engine.sync(SyncOptions::default()).unwrap();
+
+        assert_eq!(report.pages, 1);
+        assert_eq!(
+            engine
+                .store
+                .search("insidebundlesentinel", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(engine
+            .store
+            .search("symlinkescapesentinel", 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn extract_wikilinks_picks_unique_targets() {
         let body = "linking to [[Sprint 002]] and [[Sprint 002]] then [[Harvey]]";
         let out = extract_wikilinks(body);
@@ -1238,12 +1614,58 @@ mod tests {
     #[test]
     fn okf_markdown_links_become_graph_entities() {
         let body = concat!(
+            "---\ntype: BigQuery Table\n---\n",
             "See [Customers](/tables/customers.md) and ",
+            "[Sales users](/sales/users.md) plus [Support users](/support/users.md). ",
             "[Weekly active users](../metrics/weekly%20active%20users.md#definition). ",
+            "Use [Legacy API](api_(legacy).md \"Legacy title\"). ",
+            "Ignore [Outside](../../../outside.md). ",
+            "Ignore [Ghost](ghost.md invalid-title) and [Unclosed](unclosed.md. ",
             "Ignore [Google](https://google.com) and ![diagram](diagram.md)."
         );
-        let out = extract_markdown_link_entities(body);
-        assert_eq!(out, vec!["customers", "weekly active users"]);
+        let out = extract_markdown_link_entities(
+            body,
+            Path::new("/bundle/tables/orders.md"),
+            Path::new("/bundle"),
+            "catalog",
+        );
+        assert_eq!(
+            out,
+            vec![
+                "catalog::tables/customers",
+                "catalog::sales/users",
+                "catalog::support/users",
+                "catalog::metrics/weekly active users",
+                "catalog::tables/api_(legacy)"
+            ]
+        );
+    }
+
+    #[test]
+    fn okf_graph_links_ignore_frontmatter_and_markdown_code() {
+        let body = concat!(
+            "---\n",
+            "type: Playbook\n",
+            "example: '[Metadata](metadata.md)'\n",
+            "---\n",
+            "# Restart\n\n",
+            "`[Inline](inline.md)` and ``[Long span](long-span.md)``\n\n",
+            "    [Indented](indented.md)\n\n",
+            "```markdown\n[Fenced](fenced.md)\n```\n\n",
+            "~~~markdown\n[Tilde](tilde.md)\n~~~\n\n",
+            "<pre>\n[HTML](html.md)\n</pre>\n\n",
+            "[Real][real]\n\n[real]: real.md\n",
+        );
+
+        assert_eq!(
+            extract_markdown_link_entities(
+                body,
+                Path::new("/bundle/playbooks/restart.md"),
+                Path::new("/bundle"),
+                "catalog",
+            ),
+            vec!["catalog::playbooks/real"]
+        );
     }
 
     #[test]
@@ -1269,6 +1691,25 @@ mod tests {
         assert!(is_indexable_md(Path::new("/x/data/auto-memory/foo.md")));
         assert!(is_indexable_md(Path::new("/x/data/Brain/pages/Map.canvas")));
         assert!(!is_indexable_md(Path::new("/x/data/Brain/pages/foo.txt")));
+    }
+
+    #[test]
+    fn source_path_expansion_matches_shell_style_environment_variables() {
+        let home = Path::new("/makakoo-home");
+        let process_home = std::env::var("HOME").unwrap();
+
+        assert_eq!(
+            expand_path("$HOME/notes", home),
+            PathBuf::from(&process_home).join("notes")
+        );
+        assert_eq!(
+            expand_path("${HOME}/notes", home),
+            PathBuf::from(process_home).join("notes")
+        );
+        assert_eq!(
+            expand_path("$MAKAKOO_HOME/data/Brain", home),
+            home.join("data/Brain")
+        );
     }
 
     #[test]
@@ -1489,7 +1930,7 @@ mod tests {
         );
         write(
             &bundle.join("log.md"),
-            "# Log\n\n## 2026-07-14\n* Creation: catalog\n",
+            "# Log\n\n## 2026-07-14\n* reservedlogonlysentinel\n",
         );
         write(
             &bundle.join("tables").join("orders.md"),
@@ -1499,9 +1940,17 @@ mod tests {
             &bundle.join("tables").join("invalid.md"),
             "---\ntitle: Missing type\n---\n# Invalid\n\ninvalid-only-marker must not be indexed.",
         );
+        write(
+            &bundle.join("upper-index").join("INDEX.md"),
+            "---\ntype: Topic\n---\n# Upper Index\n\nuppercaseindexsentinel is a concept.",
+        );
+        write(
+            &bundle.join("upper-log").join("LOG.md"),
+            "---\ntype: Topic\n---\n# Upper Log\n\nuppercaselogsentinel is a concept.",
+        );
 
         let report = engine.sync(SyncOptions::default()).unwrap();
-        assert_eq!(report.pages, 1);
+        assert_eq!(report.pages, 3);
         assert_eq!(report.errors, 1);
         let hits = engine.store.search("Orders", 10).unwrap();
         assert_eq!(hits.len(), 1);
@@ -1513,21 +1962,181 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .any(|value| value == "customers"));
+            .any(|value| value == "catalog::tables/customers"));
         assert!(hits[0]
             .metadata
             .as_array()
             .unwrap()
             .iter()
             .any(|value| value == "#okf-type/bigquery-table"));
+        let graph_edge_count: i64 = engine
+            .store
+            .conn_arc()
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM entity_graph
+                 WHERE subject = 'catalog::tables/orders'
+                   AND predicate = 'links_to'
+                   AND object = 'catalog::tables/customers'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(graph_edge_count, 1);
         assert!(engine
             .store
-            .search("Creation catalog", 10)
+            .search("reservedlogonlysentinel", 10)
             .unwrap()
             .is_empty());
         assert!(engine
             .store
             .search("invalid-only-marker", 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            engine
+                .store
+                .search("uppercaseindexsentinel", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            engine
+                .store
+                .search("uppercaselogsentinel", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn sync_removes_stale_okf_row_when_concept_becomes_invalid() {
+        let (dir, engine) = make_engine();
+        let bundle = dir.path().join("Imported OKF");
+        let cfg = dir.path().join("config");
+        fs::create_dir_all(&cfg).unwrap();
+        let config = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "catalog", "role": "enrichment", "type": "okf", "path": bundle.to_string_lossy(), "writable": false}
+            ]
+        });
+        fs::write(
+            cfg.join("brain_sources.json"),
+            serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        let concept = bundle.join("topic.md");
+        write(
+            &concept,
+            "---\ntype: Topic\n---\n# Topic\n\nstale-okf-marker is initially valid.",
+        );
+        engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(
+            engine.store.search("stale-okf-marker", 10).unwrap().len(),
+            1
+        );
+
+        write(
+            &concept,
+            "---\ntitle: Missing type\n---\n# Topic\n\nstale-okf-marker must disappear.",
+        );
+        let report = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(report.errors, 1);
+        assert!(engine
+            .store
+            .search("stale-okf-marker", 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn sync_removes_stale_okf_row_when_concept_becomes_non_utf8() {
+        let (dir, engine) = make_engine();
+        let bundle = dir.path().join("Imported OKF");
+        let cfg = dir.path().join("config");
+        fs::create_dir_all(&cfg).unwrap();
+        let config = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "catalog", "role": "enrichment", "type": "okf", "path": bundle.to_string_lossy(), "writable": false}
+            ]
+        });
+        fs::write(
+            cfg.join("brain_sources.json"),
+            serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        let concept = bundle.join("topic.md");
+        write(
+            &concept,
+            "---\ntype: Topic\n---\n# Topic\n\nstale-non-utf8-marker is initially valid.",
+        );
+        engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .search("stale-non-utf8-marker", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        fs::write(&concept, [0xff, 0xfe, 0xfd]).unwrap();
+        let report = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(report.errors, 1);
+        assert!(engine
+            .store
+            .search("stale-non-utf8-marker", 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn sync_replaces_stale_okf_row_with_minimal_valid_concept() {
+        let (dir, engine) = make_engine();
+        let bundle = dir.path().join("Imported OKF");
+        let cfg = dir.path().join("config");
+        fs::create_dir_all(&cfg).unwrap();
+        let config = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true},
+                {"name": "catalog", "role": "enrichment", "type": "okf", "path": bundle.to_string_lossy(), "writable": false}
+            ]
+        });
+        fs::write(
+            cfg.join("brain_sources.json"),
+            serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        let concept = bundle.join("topic.md");
+        write(
+            &concept,
+            "---\ntype: X\n---\n# Topic\n\nstaleminimalsentinel",
+        );
+        engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .search("staleminimalsentinel", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        write(&concept, "---\ntype: X\n---");
+        let report = engine.sync(SyncOptions::default()).unwrap();
+
+        assert_eq!(report.pages, 1);
+        assert!(engine
+            .store
+            .search("staleminimalsentinel", 10)
             .unwrap()
             .is_empty());
     }
@@ -1600,6 +2209,61 @@ mod tests {
     }
 
     #[test]
+    fn unregistering_source_purges_index_and_graph_but_keeps_files() {
+        let (dir, engine) = make_engine();
+        let external = dir.path().join("External Obsidian");
+        let document = external.join("External.md");
+        write_sources_config(dir.path(), &external);
+        write(
+            &document,
+            "# External\n\nunregisteredsourcesentinel [[SensitiveTarget]]",
+        );
+        engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .search("unregisteredsourcesentinel", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let default_only = serde_json::json!({
+            "canonical": "default",
+            "sources": [
+                {"name": "default", "role": "canonical", "type": "logseq", "path": "$MAKAKOO_HOME/data/Brain", "writable": true}
+            ]
+        });
+        write(
+            &dir.path().join("config/brain_sources.json"),
+            &serde_json::to_string_pretty(&default_only).unwrap(),
+        );
+
+        let report = engine.sync(SyncOptions::default()).unwrap();
+
+        assert_eq!(report.removed, 1);
+        assert!(document.exists());
+        assert!(engine
+            .store
+            .search("unregisteredsourcesentinel", 10)
+            .unwrap()
+            .is_empty());
+        let graph_count: i64 = engine
+            .store
+            .conn_arc()
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM entity_graph
+                 WHERE subject = 'External' AND object = 'SensitiveTarget'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(graph_count, 0);
+    }
+
+    #[test]
     fn missing_canonical_subdirs_do_not_prune_existing_canonical_rows() {
         let (dir, engine) = make_engine();
         let brain = dir.path().join("data").join("Brain");
@@ -1621,7 +2285,7 @@ mod tests {
     }
 
     #[test]
-    fn enrichment_sources_overlapping_canonical_brain_are_skipped() {
+    fn enrichment_sources_overlapping_canonical_brain_are_rejected() {
         let (dir, engine) = make_engine();
         let cfg = dir.path().join("config");
         fs::create_dir_all(&cfg).unwrap();
@@ -1638,11 +2302,7 @@ mod tests {
         )
         .unwrap();
 
-        let sources = engine.load_sources().unwrap();
-        assert!(sources.iter().any(|source| source.name == "default"));
-        assert!(
-            sources.iter().all(|source| source.name != "obsidian"),
-            "enrichment source inside canonical Brain must not retag canonical files"
-        );
+        let error = engine.load_sources().unwrap_err().to_string();
+        assert!(error.contains("brain source roots overlap"));
     }
 }
