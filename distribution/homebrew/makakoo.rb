@@ -12,7 +12,7 @@
 # `docs/RELEASING.md`). Until the live tap is bumped, brew users stay
 # on the previous version.
 class Makakoo < Formula
-  desc "Makakoo OS — autonomous cognitive extension for any AI CLI"
+  desc "Autonomous cognitive extension for any AI CLI"
   homepage "https://makakoo.com"
   version "0.1.38"
   license "MIT"
