@@ -10,6 +10,17 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.38] - 2026-07-15
+
+### Added
+- Added native `makakoo brain list`, `add`, `remove`, `export`, and `validate` commands for managing enrichment sources and exchanging local [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.1 bundles.
+- Added read-only OKF enrichment to Superbrain. `makakoo sync` indexes valid concepts, source-qualified Markdown relationships, and `type` metadata without moving or rewriting the imported bundle.
+- Added local OKF export with journal opt-in, JSON reports, generated progressive-disclosure indexes, and a public allowlist that refuses credential-shaped content.
+
+### Changed
+- Hardened Brain source registry writes and forced export replacement with cross-process locks, owned recovery markers, verified backups, overlap checks, and fail-closed collision handling.
+- Updated the public docs, Brain guide, troubleshooting index, skills, and command manual so users and AI agents route through the native OKF workflow.
+
 ## [0.1.37] - 2026-06-28
 
 ### Added
