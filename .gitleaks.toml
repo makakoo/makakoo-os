@@ -76,3 +76,17 @@ regexes = [
     '''GK1234567890abcdef''',
     '''deadbeefcafe1234''',
 ]
+
+# The OKF public-export guard deliberately recognizes PEM private-key
+# headers. Keep this allowlist path-and-line scoped so an actual private key
+# anywhere else in the tree still fails the release gate.
+[[allowlists]]
+description = "OKF secret-detector source literals"
+condition = "AND"
+regexTarget = "line"
+paths = [
+    '''makakoo/src/okf\.rs''',
+]
+regexes = [
+    '''upper\.contains\("-----BEGIN (?:RSA |OPENSSH )?PRIVATE KEY-----"\)''',
+]
