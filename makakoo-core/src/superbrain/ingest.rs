@@ -748,14 +748,12 @@ fn doc_type_for(path: &Path) -> Option<&'static str> {
 fn expand_path(raw: &str, home: &Path) -> PathBuf {
     let s = expand_environment_variables(raw, home);
     if s == "~" {
-        return std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.to_path_buf());
+        return dirs::home_dir().unwrap_or_else(|| home.to_path_buf());
     }
     if let Some(rest) = s.strip_prefix("~/") {
-        return std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(rest))
-            .unwrap_or_else(|_| home.join(rest));
+        return dirs::home_dir()
+            .unwrap_or_else(|| home.to_path_buf())
+            .join(rest);
     }
     let path = PathBuf::from(s);
     if path.is_absolute() {
@@ -779,6 +777,12 @@ fn expand_environment_variables(raw: &str, home: &Path) -> String {
                 .as_str();
             if name == "MAKAKOO_HOME" || name == "HARVEY_HOME" {
                 return home.to_string_lossy().into_owned();
+            }
+            if name == "HOME" {
+                return dirs::home_dir()
+                    .unwrap_or_else(|| home.to_path_buf())
+                    .to_string_lossy()
+                    .into_owned();
             }
             std::env::var(name).unwrap_or_else(|_| captures[0].to_string())
         })
@@ -1696,15 +1700,12 @@ mod tests {
     #[test]
     fn source_path_expansion_matches_shell_style_environment_variables() {
         let home = Path::new("/makakoo-home");
-        let process_home = std::env::var("HOME").unwrap();
+        let process_home = dirs::home_dir().unwrap_or_else(|| home.to_path_buf());
 
-        assert_eq!(
-            expand_path("$HOME/notes", home),
-            PathBuf::from(&process_home).join("notes")
-        );
+        assert_eq!(expand_path("$HOME/notes", home), process_home.join("notes"));
         assert_eq!(
             expand_path("${HOME}/notes", home),
-            PathBuf::from(process_home).join("notes")
+            process_home.join("notes")
         );
         assert_eq!(
             expand_path("$MAKAKOO_HOME/data/Brain", home),

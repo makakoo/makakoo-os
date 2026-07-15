@@ -21,6 +21,9 @@ complement, focused on user-visible changes and migration notes.
 - Hardened Brain source registry writes and forced export replacement with cross-process locks, owned recovery markers, verified backups, overlap checks, and fail-closed collision handling.
 - Updated the public docs, Brain guide, troubleshooting index, skills, and command manual so users and AI agents route through the native OKF workflow.
 
+### Fixed
+- Fixed OKF file durability on Windows by syncing staged files through writable handles, and made `$HOME` source paths resolve through the platform home directory when Windows does not expose a `HOME` environment variable.
+
 ## [0.1.37] - 2026-06-28
 
 ### Added

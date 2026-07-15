@@ -987,7 +987,11 @@ fn sync_tree(directory: &Path) -> anyhow::Result<()> {
         if file_type.is_dir() {
             sync_tree(&path)?;
         } else if file_type.is_file() {
-            File::open(&path)?
+            // Windows FlushFileBuffers requires a handle opened for writing.
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)?
                 .sync_all()
                 .with_context(|| format!("sync OKF file: {}", path.display()))?;
         }

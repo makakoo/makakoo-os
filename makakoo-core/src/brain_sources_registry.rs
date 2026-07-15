@@ -275,7 +275,12 @@ fn recover_registry_files(home: &Path) -> anyhow::Result<()> {
         let expected = registry_marker_expected_body(home)?
             .context("brain source recovery marker has no intended config body")?;
         if fs::read_to_string(&temporary).ok().as_deref() == Some(expected.as_str()) {
-            File::open(&temporary)?.sync_all()?;
+            // Windows FlushFileBuffers requires a handle opened for writing.
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&temporary)?
+                .sync_all()?;
             fs::rename(&temporary, &path)
                 .context("promote recovered initial brain source config")?;
         } else {

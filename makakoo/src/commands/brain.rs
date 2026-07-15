@@ -428,6 +428,12 @@ fn expand_environment_variables(raw: &str, home: &Path) -> String {
             if name == "MAKAKOO_HOME" || name == "HARVEY_HOME" {
                 return home.to_string_lossy().into_owned();
             }
+            if name == "HOME" {
+                return dirs::home_dir()
+                    .unwrap_or_else(|| home.to_path_buf())
+                    .to_string_lossy()
+                    .into_owned();
+            }
             std::env::var(name).unwrap_or_else(|_| captures[0].to_string())
         })
         .into_owned()
@@ -577,15 +583,15 @@ mod tests {
     #[test]
     fn source_path_expansion_supports_shell_style_environment_variables() {
         let home = Path::new("/makakoo-home");
-        let process_home = std::env::var("HOME").unwrap();
+        let process_home = dirs::home_dir().unwrap_or_else(|| home.to_path_buf());
 
         assert_eq!(
             expand_source_path("$HOME/notes", home),
-            PathBuf::from(&process_home).join("notes")
+            process_home.join("notes")
         );
         assert_eq!(
             expand_source_path("${HOME}/notes", home),
-            PathBuf::from(process_home).join("notes")
+            process_home.join("notes")
         );
         assert_eq!(
             expand_source_path("$HARVEY_HOME/data/Brain", home),
