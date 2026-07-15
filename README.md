@@ -24,7 +24,8 @@ Your notes, your decisions, your arguments with yourself from three months ago a
 |---|---|
 | Infect AI CLIs with a shared bootstrap block (open-ended roster — 9 today: Claude / Gemini / Codex / OpenCode / Vibe / Cursor / Qwen / Kimi / pi) | ✅ macOS + Linux + Windows |
 | 4 IDE-assistant hosts (Copilot / Continue / Cline / JetBrains) | ✅ detection + writers |
-| Persistent Brain (canonical Logseq journals/pages + optional Obsidian/plain-markdown enrichment) | ✅ |
+| Persistent Brain (canonical Logseq journals/pages + optional Obsidian, Logseq, plain-Markdown, and OKF enrichment) | ✅ |
+| Portable knowledge interchange | ✅ local-only OKF v0.1 validation, import, and export via `makakoo brain` |
 | Superbrain search — FTS5 + vector + LLM synthesis | ✅ |
 | Headroom context compression for bulky tool output | ✅ included in the default core distro via `tool-headroom` |
 | Capability-sandboxed plugin system (`plugin.toml` manifests) | ✅ core catalog with skills, agents, MCP tools, SANCHO tasks, and patterns |
@@ -123,6 +124,7 @@ rm -rf ~/.makakoo ~/MAKAKOO
 |---|---|
 | Install Makakoo from zero (step-by-step, beginner-friendly) | [`docs/getting-started.md`](docs/getting-started.md) |
 | See what I can do with Makakoo day-to-day | [`docs/use-cases.md`](docs/use-cases.md) |
+| Import, validate, or export portable knowledge bundles | [`docs/user-manual/makakoo-brain.md`](docs/user-manual/makakoo-brain.md) |
 | Understand the setup wizard's sections | [`docs/user-manual/setup-wizard.md`](docs/user-manual/setup-wizard.md) |
 | Update Makakoo safely, manually or automatically | [`docs/upgrade.md`](docs/upgrade.md), [`docs/user-manual/makakoo-update.md`](docs/user-manual/makakoo-update.md) |
 | Look up a specific `makakoo` subcommand | [`docs/user-manual/`](docs/user-manual/index.md) |
@@ -142,6 +144,9 @@ makakoo query "what did I decide about the database migration?"
 
 # Search the Brain full-text
 makakoo search "polymarket"
+
+# Export a local OKF v0.1 knowledge bundle
+makakoo brain export --source default --out ~/exports/makakoo-okf
 
 # Install a plugin from the shipped core set
 makakoo plugin install skill-research-arxiv --core

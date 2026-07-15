@@ -54,6 +54,17 @@ makakoo query "what are my active trading strategies?"
 ```
 <!-- verify: skip reason="public docs example requires a real user shell/network/LLM; release smoke workflows cover install path" -->
 
+### 5. Exchange portable knowledge
+
+```bash
+# Export canonical pages and durable auto-memory as OKF v0.1
+makakoo brain export --source default --out ~/exports/makakoo-okf
+
+# Validate a bundle before importing or sharing it
+makakoo brain validate ~/exports/makakoo-okf
+```
+<!-- verify: skip reason="writes a user-owned export directory; the OKF CLI has dedicated Rust and dogfood coverage" -->
+
 ---
 
 ## Common Workflows
@@ -262,5 +273,6 @@ Makakoo synthesizes from all your notes...
 
 - [Installation Guide](getting-started.md) — If you haven't installed yet
 - [Brain Guide](brain/index.md) — Deep dive into memory
+- [`makakoo brain`](user-manual/makakoo-brain.md) — Register sources and exchange OKF bundles
 - [Plugin Guide](plugins/index.md) — Add new capabilities
 - [Troubleshooting](troubleshooting/index.md) — Common issues

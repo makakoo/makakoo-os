@@ -210,7 +210,7 @@ Asks:
 - Whether to register a separate Obsidian vault as enrichment
 - Whether to register any other plain Markdown folder, and whether that folder should be writable
 
-Initializes the canonical journals dir + pages dir. Separate Obsidian/plain folders are indexed with source labels; normal journal writes still go to the canonical Brain. You can add more vaults later by re-running `makakoo setup brain` or by using the installed plugin CLI at `$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py`.
+Initializes the canonical journals dir + pages dir. Separate Obsidian/plain folders are indexed with source labels; normal journal writes still go to the canonical Brain. You can add more vaults later by re-running `makakoo setup brain` or with `makakoo brain add <name> <logseq|obsidian|plain> <path>`. Portable OKF v0.1 bundles are registered separately with `makakoo brain add <name> okf <path>` after native validation.
 
 If the Obsidian app is missing, the picker offers to install it with Homebrew, Flatpak, or winget when one of those package managers is available. The default is No. If install is skipped or unavailable, Obsidian setup is skipped for this run; the canonical Brain remains ready and can be opened in Obsidian later.
 

@@ -23,7 +23,7 @@ Brain. Different doorway.
 
 | Area | What to read |
 |---|---|
-| Brain and search | [Brain guide](brain/index.md), [`makakoo query`](user-manual/makakoo-query.md), [`makakoo search`](user-manual/makakoo-search.md) |
+| Brain, search, and portable knowledge | [Brain guide](brain/index.md), [`makakoo brain`](user-manual/makakoo-brain.md), [`makakoo query`](user-manual/makakoo-query.md), [`makakoo search`](user-manual/makakoo-search.md) |
 | CLI and IDE infection | [`makakoo infect`](user-manual/makakoo-infect.md), [IDE integration](concepts/ide-integration.md) |
 | Agent slots and transports | [`makakoo agent`](user-manual/agent.md), [multi-transport walkthrough](walkthroughs/multi-transport-subagents.md) |
 | Durable child-agent work | [`makakoo agent-session`](user-manual/makakoo-agent-session.md), [`makakoo handle`](user-manual/makakoo-handle.md) |
@@ -38,6 +38,7 @@ Brain. Different doorway.
 - `makakoo setup updates` chooses auto or manual Makakoo OS updates. Fresh setup defaults to auto. Existing installs stay idle until this config exists.
 - `makakoo update` is the primary update command. `makakoo upgrade` is only a legacy alias.
 - `makakoo setup brain` seeds the canonical Brain at `$MAKAKOO_HOME/data/Brain` and can register separate Logseq, Obsidian, or plain-markdown folders as labeled enrichment sources. If Obsidian is missing, the picker can offer to install it first when Homebrew, Flatpak, or winget is available.
+- `makakoo brain` manages those sources and handles local Open Knowledge Format (OKF) v0.1 validation, read-only import, and export. It never uploads or publishes a bundle.
 - `makakoo setup lope` offers Lope, Makakoo's optional in-house companion for validator ensembles for reviews, votes, compares, negotiated plans, and validator-in-the-loop sprints.
 - Headroom ships in the default core distro through `tool-headroom`. It compresses bulky tool and MCP output without making users manage another setup step.
 

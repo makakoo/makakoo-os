@@ -131,9 +131,10 @@ Yes. The Makakoo Brain at `~/MAKAKOO/data/Brain/` is plain Markdown and remains 
 - **Use Obsidian as a UI over the existing Brain.** No registration
   needed. Open Obsidian → `Open folder as vault` → point at
   `~/MAKAKOO/data/Brain/`. Same files, Obsidian UX.
-- **Connect a separate vault as enrichment.** Run `makakoo setup brain`. The picker can offer to install Obsidian first if the app is missing and Homebrew, Flatpak, or winget is available. Advanced users can run the plugin CLI directly: `python3 "$MAKAKOO_HOME/plugins/skill-brain-multi-source/src/brain_cli.py" add personal obsidian ~/Documents/MyVault`. Normal journal writes still go to the canonical Brain.
+- **Connect a separate vault as enrichment.** Run `makakoo setup brain`. The picker can offer to install Obsidian first if the app is missing and Homebrew, Flatpak, or winget is available. Advanced users can run `makakoo brain add personal obsidian ~/Documents/MyVault --read-only`. Normal journal writes still go to the canonical Brain.
+- **Connect an OKF bundle as enrichment.** Run `makakoo brain validate <bundle>`, then `makakoo brain add <name> okf <bundle>` and `makakoo sync`. OKF sources are always read-only.
 
-See [use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes).
+See [use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes) and the [`makakoo brain` manual](user-manual/makakoo-brain.md).
 
 ### Does Makakoo work on a corporate / locked-down machine?
 

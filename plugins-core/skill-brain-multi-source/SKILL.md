@@ -60,6 +60,21 @@ makakoo setup brain
 
 ### Common flows
 
+#### Import an OKF bundle
+
+1. Run `makakoo brain validate <bundle> --json` and inspect both errors and warnings.
+2. If validation is conformant, run `makakoo brain add <name> okf <bundle>`.
+3. Run `makakoo sync`, then confirm retrieval with `makakoo search <known-term>`.
+4. Keep the source read-only. Never copy imported concepts into the canonical Brain unless the user explicitly asks for a curated migration.
+
+#### Export or share an OKF bundle
+
+1. Confirm which registered source to export with `makakoo brain list`.
+2. Export to a local directory. Canonical pages and durable auto-memory are included by default; journals require explicit `--include-journals`.
+3. Validate the output with `makakoo brain validate <output>`.
+4. For an intended public bundle, use `--public`, report how many private documents were skipped, and inspect the result.
+5. Never upload, publish, email, or otherwise share the directory without explicit approval.
+
 **FIRST — always disambiguate before reaching for `add`:**
 
 When a user says "connect brain to obsidian" / "use obsidian with harvey" / anything similar, there are **two completely different scenarios** and the right answer depends on which one they mean. Ask before acting:
@@ -81,7 +96,7 @@ Caveat to mention for Scenario A: the existing Brain uses Logseq outliner format
 
 **User says "setup my brain" or "first-run":**
 
-1. Run the picker interactively: `python3 .../brain_cli.py init`.
+1. Run the picker interactively: `makakoo setup brain`.
 2. What the picker does, in order:
    - Prints the canonical default Brain folder: `$MAKAKOO_HOME/data/Brain/`.
    - Detects the Obsidian app first. If missing, offers to install it through Homebrew, Flatpak, or winget when available. The default is No; declining install skips Obsidian setup for this run.
@@ -122,7 +137,7 @@ This skill is the user-facing documentation for `plugins-core/skill-brain-multi-
 
 - `brain_source.py` — adapter classes (LogseqSource / ObsidianSource / PlainMarkdownSource / OkfSource)
 - `config.py` — JSON config loader + cross-process locked, crash-recoverable writer
-- `brain_cli.py` — what this skill drives
+- `brain_cli.py` — compatibility helper used by setup and SANCHO; native user operations go through `makakoo brain`
 - `picker.py` — interactive `init` wizard
 - `sancho_ingest.py` — 30-min SANCHO task that walks every registered source
 

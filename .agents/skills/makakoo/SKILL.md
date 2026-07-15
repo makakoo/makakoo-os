@@ -1,6 +1,6 @@
 ---
 name: makakoo
-version: 1.0.0
+version: 1.1.0
 description: |
   Drop-in onboarding for any AI CLI (Claude Code, Codex, Gemini, OpenCode,
   Cursor, Vibe, Qwen, Kimi, pi) running on a machine that has Makakoo OS
@@ -38,7 +38,7 @@ Makakoo OS is a **persistent shared-Brain layer** that gives every local AI CLI 
 - **Never run destructive commands** (`rm -rf`, `git reset --hard`, `git push --force`) without explicit user approval.
 - **The user is the boss.** You are the user's autonomous extension, not an independent agent.
 
-## Real `makakoo` subcommands (verified 2026-06-21)
+## Real `makakoo` subcommands (verified 2026-07-15)
 
 Primary command surface — these are real. For the long tail, run `makakoo --help` instead of guessing.
 
@@ -74,7 +74,8 @@ Primary command surface — these are real. For the long tail, run `makakoo --he
 | `makakoo nursery {list,hatch}` | Mascot registry |
 | `makakoo buddy status` | Active mascot's ASCII frame + state |
 | `makakoo dream` | Force a Brain consolidation pass |
-| `makakoo sync [--force] [--embed]` | Index `Brain/pages/`, `Brain/journals/`, `data/auto-memory/` into FTS5 |
+| `makakoo sync [--force] [--embed]` | Index canonical Brain content, auto-memory, and registered enrichment sources into FTS5 |
+| `makakoo brain {list,add,remove,export,validate}` | Manage Brain sources and local OKF v0.1 import/export |
 | `makakoo search <query>` | Full-text search across the Brain |
 | `makakoo query <question>` | FTS retrieval + LLM synthesis (requires a configured model provider) |
 | `makakoo memory stats` | Recall log + promotion candidates |
@@ -164,6 +165,9 @@ After significant work (bug fixed, feature shipped, decision made), append a `- 
 | "search the brain for X" | `makakoo search "X"` |
 | "what did I do today / yesterday" | `makakoo query "summary of recent journal entries"` (needs LLM); or `cat ~/MAKAKOO/data/Brain/journals/$(date +%Y_%m_%d).md` |
 | "remember X" / "log X" / "save X to brain" | Append `- <X>` to today's journal file, then `makakoo sync` |
+| "connect this vault/folder" / "list brain sources" | `makakoo brain list`, then `makakoo brain add <name> <logseq|obsidian|plain> <path> --read-only` |
+| "import/add this OKF bundle" | `makakoo brain validate <bundle>`, `makakoo brain add <name> okf <bundle>`, then `makakoo sync` |
+| "export/share my Brain as OKF" | `makakoo brain export --source default --out <directory>`; use `--public` only for explicitly public documents, then ask before publishing |
 | "tell this CLI about Makakoo" / "set up Makakoo in Codex" / "infect Codex" / "install Makakoo into <cli>" | `makakoo infect --global --target <cli>` (e.g. `--target codex`) — DEFAULT |
 | "infect this project folder" / "make THIS repo Makakoo-aware" / "project-scoped overrides" | `makakoo infect --local --target <cli>` — only when user explicitly wants project-scoped, not system-wide |
 | "why is X broken" | `cat ~/MAKAKOO/data/Brain/journals/*.md \| grep -i X`; or `makakoo search "X error"`; or check `~/MAKAKOO/data/logs/` |
@@ -200,6 +204,7 @@ These are all reachable on the local filesystem under `<makakoo-os-checkout>/doc
 - Don't grep the entire filesystem to figure out what `makakoo` does. The list above is authoritative.
 - Don't invoke `makakoo skill canary` expecting a useful result — it's a documentation-only skill that prints a pointer.
 - Don't journal a URL as a workaround when `harvey_describe_*` rate-limits — that poisons retrieval. Wait for the rate limit to clear, or route through `harvey_knowledge_ingest` (different embedding path).
+- Don't publish an OKF export automatically. Export is local-only; inspect the bundle and get explicit approval before any upload or share.
 - Don't claim a feature exists without verifying it on the list above. If unsure, run `makakoo --help`.
 
 ## You are now ready

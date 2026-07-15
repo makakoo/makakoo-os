@@ -6,7 +6,7 @@ Makakoo's persistent memory system.
 
 The Brain is Makakoo's memory — all your notes, decisions, and knowledge in one place.
 
-The canonical Brain lives at `$MAKAKOO_HOME/data/Brain/`. Obsidian, Logseq, and plain Markdown folders can be added as optional enrichment sources, but they do not replace the canonical Brain. Normal journals and pages still write to `data/Brain/`; enrichment sources add searchable context with source labels.
+The canonical Brain lives at `$MAKAKOO_HOME/data/Brain/`. Obsidian, Logseq, plain Markdown, and Open Knowledge Format (OKF) folders can be added as optional enrichment sources, but they do not replace the canonical Brain. Normal journals and pages still write to `data/Brain/`; enrichment sources add searchable context with source labels.
 
 ```
 ~/MAKAKOO/data/Brain/
@@ -20,6 +20,25 @@ The canonical Brain lives at `$MAKAKOO_HOME/data/Brain/`. Obsidian, Logseq, and 
 │   └── people/
 └── superbrain.db       # Vector embeddings
 ```
+
+## Portable knowledge with OKF
+
+Makakoo uses [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.1 as a local interchange boundary. An OKF bundle can be validated, registered as read-only enrichment, indexed, and searched without changing the canonical Brain:
+
+```bash
+makakoo brain validate ~/knowledge/partner-catalog
+makakoo brain add partner-catalog okf ~/knowledge/partner-catalog
+makakoo sync
+makakoo search "partner product taxonomy"
+```
+
+Export is also local-only. Canonical pages and durable auto-memory are included by default; journals require `--include-journals`.
+
+```bash
+makakoo brain export --source default --out ~/exports/makakoo-okf
+```
+
+See [`makakoo brain`](../user-manual/makakoo-brain.md) for validation rules, public-safe export, JSON output, and recovery behavior.
 
 ## Two Types of Memory
 
@@ -398,7 +417,8 @@ makakoo sync --force
 ## See Also
 
 - [Concepts Overview](../concepts/index.md) — Brain in context
-- [Superbrain Search](../concepts/superbrain.md) — Technical details
+- [Architecture Guide](../concepts/architecture.md) — Technical details
+- [`makakoo brain`](../user-manual/makakoo-brain.md) — Sources and OKF interchange
 - [Query Reference](../user-manual/makakoo-query.md) — CLI options
 
 

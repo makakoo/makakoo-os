@@ -71,6 +71,26 @@ Two scenarios to disambiguate before registering:
   anything. Open Obsidian → `Open folder as vault` → point at
   `~/MAKAKOO/data/Brain/`. Same files, Obsidian UX. Zero config.
 
+### Import or export a portable knowledge bundle
+
+Use [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.1 when another tool or team needs a filesystem-native knowledge bundle instead of Makakoo's canonical Brain layout.
+
+Validate and register an incoming bundle as read-only enrichment:
+
+```sh
+makakoo brain validate ~/knowledge/partner-catalog
+makakoo brain add partner-catalog okf ~/knowledge/partner-catalog
+makakoo sync
+```
+
+Export your canonical pages and durable auto-memory locally:
+
+```sh
+makakoo brain export --source default --out ~/exports/makakoo-okf
+```
+
+Daily journals stay out unless you pass `--include-journals`. `--public` only includes documents explicitly marked `visibility: public` and fails closed on credential-shaped content. Neither command uploads or publishes anything. Full reference: [`makakoo brain`](user-manual/makakoo-brain.md).
+
 ---
 
 ## 4. Install the blessed CLI agent (pi) and terminal (Ghostty)

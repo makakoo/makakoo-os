@@ -156,6 +156,49 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ---
 
+## Brain sources and OKF
+
+### Source registry
+
+- **`brain source config is not a regular file: <path>`** - `$MAKAKOO_HOME/config/brain_sources.json` is a directory, symlink, or special file. Move it aside, restore a regular JSON file, then retry `makakoo brain list`.
+- **`brain source recovery artifact appeared during registry update`** - Another writer or unrelated file appeared while the atomic registry transaction was running. Stop concurrent setup/Brain commands, inspect sibling `.brain_sources.json.*` files, and retry.
+- **`brain source recovery marker collision at <path>; move it aside or remove it manually`** - The reserved recovery-marker path already exists and is not owned by the current transaction. Move it aside after inspection; Makakoo will not delete it.
+- **`brain source root overlaps existing source <name>: <path>`** - Registered roots cannot be nested inside each other. Run `makakoo brain list`, then choose a non-overlapping folder or remove the old registry entry.
+- **`cannot remove canonical source 'default'`** / **`the canonical 'default' source is fixed and cannot be replaced`** - The canonical Brain is permanent. Add or remove a named enrichment source instead.
+- **`invalid source name <name>; use 1-64 letters, digits, '.', '_' or '-'`** - Rename the source using only the printed character set.
+- **`refusing marker-only brain source recovery because primary is not a regular file: <path>`** - Recovery found a marker but the primary config path is not a file. Move the conflicting path aside and restore `brain_sources.json` before retrying.
+- **`refusing non-file brain source recovery artifact <path>; move it aside or remove it manually`** - A reserved recovery path contains a directory, symlink, or special file. Inspect and move it manually.
+- **`refusing to discard brain source backup because primary does not match the owned transaction`** - The primary config changed after Makakoo created its backup. Do not delete either copy; compare them and keep the intended registry.
+- **`refusing to discard brain source backup because primary is not a regular file: <path>`** - The primary config changed type during recovery. Move the collision aside, restore a regular JSON file, and retry.
+- **`refusing to replace non-file brain source config: <path>`** - The registry path is not a normal file. Move it aside instead of forcing replacement.
+- **`refusing unowned brain source recovery artifacts in <dir>; move them aside or remove them manually`** - Makakoo found temp/backup files without its ownership marker. Inspect and move them; automatic cleanup deliberately fails closed.
+- **`refusing unowned brain source recovery marker <path>; move it aside or remove it manually`** - The marker is not from a transaction Makakoo can prove it owns. Inspect and move it manually.
+- **`unsupported brain source type <type>; expected logseq, obsidian, plain, or okf`** - Pick one of the four supported source types.
+
+### OKF validation and export
+
+- **`OKF bundle is not a directory: <path>`** - Point `makakoo brain validate` or `brain add ... okf` at the bundle directory, not a Markdown file or missing path.
+- **`refusing invalid OKF bundle: <N> error(s); run 'makakoo brain validate <path> --json'`** - Run the printed validation command, fix every item in `errors`, then register again. Warnings alone are conformant.
+- **`frontmatter closing delimiter is missing`** - A concept starts YAML frontmatter with `---` but has no closing `---`. Close the block before the Markdown body.
+- **`source <name> is already an OKF bundle; use or copy its original directory`** - OKF-to-OKF export adds no value. Use the registered directory directly or copy it with normal filesystem tools.
+- **`unsupported export format <format>; expected 'okf'`** - `makakoo brain export` currently accepts only `--format okf`.
+- **`export produced no concepts`** - The source has no exportable concepts. Confirm the registered source and files. With `--public`, add `visibility: public` only to documents intended for sharing.
+- **`public export refused: <path> contains likely secret material (<reason>)`** - Remove the credential/private-key content from that public document or remove its public visibility marker. Do not bypass the refusal by publishing manually.
+- **`duplicate OKF destination for <path>`** - Two inputs still map to the same portable destination after collision handling. Rename one source document and retry.
+- **`output directory is not empty: <path> (pass --force to replace it)`** - Choose an empty destination, or use `--force` only after reviewing what will be replaced.
+- **`output directory became non-empty during export`** - Another process wrote into the destination during staging. Stop the writer and retry with a clean directory.
+- **`output cannot be a symlink: <path>`** - Export to a real directory path. Symlink destinations are rejected to prevent path escapes.
+- **`output cannot overlap source root: <path>`** / **`output cannot overlap auto-memory source: <path>`** - Put the export outside the source and `$MAKAKOO_HOME/data/auto-memory`; otherwise export could recursively ingest or replace its own inputs.
+- **`OKF recovery marker collision at <path>; move it aside or remove it manually`** / **`OKF promotion marker collision at <path>; move it aside or remove it manually`** - A reserved sibling marker already exists. Inspect and move it; Makakoo will not guess ownership.
+- **`OKF backup recovery artifact appeared during export: <path>`** - A backup path appeared after the export started. Stop concurrent exporters, inspect the sibling recovery artifacts, and retry.
+- **`refusing non-directory OKF recovery artifact <path>; move it aside or remove it manually`** - A reserved stage/backup path is not a directory. Inspect and move it manually.
+- **`refusing non-file entry in owned OKF bundle: <path>`** - Recovery found a symlink or special entry inside a bundle it was about to remove. Move the bundle aside and inspect it instead of forcing cleanup.
+- **`refusing unowned OKF recovery artifact <path>; move it aside or remove it manually`** / **`refusing unowned OKF recovery marker <path>; move it aside or remove it manually`** / **`refusing unowned OKF promotion marker <path>; move it aside or remove it manually`** - The recovery item lacks valid Makakoo ownership metadata. Preserve it for inspection and move it manually.
+- **`refusing to discard OKF backup because promoted output is not an owned directory: <path>`** - The promoted output is missing valid ownership metadata or is no longer a directory. Compare output and backup before deciding which to keep.
+- **`refusing to discard OKF backup because output does not match the owned promotion`** - Output changed after promotion. Preserve both output and backup, compare them, then resolve manually.
+
+---
+
 ## Additional exact diagnostics
 
 These are less common subsystem errors, but they are still searchable here so the verifier keeps public error strings covered.
