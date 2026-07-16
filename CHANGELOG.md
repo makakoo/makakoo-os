@@ -10,6 +10,17 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-07-16
+
+### Fixed
+- `makakoo update` on curl-pipe installs now refreshes the binary and bundled assets only (`MAKAKOO_NO_AUTORUN=1`); it no longer re-runs the full `makakoo install` umbrella — distro reconcile plus interactive wizard — on a machine that is already set up.
+- Distro install no longer fails the whole distro (and with it `makakoo install`/`makakoo update`) when a plugin's directory exists on disk without a lock entry, e.g. after an out-of-band auto-update. Such plugins are skipped with a warning and a reconcile hint.
+- `makakoo plugin update` for path-sourced plugins backs up the installed tree before the uninstall+reinstall round-trip and restores it (tree + lock entry) when the reinstall is refused — a security-gate refusal no longer strands the user without the plugin.
+
+### Changed
+- The setup wizard's brain picker now always shows the real, expanded default Brain folder (e.g. `/Users/you/MAKAKOO/data/Brain`) in every user-facing line — header, Obsidian vault question, and closing summary — instead of the `$MAKAKOO_HOME/data/Brain` literal, so the path can be pasted straight into Obsidian or a file manager. The symbolic form remains in the stored config and is labeled as such.
+- Brain picker copy: consistent Makakoo naming in write-permission questions, an explicit `(Enter = skip)` on the optional plain-folder prompt, and closing hints that point at `makakoo brain list|add|remove` and `makakoo setup brain`.
+
 ## [0.1.39] - 2026-07-16
 
 ### Added
