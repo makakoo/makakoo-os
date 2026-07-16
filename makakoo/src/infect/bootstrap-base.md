@@ -39,6 +39,24 @@ superbrain remember "summary"      # log to Brain + event store
 cat $MAKAKOO_HOME/data/auto-memory/MEMORY.md   # cross-session curated insights
 ```
 
+## Knowledge sources & OKF interchange — `makakoo brain` (v0.1.38+)
+
+Superbrain answers *"what do I know?"*; `makakoo brain` manages *where knowledge comes from and how it travels*. Reach for it when the user says *"add this folder as knowledge"*, *"index these docs"*, *"turn these files into knowledge"*, *"export my knowledge"*, or *"import this bundle"*:
+
+```bash
+makakoo brain list                                   # registered enrichment sources
+makakoo brain add <name> <logseq|obsidian|plain|okf> <path>   # register a source (read-only default)
+makakoo brain ingest <files|folders> --out <bundle>  # arbitrary .md → OKF v0.1 bundle
+makakoo brain export --out <bundle> [--public]       # Brain pages + auto-memory → OKF bundle
+makakoo brain validate <bundle> [--json]             # conformance check, exit 1 on structural errors
+```
+
+- `ingest` / `export` build bundles only — nothing is registered, indexed, or published. To make new knowledge searchable: `makakoo brain add <name> okf <bundle>`, then `makakoo sync`.
+- The canonical Brain never moves; OKF sources are read-only enrichment.
+- `--public` export is an allowlist (`visibility: public` documents only) and fails closed on credential-shaped content. It still publishes nothing — review before sharing.
+
+Full reference: `docs/user-manual/makakoo-brain.md` in the makakoo-os repo.
+
 ## Multimodal Understanding — always available via MCP
 
 Every MCP-capable CLI now has three omni tools that route through switchAILocal to `xiaomi-tp:mimo-v2-omni` for image / audio / video understanding. Use them **whenever a user drops media** on you — a photo, a voice note, a screen recording, a chart, a diagram. The `source` argument accepts a public URL, a `data:` URI, or a local file path (auto base64-encoded):
