@@ -81,6 +81,22 @@ def test_accept_defaults_leaves_only_default(tmp_home, monkeypatch, capsys):
     assert registry.names() == ["default"]
 
 
+def test_default_brain_path_shown_expanded_not_as_env_literal(tmp_home, monkeypatch, capsys):
+    # The user must always see the REAL default Brain folder on disk —
+    # a `$MAKAKOO_HOME/data/Brain` literal cannot be pasted into Obsidian
+    # or a file manager. The symbolic form may appear only as the
+    # stored-in-config aside.
+    _obsidian_available(monkeypatch)
+    _feed_inputs(monkeypatch, ["", "", "n"])
+    picker.run_interactive()
+    out = capsys.readouterr().out
+    expanded = str(tmp_home / "data" / "Brain")
+    assert expanded in out
+    for line in out.splitlines():
+        if "$MAKAKOO_HOME" in line:
+            assert "stored in config" in line, f"unexpanded path shown to user: {line!r}"
+
+
 def test_obsidian_app_missing_declined_skips_obsidian_setup(tmp_home, monkeypatch, capsys):
     monkeypatch.setattr(picker, "_detect_obsidian_app", lambda: (False, "not detected"))
     monkeypatch.setattr(picker, "_obsidian_install_command", lambda: ["brew", "install", "--cask", "obsidian"])

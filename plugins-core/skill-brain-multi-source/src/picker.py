@@ -202,6 +202,14 @@ def _expanded_default_brain_path() -> Path:
     return home / "data" / "Brain"
 
 
+def _display_brain_path() -> str:
+    """The default Brain path as the USER should see it: the real folder on
+    their disk, not the `$MAKAKOO_HOME` literal. The symbolic form stays in
+    the stored config (portability); display always expands it so the path
+    can be pasted into Obsidian, a file manager, or a shell as-is."""
+    return str(_expanded_default_brain_path())
+
+
 def _prompt_obsidian_path(default: str = "") -> str:
     label = "  Additional Obsidian vault path (no = skip)"
     if default:
@@ -341,8 +349,9 @@ def run_interactive(non_interactive: bool = False) -> int:
 
 def _run_interactive_impl(non_interactive: bool = False) -> int:
     print("\nMakakoo brain setup\n" + "=" * 20)
-    print("Default Brain folder:")
-    print(f"  {DEFAULT_BRAIN_PATH}")
+    print("Default Brain folder (always present — created for you):")
+    print(f"  {_display_brain_path()}")
+    print(f"  (stored in config as {DEFAULT_BRAIN_PATH})")
     print("Makakoo writes journals/pages there by default. Obsidian can use the same")
     print("folder as an editor/vault; a separate Obsidian vault is optional.\n")
 
@@ -376,21 +385,21 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
 
         if not obsidian_installed:
             print("Obsidian setup skipped. Later, install Obsidian and open this folder as a vault:")
-            print(f"  {DEFAULT_BRAIN_PATH}\n")
+            print(f"  {_display_brain_path()}\n")
 
     add_obsidian = False
     if obsidian_installed:
         if obsidian_where:
             print(f"Obsidian app detected: {obsidian_where}")
         use_default_brain = _yes_no(
-            f"Use {DEFAULT_BRAIN_PATH} as your Obsidian vault/editor folder?",
+            f"Use {_display_brain_path()} as your Obsidian vault/editor folder?",
             default=True,
         )
         if use_default_brain:
             print("  Good. No extra source registration needed for the default Brain.")
             pending_obsidian_profile = True
             print("  Obsidian UI defaults will be added if missing; existing config stays untouched.")
-            print(f"  Open this folder in Obsidian: {DEFAULT_BRAIN_PATH}\n")
+            print(f"  Open this folder in Obsidian: {_display_brain_path()}\n")
             guess = _guess_obsidian_vault()
             add_obsidian = _yes_no(
                 "Register an additional existing Obsidian vault?"
@@ -411,7 +420,7 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
     if add_obsidian:
         path = _prompt_obsidian_path(default=guess or "")
         if path:
-            writable = _yes_no("  Allow Harvey to write into this Obsidian vault?", default=False)
+            writable = _yes_no("  Allow Makakoo to write into this Obsidian vault?", default=False)
             pending_adds.append({
                 "name": "obsidian",
                 "role": "enrichment",
@@ -423,10 +432,10 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
     # Prompt 2 — any other plain-markdown folder?
     add_plain = _yes_no("Any other plain markdown folder to connect?", default=False)
     if add_plain:
-        path = _prompt("  Folder path")
+        path = _prompt("  Folder path (Enter = skip)")
         if path:
             name = _prompt("  Give this source a name", default="notes")
-            writable = _yes_no("  Allow Harvey to write into it?", default=False)
+            writable = _yes_no("  Allow Makakoo to write into it?", default=False)
             pending_adds.append({
                 "name": name,
                 "role": "enrichment",
@@ -446,7 +455,8 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
                     print(f"  - {rel}")
             else:
                 print("Existing Obsidian config left untouched.")
-        print("\nNothing to change. Default Makakoo Brain source is registered and writable.")
+        print("\nNothing to change. Default Makakoo Brain source is registered and writable:")
+        print(f"  {_display_brain_path()}")
         return 0
 
     print("\nPending changes")
@@ -492,7 +502,8 @@ def _run_interactive_impl(non_interactive: bool = False) -> int:
             print(f"  {_dry_sync(name)}")
 
     print(f"\nDone. Config saved to {cfg.config_path()}")
-    print("Change anything later with the plugin helper: python3 .../brain_cli.py {list|add|remove|set-default}\n")
+    print("Change anything later: `makakoo brain list|add|remove`, or rerun this")
+    print("section with `makakoo setup brain`.\n")
     return 0
 
 
