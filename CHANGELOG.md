@@ -10,6 +10,8 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-07-16
+
 ### Added
 - Added `makakoo brain ingest <files|folders> --out <bundle>` — build a portable OKF v0.1 bundle from arbitrary local Markdown (loose files, folders, or a mix). The output round-trips through `makakoo brain validate` by construction; ingest never registers or indexes on its own.
 - Added optional `aspect_ratio` to the `harvey_generate_image` MCP tool.
