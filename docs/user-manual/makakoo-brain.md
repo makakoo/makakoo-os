@@ -100,6 +100,29 @@ The command still does not publish the result. Review the bundle before sharing 
 
 If no document qualifies as public, export fails instead of producing a misleading empty bundle.
 
+## Ingest files or folders into a bundle
+
+`brain ingest` builds an OKF v0.1 bundle from arbitrary local Markdown — loose files, folders, or a mix. Use it to turn any documentation set into portable knowledge that can then be validated, registered as enrichment, or shared.
+
+```bash
+# One folder becomes one bundle
+makakoo brain ingest ~/notes/project-docs --out ~/exports/project-okf
+
+# Mix loose files and folders; name the knowledge source
+makakoo brain ingest README.md docs/ --out ~/exports/repo-okf --name my-repo
+
+# Replace an existing non-empty destination / machine-readable result
+makakoo brain ingest docs/ --out ~/exports/repo-okf --force --json
+```
+
+Rules and behavior:
+
+- Only `.md` files are ingested; other file types are skipped. If the inputs contain no Markdown at all, the command fails instead of writing an empty bundle.
+- A single folder input is walked in place. Loose files or multiple inputs are staged first; name collisions get a `-N` suffix.
+- Hidden directories, `node_modules`, `bak`, and symlinks are skipped.
+- The output goes through the same staged, crash-recoverable writer as `brain export`, and the resulting bundle passes `brain validate` by construction.
+- Ingest builds a bundle only — it does not register or index anything. To make the knowledge searchable, follow with `brain add <name> okf <bundle>` and `makakoo sync`.
+
 ## Validate a bundle
 
 ```bash
@@ -113,7 +136,7 @@ An empty directory is conformant with warnings. Broken internal links, untravers
 
 ## Machine-readable output and exit status
 
-`brain list --json`, `brain export --json`, and `brain validate --json` write JSON to standard output.
+`brain list --json`, `brain export --json`, `brain ingest --json`, and `brain validate --json` write JSON to standard output.
 
 - Export JSON contains `version`, `source`, `output`, `concepts`, `pages`, `memories`, `journals`, and `skipped_private`.
 - Validation JSON contains `version`, `bundle`, `concepts`, `indexes`, `logs`, `errors`, and `warnings`. Every diagnostic has `path` and `message`.

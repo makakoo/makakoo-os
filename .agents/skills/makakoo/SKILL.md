@@ -75,7 +75,7 @@ Primary command surface — these are real. For the long tail, run `makakoo --he
 | `makakoo buddy status` | Active mascot's ASCII frame + state |
 | `makakoo dream` | Force a Brain consolidation pass |
 | `makakoo sync [--force] [--embed]` | Index canonical Brain content, auto-memory, and registered enrichment sources into FTS5 |
-| `makakoo brain {list,add,remove,export,validate}` | Manage Brain sources and local OKF v0.1 import/export |
+| `makakoo brain {list,add,remove,export,validate,ingest}` | Manage Brain sources and local OKF v0.1 import/export; `ingest` builds a bundle from arbitrary Markdown files/folders |
 | `makakoo search <query>` | Full-text search across the Brain |
 | `makakoo query <question>` | FTS retrieval + LLM synthesis (requires a configured model provider) |
 | `makakoo memory stats` | Recall log + promotion candidates |
@@ -167,6 +167,7 @@ After significant work (bug fixed, feature shipped, decision made), append a `- 
 | "remember X" / "log X" / "save X to brain" | Append `- <X>` to today's journal file, then `makakoo sync` |
 | "connect this vault/folder" / "list brain sources" | `makakoo brain list`, then `makakoo brain add <name> <logseq|obsidian|plain> <path> --read-only` |
 | "import/add this OKF bundle" | `makakoo brain validate <bundle>`, `makakoo brain add <name> okf <bundle>`, then `makakoo sync` |
+| "create knowledge from these files/folders" / "turn this docs folder into a knowledge base" | `makakoo brain ingest <files|folders> --out <bundle> [--name N]`, then optionally `brain add <name> okf <bundle>` + `makakoo sync` |
 | "export/share my Brain as OKF" | `makakoo brain export --source default --out <directory>`; use `--public` only for explicitly public documents, then ask before publishing |
 | "tell this CLI about Makakoo" / "set up Makakoo in Codex" / "infect Codex" / "install Makakoo into <cli>" | `makakoo infect --global --target <cli>` (e.g. `--target codex`) — DEFAULT |
 | "infect this project folder" / "make THIS repo Makakoo-aware" / "project-scoped overrides" | `makakoo infect --local --target <cli>` — only when user explicitly wants project-scoped, not system-wide |

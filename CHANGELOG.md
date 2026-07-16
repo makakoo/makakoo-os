@@ -10,6 +10,14 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added
+- Added `makakoo brain ingest <files|folders> --out <bundle>` — build a portable OKF v0.1 bundle from arbitrary local Markdown (loose files, folders, or a mix). The output round-trips through `makakoo brain validate` by construction; ingest never registers or indexes on its own.
+- Added optional `aspect_ratio` to the `harvey_generate_image` MCP tool.
+
+### Fixed
+- `harvey_generate_image` now works through Codex and switchAILocal without persisting secret values in CLI configuration: the Codex adapter forwards selected environment variable *names* only, and `LlmClient` accepts the `SWITCHAI_KEY` / `LLM_API_KEY` / `LLM_BASE_URL` aliases.
+- Image generation handles the MiniMax URL/JPEG response shape (`data.image_urls[0]`) alongside the existing OpenAI base64 shape, and reports the detected `mime_type` honestly (`png_bytes_b64` alias kept for actual PNG payloads only).
+
 ## [0.1.38] - 2026-07-15
 
 ### Added

@@ -38,7 +38,13 @@ Export is also local-only. Canonical pages and durable auto-memory are included 
 makakoo brain export --source default --out ~/exports/makakoo-okf
 ```
 
-See [`makakoo brain`](../user-manual/makakoo-brain.md) for validation rules, public-safe export, JSON output, and recovery behavior.
+Arbitrary Markdown files and folders can be turned into a bundle directly:
+
+```bash
+makakoo brain ingest README.md docs/ --out ~/exports/repo-okf --name my-repo
+```
+
+See [`makakoo brain`](../user-manual/makakoo-brain.md) for validation rules, ingest behavior, public-safe export, JSON output, and recovery behavior.
 
 ## Two Types of Memory
 
