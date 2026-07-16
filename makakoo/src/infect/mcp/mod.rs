@@ -49,6 +49,10 @@ pub struct McpServerSpec {
     /// across runs — without this, idempotency checks would fail on
     /// HashMap iteration order alone.
     pub env: BTreeMap<String, String>,
+    /// Environment variable names the host should forward from its own
+    /// process environment without serialising their values into config.
+    /// Only adapters with an explicit name-forwarding mechanism use this.
+    pub forward_env: Vec<String>,
     /// Optional usage hint surfaced by some CLIs (vibe shows it as a
     /// tool description suffix).
     pub prompt: Option<String>,
@@ -83,6 +87,16 @@ impl McpServerSpec {
             command,
             args: Vec::new(),
             env,
+            forward_env: [
+                "AIL_API_KEY",
+                "SWITCHAI_KEY",
+                "LLM_API_KEY",
+                "AIL_BASE_URL",
+                "LLM_BASE_URL",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             prompt: Some(
                 "Harvey/Makakoo native MCP — 41 tools incl. \
                  harvey_describe_image / harvey_describe_audio / \
@@ -385,6 +399,17 @@ mod tests {
             !spec.env.contains_key("PYTHONPATH"),
             "PYTHONPATH must not be in canonical env after harvey-os retirement"
         );
+        assert_eq!(
+            spec.forward_env,
+            [
+                "AIL_API_KEY",
+                "SWITCHAI_KEY",
+                "LLM_API_KEY",
+                "AIL_BASE_URL",
+                "LLM_BASE_URL",
+            ]
+        );
+        assert!(!spec.forward_env.iter().any(|name| name == "OPENAI_API_KEY"));
         assert!(spec
             .prompt
             .as_deref()

@@ -6,9 +6,9 @@
 //! local path — the LLM client's own `encode_source` helper handles
 //! base64 encoding + mime-type guessing.
 //!
-//! The generate_image handler re-encodes the PNG bytes as base64 so the
-//! JSON-RPC channel can carry the image through stdio without framing
-//! hell; callers unpack it with any base64 decoder.
+//! The generate_image handler re-encodes detected image bytes as base64 so
+//! the JSON-RPC channel can carry PNG/JPEG/GIF/WebP through stdio without
+//! framing hell; callers unpack it with any base64 decoder.
 
 use std::sync::Arc;
 
@@ -206,16 +206,20 @@ impl ToolHandler for GenerateImageHandler {
         "harvey_generate_image"
     }
     fn description(&self) -> &str {
-        "Generate a PNG from a text prompt. Returns the raw bytes as a \
-         base64 string under png_bytes_b64 so the JSON-RPC channel can \
-         carry the image through stdio."
+        "Generate an image from a text prompt through ail-image. Returns \
+         detected PNG/JPEG/GIF/WebP bytes under image_bytes_b64 with a \
+         mime_type. If a provider returns multiple images, uses the first."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "prompt": { "type": "string" },
-                "size": { "type": "string", "default": DEFAULT_IMAGE_SIZE }
+                "size": { "type": "string", "default": DEFAULT_IMAGE_SIZE },
+                "aspect_ratio": {
+                    "type": "string",
+                    "description": "Optional provider aspect ratio such as 16:9"
+                }
             },
             "required": ["prompt"]
         })
@@ -229,18 +233,36 @@ impl ToolHandler for GenerateImageHandler {
             .get("size")
             .and_then(|v| v.as_str())
             .unwrap_or(DEFAULT_IMAGE_SIZE);
+        let aspect_ratio = params.get("aspect_ratio").and_then(|v| v.as_str());
         let llm = llm(&self.ctx)?;
-        let bytes = llm
-            .generate_image(prompt, size)
+        let image = llm
+            .generate_image(prompt, size, aspect_ratio)
             .await
             .map_err(|e| RpcError::internal(format!("harvey_generate_image: {e}")))?;
-        let encoded = B64.encode(&bytes);
-        Ok(json!({
-            "png_bytes_b64": encoded,
-            "bytes": bytes.len(),
-            "size": size,
-        }))
+        Ok(generated_image_result(image, size, aspect_ratio))
     }
+}
+
+fn generated_image_result(
+    image: makakoo_core::llm::GeneratedImage,
+    size: &str,
+    aspect_ratio: Option<&str>,
+) -> Value {
+    let encoded = B64.encode(&image.bytes);
+    let is_png = image.mime_type == "image/png";
+    let mut result = json!({
+        "image_bytes_b64": encoded,
+        "mime_type": image.mime_type,
+        "bytes": image.bytes.len(),
+        "size": size,
+    });
+    if let Some(aspect_ratio) = aspect_ratio {
+        result["aspect_ratio"] = json!(aspect_ratio);
+    }
+    if is_png {
+        result["png_bytes_b64"] = result["image_bytes_b64"].clone();
+    }
+    result
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -299,5 +321,35 @@ mod tests {
             let s = serde_json::to_string(&h).unwrap();
             let _: Value = serde_json::from_str(&s).unwrap();
         }
+    }
+
+    #[test]
+    fn generated_jpeg_result_never_claims_png() {
+        let result = generated_image_result(
+            makakoo_core::llm::GeneratedImage {
+                bytes: b"\xff\xd8\xffSYNTHETIC".to_vec(),
+                mime_type: "image/jpeg".to_string(),
+            },
+            "1024x1024",
+            Some("16:9"),
+        );
+        assert_eq!(result["mime_type"], "image/jpeg");
+        assert_eq!(result["aspect_ratio"], "16:9");
+        assert!(result.get("image_bytes_b64").is_some());
+        assert!(result.get("png_bytes_b64").is_none());
+    }
+
+    #[test]
+    fn generated_png_result_keeps_deprecated_png_alias() {
+        let result = generated_image_result(
+            makakoo_core::llm::GeneratedImage {
+                bytes: b"\x89PNG\r\n\x1a\nSYNTHETIC".to_vec(),
+                mime_type: "image/png".to_string(),
+            },
+            "1024x1024",
+            None,
+        );
+        assert_eq!(result["image_bytes_b64"], result["png_bytes_b64"]);
+        assert!(result.get("aspect_ratio").is_none());
     }
 }
