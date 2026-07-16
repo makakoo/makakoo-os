@@ -225,6 +225,7 @@ mod tests {
             command: "/opt/cargo/bin/makakoo-mcp".to_string(),
             args: vec![],
             env,
+            forward_env: vec![],
             prompt: Some("desc".to_string()),
         }
     }

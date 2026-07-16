@@ -644,6 +644,7 @@ mod tests {
             command: "/Users/sebastian/.cargo/bin/makakoo-mcp".to_string(),
             args: vec![],
             env,
+            forward_env: vec![],
             prompt: None,
         }
     }

@@ -1,7 +1,9 @@
 //! Codex TOML adapter — `[mcp_servers.<name>]` inline-table format.
 //!
 //! Codex stores each MCP server as a sub-table under `[mcp_servers.X]`
-//! with nested `[mcp_servers.X.env]`. We use `toml_edit` so reads +
+//! with nested `[mcp_servers.X.env]`. Secret-bearing parent variables are
+//! forwarded by name through Codex's `env_vars` list, never copied into the
+//! config. We use `toml_edit` so reads +
 //! writes preserve comments, blank lines, and key ordering.
 //!
 //! Other config sections (`[features]`, `[mcp_servers.GitKraken]`,
@@ -142,8 +144,20 @@ fn render_harvey(doc: &DocumentMut) -> Option<String> {
     }
     env_pairs.sort();
     let env_str = env_pairs.join(";");
+    let mut forwarded = h
+        .get("env_vars")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    forwarded.sort();
+    let forward_str = forwarded.join(";");
     Some(format!(
-        "cmd={command}|args={args}|desc={description}|env={env_str}"
+        "cmd={command}|args={args}|desc={description}|env={env_str}|forward={forward_str}"
     ))
 }
 
@@ -176,6 +190,12 @@ fn upsert_harvey(doc: &mut DocumentMut, spec: &McpServerSpec) {
         args.push(a.as_str());
     }
     harvey.insert("args", value(args));
+
+    let mut env_vars = Array::new();
+    for name in &spec.forward_env {
+        env_vars.push(name.as_str());
+    }
+    harvey.insert("env_vars", value(env_vars));
 
     // Description = the prompt hint, if any.
     if let Some(desc) = &spec.prompt {
@@ -241,6 +261,13 @@ mod tests {
             command: "/opt/cargo/bin/makakoo-mcp".to_string(),
             args: vec![],
             env,
+            forward_env: vec![
+                "AIL_API_KEY".to_string(),
+                "SWITCHAI_KEY".to_string(),
+                "LLM_API_KEY".to_string(),
+                "AIL_BASE_URL".to_string(),
+                "LLM_BASE_URL".to_string(),
+            ],
             prompt: Some("desc".to_string()),
         }
     }
@@ -256,6 +283,9 @@ mod tests {
         assert!(body.contains(r#"command = "/opt/cargo/bin/makakoo-mcp""#));
         assert!(body.contains("[mcp_servers.harvey.env]"));
         assert!(body.contains(r#"MAKAKOO_HOME = "/h""#));
+        assert!(body.contains("env_vars = ["));
+        assert!(body.contains(r#""AIL_API_KEY""#));
+        assert!(body.contains(r#""LLM_BASE_URL""#));
     }
 
     #[test]
@@ -279,6 +309,7 @@ mod tests {
 command = "/opt/cargo/bin/makakoo-mcp"
 args = []
 description = "desc"
+env_vars = ["LLM_BASE_URL", "AIL_BASE_URL", "LLM_API_KEY", "SWITCHAI_KEY", "AIL_API_KEY"]
 
 [mcp_servers.harvey.env]
 HARVEY_HOME = "/h"
@@ -298,6 +329,36 @@ approval_mode = "approve"
             Some(Path::new("/bootstrap/global.md")),
         );
         assert_eq!(outcome, SyncOutcome::Unchanged);
+    }
+
+    #[test]
+    fn partial_forwarding_list_triggers_update_without_secret_values() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"[mcp_servers.harvey]
+command = "/opt/cargo/bin/makakoo-mcp"
+args = []
+description = "desc"
+env_vars = ["AIL_API_KEY"]
+
+[mcp_servers.harvey.env]
+HARVEY_HOME = "/h"
+MAKAKOO_HOME = "/h"
+PYTHONPATH = "/h/harvey-os"
+"#,
+        )
+        .unwrap();
+
+        let outcome = sync(&path, &spec(), false, None);
+        assert_eq!(outcome, SyncOutcome::Updated);
+        let body = fs::read_to_string(&path).unwrap();
+        for name in &spec().forward_env {
+            assert!(body.contains(&format!(r#""{name}""#)));
+        }
+        assert!(!body.contains("Bearer "));
+        assert_eq!(sync(&path, &spec(), false, None), SyncOutcome::Unchanged);
     }
 
     #[test]

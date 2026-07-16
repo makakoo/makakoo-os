@@ -93,14 +93,19 @@ bug.
   "tool": "harvey_generate_image",
   "arguments": {
     "prompt": "A red mountain reflected in a lake at sunset, photorealistic",
-    "model": "ail-image",
-    "size": "1024x1024"
+    "size": "1024x1024",
+    "aspect_ratio": "16:9"
   }
 }
 ```
 
-Routes through switchAILocal's `ail-image` model by default. Returns
-the generated image as a base64 data URI in the `content` block.
+Routes through switchAILocal's fixed `ail-image` model. `prompt` is
+required; `size` defaults to `1024x1024`; `aspect_ratio` is optional.
+If the provider returns multiple images, the first non-empty result is
+used. Returns JSON with `image_bytes_b64`, detected `mime_type`, `bytes`,
+`size`, and optional `aspect_ratio`. For backward compatibility only,
+actual PNG payloads also include the deprecated `png_bytes_b64` alias;
+JPEG/GIF/WebP payloads never claim to be PNG.
 
 ## Rate-limit rule (non-negotiable)
 
