@@ -39,6 +39,8 @@ sha2.workspace = true
 # v0.6 Phase B — `adapter trust` + `adapter self-pubkey` subcommands
 # encode Ed25519 pubkeys for display.
 base64 = "0.22"
+# okf ingest stages loose files/folders into a temp bundle root
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

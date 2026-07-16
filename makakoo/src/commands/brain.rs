@@ -149,6 +149,13 @@ pub fn run(ctx: &CliContext, command: BrainCmd) -> anyhow::Result<i32> {
             json,
         ),
         BrainCmd::Validate { bundle, json } => validate(&bundle, json),
+        BrainCmd::Ingest {
+            inputs,
+            out,
+            name,
+            force,
+            json,
+        } => ingest(&inputs, &out, &name, force, json),
     }
 }
 
@@ -356,6 +363,139 @@ fn validate(bundle: &Path, json: bool) -> anyhow::Result<i32> {
         );
     }
     Ok(if report.conformant() { 0 } else { 1 })
+}
+
+fn ingest(
+    inputs: &[PathBuf],
+    output: &Path,
+    name: &str,
+    force: bool,
+    json: bool,
+) -> anyhow::Result<i32> {
+    for input in inputs {
+        if !input.exists() {
+            bail!("input path does not exist: {}", input.display());
+        }
+    }
+
+    // A single directory can be walked in place. Anything else (individual
+    // files, or several inputs) is staged into a temp directory the exporter
+    // treats as one source root. The staging dir must outlive export_bundle.
+    let mut staged: Option<tempfile::TempDir> = None;
+    let source_root = if inputs.len() == 1 && inputs[0].is_dir() {
+        inputs[0].clone()
+    } else {
+        let temp = tempfile::tempdir().context("create OKF ingest staging directory")?;
+        let mut copied = 0usize;
+        for input in inputs {
+            copied += stage_markdown(input, input, temp.path())?;
+        }
+        if copied == 0 {
+            bail!("no Markdown (.md) files found in the given inputs");
+        }
+        let root = temp.path().to_path_buf();
+        staged = Some(temp);
+        root
+    };
+
+    let options = ExportOptions {
+        home: source_root.clone(),
+        source_name: name.to_string(),
+        source_type: "files".to_string(),
+        source_root,
+        output: output.to_path_buf(),
+        include_journals: false,
+        include_auto_memory: false,
+        public_only: false,
+        force,
+    };
+    let report = export_bundle(&options)?;
+    drop(staged);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "OKF v{} ingest complete: {} concepts ({} pages, {} memories, {} journals) -> {}",
+            report.version,
+            report.concepts,
+            report.pages,
+            report.memories,
+            report.journals,
+            report.output
+        );
+    }
+    Ok(0)
+}
+
+/// Copy every Markdown file under `path` into `dest_root`, preserving the path
+/// relative to `base`'s parent so a folder keeps its own name in the bundle.
+fn stage_markdown(path: &Path, base: &Path, dest_root: &Path) -> anyhow::Result<usize> {
+    if path.is_dir() {
+        let mut copied = 0usize;
+        let mut entries: Vec<_> = std::fs::read_dir(path)
+            .with_context(|| format!("read directory {}", path.display()))?
+            .collect::<Result<_, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let entry_name = entry.file_name();
+            let entry_name = entry_name.to_string_lossy();
+            if file_type.is_dir()
+                && (entry_name.starts_with('.')
+                    || matches!(entry_name.as_ref(), "node_modules" | "bak"))
+            {
+                continue;
+            }
+            copied += stage_markdown(&entry.path(), base, dest_root)?;
+        }
+        return Ok(copied);
+    }
+
+    if path.extension().and_then(|value| value.to_str()) != Some("md") {
+        return Ok(0);
+    }
+
+    let anchor = base.parent().unwrap_or(base);
+    let relative = path
+        .strip_prefix(anchor)
+        .ok()
+        .filter(|rel| !rel.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(path.file_name().unwrap_or(path.as_os_str())));
+    let target = unique_staged_path(dest_root.join(relative));
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(path, &target).with_context(|| format!("copy {}", path.display()))?;
+    Ok(1)
+}
+
+/// Append a `-N` suffix until the staged path does not already exist.
+fn unique_staged_path(path: PathBuf) -> PathBuf {
+    if !path.exists() {
+        return path;
+    }
+    let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("concept")
+        .to_string();
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("md")
+        .to_string();
+    for suffix in 1..u32::MAX {
+        let candidate = parent.join(format!("{stem}-{suffix}.{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path
 }
 
 fn load_registry_locked(

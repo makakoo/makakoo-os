@@ -1470,6 +1470,22 @@ pub enum BrainCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Build an OKF v0.1 bundle from arbitrary Markdown files and/or folders.
+    Ingest {
+        /// Input files or directories (Markdown `.md`).
+        #[arg(required = true)]
+        inputs: Vec<std::path::PathBuf>,
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// Knowledge-source name recorded in the bundle.
+        #[arg(long, default_value = "files")]
+        name: String,
+        /// Replace an existing non-empty output using staged crash recovery.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
