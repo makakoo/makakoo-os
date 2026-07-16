@@ -183,8 +183,14 @@ pub fn plan_upgrade(
                 program: "bash".to_string(),
                 args: vec![
                     "-lc".into(),
+                    // MAKAKOO_NO_AUTORUN: an update refreshes the binary +
+                    // bundled assets only. Without it, install.sh hands off
+                    // to the full `makakoo install` umbrella (distro
+                    // reconcile + interactive wizard) on a machine that is
+                    // already set up — and any distro hiccup fails the
+                    // whole update.
                     format!(
-                        "set -euo pipefail; curl -fsSL {} | bash",
+                        "set -euo pipefail; export MAKAKOO_NO_AUTORUN=1; curl -fsSL {} | bash",
                         shell_quote(install_script_url)
                     ),
                 ],
@@ -336,6 +342,19 @@ mod tests {
         assert!(actions[0].args[1].contains("set -euo pipefail"));
         assert!(actions[0].args[1].contains(url()));
         assert!(actions[0].args[1].contains("| bash"));
+    }
+
+    #[test]
+    fn curl_pipe_suppresses_install_autorun() {
+        // An update must refresh the binary + bundled assets only; the
+        // install.sh autorun hand-off to the full `makakoo install`
+        // umbrella is a first-install experience and must stay off here.
+        let actions = plan_upgrade(&curl(), BinaryTarget::Both, None, url()).unwrap();
+        assert!(actions[0].args[1].contains("export MAKAKOO_NO_AUTORUN=1;"));
+        let cmd = &actions[0].args[1];
+        let export_pos = cmd.find("MAKAKOO_NO_AUTORUN=1").unwrap();
+        let curl_pos = cmd.find("curl").unwrap();
+        assert!(export_pos < curl_pos, "autorun opt-out must precede the pipe");
     }
 
     #[test]

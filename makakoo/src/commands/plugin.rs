@@ -481,7 +481,31 @@ fn update_from_path(ctx: &CliContext, entry: &LockEntry) -> anyhow::Result<i32> 
 
     let prior_enabled = entry.enabled;
 
+    // Back up the installed tree BEFORE the uninstall+reinstall
+    // round-trip. The reinstall can be refused after the uninstall
+    // already ran (security gate, staging error) and a refusal must not
+    // strand the user without the plugin — restore the prior tree and
+    // lock entry instead. (Bit for real 2026-07-16: SkillSpector blocked
+    // the reinstall of skill-brain-multi-source post-uninstall.)
+    let final_dir = makakoo_core::plugin::staging::final_dir(ctx.home(), name);
+    let backup_dir = ctx
+        .home()
+        .join("plugins")
+        .join(".update-backup")
+        .join(name);
+    if backup_dir.exists() {
+        std::fs::remove_dir_all(&backup_dir)?;
+    }
+    if let Err(e) = copy_dir_all(&final_dir, &backup_dir) {
+        output::print_error(format!(
+            "cannot back up {} before update — aborting untouched: {e}",
+            final_dir.display()
+        ));
+        return Ok(1);
+    }
+
     if let Err(e) = core_uninstall(name, ctx.home(), false) {
+        let _ = std::fs::remove_dir_all(&backup_dir);
         output::print_error(format!("uninstall step failed: {e}"));
         return Ok(1);
     }
@@ -491,11 +515,24 @@ fn update_from_path(ctx: &CliContext, entry: &LockEntry) -> anyhow::Result<i32> 
         expected_blake3: None,
     };
     let outcome = match install_from_path(&req, ctx.home()) {
-        Ok(o) => o,
+        Ok(o) => {
+            let _ = std::fs::remove_dir_all(&backup_dir);
+            o
+        }
         Err(e) => {
-            output::print_error(format!(
-                "reinstall failed — plugin is currently uninstalled: {e}"
-            ));
+            if !final_dir.exists() && std::fs::rename(&backup_dir, &final_dir).is_ok() {
+                let mut lock = PluginsLock::load(ctx.home())?;
+                lock.upsert(entry.clone());
+                lock.save(ctx.home())?;
+                output::print_error(format!("reinstall refused: {e}"));
+                output::print_info(format!(
+                    "previous version of {name} restored — nothing changed"
+                ));
+            } else {
+                output::print_error(format!(
+                    "reinstall failed — plugin is currently uninstalled: {e}"
+                ));
+            }
             return Ok(1);
         }
     };
@@ -520,6 +557,23 @@ fn update_from_path(ctx: &CliContext, entry: &LockEntry) -> anyhow::Result<i32> 
         }
     ));
     Ok(0)
+}
+
+/// Faithful recursive copy for the pre-update backup. Unlike the
+/// installer's `copy_dir` this must not skip anything — a restore has to
+/// reproduce the exact tree that was uninstalled.
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// Git-sourced update: probe upstream, diff manifest_hash, prompt on

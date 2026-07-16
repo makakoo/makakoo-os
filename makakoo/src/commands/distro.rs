@@ -225,13 +225,25 @@ fn install(
         // installed with a different hash, fail — user must uninstall
         // first.
         let lock = PluginsLock::load(ctx.home())?;
-        if let Some(existing) = lock.get(&pin.name) {
-            output::print_info(format!(
-                "  skip {}: already installed ({})",
-                pin.name, existing.version
-            ));
-            skipped += 1;
-            continue;
+        match preinstall_skip(&lock, ctx.home(), &pin.name) {
+            Some(PreinstallSkip::Locked(version)) => {
+                output::print_info(format!(
+                    "  skip {}: already installed ({version})",
+                    pin.name
+                ));
+                skipped += 1;
+                continue;
+            }
+            Some(PreinstallSkip::UnlockedDirExists) => {
+                output::print_warn(format!(
+                    "  skip {}: present on disk without a lock entry — leaving as-is \
+                     (reconcile: `makakoo plugin uninstall {}` then reinstall)",
+                    pin.name, pin.name
+                ));
+                skipped += 1;
+                continue;
+            }
+            None => {}
         }
 
         let req = InstallRequest {
@@ -443,3 +455,52 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
 // insurance during a churny phase.
 #[allow(dead_code)]
 fn _touch(_p: &Path) {}
+
+/// Why a pinned plugin is skipped before staging.
+enum PreinstallSkip {
+    /// Lock entry exists — normal idempotent skip (carries the version).
+    Locked(String),
+    /// No lock entry, but the final plugin dir already exists on disk
+    /// (e.g. a sancho auto-updater replaced the dir out-of-band). Staging
+    /// would refuse it with a hard error, and one such plugin used to fail
+    /// the whole distro — and with it `makakoo install` / `makakoo update`.
+    /// The plugin is present and (per the registry) working, so leave it
+    /// alone and keep the distro install green.
+    UnlockedDirExists,
+}
+
+fn preinstall_skip(lock: &PluginsLock, home: &Path, name: &str) -> Option<PreinstallSkip> {
+    if let Some(existing) = lock.get(name) {
+        return Some(PreinstallSkip::Locked(existing.version.clone()));
+    }
+    if makakoo_core::plugin::staging::final_dir(home, name).is_dir() {
+        return Some(PreinstallSkip::UnlockedDirExists);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preinstall_skip_unlocked_but_present_dir_is_skip_not_error() {
+        // Regression: agent-browser-harness existed on disk with no lock
+        // entry; distro install must skip it, not stage-and-fail.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let lock = PluginsLock::load(home).unwrap();
+        std::fs::create_dir_all(home.join("plugins").join("agent-browser-harness")).unwrap();
+        assert!(matches!(
+            preinstall_skip(&lock, home, "agent-browser-harness"),
+            Some(PreinstallSkip::UnlockedDirExists)
+        ));
+    }
+
+    #[test]
+    fn preinstall_skip_absent_plugin_proceeds_to_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lock = PluginsLock::load(tmp.path()).unwrap();
+        assert!(preinstall_skip(&lock, tmp.path(), "not-there").is_none());
+    }
+}
