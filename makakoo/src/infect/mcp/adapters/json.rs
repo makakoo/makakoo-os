@@ -24,14 +24,13 @@ use std::os::unix::fs::PermissionsExt;
 
 use serde_json::{json, Map, Value};
 
-use crate::infect::mcp::{ChangeKind, McpServerSpec, McpTarget, SyncOutcome};
+use crate::infect::mcp::{ChangeKind, McpServerSpec, SyncOutcome};
 
 const SERVER_NAME: &str = "harvey";
 
 /// Sync the JSON config at `path`. `is_opencode` switches the parent
 /// key from `mcpServers` to `mcp`.
 pub fn sync(
-    _target: &McpTarget,
     path: &Path,
     spec: &McpServerSpec,
     dry_run: bool,
@@ -236,7 +235,7 @@ mod tests {
     fn add_to_empty_file_creates_mcpServers_with_harvey() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let outcome = sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        let outcome = sync(&path, &spec(), false, false);
         assert_eq!(outcome, SyncOutcome::Added);
 
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -256,7 +255,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = sync(&McpTarget::Cursor, &path, &spec(), false, false);
+        let outcome = sync(&path, &spec(), false, false);
         assert_eq!(outcome, SyncOutcome::Added);
 
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -268,8 +267,8 @@ mod tests {
     fn second_run_is_unchanged() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let _ = sync(&McpTarget::Gemini, &path, &spec(), false, false);
-        let outcome = sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        let _ = sync(&path, &spec(), false, false);
+        let outcome = sync(&path, &spec(), false, false);
         assert_eq!(outcome, SyncOutcome::Unchanged);
     }
 
@@ -282,7 +281,7 @@ mod tests {
             r#"{"mcpServers":{"harvey":{"command":"/old/path/makakoo-mcp","args":[],"env":{}}}}"#,
         )
         .unwrap();
-        let outcome = sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        let outcome = sync(&path, &spec(), false, false);
         assert_eq!(outcome, SyncOutcome::Updated);
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
@@ -295,7 +294,7 @@ mod tests {
     fn dry_run_returns_would_change_and_writes_nothing() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let outcome = sync(&McpTarget::Gemini, &path, &spec(), true, false);
+        let outcome = sync(&path, &spec(), true, false);
         assert_eq!(
             outcome,
             SyncOutcome::WouldChange {
@@ -311,7 +310,7 @@ mod tests {
     fn opencode_uses_mcp_parent_key_not_mcpServers() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("opencode.json");
-        let outcome = sync(&McpTarget::OpenCode, &path, &spec(), false, true);
+        let outcome = sync(&path, &spec(), false, true);
         assert_eq!(outcome, SyncOutcome::Added);
 
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -334,7 +333,7 @@ mod tests {
         let path = dir.path().join("opencode.json");
         let mut s = spec();
         s.args = vec!["--flag".into(), "value".into()];
-        let _ = sync(&McpTarget::OpenCode, &path, &s, false, true);
+        let _ = sync(&path, &s, false, true);
 
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let harvey = &v["mcp"]["harvey"];
@@ -376,7 +375,7 @@ mod tests {
             r#"{"mcp":{"harvey":{"command":"/opt/cargo/bin/makakoo-mcp","args":[],"env":{}}}}"#,
         )
         .unwrap();
-        let outcome = sync(&McpTarget::OpenCode, &path, &spec(), false, true);
+        let outcome = sync(&path, &spec(), false, true);
         assert_eq!(outcome, SyncOutcome::Updated);
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["mcp"]["harvey"]["type"], "local");
@@ -390,7 +389,7 @@ mod tests {
         // Qwen, Cursor see. Those CLIs expect the flat shape.
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        sync(&path, &spec(), false, false);
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let harvey = &v["mcpServers"]["harvey"];
         assert!(
@@ -408,7 +407,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(&path, r#"{"editor":{"theme":"dark"},"mcpServers":{}}"#).unwrap();
-        let _ = sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        let _ = sync(&path, &spec(), false, false);
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["editor"]["theme"], "dark");
         assert!(v["mcpServers"].get("harvey").is_some());
@@ -419,7 +418,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(&path, "not json {{{").unwrap();
-        let outcome = sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        let outcome = sync(&path, &spec(), false, false);
         assert!(matches!(outcome, SyncOutcome::Error { .. }));
     }
 
@@ -431,7 +430,7 @@ mod tests {
         fs::write(&path, "{}").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
-        let _ = sync(&McpTarget::Gemini, &path, &spec(), false, false);
+        let _ = sync(&path, &spec(), false, false);
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }

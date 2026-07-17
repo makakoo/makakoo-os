@@ -78,7 +78,7 @@ fn write_markdown_file(target: &ExtTarget, bootstrap_body: &str, dry_run: bool) 
             status
         };
         return SlotWriteResult {
-            slot_name: target.kind.slot_name(),
+            slot_name: target.kind.slot_name().into(),
             path: target.path.clone(),
             status: final_status,
             prior_version,
@@ -87,13 +87,13 @@ fn write_markdown_file(target: &ExtTarget, bootstrap_body: &str, dry_run: bool) 
 
     match atomic_write(&target.path, &new_text) {
         Ok(_) => SlotWriteResult {
-            slot_name: target.kind.slot_name(),
+            slot_name: target.kind.slot_name().into(),
             path: target.path.clone(),
             status,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: target.kind.slot_name(),
+            slot_name: target.kind.slot_name().into(),
             path: target.path.clone(),
             status: SlotStatus::Error(format!("{e:#}")),
             prior_version,
@@ -105,13 +105,13 @@ fn write_continue_json(target: &ExtTarget, bootstrap_body: &str, dry_run: bool) 
     let result = splice_continue_json(&target.path, bootstrap_body, dry_run);
     match result {
         Ok((status, prior_version)) => SlotWriteResult {
-            slot_name: target.kind.slot_name(),
+            slot_name: target.kind.slot_name().into(),
             path: target.path.clone(),
             status,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: target.kind.slot_name(),
+            slot_name: target.kind.slot_name().into(),
             path: target.path.clone(),
             status: SlotStatus::Error(format!("{e:#}")),
             prior_version: None,

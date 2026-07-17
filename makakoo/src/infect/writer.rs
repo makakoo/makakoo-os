@@ -11,6 +11,7 @@
 //!   - Every successful write goes through a temp file + rename so a
 //!     partial write never corrupts the existing config.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -41,7 +42,10 @@ pub enum SlotStatus {
 /// Outcome of writing to a single slot.
 #[derive(Debug, Clone)]
 pub struct SlotWriteResult {
-    pub slot_name: &'static str,
+    /// Slot identifier. `Cow` so built-in slots keep their `&'static str`
+    /// names borrow-free while runtime-registered custom hosts (from
+    /// `config/cli_hosts.json`) carry an owned `String` — no leak.
+    pub slot_name: Cow<'static, str>,
     pub path: PathBuf,
     pub status: SlotStatus,
     pub prior_version: Option<String>,
@@ -212,7 +216,7 @@ pub fn remove_bootstrap_from_slot(slot: &CliSlot, home: &Path, dry_run: bool) ->
 fn remove_markdown(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResult {
     if !path.exists() {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -222,7 +226,7 @@ fn remove_markdown(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
         Ok(s) => s,
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("read {}: {e}", path.display())),
                 prior_version: None,
@@ -233,7 +237,7 @@ fn remove_markdown(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     let (new_text, removed) = remove_markdown_block(&existing);
     if !removed {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -241,7 +245,7 @@ fn remove_markdown(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     }
     if dry_run {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::DryRun,
             prior_version,
@@ -257,13 +261,13 @@ fn remove_markdown(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     };
     match result {
         Ok(()) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Updated,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Error(e.to_string()),
             prior_version,
@@ -274,7 +278,7 @@ fn remove_markdown(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
 fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResult {
     if !path.exists() {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -284,7 +288,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
         Ok(s) => s,
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("read {}: {e}", path.display())),
                 prior_version: None,
@@ -295,7 +299,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
         Ok(v) => v,
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("invalid opencode JSON: {e}")),
                 prior_version: None,
@@ -304,7 +308,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     };
     let Some(obj) = data.as_object_mut() else {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -312,7 +316,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     };
     let Some(instructions) = obj.get_mut("instructions") else {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -320,7 +324,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     };
     let Some(arr) = instructions.as_array_mut() else {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -334,7 +338,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     });
     let Some(idx) = prior_idx else {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -350,7 +354,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
 
     if dry_run {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::DryRun,
             prior_version,
@@ -360,7 +364,7 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
         Ok(s) => s + "\n",
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("serialize opencode JSON: {e}")),
                 prior_version,
@@ -369,13 +373,13 @@ fn remove_opencode(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResul
     };
     match atomic_write(path, &serialized) {
         Ok(()) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Updated,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Error(e.to_string()),
             prior_version,
@@ -395,7 +399,7 @@ fn write_markdown(
 
     if matches!(status, SlotStatus::Unchanged) {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status,
             prior_version,
@@ -403,7 +407,7 @@ fn write_markdown(
     }
     if dry_run {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::DryRun,
             prior_version,
@@ -411,13 +415,13 @@ fn write_markdown(
     }
     match atomic_write(path, &new_text) {
         Ok(()) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Error(e.to_string()),
             prior_version,
@@ -438,7 +442,7 @@ fn write_opencode(
                 Ok(v) => v,
                 Err(e) => {
                     return SlotWriteResult {
-                        slot_name: slot.name,
+                        slot_name: slot.name.into(),
                         path: path.to_path_buf(),
                         status: SlotStatus::Error(format!("invalid opencode JSON: {e}")),
                         prior_version: None,
@@ -453,7 +457,7 @@ fn write_opencode(
 
     if !data.is_object() {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Error("opencode config root is not an object".into()),
             prior_version: None,
@@ -468,7 +472,7 @@ fn write_opencode(
         Some(a) => a,
         None => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error("opencode `instructions` is not an array".into()),
                 prior_version: None,
@@ -489,7 +493,7 @@ fn write_opencode(
         let pv = opencode_entry_version(&prior_str);
         if pv.as_deref() == Some(BLOCK_VERSION) && prior_str == new_entry {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Unchanged,
                 prior_version: pv,
@@ -504,7 +508,7 @@ fn write_opencode(
 
     if dry_run {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::DryRun,
             prior_version,
@@ -515,7 +519,7 @@ fn write_opencode(
         Ok(s) => s + "\n",
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("serialize opencode JSON: {e}")),
                 prior_version,
@@ -524,13 +528,13 @@ fn write_opencode(
     };
     match atomic_write(path, &serialized) {
         Ok(()) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Error(e.to_string()),
             prior_version,
@@ -646,7 +650,7 @@ fn write_kimi_yaml(
                 Ok(v) => v,
                 Err(e) => {
                     return SlotWriteResult {
-                        slot_name: slot.name,
+                        slot_name: slot.name.into(),
                         path: path.to_path_buf(),
                         status: SlotStatus::Error(format!("invalid kimi YAML: {e}")),
                         prior_version: None,
@@ -665,7 +669,7 @@ fn write_kimi_yaml(
 
     if matches!(status, SlotStatus::Unchanged) {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status,
             prior_version,
@@ -673,7 +677,7 @@ fn write_kimi_yaml(
     }
     if dry_run {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::DryRun,
             prior_version,
@@ -686,7 +690,7 @@ fn write_kimi_yaml(
         Ok(s) => s,
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("serialize kimi YAML: {e}")),
                 prior_version,
@@ -696,13 +700,13 @@ fn write_kimi_yaml(
 
     match atomic_write(path, &serialized) {
         Ok(()) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Error(e.to_string()),
             prior_version,
@@ -713,7 +717,7 @@ fn write_kimi_yaml(
 fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResult {
     if !path.exists() {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -723,7 +727,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
         Ok(s) => s,
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("read {}: {e}", path.display())),
                 prior_version: None,
@@ -732,7 +736,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
     };
     let mut doc: serde_yaml_ng::Value = if existing.trim().is_empty() {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -742,7 +746,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
             Ok(v) => v,
             Err(e) => {
                 return SlotWriteResult {
-                    slot_name: slot.name,
+                    slot_name: slot.name.into(),
                     path: path.to_path_buf(),
                     status: SlotStatus::Error(format!("invalid kimi YAML: {e}")),
                     prior_version: None,
@@ -755,7 +759,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
     let (new_role, removed) = remove_markdown_block(&role);
     if !removed {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Unchanged,
             prior_version: None,
@@ -763,7 +767,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
     }
     if dry_run {
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::DryRun,
             prior_version,
@@ -777,14 +781,14 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
     if new_role.trim().is_empty() {
         if let Err(e) = std::fs::remove_file(path) {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("remove {}: {e}", path.display())),
                 prior_version,
             };
         }
         return SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Updated,
             prior_version,
@@ -795,7 +799,7 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
         Ok(s) => s,
         Err(e) => {
             return SlotWriteResult {
-                slot_name: slot.name,
+                slot_name: slot.name.into(),
                 path: path.to_path_buf(),
                 status: SlotStatus::Error(format!("serialize kimi YAML: {e}")),
                 prior_version,
@@ -804,13 +808,13 @@ fn remove_kimi_yaml(slot: &CliSlot, path: &Path, dry_run: bool) -> SlotWriteResu
     };
     match atomic_write(path, &serialized) {
         Ok(()) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Updated,
             prior_version,
         },
         Err(e) => SlotWriteResult {
-            slot_name: slot.name,
+            slot_name: slot.name.into(),
             path: path.to_path_buf(),
             status: SlotStatus::Error(e.to_string()),
             prior_version,

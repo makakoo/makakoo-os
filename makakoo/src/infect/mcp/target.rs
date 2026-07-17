@@ -17,6 +17,12 @@ pub enum McpFormat {
     /// TOML file with `[[mcp_servers]]` array-of-tables and a
     /// `transport` discriminator field. Used by Vibe.
     TomlArrayOfTables,
+    /// Plain `[mcp_servers.<name>]` inline-table with `enabled`/`env`
+    /// and none of Codex's `env_vars`/`model_instructions_file` extras.
+    /// Grok's schema, and the generic primitive for runtime-registered
+    /// TOML-mcp custom hosts (`config/cli_hosts.json`). No built-in
+    /// target uses it — it's reachable only via a custom host.
+    TomlSimple,
 }
 
 /// Every CLI we know how to infect.

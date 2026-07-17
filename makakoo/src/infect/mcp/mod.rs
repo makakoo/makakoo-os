@@ -22,9 +22,12 @@
 
 #![allow(dead_code)]
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+use crate::infect::custom::CustomHost;
 
 pub mod adapters;
 pub mod deep;
@@ -132,10 +135,23 @@ pub enum ChangeKind {
     Update,
 }
 
+/// One MCP-config write outcome. Name-keyed (not `McpTarget`-keyed) so
+/// built-in targets and runtime-registered custom hosts share one report
+/// shape, one set of counts, and one summary printer.
+#[derive(Debug, Clone)]
+pub struct McpSyncResult {
+    /// `harvey`-server host name — a built-in target's short name
+    /// (`"claude"`) or a custom host's registry name (`"grok"`).
+    pub name: Cow<'static, str>,
+    /// Absolute config path that was (or would be) written.
+    pub path: PathBuf,
+    pub outcome: SyncOutcome,
+}
+
 /// Aggregate report of running mcp sync across every target.
 #[derive(Debug, Default)]
 pub struct McpSyncReport {
-    pub results: Vec<(McpTarget, SyncOutcome)>,
+    pub results: Vec<McpSyncResult>,
     pub dry_run: bool,
     pub verify_only: bool,
 }
@@ -144,37 +160,37 @@ impl McpSyncReport {
     pub fn added(&self) -> usize {
         self.results
             .iter()
-            .filter(|(_, o)| matches!(o, SyncOutcome::Added))
+            .filter(|r| matches!(r.outcome, SyncOutcome::Added))
             .count()
     }
     pub fn updated(&self) -> usize {
         self.results
             .iter()
-            .filter(|(_, o)| matches!(o, SyncOutcome::Updated))
+            .filter(|r| matches!(r.outcome, SyncOutcome::Updated))
             .count()
     }
     pub fn unchanged(&self) -> usize {
         self.results
             .iter()
-            .filter(|(_, o)| matches!(o, SyncOutcome::Unchanged))
+            .filter(|r| matches!(r.outcome, SyncOutcome::Unchanged))
             .count()
     }
     pub fn would_change(&self) -> usize {
         self.results
             .iter()
-            .filter(|(_, o)| matches!(o, SyncOutcome::WouldChange { .. }))
+            .filter(|r| matches!(r.outcome, SyncOutcome::WouldChange { .. }))
             .count()
     }
     pub fn skipped(&self) -> usize {
         self.results
             .iter()
-            .filter(|(_, o)| matches!(o, SyncOutcome::Skipped { .. }))
+            .filter(|r| matches!(r.outcome, SyncOutcome::Skipped { .. }))
             .count()
     }
     pub fn errors(&self) -> usize {
         self.results
             .iter()
-            .filter(|(_, o)| matches!(o, SyncOutcome::Error { .. }))
+            .filter(|r| matches!(r.outcome, SyncOutcome::Error { .. }))
             .count()
     }
     pub fn human_summary(&self) -> String {
@@ -187,8 +203,8 @@ impl McpSyncReport {
             "makakoo infect --mcp"
         };
         out.push_str(&format!("{header} — {} target(s)\n", self.results.len()));
-        for (target, outcome) in &self.results {
-            let tag = match outcome {
+        for r in &self.results {
+            let tag = match &r.outcome {
                 SyncOutcome::Added => "added",
                 SyncOutcome::Updated => "updated",
                 SyncOutcome::Unchanged => "unchanged",
@@ -201,16 +217,14 @@ impl McpSyncReport {
             };
             out.push_str(&format!(
                 "  {:<10} {:<14} {}\n",
-                target.short_name(),
+                r.name,
                 tag,
-                target
-                    .config_path_for_home(&dirs::home_dir().unwrap_or_default())
-                    .display(),
+                r.path.display(),
             ));
-            if let SyncOutcome::Error { message } = outcome {
+            if let SyncOutcome::Error { message } = &r.outcome {
                 out.push_str(&format!("    ! {message}\n"));
             }
-            if let SyncOutcome::Skipped { reason } = outcome {
+            if let SyncOutcome::Skipped { reason } = &r.outcome {
                 out.push_str(&format!("    : {reason}\n"));
             }
         }
@@ -232,6 +246,7 @@ pub fn sync_all(
     mcp_binary: Option<&Path>,
     dry_run: bool,
     targets: Option<&[String]>,
+    custom_hosts: &[CustomHost],
 ) -> McpSyncReport {
     let spec = McpServerSpec::default_harvey(makakoo_home, mcp_binary);
     let mut report = McpSyncReport {
@@ -246,7 +261,33 @@ pub fn sync_all(
             }
         }
         let outcome = sync_one(cli_home, makakoo_home, target, &spec, dry_run);
-        report.results.push((*target, outcome));
+        report.results.push(McpSyncResult {
+            name: target.short_name().into(),
+            path: target.config_path_for_home(cli_home),
+            outcome,
+        });
+    }
+    // Runtime-registered custom hosts (config/cli_hosts.json). Only those
+    // that declared an MCP config participate here; bootstrap-only custom
+    // hosts are handled by the markdown writer, not this loop.
+    for host in custom_hosts {
+        let (Some(format), Some(rel)) = (host.mcp_format_enum(), host.mcp_path.as_deref()) else {
+            continue;
+        };
+        if let Some(filter) = targets {
+            if !filter.iter().any(|n| n == &host.name) {
+                continue;
+            }
+        }
+        let path = cli_home.join(rel);
+        // Custom hosts never get Codex's model_instructions_file hack —
+        // they either read their bootstrap slot natively or don't need it.
+        let outcome = sync_one_at(&path, format, &spec, dry_run, None);
+        report.results.push(McpSyncResult {
+            name: Cow::Owned(host.name.clone()),
+            path,
+            outcome,
+        });
     }
     report
 }
@@ -261,33 +302,51 @@ pub fn sync_one(
     dry_run: bool,
 ) -> SyncOutcome {
     let path = target.config_path_for_home(home);
+    // Codex is the only built-in whose bootstrap must be wired via
+    // `model_instructions_file` (see note in sync_one_at); everything
+    // else passes None.
+    let mif = if matches!(target.format(), McpFormat::TomlInlineTable) {
+        Some(crate::infect::canonical_bootstrap_path(makakoo_home))
+    } else {
+        None
+    };
+    sync_one_at(&path, target.format(), spec, dry_run, mif.as_deref())
+}
+
+/// Sync the harvey MCP server into an explicit config `path` using the
+/// given `format`. Shared by built-in targets ([`sync_one`]) and
+/// runtime-registered custom hosts ([`sync_all`]).
+///
+/// `model_instructions_file` is Codex's bootstrap-injection knob — pass
+/// `None` for every other format/host.
+pub fn sync_one_at(
+    path: &Path,
+    format: McpFormat,
+    spec: &McpServerSpec,
+    dry_run: bool,
+    model_instructions_file: Option<&Path>,
+) -> SyncOutcome {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
             return SyncOutcome::Skipped {
-                reason: format!(
-                    "{} not installed (no config dir at {})",
-                    target.short_name(),
-                    parent.display()
-                ),
+                reason: format!("not installed (no config dir at {})", parent.display()),
             };
         }
     }
-    match target.format() {
-        McpFormat::JsonMcpServers => adapters::json::sync(target, &path, spec, dry_run, false),
-        McpFormat::JsonOpencode => adapters::json::sync(target, &path, spec, dry_run, true),
+    match format {
+        McpFormat::JsonMcpServers => adapters::json::sync(path, spec, dry_run, false),
+        McpFormat::JsonOpencode => adapters::json::sync(path, spec, dry_run, true),
         McpFormat::TomlInlineTable => {
-            // Codex doesn't read ~/AGENTS.md from $HOME by default —
-            // its walk-up search stops at project markers, so the
-            // home-level pointer never reaches it. We patch the
-            // canonical bootstrap path directly into ~/.codex/config.toml
-            // via `model_instructions_file`, which Codex DOES load on
-            // every session. Discovered 2026-04-25 in live test —
-            // Codex resolved $MAKAKOO_HOME via printenv and missed
-            // every paths/conventions in the bootstrap until this fix.
-            let canonical = crate::infect::canonical_bootstrap_path(makakoo_home);
-            adapters::codex::sync(&path, spec, dry_run, Some(&canonical))
+            // Codex doesn't read ~/AGENTS.md from $HOME by default — its
+            // walk-up search stops at project markers, so the home-level
+            // pointer never reaches it. We patch the canonical bootstrap
+            // path directly into ~/.codex/config.toml via
+            // `model_instructions_file`, which Codex DOES load every
+            // session. (2026-04-25 live-test fix.)
+            adapters::codex::sync(path, spec, dry_run, model_instructions_file)
         }
-        McpFormat::TomlArrayOfTables => adapters::vibe::sync(&path, spec, dry_run),
+        McpFormat::TomlArrayOfTables => adapters::vibe::sync(path, spec, dry_run),
+        McpFormat::TomlSimple => adapters::toml_simple::sync(path, spec, dry_run),
     }
 }
 
@@ -470,8 +529,16 @@ mod tests {
     fn report_human_summary_lists_every_target() {
         let report = McpSyncReport {
             results: vec![
-                (McpTarget::Claude, SyncOutcome::Added),
-                (McpTarget::Vibe, SyncOutcome::Unchanged),
+                McpSyncResult {
+                    name: "claude".into(),
+                    path: PathBuf::from("/h/.claude.json"),
+                    outcome: SyncOutcome::Added,
+                },
+                McpSyncResult {
+                    name: "vibe".into(),
+                    path: PathBuf::from("/h/.vibe/config.toml"),
+                    outcome: SyncOutcome::Unchanged,
+                },
             ],
             dry_run: false,
             verify_only: false,
@@ -486,7 +553,7 @@ mod tests {
     #[test]
     fn skipped_when_target_dir_absent() {
         let tmp = tempfile::tempdir().unwrap();
-        let report = sync_all(tmp.path(), tmp.path(), None, true, None);
+        let report = sync_all(tmp.path(), tmp.path(), None, true, None, &[]);
         // Every target should be skipped because tmpdir has no CLI dirs.
         assert!(report.skipped() > 0);
         assert_eq!(report.added(), 0);

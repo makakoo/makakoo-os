@@ -103,7 +103,9 @@ pub async fn run(
                 .green()
                 .bold()
         );
-        let report = crate::infect::run(true, false, None).await?;
+        let custom_hosts =
+            crate::infect::custom::load(&makakoo_core::platform::makakoo_home());
+        let report = crate::infect::run(true, false, None, &custom_hosts).await?;
         print!("{}", report.human_summary());
     }
 

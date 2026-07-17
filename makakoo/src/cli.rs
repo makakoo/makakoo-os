@@ -310,6 +310,17 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Manage runtime-registered custom CLI hosts. Lets `makakoo infect`
+    /// cover AI CLIs beyond the built-in roster (claude, gemini, codex,
+    /// opencode, vibe, cursor, qwen, pi, kimi) with no recompile — the
+    /// registry lives at `$MAKAKOO_HOME/config/cli_hosts.json` and is
+    /// merged into every `makakoo infect` run. (`--verify` drift coverage
+    /// for custom hosts is a follow-up.)
+    Cli {
+        #[command(subcommand)]
+        cmd: CliHostCmd,
+    },
+
     /// Manage secrets in the OS keyring.
     Secret {
         #[command(subcommand)]
@@ -1398,6 +1409,54 @@ pub enum DistroCmd {
 
 /// `makakoo secret <subcommand>`. Writes go through the OS keyring
 /// (Keychain / Secret Service / Credential Manager).
+#[derive(Subcommand, Debug)]
+pub enum CliHostCmd {
+    /// Register a new CLI host so `makakoo infect` covers it. With no
+    /// flags, autodetects the bootstrap + MCP files under `~/.<name>/`.
+    Add {
+        /// Host name, e.g. `grok`. Also the `~/.<name>/` config dir
+        /// unless `--config-dir` overrides.
+        name: String,
+        /// Config dir relative to `$HOME` (default: `.<name>`).
+        #[arg(long)]
+        config_dir: Option<String>,
+        /// Bootstrap markdown file inside the config dir. Autodetected
+        /// (AGENTS.md / CLAUDE.md / GEMINI.md) when omitted; falls back
+        /// to AGENTS.md.
+        #[arg(long)]
+        bootstrap_file: Option<String>,
+        /// MCP config file inside the config dir. Autodetected
+        /// (config.toml / mcp.json / settings.json) when omitted.
+        #[arg(long)]
+        mcp_file: Option<String>,
+        /// MCP format: json-mcp-servers | json-opencode | toml-codex |
+        /// toml-vibe | toml-simple. Inferred from the MCP file when omitted.
+        #[arg(long)]
+        mcp_format: Option<String>,
+        /// Clone the bootstrap + MCP shape from a known host
+        /// (grok, codex, claude, gemini, vibe).
+        #[arg(long)]
+        from: Option<String>,
+        /// Register even if `~/.<name>/` doesn't exist yet.
+        #[arg(long)]
+        force: bool,
+        /// Register bootstrap only — no MCP server.
+        #[arg(long)]
+        no_mcp: bool,
+    },
+    /// List registered custom hosts.
+    List {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a registered custom host by name.
+    Remove {
+        /// Host name to remove.
+        name: String,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 pub enum SecretCmd {
     /// Read a secret value from stdin and store it under `key`. The

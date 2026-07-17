@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
+pub mod custom;
 pub mod ext;
 pub mod hooks;
 pub mod local;
@@ -28,6 +29,7 @@ pub mod renderer;
 pub mod slots;
 pub mod writer;
 
+use custom::CustomHost;
 use slots::{CliSlot, BLOCK_VERSION, SLOTS};
 use writer::{write_bootstrap_to_slot, SlotStatus, SlotWriteResult};
 
@@ -150,11 +152,13 @@ pub async fn run(
     _global: bool,
     dry_run: bool,
     target_filter: Option<&[String]>,
+    custom_hosts: &[CustomHost],
 ) -> Result<InfectReport> {
     run_with_home(
         &dirs::home_dir().ok_or_else(|| anyhow!("no $HOME"))?,
         dry_run,
         target_filter,
+        custom_hosts,
     )
     .await
 }
@@ -288,6 +292,11 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
 
     let makakoo_home = makakoo_core::platform::makakoo_home();
 
+    // Runtime-registered custom CLI hosts (config/cli_hosts.json). Loaded
+    // once here and threaded into both the bootstrap pass and the MCP pass
+    // so a `makakoo cli add`-ed CLI is a first-class infect target.
+    let custom_hosts = custom::load(&makakoo_home);
+
     if verify {
         // Audit-only: full drift scan (MCP + bootstrap markers + symlinks).
         // With --deep, extend into per-project / workspace / worktree scopes.
@@ -381,7 +390,7 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
 
     // 1. Bootstrap (skipped when `--mcp` is set without `--global`).
     if !mcp_only || global {
-        let report = run(global, dry_run, target_filter).await?;
+        let report = run(global, dry_run, target_filter, &custom_hosts).await?;
         print!("{}", report.human_summary());
         if report.error_count() > 0 {
             bootstrap_failed = true;
@@ -397,6 +406,7 @@ pub async fn dispatch(args: InfectArgs) -> Result<i32> {
         mcp_binary.as_deref(),
         dry_run,
         target_filter,
+        &custom_hosts,
     );
     print!("{}", mcp_report.human_summary());
     let mcp_failed = mcp_report.errors() > 0;
@@ -488,9 +498,10 @@ pub async fn run_with_home(
     home: &Path,
     dry_run: bool,
     target_filter: Option<&[String]>,
+    custom_hosts: &[CustomHost],
 ) -> Result<InfectReport> {
     let body = load_bootstrap()?;
-    run_with_home_and_body(home, &body, dry_run, target_filter).await
+    run_with_home_and_body(home, &body, dry_run, target_filter, custom_hosts).await
 }
 
 /// Fully hermetic variant used by tests — both the home directory and the
@@ -501,6 +512,7 @@ pub async fn run_with_home_and_body(
     body: &str,
     dry_run: bool,
     target_filter: Option<&[String]>,
+    custom_hosts: &[CustomHost],
 ) -> Result<InfectReport> {
     let mut report = InfectReport {
         bootstrap_version: BLOCK_VERSION.to_string(),
@@ -552,6 +564,22 @@ pub async fn run_with_home_and_body(
     for target in ext_targets_from(home) {
         let r = ext::write_ext_host(&target, &pointer_body, dry_run);
         report.results.push(r);
+    }
+
+    // Runtime-registered custom hosts (config/cli_hosts.json). Passed in
+    // explicitly by the caller — production `run` loads the registry,
+    // hermetic tests pass `&[]` — so this stays independent of which
+    // `home` the writer targets. Custom bootstrap slots are always
+    // markdown-with-markers.
+    for host in custom_hosts {
+        if let Some(filter) = target_filter {
+            if !filter.iter().any(|t| t.eq_ignore_ascii_case(&host.name)) {
+                continue;
+            }
+        }
+        report
+            .results
+            .push(custom::write_bootstrap(host, home, &pointer_body, dry_run));
     }
 
     // Clean up old slot locations that v12 abandoned. We strip our
@@ -820,7 +848,7 @@ mod tests {
     #[tokio::test]
     async fn run_with_fake_home_installs_all_eight() {
         let tmp = TempDir::new().unwrap();
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None, &[])
             .await
             .unwrap();
         assert_eq!(report.results.len(), 9);
@@ -841,7 +869,7 @@ mod tests {
     #[tokio::test]
     async fn dry_run_writes_nothing() {
         let tmp = TempDir::new().unwrap();
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, true, None)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, true, None, &[])
             .await
             .unwrap();
         assert_eq!(report.results.len(), 9);
@@ -854,10 +882,10 @@ mod tests {
     #[tokio::test]
     async fn second_run_is_unchanged() {
         let tmp = TempDir::new().unwrap();
-        run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
+        run_with_home_and_body(tmp.path(), TEST_BODY, false, None, &[])
             .await
             .unwrap();
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None, &[])
             .await
             .unwrap();
         assert_eq!(report.unchanged_count(), 9);
@@ -876,7 +904,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None)
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, None, &[])
             .await
             .unwrap();
         // Claude got updated, the other 8 got installed.
@@ -905,7 +933,7 @@ mod tests {
     async fn target_filter_restricts_to_named_slots() {
         let tmp = TempDir::new().unwrap();
         let filter = vec!["claude".to_string()];
-        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, Some(&filter))
+        let report = run_with_home_and_body(tmp.path(), TEST_BODY, false, Some(&filter), &[])
             .await
             .unwrap();
         assert_eq!(report.results.len(), 1, "only claude should be written");

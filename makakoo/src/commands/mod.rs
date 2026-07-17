@@ -18,6 +18,7 @@ pub mod agent_test_faults;
 pub mod brain;
 pub mod bucket;
 pub mod buddy;
+pub mod cli_host;
 pub mod default_banner;
 pub mod distro;
 pub mod docs;
@@ -167,6 +168,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             })
             .await
         }
+        Commands::Cli { cmd } => cli_host::run(cmd),
         Commands::Secret { cmd } => dispatch_secret(cmd),
         Commands::Plugin { cmd } => plugin::run(ctx, cmd).await,
         Commands::Distro { cmd } => distro::run(ctx, cmd).await,
