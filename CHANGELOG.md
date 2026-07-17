@@ -10,6 +10,15 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-07-17
+
+### Added
+- `makakoo cli add|list|remove` — a runtime registry of custom CLI hosts at `$MAKAKOO_HOME/config/cli_hosts.json`, merged into every `makakoo infect` run. New AI CLIs can now be onboarded without recompiling the binary. `makakoo cli add <name>` autodetects the bootstrap file (`AGENTS.md`/`CLAUDE.md`/`GEMINI.md`) and MCP config (`config.toml`/`mcp.json`/`settings.json`) under `~/.<name>/`, sniffs the MCP format, and supports `--from <known-host>`, explicit `--config-dir`/`--bootstrap-file`/`--mcp-file`/`--mcp-format` overrides, and `--no-mcp`. The nine built-in hosts are unchanged; a custom host whose name collides with a built-in is ignored.
+- New MCP format primitive `toml-simple` — a plain `[mcp_servers.<name>]` inline table with `enabled`/`env` and none of Codex's `env_vars`/`model_instructions_file` extras. This is the schema the Grok CLI uses, and the generic primitive for any future TOML-mcp custom host.
+
+### Notes
+- `makakoo infect` (write/refresh) now covers registered custom hosts on both surfaces (bootstrap + MCP). `makakoo infect --verify` (drift audit) still iterates the built-in host list only — custom-host drift coverage is a follow-up.
+
 ## [0.1.40] - 2026-07-16
 
 ### Fixed
