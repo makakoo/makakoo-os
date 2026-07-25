@@ -1,0 +1,54 @@
+# personal-day-brief — daily morning brief agent
+#
+# Run: makakoo agent create --specs ./personal-day-brief.yaml
+# Then: cd $MAKAKOO_HOME/agents-flue/personal-day-brief
+#       npm install
+#       cp .env.example .env  (fill in TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET_TOKEN)
+#       npm run proxy &
+#       npx flue dev
+# Then: message the bot on Telegram OR wait for the 8am cron.
+#
+# See docs/agents/spec.md for the full schema.
+
+name: personal-day-brief
+description: "Daily morning brief — brain recap + today's calendar + weather"
+
+# The model specifier drives provider selection. The CLI detects
+# available providers and respects this field if it names a specific
+# <provider>/<model>. See docs/agents/spec.md#llm-provider-resolution.
+model: switchailocal/ail-compound
+
+instructions: |
+  You are a personal morning brief agent. When triggered (Telegram
+  message or 8am cron), you:
+  1. Search the Makakoo Brain for recent context (last 24h).
+  2. Write a 3-bullet brief: yesterday's wins, today's priorities,
+     and one thing to watch out for.
+  3. Send the brief to the user's Telegram channel.
+  Be concise. No fluff. Use the tools you have.
+
+# Whitelist of Makakoo MCP tools this agent may invoke.
+tools: [brain_search, brain_recent, write_file]
+
+# Communications interfaces — zero or many. The CLI auto-scaffolds
+# one TS module per entry: src/channels/<kind>-<n>.ts
+channels:
+  - kind: telegram
+    token_env: TELEGRAM_BOT_TOKEN
+    # Get your user ID from @userinfobot on Telegram.
+    allowed_users: ["746496145"]
+
+# Trigger sources — zero or many. Loaded as side-effecting
+# imports from src/agents/assistant.ts. The CLI auto-scaffolds
+# one TS module per entry: src/triggers/<kind>-<n>.ts
+triggers:
+  - kind: cron
+    schedule: "0 8 * * *"     # 08:00 every day
+    timezone: "UTC"
+
+# Filesystem read/write boundaries. Required field.
+# `allowed_paths` — globs, must resolve under $MAKAKOO_HOME.
+# `forbidden_paths` — globs, always denied (overrides allowed_paths).
+scope:
+  allowed_paths: ["~/MAKAKOO/data/personal-day-brief/**"]
+  forbidden_paths: ["~/.ssh/**", "~/.aws/**", "~/.gnupg/**"]

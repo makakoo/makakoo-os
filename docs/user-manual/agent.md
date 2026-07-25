@@ -14,10 +14,11 @@ to a scoped agent slot.
 
 | Command | Purpose |
 |---|---|
-| `makakoo agent create <slot> [flags|--from-toml] [--runtime native|flue]` | Create a new slot. Config-only credential check before writing. `--runtime flue` also scaffolds a runnable TypeScript channel agent. |
+| `makakoo agent create [--specs <PATH>]` | Create a new slot from a spec (default) or from the Telegram/Slack quick-start flags. Always scaffolds a Flue (TypeScript) agent project. `<SLOT>` is optional with `--specs` (the spec's `name` becomes the slot id). |
 | `makakoo agent list [--json]` | Enumerate every slot in `~/MAKAKOO/config/agents/*.toml`. |
 | `makakoo agent show <slot> [--json]` | Print the resolved TOML with all secrets redacted. |
 | `makakoo agent validate <slot>` | Run per-transport credential verifiers WITHOUT starting the agent. |
+| `makakoo agent validate-spec <PATH>` | Parse and validate one or more spec files (file, directory, or `.`) without creating anything. Exits 0 on all-pass, 1 on any failure. |
 | `makakoo agent inventory [--json]` | List legacy `agent-*` plugins with their migration status. |
 | `makakoo agent migrate-harveychat` | One-shot: migrate the legacy Olibia bot config to the `harveychat` slot. Idempotent. |
 | `makakoo agent start <slot>` | Hand the slot to launchd (macOS) / systemd-user (Linux). Supervisor + Python gateway come up. |
@@ -43,11 +44,39 @@ to a scoped agent slot.
 
 ## `agent create` modes
 
-Three mutually exclusive modes:
+Two modes — spec-driven (preferred) or quick-start (ergonomic).
 
-### Single-Telegram
+### From a spec (preferred)
+
+Write a YAML or TOML spec that declares the agent's cognitive core,
+channels, triggers, and scope. See [`docs/agents/spec.md`](../agents/spec.md)
+for the full schema and [`examples/agents/`](../../../examples/agents/)
+for starters.
 
 ```sh
+# One agent from one spec file:
+makakoo agent create --specs ./weather-bot.yaml
+
+# N agents from a directory of specs (sorted, atomic):
+makakoo agent create --specs ./agents/
+
+# Scan the current folder:
+makakoo agent create --specs .
+
+# Validate without creating:
+makakoo agent validate-spec ./weather-bot.yaml
+```
+
+`<SLOT>` is optional with `--specs` — the spec's `name` becomes the
+slot id. For directory mode, each spec produces one agent.
+
+### Quick-start (Telegram / Slack only)
+
+For ad-hoc creation without writing a spec file. The CLI generates a
+synthetic spec from the flags, then scaffolds the same way.
+
+```sh
+# Single-Telegram quick-start:
 makakoo agent create career \
   --name "Career Manager" \
   --persona "Tracks job leads. Drafts replies; never auto-sends." \
@@ -55,102 +84,49 @@ makakoo agent create career \
   --tools "brain_search,write_file,linkedin,gmail" \
   --telegram-token '<bot-token>' \
   --telegram-allowed "746496145"
-```
 
-### Single-Slack
-
-```sh
+# Single-Slack quick-start:
 makakoo agent create alerts \
-  --name "Alerts" \
   --slack-bot-token 'xoxb-…' \
   --slack-app-token 'xapp-…' \
   --slack-team T0123ABCD \
   --slack-allowed "U0123ABCD"
 ```
 
-### Multi-transport (any combo)
+The quick-start flags are mutually exclusive with `--specs`. They
+generate a synthetic spec with a single Telegram or Slack channel;
+the agent's env var names are the well-known defaults
+(`TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`,
+`SLACK_TEAM_ID`, plus the `*_WEBHOOK_SECRET_TOKEN` for Telegram and
+`SLACK_SIGNING_SECRET` for Slack). The `.env` file in the generated
+Flue project is pre-populated with the inline tokens so
+`npx flue dev` works without a manual copy.
 
-Build a TOML by hand and load it:
+## Agent runtime: Flue (the only engine)
 
-```sh
-makakoo agent create secretary --from-toml ~/secretary.toml
-```
+Every `makakoo agent create` scaffolds a runnable
+[Flue](https://flueframework.com) (TypeScript) agent project. Makakoo
+stays the **control plane** (identity, scope, secrets, registry — the
+slot) and Flue becomes the **data plane** (the agent loop + every
+channel + every trigger).
 
-`--from-toml` lets you wire any number of `[[transport]]` blocks
-in any combination. The CLI validates the file (schema + per-
-transport credential check) before copying it into the registry.
+The two are bridged by a generated `mcp-proxy.mjs`, which re-exposes
+the local `makakoo-mcp` stdio server over StreamableHTTP so the
+agent's `connectMcpServer()` can consume every Makakoo tool as
+`mcp__harvey__*`.
 
-**Starter templates** for the most common archetypes live at
-[`templates/agents/`](../../templates/agents/) — copy one,
-replace the `<PLACEHOLDER>` fields, then run
-`makakoo agent create <slot> --from-toml <copy>.toml`. The gallery
-ships 11 archetypes in 3 tiers:
+The `--runtime` flag (native / flue) was removed in Phase 3 of
+SPRINT-FLUE-DEFAULT-AGENT-SPECS. Flue is now the only creation
+engine. Native execution paths (`agent_lifecycle`,
+`agent_destroy`, `agent_audit`) are preserved for re-running
+existing native slots.
 
-- **Tier 1 (highest payback):** secretary-freelance, invoice-chaser,
-  expense-receipts, meeting-prep, lead-qualifier
-- **Tier 2 (situational):** client-boundary-bouncer, subscription-watch,
-  career-manager, support-inbox
-- **Tier 3 (narrow):** alerts-bot, community-bot
 
-Tiering and curation methodology are documented in
-[`templates/agents/README.md`](../../templates/agents/README.md).
-
-`--from-toml` is mutually exclusive with `--telegram-token` and
-`--slack-bot-token`. The CLI's `--allowed-paths`, `--forbidden-paths`,
-`--tools`, `--persona`, `--name` flags override the source file
-when explicitly passed.
-
-## Agent runtime: `native` vs `flue`
-
-`agent create` takes an orthogonal `--runtime` flag (default `native`)
-that decides **what gets written** alongside the slot config. The slot
-itself — identity, scope, allowed paths/tools, secret references — is
-identical in both cases; Makakoo always owns that control plane.
-
-| `--runtime` | What it writes | When to use |
-|---|---|---|
-| `native` (default) | Slot TOML only. The slot runs inside Makakoo's own gateway (`makakoo agent start`). | You want a bot supervised by Makakoo's launchd/systemd lifecycle. |
-| `flue` | Slot TOML **plus** a runnable [Flue](https://flueframework.com) (TypeScript) agent project wired to Makakoo's MCP server and the `@flue/telegram` channel. | You want a standalone channel agent you run/deploy yourself, with full access to every Makakoo tool over MCP. |
-
-With `--runtime flue`, Makakoo stays the **control plane** (identity,
-scope, secrets, registry — the slot) and Flue becomes the **data plane**
-(the agent loop + the Telegram webhook). The two are bridged by a
-generated `mcp-proxy.mjs`, which re-exposes the local `makakoo-mcp` stdio
-server over StreamableHTTP so the agent's `connectMcpServer()` can consume
-every Makakoo tool as `mcp__harvey__*`.
-
-```sh
-# Scaffold a native slot AND a runnable Flue Telegram agent next to it:
-makakoo agent create assistant \
-  --runtime flue \
-  --persona "Helpful Telegram assistant. Uses Makakoo's Brain + tools." \
-  --out ~/MAKAKOO/agents-flue/assistant
-```
-
-`--out` sets the scaffold directory (default
-`$MAKAKOO_HOME/agents-flue/<slot>`). The command refuses to overwrite a
-non-empty directory. The scaffolded project contains:
-
-| File | Purpose |
-|---|---|
-| `src/agents/assistant.ts` | The agent: model + instructions + Makakoo MCP tools. |
-| `src/channels/telegram.ts` | Signature-verified Telegram webhook → dispatch to the agent. |
-| `mcp-proxy.mjs` | stdio→StreamableHTTP bridge to the local `makakoo-mcp` binary. |
-| `instructions.txt` | The agent's system instructions (seeded from the slot `--persona`). |
-| `.env.example` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET_TOKEN`, `MAKAKOO_MCP_URL`, `AGENT_MODEL`. |
-| `package.json`, `.gitignore`, `README.md` | Standard project scaffolding. |
-
-Run it from the scaffold directory:
-
-```sh
-npm install
-cp .env.example .env          # fill TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET_TOKEN
-npm run proxy                 # terminal 1: makakoo-mcp over http://127.0.0.1:8808/mcp
-npx flue dev                  # terminal 2: agent + webhook locally
-```
-
-End-to-end recipe (bot token → live replies, calling the Brain):
-[`docs/walkthroughs/flue-telegram-bot.md`](../walkthroughs/flue-telegram-bot.md).
+The Flue project layout is driven by the spec: one file per channel
+under `src/channels/`, one per trigger under `src/triggers/`,
+`package.json` deps pulled in based on what the spec declares. See
+[`docs/agents/spec.md`](../agents/spec.md) for the full schema and
+[`examples/agents/`](../../../examples/agents/) for working starters.
 
 ## Slot id rules
 

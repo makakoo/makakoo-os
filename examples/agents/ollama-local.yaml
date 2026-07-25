@@ -1,0 +1,48 @@
+# ollama-local — fully local agent using Ollama
+#
+# Requires Ollama running locally (http://localhost:11434).
+# `makakoo agent create --specs ./ollama-local.yaml` auto-detects
+# Ollama and generates `src/app.ts` with the right `registerProvider`
+# call. No manual editing needed.
+#
+# Quick setup:
+#   brew install ollama  (or download from https://ollama.com)
+#   ollama serve &
+#   ollama pull qwen3:8b
+#
+# Verify Ollama is reachable:
+#   curl http://localhost:11434/api/tags
+#
+# See docs/agents/spec.md for the full schema and the provider
+# resolution flow.
+
+name: ollama-local
+description: "Local Ollama agent (no external LLM API key)"
+
+# The model specifier is `ollama/<model-name>`. The model name
+# is auto-detected from `GET /api/tags` (first model wins) and
+# the spec is updated on `makakoo agent create` if needed.
+model: ollama/nemotron-3-super:cloud
+
+instructions: |
+  You are a local-first agent. All inference runs on the host via
+  Ollama — no external API calls, no telemetry leaves the machine.
+  Answer concisely and use the available Makakoo tools when needed.
+
+tools: [brain_search, write_file]
+
+triggers: []
+
+scope:
+  allowed_paths: ["~/MAKAKOO/data/ollama-local/**"]
+  forbidden_paths: ["~/.ssh/**", "~/.aws/**"]
+
+# Channels — Telegram works the same way as any other spec.
+# The `switchailocal` provider and `ollama` provider are mutually
+# exclusive: this spec uses ollama. The Flue scaffolder picks the
+# provider based on the spec's `model` field prefix.
+channels:
+  - kind: telegram
+    token_env: TELEGRAM_BOT_TOKEN
+    # Get your user ID from @userinfobot on Telegram.
+    allowed_users: ["746496145"]

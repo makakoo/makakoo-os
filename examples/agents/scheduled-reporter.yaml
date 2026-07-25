@@ -1,0 +1,52 @@
+# scheduled-reporter — autonomous daemon, no channels
+#
+# Zero channels. Zero outbound UI. The agent only runs on cron ticks
+# and writes reports to the filesystem (within its scope).
+#
+# Use case: a background agent that generates periodic reports and
+# saves them to disk. No human interaction.
+#
+# Try it:
+#   makakoo agent validate-spec ./scheduled-reporter.yaml
+#   makakoo agent create --specs ./scheduled-reporter.yaml
+#   cd $MAKAKOO_HOME/agents-flue/scheduled-reporter
+#   npm install
+#   npm run proxy & npx flue dev
+#   # Every Monday at 09:00 UTC the agent runs and writes a report
+#   # to ~/MAKAKOO/data/reports/weekly-YYYY-MM-DD.md
+#
+# See docs/agents/spec.md for the full schema.
+
+name: scheduled-reporter
+description: "Weekly autonomous report generator (no channels)"
+
+model: anthropic/claude-sonnet-4-6
+
+instructions: |
+  You are an autonomous reporting agent. Every Monday at 09:00 UTC, you
+  wake up and write a weekly report summarizing the past 7 days of
+  activity. Pull data from the Brain (use brain_search), write a
+  concise Markdown report to ~/MAKAKOO/data/reports/weekly-YYYY-MM-DD.md
+  (use write_file), and log a one-line summary in the audit log.
+
+  You do NOT respond to chat — there are no channels. The cron tick
+  is your only trigger.
+
+tools:
+  - brain_search
+  - write_file
+
+# No channels — this agent is purely autonomous.
+
+triggers:
+  - kind: cron
+    schedule: "0 9 * * 1"     # 09:00 every Monday
+    timezone: "UTC"
+
+scope:
+  allowed_paths:
+    - "~/MAKAKOO/data/reports/**"
+  forbidden_paths:
+    - "~/.ssh/**"
+    - "~/.aws/**"
+    - "~/.gnupg/**"

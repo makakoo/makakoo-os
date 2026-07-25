@@ -1,0 +1,72 @@
+# webhook-worker — receives webhooks, fires on triggers
+#
+# Channels: webhook (inbound HTTP with HMAC-SHA256 signature verification)
+# Triggers: webhook (a separate Hono server on port 8809 that
+#           dispatches into the agent on POST)
+#
+# This is the V1 pattern for "agent reacts to events from external
+# systems without any chat UI". Common use case: GitHub webhook → agent
+# reviews PR, posts back via a separate outbound tool. Or: internal
+# scheduler → agent runs a job.
+#
+# Try it:
+#   makakoo agent validate-spec ./webhook-worker.yaml
+#   makakoo agent create --specs ./webhook-worker.yaml
+#   cd $MAKAKOO_HOME/agents-flue/webhook-worker
+#   npm install
+#   # Set OPS_WEBHOOK_SECRET in .env
+#   npm run proxy & npx flue dev
+#   # Test the inbound webhook:
+#   curl -X POST http://127.0.0.1:8808/hooks/ops \
+#     -H "x-signature: $(echo -n '{"event":"deploy"}' | openssl dgst -sha256 -hmac "$OPS_WEBHOOK_SECRET" | cut -d' ' -f2)" \
+#     -H "content-type: application/json" \
+#     -d '{"event":"deploy","ref":"main"}'
+#   # Test the trigger webhook (separate port 8809):
+#   curl -X POST http://127.0.0.1:8809/triggers/manual \
+#     -H "x-signature: $(echo -n '{"job":"health-check"}' | openssl dgst -sha256 -hmac "$MANUAL_TRIGGER_SECRET" | cut -d' ' -f2)" \
+#     -H "content-type: application/json" \
+#     -d '{"job":"health-check"}'
+#
+# See docs/agents/spec.md for the full schema.
+
+name: webhook-worker
+description: "Reacts to inbound webhooks and trigger events (no chat)"
+
+model: anthropic/claude-sonnet-4-6
+
+instructions: |
+  You are a webhook-driven agent. Two paths wake you up:
+
+  1. Inbound webhook at /hooks/ops (HMAC-SHA256 verified) — fires when
+     an external system (e.g. CI, monitoring) POSTs an event. Inspect
+     the payload, take action using your tools, and respond to the
+     webhook with a structured JSON status.
+
+  2. Trigger webhook at /triggers/manual (separate port 8809,
+     HMAC-SHA256 verified) — fires when an operator POSTs a manual
+     job request. Run the job, write the result to the audit log.
+
+  You do NOT respond to chat. Both webhooks are your only input.
+
+tools:
+  - brain_search
+  - web_search
+  - write_file
+
+channels:
+  - kind: webhook
+    path: /hooks/ops
+    secret_env: OPS_WEBHOOK_SECRET
+
+triggers:
+  - kind: webhook
+    path: /triggers/manual
+    secret_env: MANUAL_TRIGGER_SECRET
+
+scope:
+  allowed_paths:
+    - "~/MAKAKOO/data/ops/**"
+  forbidden_paths:
+    - "~/.ssh/**"
+    - "~/.aws/**"
+    - "~/.gnupg/**"
