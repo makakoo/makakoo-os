@@ -8,19 +8,76 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-25
 
 ### Added
-- **LLM provider auto-detection** (Phase 6 of SPRINT-FLUE-DEFAULT-AGENT-SPECS). `makakoo agent create --specs <PATH>` now probes `http://localhost:18080/v1/models` (switchailocal), `http://localhost:11434/api/tags` (Ollama), and `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars at create time. The spec's `model` field drives which provider is selected. Multiple providers + TTY → interactive prompt; otherwise auto-pick local-first.
-- **`src/app.ts` is now always scaffolded** with the right `registerProvider` call for the chosen provider. Local providers (switchailocal, ollama) get `api` + `baseUrl` + the lope team fix (`contextWindow: 128_000` + `maxTokens: 8_192`). Cloud providers (anthropic, openai) get only `apiKey` (catalog provides the rest). No more manual `app.ts` editing after scaffolding.
-- **`discover_providers()`** in `makakoo-core::agents::llm_provider` — concurrent probe with 2s timeout, sorts local-first, exports `DiscoveredProvider`, `ProviderSource`, `default_fallback()`.
-- **Two new example specs** in `examples/agents/`: `weather-bot.yaml` (switchailocal) and `ollama-local.yaml` (Ollama).
-- **New docs section** in `docs/agents/spec.md`: "LLM provider resolution" covering detection, spec selection, and the scaffolder's output format.
-- **lope team fix baked in** (the `contextWindow: 0` / `maxTokens: 0` silent 1-token output bug in Flue v1.0.0-beta.9). The scaffolder always sets safe values for non-catalog providers. This is the single most important thing to get right — without it, LLM calls complete but produce nothing.
+
+**Sprint: declarative agent spec format + LLM provider auto-detection**
+(Phase 1-6 of SPRINT-FLUE-DEFAULT-AGENT-SPECS). `makakoo agent create --specs <PATH>`
+now scaffolds a runnable Flue (TypeScript) project from a YAML or TOML spec
+in one command, with zero manual `app.ts` editing.
+
+- **Spec format** (Phase 1-5). `AgentSpec` / `ChannelSpec` / `TriggerSpec` /
+  `ScopeSpec` in `makakoo-core/src/agents/spec/`. YAML + TOML parsing, validation,
+  conversion to slot TOML. `makakoo agent create --specs <PATH>` accepts a file,
+  directory, or `.` to scan the current folder. `makakoo agent validate-spec <PATH>`
+  for dry-run validation.
+- **6 channel kinds** (Phase 2-4). `telegram`, `slack`, `discord`, `webhook` in V1;
+  `email`, `voice` deferred to V2. Each scaffoldered as `src/channels/<kind>-<n>.ts`.
+- **2 trigger kinds** (Phase 2-4). `cron` (5-field, via `node-cron`),
+  `webhook` (standalone Hono server on port 8809).
+- **13-file Flue scaffolder** (Phase 4). Was a single `flue_scaffold.rs`; now a
+  directory with `app.rs`, `assistant.rs`, `context.rs`, `package_json.rs`,
+  `mcp_proxy.rs`, `env_example.rs`, `readme.rs`, `gitignore.rs`, plus
+  `channels/{telegram,slack,discord,webhook,email,voice}.rs` and
+  `triggers/{cron,webhook}.rs`.
+- **LLM provider auto-detection** (Phase 6).
+  `makakoo-core::agents::llm_provider::discover_providers()` concurrently probes
+  `http://localhost:18080/v1/models` (switchailocal),
+  `http://localhost:11434/api/tags` (Ollama), and `ANTHROPIC_API_KEY` /
+  `OPENAI_API_KEY` env vars. Sorts local-first, concurrent 2s timeout.
+- **`src/app.ts` always scaffolded** (Phase 6) with the right
+  `registerProvider` call for the chosen provider. Local providers (switchailocal,
+  ollama) get `api` + `baseUrl` + the lope team fix. Cloud providers (anthropic,
+  openai) get only `apiKey` (catalog provides the rest). No more manual
+  `app.ts` editing after scaffolding.
+- **lope team fix baked in** (Phase 6, critical). Flue v1.0.0-beta.9 silently
+  defaults `contextWindow: 0` and `maxTokens: 0` for non-catalog providers,
+  which limits the LLM output to **one token** and looks like a "hang".
+  The scaffolder **always sets both to safe values** (`128_000` and `8_192`) for
+  local providers.
+- **4 example specs** in `examples/agents/`: `weather-bot.yaml`, `slack-assistant.yaml`,
+  `ollama-local.yaml`, `personal-day-brief.yaml`.
+- **Interactive agent creation** (Phase 6.1).
+  - `makakoo provider set <provider> [model]` / `makakoo provider get` — project-level
+    LLM default at `$MAKAKOO_HOME/config/llm-default`.
+  - `makakoo agent init-spec <PATH>` — interactive TTY starter. Asks the right
+    questions, discovers providers, respects the project default, writes a correct
+    spec. `--minimal` flag emits a 10-line "hello world" spec.
+- **3 new `AgentCmd` variants**: `InitSpec`, `ProviderSet`, `ProviderGet`.
+- **End-to-end proven** (Phase 6). `makakoo agent create --specs ./weather-bot.yaml`
+  → Flue dev server → switchailocal (model `ail-compound`) → `brain_search` tool
+  via Makakoo MCP → Telegram bot reply (screenshot-verified by user).
+
+### Changed
+
+- **BREAKING** (Phase 4, predates 0.2.0): the original single-file
+  `makakoo/src/commands/flue_scaffold.rs` was split into a 13-file directory at
+  `makakoo/src/commands/flue_scaffold/`. The `scaffold_flue_project` function
+  signature gained a 4th parameter `llm_provider: Option<&DiscoveredProvider>`.
+- Spec discovery now accepts a third argument `inline_secrets: &InlineSecrets`
+  (was a hardcoded empty map in the spec path).
 
 ### Known limitations
-- **Flue v1.0.0-beta.9 LLM dispatch bug for some Ollama `:cloud` models** — `flue dev` accepts the webhook, starts the agent session, but the background worker never fires the LLM call. The LLM itself is fine (direct `curl` to the provider works in <1s). The bug is in the Flue runtime's background worker. Workaround: use switchailocal (proven end-to-end) or wait for an upstream Flue fix.
-- **Provider detection is best-effort** — 2s probe timeout means a slow LLM gateway (cold start, network latency) might be missed. Set `AGENT_MODEL` in `.env` or set the spec's `model` explicitly if the auto-detection misses your provider.
+
+- **Flue v1.0.0-beta.9 LLM dispatch bug for some Ollama `:cloud` models** — `flue
+  dev` accepts the webhook, starts the agent session, but the background worker
+  never fires the LLM call. The LLM itself is fine (direct `curl` to the provider
+  works in <1s). The bug is in the Flue runtime's background worker. Workaround:
+  use switchailocal (proven end-to-end) or wait for an upstream Flue fix.
+- **Provider detection is best-effort** — 2s probe timeout means a slow LLM gateway
+  (cold start, network latency) might be missed. Set `AGENT_MODEL` in `.env` or set
+  the spec's `model` explicitly if the auto-detection misses your provider.
 
 
 
