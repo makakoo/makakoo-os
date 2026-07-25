@@ -10,6 +10,43 @@ complement, focused on user-visible changes and migration notes.
 
 ## [Unreleased]
 
+### Added
+- **LLM provider auto-detection** (Phase 6 of SPRINT-FLUE-DEFAULT-AGENT-SPECS). `makakoo agent create --specs <PATH>` now probes `http://localhost:18080/v1/models` (switchailocal), `http://localhost:11434/api/tags` (Ollama), and `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars at create time. The spec's `model` field drives which provider is selected. Multiple providers + TTY → interactive prompt; otherwise auto-pick local-first.
+- **`src/app.ts` is now always scaffolded** with the right `registerProvider` call for the chosen provider. Local providers (switchailocal, ollama) get `api` + `baseUrl` + the lope team fix (`contextWindow: 128_000` + `maxTokens: 8_192`). Cloud providers (anthropic, openai) get only `apiKey` (catalog provides the rest). No more manual `app.ts` editing after scaffolding.
+- **`discover_providers()`** in `makakoo-core::agents::llm_provider` — concurrent probe with 2s timeout, sorts local-first, exports `DiscoveredProvider`, `ProviderSource`, `default_fallback()`.
+- **Two new example specs** in `examples/agents/`: `weather-bot.yaml` (switchailocal) and `ollama-local.yaml` (Ollama).
+- **New docs section** in `docs/agents/spec.md`: "LLM provider resolution" covering detection, spec selection, and the scaffolder's output format.
+- **lope team fix baked in** (the `contextWindow: 0` / `maxTokens: 0` silent 1-token output bug in Flue v1.0.0-beta.9). The scaffolder always sets safe values for non-catalog providers. This is the single most important thing to get right — without it, LLM calls complete but produce nothing.
+
+### Known limitations
+- **Flue v1.0.0-beta.9 LLM dispatch bug for some Ollama `:cloud` models** — `flue dev` accepts the webhook, starts the agent session, but the background worker never fires the LLM call. The LLM itself is fine (direct `curl` to the provider works in <1s). The bug is in the Flue runtime's background worker. Workaround: use switchailocal (proven end-to-end) or wait for an upstream Flue fix.
+- **Provider detection is best-effort** — 2s probe timeout means a slow LLM gateway (cold start, network latency) might be missed. Set `AGENT_MODEL` in `.env` or set the spec's `model` explicitly if the auto-detection misses your provider.
+
+
+
+### Added
+- **Agent spec format** — declarative YAML/TOML agent definitions (name, model, instructions, tools, channels, triggers, scope). `makakoo agent create --specs <PATH>` accepts a file, directory, or `.` to scan the current folder. `makakoo agent validate-spec <PATH>` validates without creating. See `docs/agents/spec.md` for the full schema.
+- **6 channel kinds** — telegram, slack, discord, webhook (V1); email, voice (V1 deferred, see Limitations).
+- **2 trigger kinds** — cron (standard 5-field), webhook (HMAC-SHA256, standalone Hono server on port 8809).
+- **Flue project scaffolder** — `flue_scaffold` module renders a complete runnable Flue (TypeScript) project from a spec: `package.json` (deps driven by the spec's channels/triggers), `src/agents/assistant.ts` (wires model + instructions + tool whitelist + channels), `src/channels/<kind>-<n>.ts` (one per channel), `src/triggers/<kind>-<n>.ts` (one per trigger), `mcp-proxy.mjs` (unchanged stdio→StreamableHTTP bridge to `makakoo-mcp`), `instructions.txt`, `.env.example`, `README.md`, `spec.yaml` (verbatim copy for reproducibility).
+
+### Changed
+- **BREAKING**: `--runtime` flag removed from `makakoo agent create`. Flue is the only creation engine.
+- **BREAKING**: `--from-toml` flag removed. Use `--specs` instead. See `docs/agents/spec-migration.md`.
+- **BREAKING**: `<SLOT>` positional argument is now optional when `--specs` is used (the spec's `name` becomes the slot id).
+- Slot TOML schema unchanged. Existing native slots keep working.
+
+### Limitations (tracked for V2)
+- **Email & voice channels** — no first-party `@flue/*` adapter on npm. `agent create` with these channels writes the slot TOML but errors at scaffold time with a clear message. Workaround: use a `webhook` channel + a custom `defineTool` for SMTP/IMAP/Twilio.
+- **Slack/Discord outbound** — the Flue channel only handles inbound. Outbound requires an operator-supplied `defineTool` calling the platform's Web/REST API. The generated template includes a `post_slack_message` starter.
+- **Telegram `allowedUsers`** — not a channel config option in `@flue/telegram`. Enforced inside the webhook handler before `dispatch()`.
+- **Cron** — uses `node-cron` directly. `@flue/runtime` has no `defineTrigger` export. Standard 5-field cron only.
+- **Webhook trigger** — standalone Hono server on port 8809 (convention). Triggers are loaded as side-effecting imports.
+- **Scope overlap detection** — exact-string match only. Proper glob overlap requires `globset` and is deferred to V2.
+- **Orphan slot TOML** — if a spec with a deferred channel (email/voice) is scaffolded, the slot TOML is written first, then the scaffold errors. The slot is harmless without a Flue project; cleanup via `makakoo agent destroy <slot>` if desired.
+
+
+
 ## [0.1.41] - 2026-07-17
 
 ### Added

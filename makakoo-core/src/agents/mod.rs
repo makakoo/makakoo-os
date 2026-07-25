@@ -17,6 +17,8 @@
 
 pub mod audit;
 pub mod destroy;
+pub mod llm_provider;
+pub mod llm_provider_default;
 pub mod fault_inject;
 pub mod identity;
 pub mod lifecycle;
@@ -28,6 +30,7 @@ pub mod rlimits;
 pub mod scaffold;
 pub mod scope;
 pub mod slot;
+pub mod spec;
 pub mod status;
 pub mod supervisor;
 pub mod supervisor_runtime;

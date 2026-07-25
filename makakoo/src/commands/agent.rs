@@ -74,6 +74,54 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
         AgentCmd::List { json } => crate::commands::agent_slot::list(ctx, json),
         AgentCmd::Show { slot, json } => crate::commands::agent_slot::show(ctx, &slot, json),
         AgentCmd::Validate { slot } => crate::commands::agent_slot::validate(ctx, &slot),
+        AgentCmd::ValidateSpec { path } => crate::commands::agent_slot::validate_spec(ctx, &path),
+        AgentCmd::InitSpec { path, minimal } => {
+            crate::commands::agent_slot::init_spec(ctx, &path, minimal)
+        }
+        AgentCmd::ProviderSet { provider, model } => {
+            // If model is None, look up the provider's default_model
+            // from the discovery function. If the provider isn't
+            // discovered (no running gateway / env var), default
+            // to `<provider>/<provider>` as a placeholder.
+            let specifier = match model {
+                Some(m) => format!("{}/{}", provider, m),
+                None => {
+                    use makakoo_core::agents::llm_provider::discover_providers;
+                    let providers = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(discover_providers())
+                    });
+                    let p = providers.iter().find(|p| p.id == provider);
+                    match p {
+                        Some(p) => format!("{}/{}", p.id, p.default_model),
+                        None => format!("{}/{}", provider, provider),
+                    }
+                }
+            };
+            match makakoo_core::agents::llm_provider_default::set_default(&specifier) {
+                Ok(()) => {
+                    output::print_info(format!(
+                        "✓ Set project default: {}",
+                        specifier
+                    ));
+                    Ok(0)
+                }
+                Err(e) => {
+                    output::print_error(format!("failed to set default: {}", e));
+                    Ok(1)
+                }
+            }
+        }
+        AgentCmd::ProviderGet => {
+            match makakoo_core::agents::llm_provider_default::get_default() {
+                Some(d) => println!("{}", d),
+                None => {
+                    println!("No project default set. Use `makakoo provider set <provider> <model>`.");
+                    return Ok(1);
+                }
+            }
+            Ok(0)
+        }
         AgentCmd::Inventory { json } => crate::commands::agent_slot::inventory(ctx, json),
         AgentCmd::Create {
             slot,
@@ -82,7 +130,6 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             allowed_paths,
             forbidden_paths,
             tools,
-            from_toml,
             telegram_token,
             telegram_allowed,
             slack_bot_token,
@@ -90,18 +137,17 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             slack_team,
             slack_allowed,
             skip_credential_check,
-            runtime,
             out,
+            specs,
         } => crate::commands::agent_slot::create(
             ctx,
             crate::commands::agent_slot::CreateArgs {
-                slot,
+                slot: slot.unwrap_or_default(),
                 name,
                 persona,
                 allowed_paths,
                 forbidden_paths,
                 tools,
-                from_toml,
                 telegram_token,
                 telegram_allowed,
                 slack_bot_token,
@@ -109,8 +155,8 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 slack_team,
                 slack_allowed,
                 skip_credential_check,
-                runtime,
                 out,
+                specs,
             },
         ),
         AgentCmd::MigrateHarveychat => crate::commands::agent_slot::migrate_harveychat(ctx),

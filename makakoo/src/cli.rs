@@ -916,17 +916,6 @@ pub enum HandleCmd {
     },
 }
 
-/// Runtime backing a slot created by `makakoo agent create`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
-pub enum AgentRuntime {
-    /// Native Makakoo slot — control-plane config only (identity, scope, secrets).
-    #[default]
-    Native,
-    /// Also scaffold a Flue (TypeScript) agent project wired to Makakoo's MCP
-    /// server + the @flue/telegram channel — the runnable channel agent.
-    Flue,
-}
-
 /// `makakoo agent <subcommand>`.
 // variant size disparity accepted; boxing is a tracked follow-up
 #[allow(clippy::large_enum_variant)]
@@ -976,6 +965,41 @@ pub enum AgentCmd {
         /// Slot id.
         slot: String,
     },
+    /// Validate a declarative agent spec without creating anything.
+    /// `path` may be a file (`.yaml`/`.yml`/`.toml`), a directory
+    /// (non-recursive glob), or `.` to scan the current folder.
+    /// Field-level errors are printed per spec. Exits 0 if all
+    /// specs validate, 1 otherwise.
+    ValidateSpec {
+        /// Path to a spec file or directory of specs.
+        path: std::path::PathBuf,
+    },
+    /// Interactively create a starter spec at PATH. With `--minimal`,
+    /// emits a 10-line "hello world" spec. The project default
+    /// (see `makakoo provider set`) is used as the initial model
+    /// choice; the user can accept it or pick a different one.
+    InitSpec {
+        /// Path to write the spec to.
+        path: std::path::PathBuf,
+        /// Emit a 10-line "hello world" spec (no channels, triggers,
+        /// tools, or scope — just name, description, model, instructions).
+        #[arg(long)]
+        minimal: bool,
+    },
+    /// Set the project-level LLM default (e.g.
+    /// `switchailocal/ail-compound`). Read by `init-spec` and
+    /// `create` when the spec's `model` is empty.
+    ProviderSet {
+        /// Provider ID (e.g. `switchailocal`, `ollama`, `anthropic`,
+        /// `openai`).
+        provider: String,
+        /// Optional model name. If omitted, uses the provider's
+        /// `default_model` from `discover_providers()`.
+        model: Option<String>,
+    },
+    /// Print the project-level LLM default. Prints
+    /// "No project default set." if none is configured.
+    ProviderGet,
     /// Inventory existing `agent-*` plugins with their migration
     /// status (active / migrated / pending). Does NOT migrate them.
     Inventory {
@@ -983,11 +1007,16 @@ pub enum AgentCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Create a new slot from flags (single Telegram, single Slack,
-    /// or `--from-toml` for arbitrary multi-transport configs).
+    /// Create a new slot from a spec (--specs <PATH>) or from the
+    /// Telegram/Slack quick-start flags. Every created slot is a
+    /// Flue (TypeScript) agent — `--runtime` was removed in Phase 3
+    /// of SPRINT-FLUE-DEFAULT-AGENT-SPECS and `--from-toml` was
+    /// removed (use --specs instead).
     Create {
-        /// Slot id (also the TOML filename).
-        slot: String,
+        /// Slot id (also the TOML filename). Optional with --specs:
+        /// the spec's `name` becomes the slot id. Required for
+        /// quick-start (Telegram/Slack flags).
+        slot: Option<String>,
         /// Display name shown in `agent list` Name column. Defaults
         /// to the slot id if unset.
         #[arg(long)]
@@ -1008,11 +1037,6 @@ pub enum AgentCmd {
         /// Tool whitelist (comma-separated tool names).
         #[arg(long, value_name = "TOOLS", value_delimiter = ',')]
         tools: Vec<String>,
-        /// Path to a TOML file pre-built by the operator (multi-
-        /// transport configs). Mutually exclusive with --telegram-token
-        /// and --slack-* flags.
-        #[arg(long, value_name = "PATH")]
-        from_toml: Option<std::path::PathBuf>,
         /// Telegram bot token. Triggers single-Telegram-transport
         /// mode. The token is stored as inline_secret_dev — for
         /// production move it to env or makakoo secret.
@@ -1039,16 +1063,18 @@ pub enum AgentCmd {
         /// tokens you'll fix up afterward.
         #[arg(long)]
         skip_credential_check: bool,
-        /// Agent runtime. `native` writes a Makakoo slot config only;
-        /// `flue` additionally scaffolds a Flue (TypeScript) agent
-        /// project wired to Makakoo's MCP server + the @flue/telegram
-        /// channel (the runnable channel agent).
-        #[arg(long, value_enum, default_value_t = AgentRuntime::Native)]
-        runtime: AgentRuntime,
-        /// Output dir for the scaffolded Flue project (only with
-        /// --runtime flue). Defaults to $MAKAKOO_HOME/agents-flue/<slot>.
+        /// Output dir for the scaffolded Flue project.
+        /// Defaults to $MAKAKOO_HOME/agents-flue/<slot>.
         #[arg(long, value_name = "DIR")]
         out: Option<std::path::PathBuf>,
+        /// Path to a declarative spec file (`.yaml`/`.yml`/`.toml`),
+        /// directory of specs, or `.` to scan the current folder.
+        /// Mutually exclusive with the inline transport flags
+        /// (--telegram-token, --slack-*). The spec is the new
+        /// canonical source of truth; quick-start flags are kept
+        /// for ergonomic ad-hoc creation.
+        #[arg(long, value_name = "PATH")]
+        specs: Option<std::path::PathBuf>,
     },
 
     /// Migrate the legacy HarveyChat (`Olibia`) bot from
