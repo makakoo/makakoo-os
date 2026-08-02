@@ -1,8 +1,11 @@
 //! `makakoo update` / legacy `makakoo upgrade` — self-update the kernel binaries.
 //!
 //! SPRINT-MAKAKOO-UPGRADE-VERB. Detects install method, dispatches the
-//! matching update command, prints version delta, surfaces a manual
-//! `makakoo daemon restart` command (the update verb itself still does not auto-restart).
+//! matching update command, prints the version delta, and — when the version
+//! actually changed and a daemon service exists — restarts the daemon via the
+//! freshly installed binary so no manual step is left behind. Opt out with
+//! `--no-daemon-restart` / `MAKAKOO_UPDATE_NO_DAEMON_RESTART=1`, in which
+//! case the manual hint is printed instead.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -27,6 +30,7 @@ pub async fn run(
     install_script_url: Option<String>,
     only_kernel: bool,
     only_mcp: bool,
+    no_daemon_restart: bool,
     _ctx: &CliContext,
 ) -> anyhow::Result<i32> {
     // Detect install method (or honor override).
@@ -106,16 +110,20 @@ pub async fn run(
         .with_context(|| "running update")?
     };
 
-    // Verify version delta (skip on dry-run).
+    // Verify version delta (skip on dry-run). `None` = could not verify, in
+    // which case we still treat the binary as possibly-new below.
+    let mut version_changed = None;
     if !dry_run {
         let post_version = capture_version("makakoo");
         match (&pre_version, &post_version) {
             (Some(pre), Some(post)) if pre == post => {
+                version_changed = Some(false);
                 println!();
                 println!("# version unchanged: {pre}");
                 println!("# already up to date — package manager reported no newer build");
             }
             (Some(pre), Some(post)) => {
+                version_changed = Some(true);
                 println!();
                 println!("# version delta:");
                 println!("  before: {pre}");
@@ -127,11 +135,39 @@ pub async fn run(
         }
     }
 
-    // Daemon-restart hint (always print after non-dry-run success).
-    if !dry_run {
-        println!();
-        println!("# daemon: pick up the new binary in any running daemon with:");
-        println!("    {}", daemon_restart_hint());
+    // A daemon running the old image after an update is a support ticket
+    // waiting to happen, so restart is automatic. Constraints: only when a
+    // daemon service exists (restart on a daemon-less install would *install*
+    // one), only when the binary may actually be new, and always via the
+    // PATH-resolved `makakoo` so the restart logic comes from the new binary,
+    // not this (old) process.
+    if !dry_run && version_changed != Some(false) {
+        let platform = makakoo_platform::CurrentPlatform::default();
+        let daemon_present = {
+            use makakoo_platform::PlatformAdapter;
+            platform.daemon_is_installed() || platform.daemon_is_running()
+        };
+        let opted_out = no_daemon_restart
+            || std::env::var("MAKAKOO_UPDATE_NO_DAEMON_RESTART")
+                .map(|v| !v.is_empty() && v != "0")
+                .unwrap_or(false);
+        if daemon_present && !opted_out {
+            println!();
+            println!("# daemon: restarting so it picks up the new binary...");
+            let restarted = Command::new("makakoo")
+                .args(["daemon", "restart"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !restarted {
+                eprintln!("⚠ automatic daemon restart failed — run it manually:");
+                eprintln!("    {}", daemon_restart_hint());
+            }
+        } else if daemon_present {
+            println!();
+            println!("# daemon: restart skipped (--no-daemon-restart); pick up the new binary with:");
+            println!("    {}", daemon_restart_hint());
+        }
     }
 
     // Optional re-infect. A fragment refresh must write the global slots, not

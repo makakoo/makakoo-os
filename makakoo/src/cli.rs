@@ -140,7 +140,9 @@ pub enum Commands {
 
     /// Update Makakoo OS by detecting the install method (cargo /
     /// homebrew / curl-pipe) and running the matching updater. Prints
-    /// the version delta and a `makakoo daemon restart` hint.
+    /// the version delta and, when the version changed and a daemon is
+    /// installed, restarts the daemon automatically (opt out with
+    /// `--no-daemon-restart`).
     Update(UpgradeArgs),
 
     /// Legacy spelling for `makakoo update`.
@@ -596,6 +598,11 @@ pub struct UpgradeArgs {
     /// Update only the `makakoo-mcp` binary, not the kernel.
     #[arg(long)]
     pub only_mcp: bool,
+    /// Do not restart an installed daemon after a successful update.
+    /// (Also honored via MAKAKOO_UPDATE_NO_DAEMON_RESTART=1.) The
+    /// manual `makakoo daemon restart` hint is printed instead.
+    #[arg(long)]
+    pub no_daemon_restart: bool,
 }
 
 /// `makakoo docs <subcommand>`.

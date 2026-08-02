@@ -2,7 +2,7 @@
 
 ``router_compiled_prompt.py`` is generated; these tests are what stops it from
 drifting. ``golden_renders.json`` was rendered by DSPy's JSONAdapter for the
-winning compiled program (see harvey-os/core/evals/t2_bake.py) — if the
+winning compiled program (by t2_bake.py in the offline compile toolchain) — if the
 stdlib ``render()`` ever disagrees with it, the runtime is no longer sending
 the prompt that was measured, and every scoreboard number for this candidate
 stops applying.

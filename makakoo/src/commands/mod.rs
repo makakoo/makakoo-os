@@ -94,6 +94,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
                 args.install_script_url,
                 args.only_kernel,
                 args.only_mcp,
+                args.no_daemon_restart,
                 ctx,
             )
             .await

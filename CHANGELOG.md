@@ -8,6 +8,18 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
+## [0.2.1] - 2026-08-02
+
+### Changed
+
+- **`makakoo update` now restarts the daemon automatically.** When the
+  update actually changed the installed version and a daemon service
+  exists, the updater invokes `makakoo daemon restart` through the newly
+  installed binary — no manual step left behind. Installs without a
+  daemon are untouched (restart would have installed one). Opt out with
+  `--no-daemon-restart` or `MAKAKOO_UPDATE_NO_DAEMON_RESTART=1`; on
+  opt-out or restart failure the familiar manual hint is printed.
+
 ## [0.2.0] - 2026-08-02
 
 ### Added
