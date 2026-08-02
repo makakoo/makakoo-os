@@ -216,7 +216,10 @@ fn maybe_offer_setup_review() -> anyhow::Result<()> {
     if !crate::commands::setup::is_interactive_stdin() {
         return Ok(());
     }
-    print!("\nReview setup defaults / new sections now? [y/N]: ");
+    println!();
+    println!("# your existing settings are kept either way — answering `y` only");
+    println!("# opens a review of setup sections added or changed in this version");
+    print!("Review new setup sections now? [y/N]: ");
     use std::io::Write as _;
     std::io::stdout().flush()?;
     let mut line = String::new();
@@ -230,7 +233,7 @@ fn maybe_offer_setup_review() -> anyhow::Result<()> {
         }
     } else {
         println!();
-        println!("# setup review skipped — run `makakoo setup` anytime");
+        println!("# skipped — settings unchanged. Review anytime with: makakoo setup");
     }
     Ok(())
 }

@@ -8,6 +8,16 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
+## [0.2.2] - 2026-08-02
+
+### Changed
+
+- **Clearer post-update setup prompt.** The `Review setup defaults / new
+  sections now?` question after `makakoo update` read as if answering `n`
+  might discard existing configuration. The prompt now states explicitly
+  that settings are kept either way and that `y` only opens a review of
+  sections added or changed in the new version.
+
 ## [0.2.1] - 2026-08-02
 
 ### Changed
