@@ -98,7 +98,7 @@ impl Section for BrainSection {
             )));
         }
 
-        ui.line("brain: launching the picker (you drive it from here) …")?;
+        ui.line("brain: opening the vault picker — choose your note folders there …")?;
         ui.stdout().flush()?;
 
         let status = Command::new("python3")

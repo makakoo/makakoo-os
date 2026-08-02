@@ -105,6 +105,9 @@ pub fn run(args: SetupArgs) -> anyhow::Result<i32> {
     let stdout = stdout.lock();
     let mut ui = Ui::new(stdin, stdout);
 
+    ui.line("Makakoo setup — nothing changes without your confirmation.")?;
+    ui.line("Enter always picks the safe default; answer s to skip any step.")?;
+
     for idx in &wanted {
         let section = &mut sections[*idx];
         if !section.is_applicable() {
@@ -115,7 +118,7 @@ pub fn run(args: SetupArgs) -> anyhow::Result<i32> {
         let is_persona_with_force = section.name() == "persona" && args.force;
         if current.is_terminal() && !is_persona_with_force {
             ui.line(format!(
-                "{} — {} (skip; re-run with --reset to re-ask)",
+                "{} — {} (already answered — run `makakoo setup --reset` to change it)",
                 section.name(),
                 current.label()
             ))?;

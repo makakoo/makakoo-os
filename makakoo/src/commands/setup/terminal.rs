@@ -56,18 +56,18 @@ impl Section for TerminalSection {
 
     fn run(&mut self, ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
         if !self.is_applicable() {
-            ui.line("terminal: Ghostty is macOS-only; skipping on this platform.")?;
+            ui.line("terminal: Ghostty is only available on macOS — skipping this step here.")?;
             return Ok(SectionOutcome::AlreadyPresent);
         }
 
         if ghostty_installed() {
-            ui.line("terminal: Ghostty already installed via Homebrew. No action needed.")?;
+            ui.line("terminal: Ghostty is already installed. Nothing to do.")?;
             return Ok(SectionOutcome::AlreadyPresent);
         }
 
-        ui.line("terminal: Ghostty is the blessed terminal — fast, native macOS, low")?;
-        ui.line("  latency. Installing via Homebrew cask wires it up so the 24h sancho")?;
-        ui.line("  updater keeps it current.")?;
+        ui.line("terminal: Ghostty is the recommended terminal app — fast, native to")?;
+        ui.line("  macOS, and low-latency. Makakoo installs it via Homebrew and keeps")?;
+        ui.line("  it updated automatically afterwards.")?;
         let answer = ui.ask_ynskip(
             &format!("Install Ghostty now? Runs: brew install --cask {GHOSTTY_CASK}"),
             YnSkip::Yes,
@@ -83,8 +83,8 @@ impl Section for TerminalSection {
 
 fn install_ghostty(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
     if !binary_on_path("brew") {
-        ui.line("terminal: Homebrew (`brew`) not on PATH.")?;
-        ui.line("  Install Homebrew from https://brew.sh, then re-run")?;
+        ui.line("terminal: Homebrew (`brew`) is not installed.")?;
+        ui.line("  Install Homebrew from https://brew.sh, then run this again with")?;
         ui.line(format!(
             "  `makakoo setup terminal` — or run `brew install --cask {GHOSTTY_CASK}` by hand."
         ))?;
@@ -117,7 +117,7 @@ fn install_ghostty(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
             "brew install reported success but ghostty is still not listed as an installed cask — check `brew doctor`.".to_string(),
         ));
     }
-    ui.line("terminal: installed. Ghostty is registered as a Homebrew cask.")?;
+    ui.line("terminal: done — Ghostty is installed and will stay updated via Homebrew.")?;
     Ok(SectionOutcome::Installed)
 }
 

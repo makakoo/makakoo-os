@@ -67,25 +67,25 @@ impl Section for UpdatesSection {
             return Ok(SectionOutcome::AlreadyPresent);
         }
 
-        ui.line("updates: Makakoo can keep itself current like normal software.")?;
-        ui.line("  Auto mode runs `makakoo update --reinfect` from SANCHO every 24h.")?;
-        ui.line("  Manual mode only journals a reminder; you run `makakoo update` yourself.")?;
-        ui.line("  Default for fresh setup: auto. Without this config file, scheduled updates stay idle.")?;
+        ui.line("updates: How should Makakoo OS stay up to date?")?;
+        ui.line("  auto   — checks once a day and installs new versions for you (recommended)")?;
+        ui.line("  manual — Makakoo only reminds you; you run `makakoo update` when it suits you")?;
+        ui.line("  Either way, your settings and data are never touched by an update.")?;
 
         let answer = ui.ask_ynskip(
-            "Enable automatic Makakoo OS updates? You can switch to manual later by editing config/updates.toml.",
+            "Enable automatic updates? (change anytime with `makakoo setup updates`)",
             YnSkip::Yes,
         )?;
         match answer {
             YnSkip::Skip => Ok(SectionOutcome::Skipped),
             YnSkip::Yes => {
                 write_update_mode(&self.config_path(), "auto")?;
-                ui.line("updates: mode → auto.")?;
+                ui.line("updates: automatic updates are ON — Makakoo keeps itself current.")?;
                 Ok(SectionOutcome::Installed)
             }
             YnSkip::No => {
                 write_update_mode(&self.config_path(), "manual")?;
-                ui.line("updates: mode → manual. Run `makakoo update --reinfect` when you want upgrades.")?;
+                ui.line("updates: manual mode — run `makakoo update` whenever you want the newest version.")?;
                 Ok(SectionOutcome::Installed)
             }
         }

@@ -167,7 +167,7 @@ impl<'a> Ui<'a> {
                 "n" | "no" => return Ok(YnSkip::No),
                 "s" | "skip" => return Ok(YnSkip::Skip),
                 _ => {
-                    self.line("(didn't catch that — y / n / s, or Enter for the default)")?;
+                    self.line("(please answer y = yes, n = no, or s = skip for now — Enter picks the capitalized default)")?;
                 }
             }
         }

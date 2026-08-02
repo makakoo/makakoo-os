@@ -47,7 +47,7 @@ impl Section for LopeSection {
     }
 
     fn description(&self) -> &'static str {
-        "Install Lope multi-CLI validator ensemble"
+        "Install Lope — your AI CLIs double-check each other's work"
     }
 
     fn status(&self) -> SectionStatus {
@@ -67,11 +67,11 @@ impl Section for LopeSection {
             return Ok(SectionOutcome::AlreadyPresent);
         }
 
-        ui.line("lope: install recommended.")?;
-        ui.line("  Lope is Makakoo's judgment engine: any CLI implements, any CLI validates.")?;
-        ui.line("  It catches single-model blind spots with negotiate / review / vote / compare")?;
-        ui.line("  and runs full autonomous sprints with validator-in-the-loop retry.")?;
-        ui.line("  Translation: fewer hallucinated plans, fewer bad merges, stronger decisions.")?;
+        ui.line("lope: recommended.")?;
+        ui.line("  Lope has your AI assistants review each other's work before it counts:")?;
+        ui.line("  one drafts a plan or a change, the others independently check it and")?;
+        ui.line("  vote. That catches mistakes a single model can't see in itself —")?;
+        ui.line("  fewer wrong plans, fewer bad merges, better decisions.")?;
 
         let question = format!(
             "Install Lope now? This clones {LOPE_REPO_URL_NO_GIT} to {} and executes its installer.",
@@ -202,7 +202,7 @@ fn install_lope(ui: &mut Ui, lope_home: &Path) -> anyhow::Result<SectionOutcome>
     } else {
         ui.line("lope: installed, but version smoke-test did not print a banner.")?;
     }
-    ui.line("lope: restart AI CLI sessions so new Lope skills load.")?;
+    ui.line("lope: restart your AI CLI sessions once so they pick up the new Lope commands.")?;
     ui.line("lope: if your shell lacks a `lope` command, add: alias lope='PYTHONPATH=~/.lope python3 -m lope'")?;
     Ok(SectionOutcome::Installed)
 }

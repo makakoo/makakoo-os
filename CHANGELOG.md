@@ -8,6 +8,19 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
+## [0.2.3] - 2026-08-02
+
+### Changed
+
+- **Friendlier setup wizard.** A full copy pass over `makakoo setup`:
+  every section now explains in plain language what it does, what a yes
+  answer will run, and that Enter always picks the safe default. Internal
+  jargon (SANCHO, "blessed", "bootstrap block", "validator ensemble") is
+  gone from user-facing text — e.g. the infect step now says "Connect
+  Makakoo to your installed AI CLIs", and the updates step states that
+  updates never touch your settings or data. The wizard opens with
+  "nothing changes without your confirmation."
+
 ## [0.2.2] - 2026-08-02
 
 ### Changed

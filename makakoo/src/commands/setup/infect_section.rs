@@ -35,7 +35,7 @@ impl Section for InfectSection {
     }
 
     fn description(&self) -> &'static str {
-        "Add Makakoo bootstrap block to each CLI host"
+        "Connect Makakoo to your installed AI CLIs"
     }
 
     fn status(&self) -> SectionStatus {
@@ -62,24 +62,24 @@ impl Section for InfectSection {
         let bin = Self::makakoo_bin();
 
         // 1) Show the user what verify reports right now.
-        ui.line("infect: running `makakoo infect --verify` to check current state …")?;
+        ui.line("infect: checking which of your AI CLIs are already connected to Makakoo …")?;
         ui.stdout().flush()?;
         let verify = Command::new(&bin).arg("infect").arg("--verify").status()?;
         if verify.success() {
-            ui.line("infect: every CLI host is already up-to-date. Nothing to do.")?;
+            ui.line("infect: all your AI CLIs are already connected. Nothing to do.")?;
             return Ok(SectionOutcome::AlreadyPresent);
         }
 
         // 2) Ask whether to fix the drift.
         let answer = ui.ask_ynskip(
-            "Apply makakoo infect now? Writes the bootstrap block to each missing CLI host config.",
+            "Connect the remaining AI CLIs now? This adds a small Makakoo section to each CLI's config file (nothing else is changed).",
             YnSkip::Yes,
         )?;
         match answer {
             YnSkip::No => Ok(SectionOutcome::Declined),
             YnSkip::Skip => Ok(SectionOutcome::Skipped),
             YnSkip::Yes => {
-                ui.line("infect: running `makakoo infect` …")?;
+                ui.line("infect: connecting your AI CLIs …")?;
                 ui.stdout().flush()?;
                 let run = Command::new(&bin).arg("infect").status()?;
                 if !run.success() {
@@ -96,7 +96,7 @@ impl Section for InfectSection {
                     .stderr(Stdio::null())
                     .status()?;
                 if reverify.success() {
-                    ui.line("infect: verify now clean.")?;
+                    ui.line("infect: done — all AI CLIs are connected.")?;
                     Ok(SectionOutcome::Installed)
                 } else {
                     Ok(SectionOutcome::Failed(

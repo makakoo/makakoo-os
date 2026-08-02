@@ -61,9 +61,9 @@ impl Section for CliAgentSection {
             return Ok(SectionOutcome::AlreadyPresent);
         }
 
-        ui.line("cli-agent: pi is the blessed CLI coding agent that ships as a sancho-")?;
-        ui.line("  task-updated npm global. Install it with npm install -g so the daily")?;
-        ui.line("  update loop can keep it current.")?;
+        ui.line("cli-agent: pi is Makakoo's recommended AI coding agent for the terminal.")?;
+        ui.line("  It is installed with npm, and Makakoo's daily update check keeps it")?;
+        ui.line("  current afterwards — nothing else for you to maintain.")?;
         let answer = ui.ask_ynskip(
             &format!("Install pi now? Runs: npm install -g {PI_PACKAGE}"),
             YnSkip::Yes,
@@ -79,8 +79,8 @@ impl Section for CliAgentSection {
 
 fn install_pi(ui: &mut Ui) -> anyhow::Result<SectionOutcome> {
     if !binary_on_path("npm") {
-        ui.line("cli-agent: npm not on PATH.")?;
-        ui.line("  Install Node.js (ships with npm) from https://nodejs.org, then re-run")?;
+        ui.line("cli-agent: npm is not installed (it comes bundled with Node.js).")?;
+        ui.line("  Install Node.js from https://nodejs.org, then run this again with")?;
         ui.line(format!(
             "  `makakoo setup cli-agent` — or run `npm install -g {PI_PACKAGE}` by hand."
         ))?;

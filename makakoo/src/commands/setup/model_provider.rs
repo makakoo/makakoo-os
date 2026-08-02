@@ -61,7 +61,8 @@ impl Section for ModelProviderSection {
 
         let mut names: Vec<String> = registry.names().map(String::from).collect();
         if names.is_empty() {
-            ui.line("model-provider: no adapters registered yet.")?;
+            ui.line("model-provider: an adapter is what connects Makakoo to an AI model service.")?;
+        ui.line("  None is set up yet.")?;
             ui.line("model-provider: installing bundled switchailocal adapter as the default local gateway …")?;
 
             match install_bundled_switchailocal() {
@@ -143,11 +144,11 @@ impl Section for ModelProviderSection {
             AdapterPick::Skip => return Ok(SectionOutcome::Skipped),
             AdapterPick::Index(idx) => &names[idx],
             AdapterPick::InvalidNumber => {
-                ui.line("(not a number — leaving primary unchanged)")?;
+                ui.line("(that wasn't a number — keeping your current choice)")?;
                 return Ok(SectionOutcome::Declined);
             }
             AdapterPick::OutOfRange => {
-                ui.line("(out of range — leaving primary unchanged)")?;
+                ui.line("(no option with that number — keeping your current choice)")?;
                 return Ok(SectionOutcome::Declined);
             }
         };
