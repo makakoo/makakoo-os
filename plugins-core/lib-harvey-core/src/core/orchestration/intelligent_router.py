@@ -198,6 +198,44 @@ class IntelligentRouter:
         "\"rationale\": str}. No prose outside the JSON.\n\nRequest: "
     )
 
+    # Default LLM budget. The original 0.3s was below the round-trip time of
+    # any real model, so the LLM path could never return and every request
+    # silently fell back to keywords — the classifier was dead code.
+    DEFAULT_LLM_TIMEOUT = 10.0
+
+    @staticmethod
+    def _compiled_prompt_enabled() -> bool:
+        """The DSPy-compiled prompt is the default since its held-out win
+        (decision 97b4c1d5…, 2026-08-02: 80% vs 36% keyword, CI excludes
+        zero). Set ``MAKAKOO_ROUTER_COMPILED_PROMPT=off`` to roll back to the
+        legacy hand prompt without a deploy."""
+        raw = os.environ.get("MAKAKOO_ROUTER_COMPILED_PROMPT", "").strip().lower()
+        return raw not in ("off", "0", "false", "no")
+
+    def _llm_request_body(self, request: str, model: str) -> dict:
+        """Chat-completion body for the LLM classifier — pure, testable."""
+        if self._compiled_prompt_enabled():
+            try:
+                from . import router_compiled_prompt as _rcp
+            except ImportError:
+                _rcp = None
+            if _rcp is not None:
+                return {
+                    "model": model,
+                    "messages": _rcp.render(request),
+                    "temperature": _rcp.TEMPERATURE,
+                    "max_tokens": _rcp.MAX_TOKENS,
+                }
+        return {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a strict JSON classifier."},
+                {"role": "user", "content": self._LLM_PROMPT + request},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 200,
+        }
+
     def _classify_llm(self, request: str) -> Optional[IntentClassification]:
         """One switchAILocal call. Returns None on any error (caller falls back)."""
         try:
@@ -209,18 +247,11 @@ class IntelligentRouter:
             return None
 
         base = _os.environ.get("LLM_BASE_URL", "http://localhost:18080/v1")
-        model = _os.environ.get("MAKAKOO_ROUTER_LLM_MODEL", "auto")
+        model = self._llm_model()
         key = _os.environ.get("LLM_API_KEY") or _os.environ.get("SWITCHAI_KEY", "")
+        timeout = self._llm_timeout()
 
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "You are a strict JSON classifier."},
-                {"role": "user", "content": self._LLM_PROMPT + request},
-            ],
-            "temperature": 0.0,
-            "max_tokens": 200,
-        }
+        body = self._llm_request_body(request, model)
         try:
             req = _urllib_request.Request(
                 f"{base.rstrip('/')}/chat/completions",
@@ -231,7 +262,7 @@ class IntelligentRouter:
                 },
                 method="POST",
             )
-            with _urllib_request.urlopen(req, timeout=0.3) as resp:
+            with _urllib_request.urlopen(req, timeout=timeout) as resp:
                 payload = _json.loads(resp.read().decode("utf-8", "replace"))
         except (_urllib_error.URLError, TimeoutError, OSError, ValueError):
             return None
@@ -246,12 +277,62 @@ class IntelligentRouter:
                 intent = "unknown"
             return IntentClassification(
                 intent=intent,
-                confidence=float(parsed.get("confidence", 0.0)),
+                # The compiled prompt answers with intent only. Defaulting a
+                # missing confidence to 0.0 would flunk every is_confident()
+                # gate downstream; 0.8 is the candidate's measured held-out
+                # accuracy (decision 97b4c1d5…), an uncalibrated but honest
+                # stand-in.
+                confidence=float(parsed.get("confidence", 0.8)),
                 rationale=str(parsed.get("rationale", "llm classifier"))[:200],
                 keywords_hit=[],
             )
         except (KeyError, ValueError, TypeError):
             return None
+
+    @staticmethod
+    def _llm_model() -> str:
+        """Which model the classifier calls — entirely the operator's choice.
+
+        Resolution order, most specific first:
+
+          1. ``MAKAKOO_ROUTER_LLM_MODEL`` — pin the router to one model
+             without disturbing anything else.
+          2. ``LLM_MODEL`` — the deployment-wide default.
+          3. ``"auto"`` — let the endpoint decide.
+
+        Nothing here is provider-specific. The endpoint comes from
+        ``LLM_BASE_URL``, so any OpenAI-compatible backend works: a hosted
+        API, a local Ollama, a self-hosted vLLM, or a gateway.
+
+        Note for anyone running evaluations: some gateways expose *pool*
+        aliases that load-balance across different backing models, so two
+        identical requests can be answered by different models. That is fine
+        for everyday routing and fatal for measurement. The eval harness
+        therefore records the resolved model reported by each response and
+        refuses to promote a run whose identity was not stable — it measures
+        determinism rather than mandating a particular model here.
+        """
+        for var in ("MAKAKOO_ROUTER_LLM_MODEL", "LLM_MODEL"):
+            value = (os.environ.get(var) or "").strip()
+            if value:
+                return value
+        return "auto"
+
+    @classmethod
+    def _llm_timeout(cls) -> float:
+        """LLM budget in seconds, from ``MAKAKOO_ROUTER_LLM_TIMEOUT``.
+
+        Falls back to the default on anything unparseable or non-positive —
+        a typo in an env var must not silently disable the classifier again.
+        """
+        raw = os.environ.get("MAKAKOO_ROUTER_LLM_TIMEOUT")
+        if raw is None:
+            return cls.DEFAULT_LLM_TIMEOUT
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return cls.DEFAULT_LLM_TIMEOUT
+        return value if value > 0 else cls.DEFAULT_LLM_TIMEOUT
 
     # ── Helpers ──
 

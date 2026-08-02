@@ -1,0 +1,173 @@
+{
+  "candidate_id": "dspy-miprov2-seed13",
+  "renders": {
+    "please analyse the new API and tell me if we can use it": [
+      {
+        "role": "system",
+        "content": "Your input fields are:\n1. `request` (str): the user's request, verbatim\nYour output fields are:\n1. `intent` (Literal['research', 'image', 'archive', 'minimal', 'unknown']):\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\nInputs will have the following structure:\n\n[[ ## request ## ]]\n{request}\n\nOutputs will be a JSON object with the following fields.\n\n{\n  \"intent\": \"{intent}        # note: the value you produce must exactly match (no extra characters) one of: research; image; archive; minimal; unknown\"\n}\nIn adhering to this structure, your objective is: \n        Analyze the user request provided below. Based on its content and nature, determine the most appropriate intent from the following categories:\n        - 'research': The request requires detailed analysis, reasoning, or planning.\n        - 'image': The request includes or references an image (e.g., a file path or screenshot).\n        - 'minimal': The request is straightforward and requires minimal processing.\n        - 'unknown': The intent cannot be clearly determined from the request.\n        Respond with only the intent label."
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nask lopeteammember codex what to do .. analyse to take the best strategy do not be to much conservative but make the perfect most reliable decision"
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nFor a local SQLite database in rollback-journal mode, same SQLite version and same path, we copy the closed DB file, restore-test the copy with integrity_check, then use it for byte-identical rollback if migration fails. Is that backup mechanism P0/P1 unsafe? Answer briefly and end PASS or NEEDS_FIX."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nand maybe in future user will have cli that is not in our list for this reason we need somethink more flexible and dynamic..."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"unknown\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nOkay, please build a sprint. Complete. Completely. Completely sprint. And give me green light when we are ready for implementation."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nplease analyse the new API and tell me if we can use it\n\nRespond with a JSON object in the following order of fields: `intent` (must be formatted as a valid Python Literal['research', 'image', 'archive', 'minimal', 'unknown'])."
+      }
+    ],
+    "[Image #1] what is wrong here?": [
+      {
+        "role": "system",
+        "content": "Your input fields are:\n1. `request` (str): the user's request, verbatim\nYour output fields are:\n1. `intent` (Literal['research', 'image', 'archive', 'minimal', 'unknown']):\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\nInputs will have the following structure:\n\n[[ ## request ## ]]\n{request}\n\nOutputs will be a JSON object with the following fields.\n\n{\n  \"intent\": \"{intent}        # note: the value you produce must exactly match (no extra characters) one of: research; image; archive; minimal; unknown\"\n}\nIn adhering to this structure, your objective is: \n        Analyze the user request provided below. Based on its content and nature, determine the most appropriate intent from the following categories:\n        - 'research': The request requires detailed analysis, reasoning, or planning.\n        - 'image': The request includes or references an image (e.g., a file path or screenshot).\n        - 'minimal': The request is straightforward and requires minimal processing.\n        - 'unknown': The intent cannot be clearly determined from the request.\n        Respond with only the intent label."
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nask lopeteammember codex what to do .. analyse to take the best strategy do not be to much conservative but make the perfect most reliable decision"
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nFor a local SQLite database in rollback-journal mode, same SQLite version and same path, we copy the closed DB file, restore-test the copy with integrity_check, then use it for byte-identical rollback if migration fails. Is that backup mechanism P0/P1 unsafe? Answer briefly and end PASS or NEEDS_FIX."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nand maybe in future user will have cli that is not in our list for this reason we need somethink more flexible and dynamic..."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"unknown\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nOkay, please build a sprint. Complete. Completely. Completely sprint. And give me green light when we are ready for implementation."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\n[Image #1] what is wrong here?\n\nRespond with a JSON object in the following order of fields: `intent` (must be formatted as a valid Python Literal['research', 'image', 'archive', 'minimal', 'unknown'])."
+      }
+    ],
+    "yes please pull": [
+      {
+        "role": "system",
+        "content": "Your input fields are:\n1. `request` (str): the user's request, verbatim\nYour output fields are:\n1. `intent` (Literal['research', 'image', 'archive', 'minimal', 'unknown']):\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\nInputs will have the following structure:\n\n[[ ## request ## ]]\n{request}\n\nOutputs will be a JSON object with the following fields.\n\n{\n  \"intent\": \"{intent}        # note: the value you produce must exactly match (no extra characters) one of: research; image; archive; minimal; unknown\"\n}\nIn adhering to this structure, your objective is: \n        Analyze the user request provided below. Based on its content and nature, determine the most appropriate intent from the following categories:\n        - 'research': The request requires detailed analysis, reasoning, or planning.\n        - 'image': The request includes or references an image (e.g., a file path or screenshot).\n        - 'minimal': The request is straightforward and requires minimal processing.\n        - 'unknown': The intent cannot be clearly determined from the request.\n        Respond with only the intent label."
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nask lopeteammember codex what to do .. analyse to take the best strategy do not be to much conservative but make the perfect most reliable decision"
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nFor a local SQLite database in rollback-journal mode, same SQLite version and same path, we copy the closed DB file, restore-test the copy with integrity_check, then use it for byte-identical rollback if migration fails. Is that backup mechanism P0/P1 unsafe? Answer briefly and end PASS or NEEDS_FIX."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nand maybe in future user will have cli that is not in our list for this reason we need somethink more flexible and dynamic..."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"unknown\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nOkay, please build a sprint. Complete. Completely. Completely sprint. And give me green light when we are ready for implementation."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nyes please pull\n\nRespond with a JSON object in the following order of fields: `intent` (must be formatted as a valid Python Literal['research', 'image', 'archive', 'minimal', 'unknown'])."
+      }
+    ],
+    "a request with \"quotes\", a\nnewline, and [[ ## markers ## ]] inside": [
+      {
+        "role": "system",
+        "content": "Your input fields are:\n1. `request` (str): the user's request, verbatim\nYour output fields are:\n1. `intent` (Literal['research', 'image', 'archive', 'minimal', 'unknown']):\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\nInputs will have the following structure:\n\n[[ ## request ## ]]\n{request}\n\nOutputs will be a JSON object with the following fields.\n\n{\n  \"intent\": \"{intent}        # note: the value you produce must exactly match (no extra characters) one of: research; image; archive; minimal; unknown\"\n}\nIn adhering to this structure, your objective is: \n        Analyze the user request provided below. Based on its content and nature, determine the most appropriate intent from the following categories:\n        - 'research': The request requires detailed analysis, reasoning, or planning.\n        - 'image': The request includes or references an image (e.g., a file path or screenshot).\n        - 'minimal': The request is straightforward and requires minimal processing.\n        - 'unknown': The intent cannot be clearly determined from the request.\n        Respond with only the intent label."
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nask lopeteammember codex what to do .. analyse to take the best strategy do not be to much conservative but make the perfect most reliable decision"
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nFor a local SQLite database in rollback-journal mode, same SQLite version and same path, we copy the closed DB file, restore-test the copy with integrity_check, then use it for byte-identical rollback if migration fails. Is that backup mechanism P0/P1 unsafe? Answer briefly and end PASS or NEEDS_FIX."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nand maybe in future user will have cli that is not in our list for this reason we need somethink more flexible and dynamic..."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"unknown\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\nOkay, please build a sprint. Complete. Completely. Completely sprint. And give me green light when we are ready for implementation."
+      },
+      {
+        "role": "assistant",
+        "content": "{\n  \"intent\": \"research\"\n}"
+      },
+      {
+        "role": "user",
+        "content": "[[ ## request ## ]]\na request with \"quotes\", a\nnewline, and [[ ## markers ## ]] inside\n\nRespond with a JSON object in the following order of fields: `intent` (must be formatted as a valid Python Literal['research', 'image', 'archive', 'minimal', 'unknown'])."
+      }
+    ]
+  }
+}

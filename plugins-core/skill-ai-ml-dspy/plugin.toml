@@ -1,9 +1,9 @@
 [plugin]
 name = "skill-ai-ml-dspy"
-version = "0.1.0"
+version = "2.0.0"
 kind = "skill"
 language = "python"
-summary = "Build complex AI systems with declarative programming, optimize prompts automatically, create modular RAG systems and agents with DSPy - Stanford NLP's framework for systematic LM programming"
+summary = "Compile prompts offline with DSPy 3.x and ship dependency-free string constants - validated on Makakoo intelligent router (36% to 80%)"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
 

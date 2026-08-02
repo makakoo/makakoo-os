@@ -8,9 +8,28 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
-## [0.2.0] - 2026-07-25
+## [0.2.0] - 2026-08-02
 
 ### Added
+
+**DSPy-compiled intent router prompt (promoted on held-out evidence).**
+The `lib-harvey-core` intelligent router's LLM classifier now ships a
+MIPROv2-compiled prompt baked as dependency-free string constants
+(`router_compiled_prompt.py`) — DSPy runs offline only, the runtime imports
+no new packages. Held-out test (n=25, paired): 80% accuracy vs 36% for the
+keyword table, delta +0.44, bootstrap 95% CI [+0.20, +0.68], McNemar
+p=0.007, decision `97b4c1d5…`. Golden tests pin the baked renderer to
+DSPy's own rendered messages. Rollback: `MAKAKOO_ROUTER_COMPILED_PROMPT=off`.
+
+- Router LLM path fixes: dead `timeout=0.3` → `MAKAKOO_ROUTER_LLM_TIMEOUT`
+  (default 10s); model selection is provider-agnostic
+  (`MAKAKOO_ROUTER_LLM_MODEL` → `LLM_MODEL` → `auto`, no vendor default);
+  missing confidence in compiled replies defaults to measured accuracy
+  instead of 0.0 (which silently flunked `is_confident()` gates).
+- `skill-ai-ml-dspy` v2.0.0: rewritten against dspy 3.2.1 and the verified
+  compile-offline-ship-strings workflow; stale 1.x references deleted.
+
+### Added (spec sprint)
 
 **Sprint: declarative agent spec format + LLM provider auto-detection**
 (Phase 1-6 of SPRINT-FLUE-DEFAULT-AGENT-SPECS). `makakoo agent create --specs <PATH>`
