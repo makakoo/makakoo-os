@@ -25,7 +25,8 @@ Brain. Different doorway.
 |---|---|
 | Brain, search, and portable knowledge | [Brain guide](brain/index.md), [`makakoo brain`](user-manual/makakoo-brain.md), [`makakoo query`](user-manual/makakoo-query.md), [`makakoo search`](user-manual/makakoo-search.md) |
 | CLI and IDE infection | [`makakoo infect`](user-manual/makakoo-infect.md), [IDE integration](concepts/ide-integration.md) |
-| Agent slots and transports | [`makakoo agent`](user-manual/agent.md), [multi-transport walkthrough](walkthroughs/multi-transport-subagents.md) |
+| Supervised agent runtimes | [DeepSeek Harness walkthrough](walkthroughs/dsh-agent-runtime.md), [`makakoo agent`](user-manual/agent.md) |
+| Legacy channel compatibility | [Flue Telegram walkthrough](walkthroughs/flue-telegram-bot.md), [multi-transport support boundary](walkthroughs/multi-transport-subagents.md) |
 | Durable child-agent work | [`makakoo agent-session`](user-manual/makakoo-agent-session.md), [`makakoo handle`](user-manual/makakoo-handle.md) |
 | Plugins and skills | [Plugin guide](plugins/index.md), [Writing plugins](plugins/writing.md) |
 | SANCHO background tasks | [SANCHO concept](concepts/sancho.md), [`makakoo sancho`](user-manual/makakoo-sancho.md) |
@@ -58,6 +59,10 @@ Makakoo OS
 Chat transports
   Telegram, Slack, Discord, WhatsApp, voice, email, web
 ```
+
+AgentSpec channel and trigger declarations are metadata-only in the default
+DeepSeek Harness runtime. Use a supported adapter/runtime integration before
+expecting those chat transports to carry live traffic.
 
 ## Resources
 

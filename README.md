@@ -18,7 +18,7 @@ Makakoo OS fixes this. One install gives the agentic hosts on your machine the s
 
 Your notes, your decisions, your arguments with yourself from three months ago are retrievable by the next assistant you open. No context-reset ceremony.
 
-## What's in v0.1
+## What's included
 
 | Capability | Status |
 |---|---|
@@ -32,7 +32,7 @@ Your notes, your decisions, your arguments with yourself from three months ago a
 | Lope validator ensemble | ✅ optional in-house companion project, offered by `makakoo setup lope` |
 | SANCHO proactive task engine | ✅ native + plugin tasks, including optional auto-update checks |
 | Makakoo OS updates | ✅ `makakoo update`, plus auto/manual mode in `makakoo setup updates` |
-| Chat-channel agents — `makakoo agent create <slot>` creates a scoped agent slot for transports like Telegram, Slack, Discord, WhatsApp, voice, email, or web; `--runtime flue` can also scaffold a runnable TypeScript ([Flue](https://flueframework.com)) agent | ✅ native slots + Flue scaffolder |
+| Supervised agent runtime — `makakoo agent create --specs <PATH>` compiles a scoped AgentSpec into a pinned [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) project; `start`, `prompt`, `health`, `restart`, and `destroy` own the lifecycle | ✅ local authenticated runtime; channel adapters are the next slice |
 | Unix domain socket + Windows named-pipe IPC for plugins | ✅ |
 | 6 distros published (minimal, core, federation, sebastian, creator, trader) | ✅ |
 | Shell completion (bash, zsh, fish, elvish, powershell) | ✅ |
@@ -130,7 +130,8 @@ rm -rf ~/.makakoo ~/MAKAKOO
 | Look up a specific `makakoo` subcommand | [`docs/user-manual/`](docs/user-manual/index.md) |
 | Run durable child-agent work without transcript floods | [`docs/user-manual/makakoo-agent-session.md`](docs/user-manual/makakoo-agent-session.md) |
 | Use Lope for multi-model review, votes, compare, and sprints | [`docs/user-manual/setup-wizard.md#sections`](docs/user-manual/setup-wizard.md#sections) |
-| Build a chat bot through agent slots and transports | [`docs/user-manual/agent.md`](docs/user-manual/agent.md), [`docs/walkthroughs/flue-telegram-bot.md`](docs/walkthroughs/flue-telegram-bot.md) |
+| Create and run a supervised agent | [`docs/walkthroughs/dsh-agent-runtime.md`](docs/walkthroughs/dsh-agent-runtime.md), [`docs/user-manual/agent.md`](docs/user-manual/agent.md) |
+| Run the legacy Flue channel compatibility path | [`docs/walkthroughs/flue-telegram-bot.md`](docs/walkthroughs/flue-telegram-bot.md) |
 | Fix something that broke | [`docs/troubleshooting/`](docs/troubleshooting/index.md) |
 | Understand architecture / internals | [`docs/concepts/`](docs/concepts/) and [`spec/`](spec/) |
 | Write or publish an adapter | [`docs/adapters.md`](docs/adapters.md), [`docs/adapter-publishing.md`](docs/adapter-publishing.md) |

@@ -66,7 +66,7 @@ fn register_local(provider: &DiscoveredProvider) -> String {
         .unwrap_or_else(|| "http://localhost:11434/v1".into());
     let (api_key_var, default_key) = match provider.id.as_str() {
         "switchailocal" => ("AIL_API_KEY", "sk-test-123"),
-        _ => ("OLLAMA_API_KEY", "ollama"),  // keyless, placeholder
+        _ => ("OLLAMA_API_KEY", "ollama"), // keyless, placeholder
     };
     format!(
         r#"registerProvider('{id}', {{
@@ -140,7 +140,9 @@ mod tests {
             id: id.into(),
             display_name: id.into(),
             default_model: model.into(),
-            source: ProviderSource::Local { base_url: base_url.into() },
+            source: ProviderSource::Local {
+                base_url: base_url.into(),
+            },
             requires_api_key: false,
             base_url: Some(base_url.into()),
             api_protocol: "openai-completions".into(),
@@ -152,7 +154,9 @@ mod tests {
             id: id.into(),
             display_name: id.into(),
             default_model: model.into(),
-            source: ProviderSource::EnvVar { env_var: env_var.into() },
+            source: ProviderSource::EnvVar {
+                env_var: env_var.into(),
+            },
             requires_api_key: true,
             base_url: None,
             api_protocol: "openai-completions".into(),
@@ -176,7 +180,7 @@ mod tests {
         let s = render(&p);
         assert!(s.contains("registerProvider('anthropic'"));
         assert!(s.contains("apiKey: process.env.ANTHROPIC_API_KEY"));
-        assert!(!s.contains("contextWindow"));  // catalog provider, no override needed
+        assert!(!s.contains("contextWindow")); // catalog provider, no override needed
     }
 
     #[test]

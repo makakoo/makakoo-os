@@ -63,7 +63,13 @@ if str(_HERE) not in sys.path:
 
 import importlib  # noqa: E402
 
-for _flat_name in ("bridge", "tool_dispatcher", "file_enforcement", "brain_sync"):
+for _flat_name in (
+    "bridge",
+    "tool_dispatcher",
+    "file_enforcement",
+    "brain_sync",
+    "parent_watchdog",
+):
     _full = f"plugins_core.agent_harveychat.python.{_flat_name}"
     _mod = importlib.import_module(_full)
     sys.modules[_flat_name] = _mod

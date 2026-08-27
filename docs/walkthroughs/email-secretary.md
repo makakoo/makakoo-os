@@ -1,5 +1,10 @@
 # Walkthrough — Email secretary subagent
 
+> **Legacy gateway reference.** DSH V1 preserves email metadata but does not
+> start SMTP/IMAP delivery. Do not use this page to deploy a new DSH slot.
+> Start with [`dsh-agent-runtime.md`](./dsh-agent-runtime.md); use the details
+> below only for an existing legacy gateway slot.
+
 **Status:** Email transport adapter ships in v2.1. This walkthrough
 documents the locked behavior + slot.toml shape so production
 deployments can plan around it.

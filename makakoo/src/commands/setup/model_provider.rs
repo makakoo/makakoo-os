@@ -62,7 +62,7 @@ impl Section for ModelProviderSection {
         let mut names: Vec<String> = registry.names().map(String::from).collect();
         if names.is_empty() {
             ui.line("model-provider: an adapter is what connects Makakoo to an AI model service.")?;
-        ui.line("  None is set up yet.")?;
+            ui.line("  None is set up yet.")?;
             ui.line("model-provider: installing bundled switchailocal adapter as the default local gateway …")?;
 
             match install_bundled_switchailocal() {

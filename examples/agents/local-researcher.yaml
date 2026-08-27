@@ -1,0 +1,16 @@
+name: local-researcher
+description: Researches the local Makakoo Brain with a narrow tool set
+model: switchailocal/ail-compound
+instructions: |
+  Answer from the Makakoo Brain. Cite the relevant note or journal date.
+  State plainly when the available evidence does not answer the question.
+tools:
+  - brain_search
+channels: []
+triggers: []
+scope:
+  allowed_paths:
+    - "~/MAKAKOO/data/Brain/**"
+  forbidden_paths:
+    - "~/.ssh/**"
+    - "~/.aws/**"

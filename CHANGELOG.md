@@ -8,6 +8,74 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
+## [0.3.0] - 2026-08-27
+
+### Added
+
+- **Supervised DeepSeek Harness agent runtime.** `makakoo agent create`
+  now compiles AgentSpec YAML/TOML into a pinned DSH project under
+  `$MAKAKOO_HOME/agents-dsh/<slot>/`; DSH owns the model/tool loop while
+  AgentSlot remains the Makakoo policy authority.
+- **Complete local lifecycle.** `agent start`, `stop`, `restart`, `status`,
+  `health`, `prompt`, and transactional `destroy` cover generated DSH slots.
+  launchd and systemd-user run one supervisor per slot; an explicit
+  `MAKAKOO_AGENT_SUPERVISOR=foreground` escape hatch supports containers and
+  debugging.
+- **Authenticated prompt API and durable sessions.** Each runtime binds only
+  to `127.0.0.1`, rotates a mode-0600 bearer token per start, serializes turns
+  within a session, and bounds concurrency, queueing, session count, turns,
+  prompt size, and total persistence admission.
+- **User discovery surface.** Added the `deepseek-harness-agent-runtime`
+  installed skill, a complete DSH walkthrough, an executable local-researcher
+  example, CLI/manual coverage, troubleshooting entries, and clear separation
+  from plugin-agent MCP scaffolding.
+
+### Changed
+
+- **BREAKING: DSH is the default AgentSpec engine.** Autonomous model calls
+  use the fixed switchAILocal OpenAI-compatible endpoint at
+  `127.0.0.1:18080/v1`. Explicit non-switchAILocal provider prefixes are
+  rejected. Set `MAKAKOO_AGENT_ENGINE=flue` only for the legacy, manually
+  operated Flue compatibility renderer.
+- `makakoo agent provider-set <provider> [model]` and
+  `makakoo agent provider-get` are the authoritative project-default commands.
+  Stale `makakoo provider ...` documentation was removed.
+- AgentSpec tool lists are strict allowlists. `tools: []` exposes no
+  model-facing tools and generated runtimes never inherit a hidden baseline.
+- `agent stop` now removes its LaunchAgent/systemd-user definition after the
+  process tree exits. A later `start` recreates it; stopped or destroyed slots
+  cannot resurrect at login.
+- DSH requires Node.js 22.9 or newer. Direct runtime dependencies are exact
+  pinned at `0.1.1-rc.2`; the full upstream DSH CLI is not installed.
+
+### Security
+
+- The supervisor holds an exclusive per-slot runtime lock, starts the gateway
+  in a dedicated Unix process group, terminates the whole descendant tree, and
+  gives the Node gateway a parent-death watchdog. Duplicate foreground/service
+  starts fail closed.
+- DSH native shell and filesystem tools are not mounted. `makakoo-mcp` is the
+  only generated tool source and receives `MAKAKOO_AGENT_SLOT` for server-side
+  discovery and call authorization.
+- Signed HTTP adapter calls made inside an agent slot now propagate
+  `X-Makakoo-Agent-Id` in the signed digest. Calls without an agent binding are
+  explicit trusted-peer administrator calls; attribution cannot be stripped or
+  changed without invalidating the signature.
+- Destroy remains confirmation-gated, proves shutdown before moving state, and
+  archives managed runtime/data/TOML transactionally. Secret revocation remains
+  separately explicit.
+
+### Known limitations
+
+- DSH V1 preserves channel and trigger declarations but does not start
+  Telegram, Slack, Discord, WhatsApp, email, voice, webhook, or cron adapters.
+  Use `agent prompt` or a trusted local adapter; the CLI warns when declarations
+  are not executable.
+- DSH `0.1.1-rc.2` is an upstream release candidate. Package upgrades remain a
+  deliberate Makakoo integration decision.
+- Background service registration ships for macOS and Linux. Other platforms
+  require explicit foreground mode.
+
 ## [0.2.3] - 2026-08-02
 
 ### Changed

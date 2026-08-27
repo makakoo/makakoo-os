@@ -54,18 +54,20 @@ pub fn render(i: usize, c: &ChannelSpec) -> Result<String> {
     let _ = i; // index is encoded by the caller via rel_path/import_alias
     let _ = RenderContext::new; // silence unused import when not all paths use ctx
     let body = match c {
-        ChannelSpec::Telegram { token_env, allowed_users } => {
-            telegram::render(token_env, allowed_users)
-        }
+        ChannelSpec::Telegram {
+            token_env,
+            allowed_users,
+        } => telegram::render(token_env, allowed_users),
         ChannelSpec::Slack {
             token_env,
             app_token_env,
             team_id_env,
             allowed_users,
         } => slack::render(token_env, app_token_env, team_id_env, allowed_users),
-        ChannelSpec::Discord { token_env, allowed_users } => {
-            discord::render(token_env, allowed_users)
-        }
+        ChannelSpec::Discord {
+            token_env,
+            allowed_users,
+        } => discord::render(token_env, allowed_users),
         ChannelSpec::Webhook { path, secret_env } => webhook::render(path, secret_env),
         ChannelSpec::Email {
             smtp_host,

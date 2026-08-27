@@ -33,7 +33,7 @@ pub fn render(ctx: &RenderContext) -> String {
             let envs = channel_env_list(c).join(", ");
             s.push_str(&format!("| {} | `{}` | `{}` |\n", i, kind, envs));
         }
-        s.push_str("\n");
+        s.push('\n');
     }
 
     // Triggers
@@ -47,20 +47,24 @@ pub fn render(ctx: &RenderContext) -> String {
             let (kind, sched) = trigger_summary(t);
             s.push_str(&format!("| {} | `{}` | `{}` |\n", i, kind, sched));
         }
-        s.push_str("\n");
+        s.push('\n');
     }
 
     s.push_str("## Run\n\n```sh\n");
     s.push_str("npm install\n");
     s.push_str("cp .env.example .env          # fill in the values listed above\n");
-    s.push_str("npm run proxy                 # terminal 1: makakoo-mcp over http://127.0.0.1:8808/mcp\n");
+    s.push_str(
+        "npm run proxy                 # terminal 1: makakoo-mcp over http://127.0.0.1:8808/mcp\n",
+    );
     s.push_str("npx flue dev                  # terminal 2: runs the agent\n");
     s.push_str("```\n\n");
     s.push_str("## Files\n\n");
     s.push_str("- `src/agents/assistant.ts` — the agent: model + instructions + Makakoo MCP tools (whitelisted to the spec's `tools` list).\n");
     s.push_str("- `src/channels/*.ts` — one module per channel declared in the spec.\n");
     s.push_str("- `src/triggers/*.ts` — one module per trigger declared in the spec.\n");
-    s.push_str("- `mcp-proxy.mjs` — stdio→StreamableHTTP bridge to the local `makakoo-mcp` binary.\n");
+    s.push_str(
+        "- `mcp-proxy.mjs` — stdio→StreamableHTTP bridge to the local `makakoo-mcp` binary.\n",
+    );
     s.push_str("- `instructions.txt` — the agent's system instructions (from the spec).\n");
     s.push_str("- `spec.yaml` — the source-of-truth spec used to scaffold this project.\n");
 
@@ -81,7 +85,12 @@ fn channel_kind_name(c: &ChannelSpec) -> &'static str {
 fn channel_env_list(c: &ChannelSpec) -> Vec<String> {
     match c {
         ChannelSpec::Telegram { token_env, .. } => vec![token_env.clone()],
-        ChannelSpec::Slack { token_env, app_token_env, team_id_env, .. } => vec![
+        ChannelSpec::Slack {
+            token_env,
+            app_token_env,
+            team_id_env,
+            ..
+        } => vec![
             token_env.clone(),
             app_token_env.clone(),
             team_id_env.clone(),
@@ -89,17 +98,22 @@ fn channel_env_list(c: &ChannelSpec) -> Vec<String> {
         ChannelSpec::Discord { token_env, .. } => vec![token_env.clone()],
         ChannelSpec::Webhook { secret_env, .. } => vec![secret_env.clone()],
         ChannelSpec::Email { secret_env, .. } => vec![secret_env.clone()],
-        ChannelSpec::Voice { twilio_account_sid_env, secret_env, .. } => vec![
-            twilio_account_sid_env.clone(),
-            secret_env.clone(),
-        ],
+        ChannelSpec::Voice {
+            twilio_account_sid_env,
+            secret_env,
+            ..
+        } => vec![twilio_account_sid_env.clone(), secret_env.clone()],
     }
 }
 
 fn trigger_summary(t: &TriggerSpec) -> (&'static str, String) {
     match t {
         TriggerSpec::Cron { schedule, timezone } => {
-            let tz = if timezone.is_empty() { "UTC".to_string() } else { timezone.clone() };
+            let tz = if timezone.is_empty() {
+                "UTC".to_string()
+            } else {
+                timezone.clone()
+            };
             ("cron", format!("`{}` ({})", schedule, tz))
         }
         TriggerSpec::Webhook { path, .. } => ("webhook", format!("`POST {}`", path)),

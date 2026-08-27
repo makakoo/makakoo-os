@@ -15,4 +15,5 @@ files = [
     # carry explicit verify-skip markers when listed here.
     "docs/getting-started.md",
     "docs/quickstart.md",
+    "docs/walkthroughs/dsh-agent-runtime.md",
 ]

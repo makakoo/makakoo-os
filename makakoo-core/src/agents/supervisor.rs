@@ -76,7 +76,14 @@ pub enum SupervisorState {
 
 /// Where the supervisor writes its status.json + PID file.
 pub fn run_dir(makakoo_home: &Path, slot_id: &str) -> PathBuf {
-    makakoo_home.join("run/agents").join(slot_id)
+    checked_run_dir(makakoo_home, slot_id)
+        .unwrap_or_else(|_| makakoo_home.join("run/agents/.invalid-slot-id"))
+}
+
+/// Checked run-directory constructor for untrusted slot identifiers.
+pub fn checked_run_dir(makakoo_home: &Path, slot_id: &str) -> crate::Result<PathBuf> {
+    crate::agents::validate_slot_id(slot_id)?;
+    Ok(makakoo_home.join("run/agents").join(slot_id))
 }
 
 /// status.json is the lingua franca between supervisor and `agent
@@ -112,16 +119,13 @@ impl SupervisorStatusFile {
         Ok(())
     }
 
-    /// Read status.json from a slot's run dir. Returns Ok(None) if
-    /// the file is missing (slot not supervised).
+    /// Read status.json from a slot's run dir. Missing or malformed snapshots
+    /// are treated as absent: status is advisory, while the runtime lock and
+    /// same-user process identity are the lifecycle authority.
     pub fn read(run_dir: &Path) -> Result<Option<Self>> {
         let path = run_dir.join("status.json");
         match std::fs::read(&path) {
-            Ok(bytes) => {
-                let parsed: Self = serde_json::from_slice(&bytes)
-                    .map_err(|e| MakakooError::Internal(format!("parse status: {e}")))?;
-                Ok(Some(parsed))
-            }
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(MakakooError::Internal(format!("read status: {e}"))),
         }
@@ -434,11 +438,29 @@ mod tests {
     }
 
     #[test]
+    fn status_file_read_malformed_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("status.json"), b"{not-json").unwrap();
+        let back = SupervisorStatusFile::read(tmp.path()).unwrap();
+        assert!(back.is_none());
+    }
+
+    #[test]
     fn run_dir_path_is_under_makakoo_home() {
         let home = PathBuf::from("/Users/sebastian/MAKAKOO");
         let d = run_dir(&home, "secretary");
         assert!(d.ends_with("run/agents/secretary"));
         assert!(d.starts_with(&home));
+    }
+
+    #[test]
+    fn invalid_run_dir_fails_closed() {
+        let home = PathBuf::from("/tmp/makakoo");
+        assert!(checked_run_dir(&home, "../escape").is_err());
+        assert_eq!(
+            run_dir(&home, "../escape"),
+            home.join("run/agents/.invalid-slot-id")
+        );
     }
 
     #[test]

@@ -488,11 +488,7 @@ fn update_from_path(ctx: &CliContext, entry: &LockEntry) -> anyhow::Result<i32> 
     // lock entry instead. (Bit for real 2026-07-16: SkillSpector blocked
     // the reinstall of skill-brain-multi-source post-uninstall.)
     let final_dir = makakoo_core::plugin::staging::final_dir(ctx.home(), name);
-    let backup_dir = ctx
-        .home()
-        .join("plugins")
-        .join(".update-backup")
-        .join(name);
+    let backup_dir = ctx.home().join("plugins").join(".update-backup").join(name);
     if backup_dir.exists() {
         std::fs::remove_dir_all(&backup_dir)?;
     }

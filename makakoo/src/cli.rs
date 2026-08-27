@@ -478,25 +478,11 @@ pub enum Commands {
         shell: clap_complete::Shell,
     },
 
-    /// Drive an agent plugin's lifecycle entrypoint.
+    /// Create, run, inspect, and validate Makakoo agent slots.
     ///
-    /// Agent plugins declare `[entrypoint].start|stop|health` in their
-    /// `plugin.toml`. This subcommand resolves a plugin by name,
-    /// reads the relevant entry, runs it with `cwd = plugin.root` via
-    /// `/bin/sh -c`, and forwards the exit code. Thin wrapper — the
-    /// daemon is the primary lifecycle supervisor; this command is the
-    /// escape hatch for manual control, SKILL.md examples, and the
-    /// `sancho-task-plugin-update-check/post_update` hook.
-    ///
-    /// Subcommands:
-    ///   makakoo agent start  <name>
-    ///   makakoo agent stop   <name>
-    ///   makakoo agent status <name>
-    ///   makakoo agent health <name>
-    ///
-    /// `status` is not declared in plugin manifests today; it is derived
-    /// by invoking `[entrypoint].health` if present, else falling back to
-    /// a pgrep-style scan on the plugin name.
+    /// New slots compile an `AgentSpec` into a supervised DeepSeek Harness
+    /// runtime. Legacy plugin lifecycle hooks remain available for slots that
+    /// have not migrated yet.
     Agent {
         #[command(subcommand)]
         cmd: AgentCmd,
@@ -928,25 +914,35 @@ pub enum HandleCmd {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 pub enum AgentCmd {
-    /// Run the plugin's `[entrypoint].start` script.
+    /// Start a supervised agent slot, or a legacy plugin lifecycle hook.
     Start {
-        /// Plugin name (as reported by `makakoo plugin list`).
+        /// Slot id or legacy plugin name.
         name: String,
     },
-    /// Run the plugin's `[entrypoint].stop` script.
+    /// Send a prompt to a running DeepSeek Harness slot.
+    Prompt {
+        /// Slot id.
+        slot: String,
+        /// Prompt text. Quote multi-word prompts in the shell.
+        prompt: String,
+        /// Durable DSH session id used for continuation.
+        #[arg(long, default_value = "cli-default")]
+        session: String,
+    },
+    /// Stop a supervised agent slot, or a legacy plugin lifecycle hook.
     Stop {
-        /// Plugin name.
+        /// Slot id or legacy plugin name.
         name: String,
     },
-    /// Show whether the plugin's agent process is running. Uses the
-    /// plugin's `[entrypoint].health` script if declared, else pgrep.
+    /// Show runtime state for an agent slot or legacy plugin.
     Status {
-        /// Plugin name.
+        /// Slot id or legacy plugin name.
         name: String,
     },
-    /// Run the plugin's `[entrypoint].health` script (exits 0 if up).
+    /// Probe a slot's DSH loopback endpoint, or run a legacy plugin's
+    /// `[entrypoint].health` script (exits 0 if up).
     Health {
-        /// Plugin name.
+        /// Slot id or legacy plugin name.
         name: String,
     },
 
@@ -965,9 +961,8 @@ pub enum AgentCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Config-only validation of each transport (parse + resolve its
-    /// secret references) WITHOUT a network call or starting the agent.
-    /// Useful before `start` to surface a missing token or bad config.
+    /// Validate the declared runtime, generated dependencies, transports,
+    /// and secret references without starting the agent or calling a channel.
     Validate {
         /// Slot id.
         slot: String,
@@ -983,7 +978,7 @@ pub enum AgentCmd {
     },
     /// Interactively create a starter spec at PATH. With `--minimal`,
     /// emits a 10-line "hello world" spec. The project default
-    /// (see `makakoo provider set`) is used as the initial model
+    /// (see `makakoo agent provider-set`) is used as the initial model
     /// choice; the user can accept it or pick a different one.
     InitSpec {
         /// Path to write the spec to.
@@ -1015,10 +1010,9 @@ pub enum AgentCmd {
         json: bool,
     },
     /// Create a new slot from a spec (--specs <PATH>) or from the
-    /// Telegram/Slack quick-start flags. Every created slot is a
-    /// Flue (TypeScript) agent — `--runtime` was removed in Phase 3
-    /// of SPRINT-FLUE-DEFAULT-AGENT-SPECS and `--from-toml` was
-    /// removed (use --specs instead).
+    /// Telegram/Slack quick-start flags. DeepSeek Harness is the
+    /// default execution engine; set MAKAKOO_AGENT_ENGINE=flue only
+    /// for the legacy compatibility scaffolder.
     Create {
         /// Slot id (also the TOML filename). Optional with --specs:
         /// the spec's `name` becomes the slot id. Required for
@@ -1070,8 +1064,8 @@ pub enum AgentCmd {
         /// tokens you'll fix up afterward.
         #[arg(long)]
         skip_credential_check: bool,
-        /// Output dir for the scaffolded Flue project.
-        /// Defaults to $MAKAKOO_HOME/agents-flue/<slot>.
+        /// Output dir for the generated runtime project.
+        /// Defaults to $MAKAKOO_HOME/agents-dsh/<slot>.
         #[arg(long, value_name = "DIR")]
         out: Option<std::path::PathBuf>,
         /// Path to a declarative spec file (`.yaml`/`.yml`/`.toml`),

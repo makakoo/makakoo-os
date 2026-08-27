@@ -21,7 +21,11 @@ pub struct RenderContext<'a> {
 
 impl<'a> RenderContext<'a> {
     pub fn new(spec: &'a AgentSpec, out_dir: &'a Path) -> Self {
-        Self { spec, out_dir, llm_provider: None }
+        Self {
+            spec,
+            out_dir,
+            llm_provider: None,
+        }
     }
 
     pub fn with_provider(mut self, provider: DiscoveredProvider) -> Self {
@@ -42,8 +46,36 @@ impl<'a> RenderContext<'a> {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating dir {}", parent.display()))?;
         }
-        std::fs::write(&path, content)
-            .with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Write a secret-bearing file without a world-readable creation window.
+    pub fn write_private(&self, rel: &str, content: &str) -> Result<()> {
+        let path = self.out_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating dir {}", parent.display()))?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .with_context(|| format!("opening private {}", path.display()))?;
+        use std::io::Write as _;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("writing private {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("chmod 0600 {}", path.display()))?;
+        }
         Ok(())
     }
 

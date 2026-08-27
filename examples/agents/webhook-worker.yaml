@@ -12,27 +12,20 @@
 # Try it:
 #   makakoo agent validate-spec ./webhook-worker.yaml
 #   makakoo agent create --specs ./webhook-worker.yaml
-#   cd $MAKAKOO_HOME/agents-flue/webhook-worker
+#   cd $MAKAKOO_HOME/agents-dsh/webhook-worker
 #   npm install
-#   # Set OPS_WEBHOOK_SECRET in .env
-#   npm run proxy & npx flue dev
-#   # Test the inbound webhook:
-#   curl -X POST http://127.0.0.1:8808/hooks/ops \
-#     -H "x-signature: $(echo -n '{"event":"deploy"}' | openssl dgst -sha256 -hmac "$OPS_WEBHOOK_SECRET" | cut -d' ' -f2)" \
-#     -H "content-type: application/json" \
-#     -d '{"event":"deploy","ref":"main"}'
-#   # Test the trigger webhook (separate port 8809):
-#   curl -X POST http://127.0.0.1:8809/triggers/manual \
-#     -H "x-signature: $(echo -n '{"job":"health-check"}' | openssl dgst -sha256 -hmac "$MANUAL_TRIGGER_SECRET" | cut -d' ' -f2)" \
-#     -H "content-type: application/json" \
-#     -d '{"job":"health-check"}'
+#   makakoo agent start webhook-worker
+#   makakoo agent prompt webhook-worker '{"event":"deploy","ref":"main"}'
+#
+# DSH V1 validates and preserves channel/trigger declarations but does not
+# open webhook listeners. Add the Makakoo/Flue adapter slice before production.
 #
 # See docs/agents/spec.md for the full schema.
 
 name: webhook-worker
 description: "Reacts to inbound webhooks and trigger events (no chat)"
 
-model: anthropic/claude-sonnet-4-6
+model: switchailocal/ail-compound
 
 instructions: |
   You are a webhook-driven agent. Two paths wake you up:

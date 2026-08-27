@@ -142,6 +142,62 @@ def test_preflight_request_rolls_through_tool_calls_in_request():
         preflight_request(cfg, req)
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"tool": "write_file", "PATH": "/var/lib/secretary/secret/key"},
+        {"tool": "write_file", "File": "/var/lib/secretary/secret/key"},
+        {"tool": "write_file", "filepath": "/var/lib/secretary/secret/key"},
+        {"tool": "write_file", "out_path": "/var/lib/secretary/secret/key"},
+        {"tool": "write_file", "cwd": "/var/lib/secretary/secret"},
+        {"tool": "write_file", "directory": "/var/lib/secretary/secret"},
+        {"tool": "write_file", "myfilepath": "/var/lib/secretary/secret/key"},
+        {"tool": "write_file", "outFilePath": "/var/lib/secretary/secret/key"},
+        {"tool": "write_file", "workingDirectory": "/var/lib/secretary/secret"},
+        {"tool": "write_file", "paths": ["/var/lib/secretary/secret/key"]},
+        {
+            "tool": "write_file",
+            "arguments": {"nested": {"target": "/var/lib/secretary/secret/key"}},
+        },
+    ],
+)
+def test_preflight_request_rejects_nested_and_aliased_forbidden_paths(call):
+    cfg = SlotConfig.from_toml("secretary", _slot_toml())
+    req = LlmRequest("ignored", "x", None, pending_tool_calls=[call])
+    with pytest.raises(PathNotInScopeError):
+        preflight_request(cfg, req)
+
+
+def test_preflight_request_exempts_only_remote_source_values():
+    cfg = SlotConfig.from_toml("secretary", _slot_toml())
+    req = LlmRequest(
+        "ignored",
+        "x",
+        None,
+        pending_tool_calls=[
+            {
+                "tool": "brain_search",
+                "source": "https://example.com/a",
+                "SOURCES": ["data:image/png;base64,AA"],
+            }
+        ],
+    )
+    preflight_request(cfg, req)
+
+    for local_source in (
+        "/var/lib/secretary/secret/key://payload",
+        "file:///var/lib/secretary/secret/key",
+    ):
+        blocked = LlmRequest(
+            "ignored",
+            "x",
+            None,
+            pending_tool_calls=[{"tool": "write_file", "source": local_source}],
+        )
+        with pytest.raises(PathNotInScopeError):
+            preflight_request(cfg, blocked)
+
+
 @pytest.mark.asyncio
 async def test_handle_inbound_converts_scope_violation_to_polite_reply():
     """When the dispatcher records a tool call outside scope, the

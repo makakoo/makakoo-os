@@ -354,7 +354,10 @@ mod tests {
         let cmd = &actions[0].args[1];
         let export_pos = cmd.find("MAKAKOO_NO_AUTORUN=1").unwrap();
         let curl_pos = cmd.find("curl").unwrap();
-        assert!(export_pos < curl_pos, "autorun opt-out must precede the pipe");
+        assert!(
+            export_pos < curl_pos,
+            "autorun opt-out must precede the pipe"
+        );
     }
 
     #[test]

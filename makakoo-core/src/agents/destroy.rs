@@ -58,10 +58,17 @@ pub struct DestroyOutcome {
     /// `Some(path)` if the slot had a data dir; `None` if it didn't
     /// exist (e.g., never started).
     pub archived_data_dir: Option<PathBuf>,
-    /// Direct `secret_ref = "..."` literals found in the TOML.
-    /// Note: secrets nested under `[transport.config]` sub-tables
-    /// or referenced via env-var interpolation are NOT detected
-    /// (locked Q3 limitation — surfaced in walkthrough).
+    /// Original generated runtime path, when declared by the slot.
+    #[serde(default)]
+    pub runtime_project_dir: Option<PathBuf>,
+    /// Managed runtime project moved to `<archive>/runtime/`.
+    #[serde(default)]
+    pub archived_runtime_dir: Option<PathBuf>,
+    /// Recovery warning when malformed legacy TOML had no runtime table.
+    #[serde(default)]
+    pub runtime_archive_warning: Option<String>,
+    /// Direct `*_ref = "..."` literals found in the TOML.
+    /// Dotted-key assignments and env-var interpolation are not detected.
     pub detected_secrets: Vec<String>,
 }
 
@@ -79,6 +86,18 @@ pub enum DestroyError {
 
     #[error("archive_dir already exists at {path}: refusing to overwrite")]
     ArchiveExists { path: PathBuf },
+
+    #[error("invalid slot runtime metadata at {path}: {message}")]
+    InvalidRuntimeMetadata { path: PathBuf, message: String },
+
+    #[error("could not archive generated runtime: {message}")]
+    RuntimeArchive { message: String },
+
+    #[error("destroy archive transaction failed: {message}")]
+    ArchiveTransaction { message: String },
+
+    #[error("invalid slot id '{slot_id}': {message}")]
+    InvalidSlotId { slot_id: String, message: String },
 }
 
 /// Core destroy primitive. Pure data movement — no prompts, no
@@ -93,6 +112,10 @@ pub fn destroy_slot(
     really_destroy_harveychat: bool,
     unix_ts: u64,
 ) -> std::result::Result<DestroyOutcome, DestroyError> {
+    super::validate_slot_id(slot_id).map_err(|error| DestroyError::InvalidSlotId {
+        slot_id: slot_id.to_string(),
+        message: error.to_string(),
+    })?;
     if slot_id == PROTECTED_SLOT && !really_destroy_harveychat {
         return Err(DestroyError::HarveychatProtected);
     }
@@ -105,20 +128,25 @@ pub fn destroy_slot(
         });
     }
 
+    let toml_body =
+        std::fs::read_to_string(&toml_path).map_err(|e| DestroyError::SlotNotFound {
+            slot_id: format!("could not read slot TOML: {e}"),
+            path: toml_path.clone(),
+        })?;
+    let runtime_plan =
+        super::runtime_archive::plan(makakoo_home, slot_id, &toml_body).map_err(|message| {
+            DestroyError::InvalidRuntimeMetadata {
+                path: toml_path.clone(),
+                message,
+            }
+        })?;
+
     let dst = archive_dir(makakoo_home, slot_id, unix_ts);
     if dst.exists() {
         return Err(DestroyError::ArchiveExists { path: dst });
     }
-    std::fs::create_dir_all(&dst).map_err(|e| {
-        // Map io::Error into a domain error variant. The error
-        // surface is wrapped in DestroyError::ArchiveExists's family
-        // — but for "permission denied" we just bubble through the
-        // generic SlotNotFound::path display (close enough for the
-        // CLI; the io::Error details print via `{e}`).
-        DestroyError::SlotNotFound {
-            slot_id: format!("could not create archive dir: {e}"),
-            path: dst.clone(),
-        }
+    std::fs::create_dir_all(&dst).map_err(|error| DestroyError::ArchiveTransaction {
+        message: format!("create archive directory {}: {error}", dst.display()),
     })?;
 
     // Read TOML body BEFORE moving it so we can scan for
@@ -128,46 +156,33 @@ pub fn destroy_slot(
     // variant (secret_ref + app_token_ref + signing_secret_ref +
     // verify_token_ref + access_token_ref + password_ref +
     // refresh_token_ref + client_secret_ref).
-    let toml_body =
-        std::fs::read_to_string(&toml_path).map_err(|e| DestroyError::SlotNotFound {
-            slot_id: format!("could not read slot TOML: {e}"),
-            path: toml_path.clone(),
-        })?;
     let detected_secrets = scan_secret_refs(&toml_body);
 
-    // Move the TOML.
-    let archived_toml = dst.join(format!("{slot_id}.toml"));
-    std::fs::rename(&toml_path, &archived_toml).map_err(|e| DestroyError::SlotNotFound {
-        slot_id: format!("could not move slot TOML: {e}"),
-        path: toml_path.clone(),
-    })?;
-
-    // Always create `<archive>/data/`. If the source data dir
-    // exists, move its contents in; otherwise the archive ships an
-    // empty `data/` so the locked Q3 archive shape (`<slot>.toml +
-    // data/`) is invariant. Restoration semantics differ between
-    // the two cases (see `render_restore_one_liner`).
-    let data_dst = dst.join("data");
+    // Stage runtime + data first. The TOML is the registry commit marker and
+    // moves only after every other archive operation succeeds.
     let data_src = slot_data_dir(makakoo_home, slot_id);
-    let archived_data_dir = if data_src.exists() {
-        std::fs::rename(&data_src, &data_dst).map_err(|e| DestroyError::SlotNotFound {
-            slot_id: format!("could not move slot data dir: {e}"),
-            path: data_src.clone(),
-        })?;
-        Some(data_dst.clone())
-    } else {
-        std::fs::create_dir_all(&data_dst).map_err(|e| DestroyError::SlotNotFound {
-            slot_id: format!("could not create empty data archive: {e}"),
-            path: data_dst.clone(),
-        })?;
-        None
-    };
+    let staged = super::destroy_transaction::stage(&runtime_plan, &dst, &data_src)
+        .map_err(|message| DestroyError::ArchiveTransaction { message })?;
+
+    let archived_toml = dst.join(format!("{slot_id}.toml"));
+    super::destroy_transaction::commit_registry(
+        &runtime_plan,
+        &dst,
+        &data_src,
+        &staged,
+        &toml_path,
+        &archived_toml,
+    )
+    .map_err(|message| DestroyError::ArchiveTransaction { message })?;
 
     Ok(DestroyOutcome {
         slot_id: slot_id.to_string(),
         archive_dir: dst,
         archived_toml,
-        archived_data_dir,
+        archived_data_dir: staged.archived_data_dir,
+        runtime_project_dir: runtime_plan.project_dir,
+        archived_runtime_dir: staged.archived_runtime_dir,
+        runtime_archive_warning: runtime_plan.warning,
         detected_secrets,
     })
 }
@@ -254,14 +269,35 @@ fn extract_quoted(s: &str) -> Option<String> {
 /// correct action.
 pub fn render_restore_one_liner(outcome: &DestroyOutcome, makakoo_home: &Path) -> String {
     let slot = &outcome.slot_id;
-    let archive = outcome.archive_dir.display();
-    let cfg = makakoo_home.join("config/agents").display().to_string();
+    let archive = &outcome.archive_dir;
+    let cfg = makakoo_home.join("config/agents");
+    let mut commands = vec![format!(
+        "mv {} {}",
+        shell_quote(&archive.join(format!("{slot}.toml"))),
+        shell_quote(&cfg)
+    )];
     if outcome.archived_data_dir.is_some() {
-        let data = slot_data_dir(makakoo_home, slot).display().to_string();
-        format!("to restore: mv {archive}/{slot}.toml {cfg}/ && mv {archive}/data {data}")
-    } else {
-        format!("to restore: mv {archive}/{slot}.toml {cfg}/")
+        let data = slot_data_dir(makakoo_home, slot);
+        commands.push(format!(
+            "mv {} {}",
+            shell_quote(&archive.join("data")),
+            shell_quote(&data)
+        ));
     }
+    if outcome.archived_runtime_dir.is_some() {
+        if let Some(runtime) = outcome.runtime_project_dir.as_ref() {
+            commands.push(format!(
+                "mv {} {}",
+                shell_quote(&archive.join("runtime")),
+                shell_quote(runtime)
+            ));
+        }
+    }
+    format!("to restore: {}", commands.join(" && "))
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
 }
 
 #[cfg(test)]
@@ -446,13 +482,16 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
             archive_dir: PathBuf::from("/m/archive/agents/secretary-1700000000"),
             archived_toml: PathBuf::from("/m/archive/agents/secretary-1700000000/secretary.toml"),
             archived_data_dir: Some(PathBuf::from("/m/archive/agents/secretary-1700000000/data")),
+            runtime_project_dir: None,
+            archived_runtime_dir: None,
+            runtime_archive_warning: None,
             detected_secrets: vec![],
         };
         let line = render_restore_one_liner(&outcome, Path::new("/m"));
         let normalized = line.replace('\\', "/");
         assert!(line.contains("mv "));
         assert!(normalized.contains("/m/archive/agents/secretary-1700000000/secretary.toml"));
-        assert!(normalized.contains("/m/config/agents/"));
+        assert!(normalized.contains("/m/config/agents"));
         assert!(normalized.contains("/m/archive/agents/secretary-1700000000/data"));
     }
 
@@ -466,6 +505,9 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
             archive_dir: PathBuf::from("/m/archive/agents/secretary-1700000000"),
             archived_toml: PathBuf::from("/m/archive/agents/secretary-1700000000/secretary.toml"),
             archived_data_dir: None,
+            runtime_project_dir: None,
+            archived_runtime_dir: None,
+            runtime_archive_warning: None,
             detected_secrets: vec![],
         };
         let line = render_restore_one_liner(&outcome, Path::new("/m"));
@@ -476,6 +518,23 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
             !line.contains("data"),
             "no data restore arm should appear; got: {line}"
         );
+    }
+
+    #[test]
+    fn restore_one_liner_shell_quotes_spaces_and_apostrophes() {
+        let outcome = DestroyOutcome {
+            slot_id: "secretary".into(),
+            archive_dir: PathBuf::from("/tmp/Makakoo's Archive/secretary-1"),
+            archived_toml: PathBuf::new(),
+            archived_data_dir: Some(PathBuf::from("data")),
+            runtime_project_dir: None,
+            archived_runtime_dir: None,
+            runtime_archive_warning: None,
+            detected_secrets: vec![],
+        };
+        let line = render_restore_one_liner(&outcome, Path::new("/tmp/My Makakoo"));
+        assert!(line.contains("'/tmp/Makakoo'\"'\"'s Archive/secretary-1/secretary.toml'"));
+        assert!(line.contains("'/tmp/My Makakoo/config/agents'"));
     }
 
     #[test]
@@ -493,5 +552,67 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
             archive_data.exists() && archive_data.is_dir(),
             "archive must include empty data/ dir when source had none"
         );
+    }
+
+    #[test]
+    fn destroy_archives_managed_runtime_and_restore_includes_it() {
+        let tmp = TempDir::new().unwrap();
+        let runtime = tmp.path().join("agents-dsh/researcher");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join(".env"), "TOKEN=secret").unwrap();
+        write_slot(
+            tmp.path(),
+            "researcher",
+            &format!(
+                "slot_id = \"researcher\"\n[runtime]\nengine = \"deepseek-harness\"\nproject_dir = {:?}\n",
+                runtime
+            ),
+        );
+
+        let outcome = destroy_slot(tmp.path(), "researcher", false, 1700000008).unwrap();
+        let archived = outcome.archived_runtime_dir.as_ref().unwrap();
+        assert!(!runtime.exists());
+        assert_eq!(
+            fs::read_to_string(archived.join(".env")).unwrap(),
+            "TOKEN=secret"
+        );
+        let restore = render_restore_one_liner(&outcome, tmp.path());
+        assert!(restore.contains("/runtime"));
+        assert!(restore.contains(&runtime.display().to_string()));
+    }
+
+    #[test]
+    fn destroy_preserves_runtime_outside_managed_roots() {
+        let tmp = TempDir::new().unwrap();
+        let external = tmp.path().join("custom/researcher");
+        fs::create_dir_all(&external).unwrap();
+        write_slot(
+            tmp.path(),
+            "researcher",
+            &format!(
+                "slot_id = \"researcher\"\n[runtime]\nengine = \"deepseek-harness\"\nproject_dir = {:?}\n",
+                external
+            ),
+        );
+
+        let outcome = destroy_slot(tmp.path(), "researcher", false, 1700000009).unwrap();
+        assert!(external.exists());
+        assert!(outcome.archived_runtime_dir.is_none());
+        assert_eq!(
+            outcome.runtime_project_dir.as_deref(),
+            Some(external.as_path())
+        );
+    }
+
+    #[test]
+    fn destroy_archives_malformed_legacy_toml_without_runtime() {
+        let tmp = TempDir::new().unwrap();
+        write_slot(tmp.path(), "broken", "slot_id =");
+        let outcome = destroy_slot(tmp.path(), "broken", false, 1700000010).unwrap();
+        assert!(outcome.archived_toml.exists());
+        assert!(outcome
+            .runtime_archive_warning
+            .unwrap()
+            .contains("malformed"));
     }
 }

@@ -1,9 +1,10 @@
-# ollama-local — fully local agent using Ollama
+# ollama-local — legacy Flue compatibility example
 #
+# The default DSH runtime is switchAILocal-only and rejects this model.
+# Use this file only with the explicit, manually operated compatibility path:
+#   MAKAKOO_AGENT_ENGINE=flue makakoo agent create --specs ./ollama-local.yaml
+# Then follow the generated Flue README; the Makakoo supervisor does not run it.
 # Requires Ollama running locally (http://localhost:11434).
-# `makakoo agent create --specs ./ollama-local.yaml` auto-detects
-# Ollama and generates `src/app.ts` with the right `registerProvider`
-# call. No manual editing needed.
 #
 # Quick setup:
 #   brew install ollama  (or download from https://ollama.com)
@@ -37,7 +38,7 @@ scope:
   allowed_paths: ["~/MAKAKOO/data/ollama-local/**"]
   forbidden_paths: ["~/.ssh/**", "~/.aws/**"]
 
-# Channels — Telegram works the same way as any other spec.
+# Channel generation belongs to the legacy Flue compatibility renderer.
 # The `switchailocal` provider and `ollama` provider are mutually
 # exclusive: this spec uses ollama. The Flue scaffolder picks the
 # provider based on the spec's `model` field prefix.

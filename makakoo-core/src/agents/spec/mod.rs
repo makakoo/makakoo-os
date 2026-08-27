@@ -87,10 +87,7 @@ pub enum ChannelSpec {
         allowed_users: Vec<String>,
     },
     /// Webhook. Inbound only.
-    Webhook {
-        path: String,
-        secret_env: String,
-    },
+    Webhook { path: String, secret_env: String },
     /// Email via SMTP/IMAP. Bidirectional.
     Email {
         smtp_host: String,
@@ -126,7 +123,7 @@ pub enum TriggerSpec {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ScopeSpec {
-    /// Globs, must resolve under `$MAKAKOO_HOME`.
+    /// Filesystem prefixes or prefix globs. Absolute paths and `~/...` are supported.
     #[serde(default)]
     pub allowed_paths: Vec<String>,
     /// Globs, always denied even if matched by `allowed_paths`.

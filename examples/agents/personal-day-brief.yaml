@@ -1,12 +1,12 @@
 # personal-day-brief — daily morning brief agent
 #
 # Run: makakoo agent create --specs ./personal-day-brief.yaml
-# Then: cd $MAKAKOO_HOME/agents-flue/personal-day-brief
+# Then: cd $MAKAKOO_HOME/agents-dsh/personal-day-brief
 #       npm install
-#       cp .env.example .env  (fill in TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET_TOKEN)
-#       npm run proxy &
-#       npx flue dev
-# Then: message the bot on Telegram OR wait for the 8am cron.
+#       makakoo agent start personal-day-brief
+#       makakoo agent prompt personal-day-brief "Create today's brief"
+# Channel and cron declarations are validated policy only in DSH V1; no
+# Telegram listener or scheduler is started until the adapter slice lands.
 #
 # See docs/agents/spec.md for the full schema.
 
@@ -30,24 +30,21 @@ instructions: |
 # Whitelist of Makakoo MCP tools this agent may invoke.
 tools: [brain_search, brain_recent, write_file]
 
-# Communications interfaces — zero or many. The CLI auto-scaffolds
-# one TS module per entry: src/channels/<kind>-<n>.ts
+# Communications policy — zero or many. Declaration-only in DSH V1.
 channels:
   - kind: telegram
     token_env: TELEGRAM_BOT_TOKEN
     # Get your user ID from @userinfobot on Telegram.
     allowed_users: ["746496145"]
 
-# Trigger sources — zero or many. Loaded as side-effecting
-# imports from src/agents/assistant.ts. The CLI auto-scaffolds
-# one TS module per entry: src/triggers/<kind>-<n>.ts
+# Trigger policy — zero or many. Declaration-only in DSH V1.
 triggers:
   - kind: cron
     schedule: "0 8 * * *"     # 08:00 every day
     timezone: "UTC"
 
 # Filesystem read/write boundaries. Required field.
-# `allowed_paths` — globs, must resolve under $MAKAKOO_HOME.
+# `allowed_paths` — filesystem prefixes/globs; absolute and ~/ paths supported.
 # `forbidden_paths` — globs, always denied (overrides allowed_paths).
 scope:
   allowed_paths: ["~/MAKAKOO/data/personal-day-brief/**"]

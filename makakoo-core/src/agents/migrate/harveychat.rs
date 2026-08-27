@@ -82,7 +82,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         if legacy_path.exists() {
             let archived_config = agent_dir.join("config.json.bak");
             if !archived_config.exists() {
-                std::fs::copy(&legacy_path, &archived_config)?;
+                copy_private(&legacy_path, &archived_config)?;
                 backfilled.push(archived_config);
             }
         }
@@ -93,13 +93,13 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         if legacy_db.exists() {
             let archived_db = agent_dir.join("conversations.db.bak");
             if !archived_db.exists() {
-                std::fs::copy(&legacy_db, &archived_db)?;
+                copy_private(&legacy_db, &archived_db)?;
                 backfilled.push(archived_db);
             }
         }
         let new_db = agent_dir.join("conversations.db");
         if !new_db.exists() {
-            std::fs::File::create(&new_db)?;
+            create_private(&new_db)?;
             backfilled.push(new_db);
         }
         return Ok(MigrationOutcome::AlreadyMigrated {
@@ -157,6 +157,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         process_mode: "supervised_pair".into(),
         transports: vec![transport],
         llm: None,
+        runtime: None,
     };
     AgentRegistry::create(makakoo_home, &slot)?;
 
@@ -174,7 +175,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         .join("conversations.db");
     let archived_db = if legacy_db.exists() {
         let dst = agent_dir.join("conversations.db.bak");
-        std::fs::copy(&legacy_db, &dst)?;
+        copy_private(&legacy_db, &dst)?;
         Some(dst)
     } else {
         None
@@ -185,7 +186,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
     // (copy semantics) for the same rollback rationale.
     let archived_config = {
         let dst = agent_dir.join("config.json.bak");
-        std::fs::copy(&legacy_path, &dst)?;
+        copy_private(&legacy_path, &dst)?;
         Some(dst)
     };
 
@@ -194,7 +195,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
     // creation surfaces permission errors at migration time.
     let new_db = agent_dir.join("conversations.db");
     let new_db = if !new_db.exists() {
-        std::fs::File::create(&new_db)?;
+        create_private(&new_db)?;
         Some(new_db)
     } else {
         Some(new_db)
@@ -206,6 +207,30 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         archived_config,
         new_db,
     })
+}
+
+fn copy_private(source: &Path, destination: &Path) -> Result<()> {
+    let mut input = std::fs::File::open(source)?;
+    let mut output = private_options().create_new(true).open(destination)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
+    Ok(())
+}
+
+fn create_private(path: &Path) -> Result<()> {
+    private_options().create_new(true).open(path)?.sync_all()?;
+    Ok(())
+}
+
+fn private_options() -> std::fs::OpenOptions {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
 }
 
 #[cfg(test)]

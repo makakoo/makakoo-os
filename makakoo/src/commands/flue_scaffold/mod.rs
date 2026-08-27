@@ -80,10 +80,7 @@ pub fn scaffold_flue_project(
 
     ctx.write("package.json", &package_json::render(&ctx))?;
     ctx.write("mcp-proxy.mjs", mcp_proxy::MCP_PROXY)?;
-    ctx.write(
-        "src/agents/assistant.ts",
-        &assistant::render(&ctx),
-    )?;
+    ctx.write("src/agents/assistant.ts", &assistant::render(&ctx))?;
 
     // Phase 6: write src/app.ts with the chosen LLM provider's
     // registerProvider call. If no provider was chosen, skip
@@ -94,7 +91,10 @@ pub fn scaffold_flue_project(
     ctx.write("instructions.txt", &ctx.spec.instructions)?;
     ctx.write(".env.example", &env_example::render(&ctx))?;
     if !inline_secrets.is_empty() {
-        ctx.write(".env", &render_dotenv(&env_example::render(&ctx), inline_secrets))?;
+        ctx.write_private(
+            ".env",
+            &render_dotenv(&env_example::render(&ctx), inline_secrets),
+        )?;
     }
     ctx.write(".gitignore", gitignore::GITIGNORE)?;
     ctx.write("README.md", &readme::render(&ctx))?;
@@ -103,18 +103,16 @@ pub fn scaffold_flue_project(
     // Channel modules — one per spec.channels[] entry.
     for (i, c) in ctx.spec.channels.iter().enumerate() {
         let rel = channels::rel_path(i, c);
-        let body = channels::render(i, c).with_context(|| {
-            format!("rendering channel {} for spec '{}'", i, ctx.spec.name)
-        })?;
+        let body = channels::render(i, c)
+            .with_context(|| format!("rendering channel {} for spec '{}'", i, ctx.spec.name))?;
         ctx.write(&rel, &body)?;
     }
 
     // Trigger modules — one per spec.triggers[] entry.
     for (i, t) in ctx.spec.triggers.iter().enumerate() {
         let rel = triggers::rel_path(i, t);
-        let body = triggers::render(i, t).with_context(|| {
-            format!("rendering trigger {} for spec '{}'", i, ctx.spec.name)
-        })?;
+        let body = triggers::render(i, t)
+            .with_context(|| format!("rendering trigger {} for spec '{}'", i, ctx.spec.name))?;
         ctx.write(&rel, &body)?;
     }
 
@@ -127,10 +125,15 @@ fn render_dotenv(template: &str, secrets: &InlineSecrets) -> String {
     let mut out = String::new();
     for line in template.lines() {
         let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix(|c: char| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()) {
+        if let Some(rest) =
+            trimmed.strip_prefix(|c: char| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        {
             // Possible `KEY=value` line — split on first '='.
             if let Some((key, _)) = rest.split_once('=') {
-                let key = trimmed.split_once('=').map(|(k, _)| k.trim()).unwrap_or(key.trim());
+                let key = trimmed
+                    .split_once('=')
+                    .map(|(k, _)| k.trim())
+                    .unwrap_or(key.trim());
                 if let Some(value) = secrets.get(key) {
                     out.push_str(&format!("{}={}\n", key, value));
                     continue;
@@ -141,4 +144,41 @@ fn render_dotenv(template: &str, secrets: &InlineSecrets) -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use makakoo_core::agents::spec::{ChannelSpec, ScopeSpec};
+
+    #[cfg(unix)]
+    #[test]
+    fn inline_secret_env_is_created_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = AgentSpec {
+            name: "private-agent".into(),
+            description: "test".into(),
+            model: "switchailocal/ail-compound".into(),
+            instructions: "test".into(),
+            tools: vec![],
+            channels: vec![ChannelSpec::Telegram {
+                token_env: "TELEGRAM_BOT_TOKEN".into(),
+                allowed_users: vec![],
+            }],
+            triggers: vec![],
+            scope: ScopeSpec {
+                allowed_paths: vec![],
+                forbidden_paths: vec![],
+            },
+        };
+        let mut secrets = InlineSecrets::new();
+        secrets.insert("TELEGRAM_BOT_TOKEN".into(), "token".into());
+        scaffold_flue_project(&spec, tmp.path(), &secrets, None).unwrap();
+        let env = tmp.path().join(".env");
+        assert_eq!(
+            std::fs::metadata(env).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

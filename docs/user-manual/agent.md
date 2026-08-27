@@ -1,46 +1,48 @@
 # `makakoo agent` — CLI reference
 
-The `agent` subcommand group manages multi-bot subagents. Each
-subagent ("slot") has its own persona, tools, paths, and one or
-more chat-transport attachments (Telegram, Slack, …).
+The `agent` subcommand group manages scoped agent slots and legacy agent
+plugin lifecycle hooks. New slots compile an AgentSpec into a supervised
+DeepSeek Harness (DSH) runtime. Each slot owns its persona, model, tool
+whitelist, and path scope.
 
 
 Important distinction: `makakoo infect` is for local agentic hosts that can
 load Makakoo instructions and MCP tools. Telegram, Slack, Discord, WhatsApp,
-voice, email, and web are transports. They do not get infected. They attach
-to a scoped agent slot.
+voice, email, and web are transports, not infectable hosts. AgentSpec can
+declare them, but DSH V1 does not start their listeners yet.
 
 ## Slot lifecycle
 
 | Command | Purpose |
 |---|---|
-| `makakoo agent create [--specs <PATH>]` | Create a new slot from a spec (default) or from the Telegram/Slack quick-start flags. Always scaffolds a Flue (TypeScript) agent project. `<SLOT>` is optional with `--specs` (the spec's `name` becomes the slot id). |
+| `makakoo agent create [--specs <PATH>]` | Create a slot and compile its AgentSpec into a pinned DeepSeek Harness runtime project. `<SLOT>` is optional with `--specs`; the spec's `name` becomes the slot id. |
 | `makakoo agent list [--json]` | Enumerate every slot in `~/MAKAKOO/config/agents/*.toml`. |
 | `makakoo agent show <slot> [--json]` | Print the resolved TOML with all secrets redacted. |
-| `makakoo agent validate <slot>` | Run per-transport credential verifiers WITHOUT starting the agent. |
+| `makakoo agent validate <slot>` | Validate the declared runtime, generated files, installed dependencies, transport configuration, and resolvable secret references without starting the agent or calling a channel. |
 | `makakoo agent validate-spec <PATH>` | Parse and validate one or more spec files (file, directory, or `.`) without creating anything. Exits 0 on all-pass, 1 on any failure. |
 | `makakoo agent inventory [--json]` | List legacy `agent-*` plugins with their migration status. |
 | `makakoo agent migrate-harveychat` | One-shot: migrate the legacy Olibia bot config to the `harveychat` slot. Idempotent. |
-| `makakoo agent start <slot>` | Hand the slot to launchd (macOS) / systemd-user (Linux). Supervisor + Python gateway come up. |
-| `makakoo agent stop <slot>` | Stop the slot's process pair. |
-| `makakoo agent restart <slot>` | Stop + start. v2-mega: graceful via the per-slot supervisor. |
-| `makakoo agent status <slot>` | Per-transport.id status: connection state, last_inbound, errors_1h, queue_depth, RSS. |
-| `makakoo agent health <slot>` | Run the slot's health hook (exit 0 = up). |
-| `makakoo agent destroy <slot>` | Interactive teardown. Stops the supervisor, archives TOML + data dir under `$MAKAKOO_HOME/archive/agents/<slot>-<unix_ts>/`, lists detected secret refs. `--yes` skips the prompt. `--revoke-secrets` also clears the keyring entries (off by default). |
+| `makakoo agent start <slot>` | Preflight the generated project, then hand the DSH runtime to launchd (macOS) / systemd-user (Linux). |
+| `makakoo agent prompt <slot> "<text>" [--session <id>]` | Run one turn through the authenticated loopback API. Reuse a session id for continuation. |
+| `makakoo agent stop <slot>` | Stop the slot supervisor and runtime. |
+| `makakoo agent restart <slot>` | Stop + start through the per-slot supervisor. A failed stop blocks the restart. |
+| `makakoo agent status <slot>` | Show the supervisor and runtime process state. Legacy gateway slots also show per-transport status. |
+| `makakoo agent health <slot>` | Probe the running DSH loopback endpoint (exit 0 = healthy). Legacy slots use supervisor status; legacy plugin names use their health hook. |
+| `makakoo agent destroy <slot>` | Interactive teardown. Stops the supervisor and archives TOML, data, and a managed generated runtime under `$MAKAKOO_HOME/archive/agents/<slot>-<unix_ts>/`. Custom runtime paths are preserved and reported. `--yes` skips the prompt. `--revoke-secrets` clears detected keyring entries (off by default). |
 | `makakoo agent audit [--last N] [--kind K] [--json]` | Tail the per-machine audit log. Filter by `--kind scope_tool / webhook_invalid_signature / rate_limit / fault_test / ...`. |
 | `makakoo agent test-faults [--scenario S] [--json]` | Run the fault-injection scenario suite. Gated behind `MAKAKOO_DEV_FAULTS=1`. |
 
-## Supported transports (v2.0)
+## Runtime support matrix
 
-| Kind | Direction | Listener | Auth | Notes |
-|---|---|---|---|---|
-| `telegram` | inbound (long-poll) + outbound REST | Per-task `getUpdates` | bot token | Per-chat allowlist. Forum topics via `support_thread`. |
-| `slack` | inbound (Socket Mode WS) + outbound REST | Per-task wss | bot + app token | `dm_only` default; `channels` allowlist when false. |
-| `discord` | inbound (gateway WS) + outbound REST | Per-task wss | bot token | MESSAGE_CONTENT default OFF; `guild_ids` allowlist; intents auto-computed. |
-| `whatsapp` | inbound (webhook) + outbound REST | Shared webhook router | access token + verify token + app secret | X-Hub-Signature-256; media → drop-reply. |
-| `voice_twilio` | inbound (webhook) + TwiML response | Shared webhook router | account_sid + auth_token | HMAC-SHA1 signature; recording-callback URL embeds CallSid. |
-| `email` | outbound SMTP (v2.0) + inbound IMAP IDLE (v2.1) | (v2.1) | OAuth2 / app password | Plain IMAP/SMTP rejected. |
-| `web` | inbound + outbound WS | Shared WS upgrade | HMAC-SHA256 visitor cookie | Origin allowlist required in production. |
+| Surface | DSH V1 status | Notes |
+|---|---|---|
+| Local prompt API | Supported | Authenticated loopback endpoint, normally called through `makakoo agent prompt`. |
+| Durable sessions | Supported, bounded | Reuse `--session <id>` for continuation. Defaults: 128 sessions, 1,000 turns/session, 512 MiB admission ceiling. |
+| Makakoo MCP tools | Supported | Server-side filtered by the slot tool whitelist. |
+| Background supervision | macOS + Linux | launchd or systemd-user. |
+| Telegram / Slack / Discord | Declaration only | No DSH listener or outbound adapter yet. |
+| WhatsApp / email / voice / web | Declaration or legacy metadata only | No DSH listener or outbound adapter yet. |
+| Cron / webhook triggers | Declaration only | No DSH scheduler or trigger ingress yet. |
 
 ## `agent create` modes
 
@@ -50,7 +52,7 @@ Two modes — spec-driven (preferred) or quick-start (ergonomic).
 
 Write a YAML or TOML spec that declares the agent's cognitive core,
 channels, triggers, and scope. See [`docs/agents/spec.md`](../agents/spec.md)
-for the full schema and [`examples/agents/`](../../../examples/agents/)
+for the full schema and [`examples/agents/`](../../examples/agents/)
 for starters.
 
 ```sh
@@ -70,10 +72,12 @@ makakoo agent validate-spec ./weather-bot.yaml
 `<SLOT>` is optional with `--specs` — the spec's `name` becomes the
 slot id. For directory mode, each spec produces one agent.
 
-### Quick-start (Telegram / Slack only)
+### Inline Telegram / Slack shorthand
 
-For ad-hoc creation without writing a spec file. The CLI generates a
-synthetic spec from the flags, then scaffolds the same way.
+For ad-hoc metadata creation without writing a spec file. The CLI generates a
+synthetic spec from the flags, then scaffolds the same runtime. **These flags
+do not make Telegram or Slack delivery operational in DSH V1.** Use a normal
+spec without channels for a local prompt-driven agent.
 
 ```sh
 # Single-Telegram quick-start:
@@ -99,34 +103,66 @@ the agent's env var names are the well-known defaults
 (`TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`,
 `SLACK_TEAM_ID`, plus the `*_WEBHOOK_SECRET_TOKEN` for Telegram and
 `SLACK_SIGNING_SECRET` for Slack). The `.env` file in the generated
-Flue project is pre-populated with the inline tokens so
-`npx flue dev` works without a manual copy.
+runtime project is pre-populated with the inline tokens. DSH V1 reserves
+them for the Makakoo channel-adapter slice; DSH does not consume channel
+credentials directly.
 
-## Agent runtime: Flue (the only engine)
+## Agent runtime: DeepSeek Harness
 
-Every `makakoo agent create` scaffolds a runnable
-[Flue](https://flueframework.com) (TypeScript) agent project. Makakoo
-stays the **control plane** (identity, scope, secrets, registry — the
-slot) and Flue becomes the **data plane** (the agent loop + every
-channel + every trigger).
+`makakoo agent create` keeps AgentSpec and AgentSlot as Makakoo's control
+plane, then compiles a Node.js project under
+`$MAKAKOO_HOME/agents-dsh/<slot>/`. DeepSeek Harness owns the model/tool
+loop and durable JSONL sessions. The generated runtime:
 
-The two are bridged by a generated `mcp-proxy.mjs`, which re-exposes
-the local `makakoo-mcp` stdio server over StreamableHTTP so the
-agent's `connectMcpServer()` can consume every Makakoo tool as
-`mcp__harvey__*`.
+- routes model calls through switchAILocal's OpenAI-compatible endpoint;
+- mounts `makakoo-mcp` as its only model-facing tool source;
+- passes `MAKAKOO_AGENT_SLOT` to MCP for server-side tool filtering;
+- mounts no DSH shell or filesystem tools;
+- exposes only an authenticated API on `127.0.0.1`;
+- stores runtime metadata and a mode-0600 bearer token inside the project.
+- limits cross-session execution to four concurrent turns by default while
+  serializing turns within each session;
+- admission-bounds durable state to 128 sessions, 1,000 turns per session,
+  512 MiB total session storage, and 128 KiB per prompt by default;
+- watches its supervisor parent and shuts down if orphaned.
 
-The `--runtime` flag (native / flue) was removed in Phase 3 of
-SPRINT-FLUE-DEFAULT-AGENT-SPECS. Flue is now the only creation
-engine. Native execution paths (`agent_lifecycle`,
-`agent_destroy`, `agent_audit`) are preserved for re-running
-existing native slots.
+Prerequisites: Node.js 22.9 or newer, a running switchAILocal endpoint, and
+`makakoo-mcp` on `PATH` (or set `MAKAKOO_MCP_BIN`).
 
+Install dependencies once, then let Makakoo own lifecycle:
 
-The Flue project layout is driven by the spec: one file per channel
-under `src/channels/`, one per trigger under `src/triggers/`,
-`package.json` deps pulled in based on what the spec declares. See
-[`docs/agents/spec.md`](../agents/spec.md) for the full schema and
-[`examples/agents/`](../../../examples/agents/) for working starters.
+```sh
+cd "$MAKAKOO_HOME/agents-dsh/weather-bot"
+npm install
+npm run check
+makakoo agent validate weather-bot
+makakoo agent start weather-bot
+makakoo agent prompt weather-bot "Check current priorities" --session daily
+makakoo agent status weather-bot
+```
+
+Direct DSH runtime packages are pinned to `0.1.1-rc.2`; the full DSH CLI
+bundle is deliberately excluded because it multiplies install size and is not
+part of the runtime contract. An upgrade is an integration decision, not
+automatic semver drift. `MAKAKOO_AGENT_ENGINE=flue` keeps
+the old Flue renderer available for operators, but Flue projects remain a
+manual `npm run proxy` + `npm run dev` path and are not launched by the slot
+supervisor.
+
+DSH model calls always use switchAILocal. Specs may use
+`switchailocal/<model>` (recommended) or an unprefixed switchAILocal model id;
+an explicit different provider prefix is rejected during creation and start.
+The runner uses `DEEPSEEK_API_KEY`, falls back to `AIL_API_KEY`, then uses a
+local placeholder for gateways that do not require authentication.
+
+### V1 channel boundary
+
+Telegram, Slack, Discord, email, voice, webhook, and cron declarations remain
+in AgentSpec and AgentSlot, but they are not wired into the DSH loop yet. V1
+delivers a strong local agent runtime and authenticated invocation contract.
+The next slice is a Makakoo channel adapter that calls the same `/v1/run`
+endpoint. Creation prints a warning when a DSH spec declares channels so this
+limitation cannot be mistaken for a working deployment.
 
 ## Slot id rules
 
@@ -152,26 +188,29 @@ token: `app_token_env` / `app_token_ref` / `inline_app_token_dev`.
 ## `agent status <slot>` output
 
 ```
-secretary
-  gateway:   alive   pid=12345     last_frame=2s ago
-  transport slack-main:     connected     last_inbound=3m ago    errors_1h=0  queue_depth=0
-  transport telegram-main:  connected     last_inbound=8s ago    errors_1h=0  queue_depth=0
+local-researcher
+  gateway:   alive   pid=12345     last_frame=never
+  state=Running supervisor_pid=12344 restart_count=0
 ```
 
-Per-transport states: `connected | reconnecting | failed`.
-`errors_1h` is a sliding-window count (1 hour rolling). `queue_depth`
-is the per-transport asyncio queue depth on the Python gateway side
-(0 means LLM is keeping up).
+DSH V1 has no transport rows because channel listeners are not connected.
+Existing legacy gateway slots may still show transport state,
+`last_inbound`, `errors_1h`, and `queue_depth` rows.
 
 ## Identity propagation
 
-A running slot's persona system prompt always includes:
+For DSH slots, the AgentSpec `instructions` field is the generated system
+prompt. Slot identity and tool authority are also propagated out-of-band via
+`MAKAKOO_AGENT_SLOT`, then enforced by `makakoo-mcp`. Editing the generated
+runner does not change the canonical AgentSpec or server-side tool scope.
+
+Legacy channel gateways prepend an identity block such as:
 
 > *"You are Olibia. Your slot id is harveychat. This message arrived
 > via telegram. Your allowed tools are brain_search, write_file. Your
 > allowed paths are ~/MAKAKOO/data/harveychat/."*
 
-Empty allowed-tools renders as `(baseline)` (when `inherit_baseline =
+For that legacy block, empty allowed-tools renders as `(baseline)` (when `inherit_baseline =
 true`) or `(none — least-privilege default)`. Empty allowed-paths
 always renders as `(none — least-privilege default)`.
 
@@ -179,20 +218,30 @@ always renders as `(none — least-privilege default)`.
 
 | Subsystem | How agent-id flows |
 |---|---|
-| **MCP HTTP** | `X-Makakoo-Agent-Id` header → `tokio::task_local AGENT_ID` → `dispatch::current_agent_id()` available to every tool handler |
+| **MCP HTTP** | Validated `X-Makakoo-Agent-Id` header is covered by the peer request signature → `tokio::task_local AGENT_ID` → `dispatch::current_agent_id()` |
 | **MCP stdio** | `MAKAKOO_AGENT_SLOT` env var read once at startup → same task-local |
 | **User grants** | New grants populate `bound_to_agent` from `current_agent_id()`; `visible_to(caller)` returns false unless the caller matches |
 | **Brain journal** | Lines from agents get `[agent:<slot_id>]` prefix (Phase 4 dogfood) |
+
+Agent-bound signed HTTP clients automatically copy `MAKAKOO_AGENT_SLOT` into
+`X-Makakoo-Agent-Id` and sign that attribution. An authenticated HTTP peer
+without an agent binding deliberately makes a peer-administrator call and
+receives the unscoped peer surface. Changing, adding, or removing a signed
+attribution invalidates the request signature; only trusted peer credentials
+can make the explicit administrator call.
 
 ## Files & paths
 
 | What | Where |
 |---|---|
 | Slot TOMLs | `~/MAKAKOO/config/agents/<slot>.toml` |
+| Generated DSH runtime | `~/MAKAKOO/agents-dsh/<slot>/` |
+| DSH sessions | `~/MAKAKOO/agents-dsh/<slot>/.sessions/` |
+| Runtime metadata + token | `runtime.json` + per-start token inside the generated project (0600) |
 | Per-agent state dir | `~/MAKAKOO/data/agents/<slot>/` |
-| Per-agent conversation DB | `~/MAKAKOO/data/agents/<slot>/conversations.db` |
-| IPC socket | `~/MAKAKOO/run/agents/<slot>/ipc.sock` (parent dir 0700) |
-| LaunchAgent / systemd unit | `com.makakoo.agent.<slot>.plist` |
+| Legacy gateway conversation DB | `~/MAKAKOO/data/agents/<slot>/conversations.db` |
+| Legacy gateway IPC socket | `~/MAKAKOO/run/agents/<slot>/ipc.sock` (parent dir 0700) |
+| LaunchAgent / systemd unit | `~/Library/LaunchAgents/com.makakoo.agent.<slot>.plist` or `~/.config/systemd/user/makakoo-agent-<slot>.service`; removed by `agent stop` |
 | User grants | `~/MAKAKOO/config/user_grants.json` (shared, with `bound_to_agent` field) |
 
 ## Audit log + redaction
@@ -222,9 +271,8 @@ MAKAKOO_DEV_FAULTS=1 makakoo agent test-faults
 MAKAKOO_DEV_FAULTS=1 makakoo agent test-faults --scenario rate-limit-burst
 ```
 
-See `docs/walkthroughs/multi-transport-subagents.md` for an
-end-to-end multi-transport walkthrough; per-transport recipes at
-`discord-bot.md`, `whatsapp-business.md`, `voice-quickstart.md`,
-`email-secretary.md`, `web-chat-demo.html`. Failure modes:
+Start with `docs/walkthroughs/dsh-agent-runtime.md`. The older
+multi-transport and per-channel pages document the legacy gateway contract;
+they are not DSH V1 deployment guides. Failure modes:
 `docs/troubleshooting/agents.md`. Locked HTTP-server contract
 (signatures, status codes, redaction): `docs/specs/http-server-security.md`.

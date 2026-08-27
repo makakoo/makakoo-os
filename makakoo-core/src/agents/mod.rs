@@ -17,16 +17,19 @@
 
 pub mod audit;
 pub mod destroy;
-pub mod llm_provider;
-pub mod llm_provider_default;
+mod destroy_transaction;
 pub mod fault_inject;
 pub mod identity;
 pub mod lifecycle;
 pub mod llm_override;
+pub mod llm_provider;
+pub mod llm_provider_default;
 pub mod migrate;
+pub mod process;
 pub mod rate_limit;
 pub mod registry;
 pub mod rlimits;
+mod runtime_archive;
 pub mod scaffold;
 pub mod scope;
 pub mod slot;
@@ -47,7 +50,10 @@ pub use identity::{
 };
 pub use registry::AgentRegistry;
 pub use scope::{check_path, check_tool, ScopeError};
-pub use slot::{registry_dir, slot_path, validate_slot_id, AgentSlot};
+pub use slot::{
+    checked_slot_path, registry_dir, slot_path, validate_slot_id, AgentRuntime, AgentRuntimeEngine,
+    AgentSlot,
+};
 
 pub use lifecycle::{AgentLaunchSpec, AgentProcess, AgentSupervisor, HealthStatus};
 pub use scaffold::{AgentKind, AgentScaffold, AgentSpec};

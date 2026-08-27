@@ -1,148 +1,111 @@
-# Build a Telegram bot with Flue (`agent create --runtime flue`)
+# Legacy compatibility: build a Telegram bot with Flue
 
-**Time:** ~15 min · **Prereqs:** Walkthrough [01](./01-fresh-install-mac.md)
-(a working `makakoo` + `makakoo-mcp` on `PATH`), Node 18+, and a Telegram
-bot token from [@BotFather](https://t.me/BotFather).
+**Status:** operator-only compatibility path. New Makakoo agents use the
+[supervised DeepSeek Harness runtime](./dsh-agent-runtime.md). Flue remains
+useful when you specifically need the older generated Telegram listener, but
+Makakoo does not supervise Flue projects with `makakoo agent start`.
 
-This builds a **runnable** Telegram agent that answers messages using your
-Makakoo Brain, skills, and every `mcp__harvey__*` tool — scaffolded in one
-command. Unlike a `native` slot (which runs inside Makakoo's own gateway),
-a **Flue** agent is a standalone TypeScript project you run and deploy
-yourself, while Makakoo still owns identity, scope, and secrets.
+**Time:** about 15 minutes. **Prerequisites:** Makakoo OS, Node.js 18 or newer,
+a Telegram bot token, and a switchAILocal or supported legacy Flue provider.
 
-## How it fits together
+## 1. Write an AgentSpec
 
+```yaml
+# assistant.yaml
+name: assistant
+description: Telegram assistant on the legacy Flue compatibility runtime
+model: switchailocal/ail-compound
+instructions: |
+  You are a concise Telegram assistant. Use only the allowed Makakoo tools.
+tools:
+  - brain_search
+channels:
+  - kind: telegram
+    token_env: TELEGRAM_BOT_TOKEN
+    allowed_users: ["YOUR_TELEGRAM_CHAT_ID"]
+triggers: []
+scope:
+  allowed_paths:
+    - "~/MAKAKOO/data/Brain/**"
+  forbidden_paths:
+    - "~/.ssh/**"
 ```
-   Telegram  ──webhook──▶  Flue agent (TypeScript)  ──MCP──▶  makakoo-mcp
-   (your bot)              src/agents/assistant.ts            (Brain, skills,
-                           src/channels/telegram.ts            tools = mcp__harvey__*)
-                                    │
-                                    ▼
-                            mcp-proxy.mjs  (stdio → StreamableHTTP, :8808)
-```
 
-- **Makakoo = control plane:** the `assistant` slot holds identity, scope,
-  allowed paths/tools, and secret references.
-- **Flue = data plane:** the agent loop + the verified Telegram webhook.
-- **`mcp-proxy.mjs` = the bridge:** spawns `makakoo-mcp` once and re-exposes
-  its stdio tools over HTTP so Flue's `connectMcpServer()` can call them.
-
-## 1. Scaffold the agent
+Validate the canonical spec first:
 
 ```sh
-makakoo agent create assistant \
-  --runtime flue \
-  --persona "You are a helpful Telegram assistant. Reply concisely. Use Makakoo's Brain and tools." \
-  --out ~/MAKAKOO/agents-flue/assistant
+makakoo agent validate-spec ./assistant.yaml
 ```
 
-`--out` is optional (default `$MAKAKOO_HOME/agents-flue/<slot>`). The command
-refuses to overwrite a non-empty directory. It writes a native slot config
-**and** a runnable project:
-
-```
-~/MAKAKOO/agents-flue/assistant/
-├── package.json            # @flue/runtime + @flue/telegram + MCP SDK + grammy
-├── mcp-proxy.mjs           # stdio → StreamableHTTP bridge to makakoo-mcp
-├── instructions.txt        # the agent's system prompt (from --persona)
-├── src/agents/assistant.ts # model + instructions + Makakoo MCP tools
-├── src/channels/telegram.ts# signature-verified webhook → dispatch to agent
-├── .env.example
-├── .gitignore
-└── README.md
-```
-
-## 2. Configure secrets
+## 2. Select Flue explicitly
 
 ```sh
-cd ~/MAKAKOO/agents-flue/assistant
+MAKAKOO_AGENT_ENGINE=flue \
+  makakoo agent create --specs ./assistant.yaml
+```
+
+Without that environment variable, Makakoo generates the default DSH runtime.
+There is no runtime-selection CLI flag.
+
+The Flue project is written under
+`$MAKAKOO_HOME/agents-flue/assistant/`. Makakoo also records the slot policy
+under `$MAKAKOO_HOME/config/agents/assistant.toml`.
+
+## 3. Configure and run manually
+
+```sh
+cd "$MAKAKOO_HOME/agents-flue/assistant"
 cp .env.example .env
 ```
 
-Edit `.env`:
+Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET_TOKEN` in `.env`. Keep
+that file out of git.
 
-| Var | Value |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | The token from @BotFather (or pull from `makakoo secret get <name>`). |
-| `TELEGRAM_WEBHOOK_SECRET_TOKEN` | Any random string — you'll pass the **same** value to `setWebhook`. |
-| `MAKAKOO_MCP_URL` | Leave as `http://127.0.0.1:8808/mcp` (the proxy default). |
-| `AGENT_MODEL` | Optional model override (default `anthropic/claude-sonnet-4-6`). |
-
-> Keep tokens out of git — the generated `.gitignore` already excludes `.env`.
-
-## 3. Run it (two terminals)
+Then use two terminals:
 
 ```sh
+# terminal 1
 npm install
+npm run proxy
 
-# terminal 1 — expose Makakoo's MCP tools over HTTP
-npm run proxy        # → makakoo MCP proxy on http://127.0.0.1:8808/mcp
-
-# terminal 2 — run the agent + the local webhook server
+# terminal 2
 npx flue dev
 ```
 
-`npm run proxy` starts `mcp-proxy.mjs`. It spawns `makakoo-mcp` (override
-with `MAKAKOO_MCP_BIN`) and listens on port `8808` (override with
-`MAKAKOO_MCP_PORT`). On boot the agent calls `connectMcpServer('harvey', …)`
-and adapts every Makakoo tool into a Flue tool — so the bot can search the
-Brain, run skills, and act, all gated by the slot's scope.
+The generated MCP proxy starts `makakoo-mcp` and exposes its scoped tools to
+the Flue agent. The generated channel module verifies Telegram's webhook
+secret before dispatch.
 
-## 4. Point Telegram at the webhook
+## 4. Register the Telegram webhook
 
-Telegram only delivers updates to a **public HTTPS** URL, so in development
-put a tunnel in front of the Flue dev server (the URL it prints on start):
-
-```sh
-# example with cloudflared — any HTTPS tunnel works (ngrok, etc.)
-cloudflared tunnel --url http://localhost:<flue-dev-port>
-```
-
-Register the webhook, reusing the **exact** secret from your `.env`:
+Telegram needs a public HTTPS URL. Put a trusted tunnel in front of the local
+Flue server, then register the generated webhook path:
 
 ```sh
 curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
-  -d "url=https://<your-tunnel-host>/channels/telegram/webhook" \
+  -d "url=https://<your-host>/channels/telegram/webhook" \
   -d "secret_token=$TELEGRAM_WEBHOOK_SECRET_TOKEN"
 ```
 
-The agent rejects any update whose `X-Telegram-Bot-Api-Secret-Token` header
-doesn't match — so a leaked URL alone can't drive your bot.
+## Lifecycle caveat
 
-## 5. Talk to it
+Do not run `makakoo agent start assistant`. The supervisor rejects Flue slots
+and tells you to run the generated proxy/dev scripts. Stop Flue by stopping
+those processes.
 
-Message your bot on Telegram. It dispatches each message to the agent, which
-replies in the same conversation via the generated `post_telegram_message`
-tool. Ask it something only your Brain knows — e.g. *"what did I journal about
-the OpenAI Codex application?"* — to confirm the MCP bridge is live.
-
-## 6. Deploy (optional)
-
-`flue dev` is for local iteration. For a long-running bot, build and host the
-project on any Flue target:
+To remove the slot and archive its managed files:
 
 ```sh
-npm run build        # flue build --target node
+makakoo agent destroy assistant
 ```
-
-The `mcp-proxy.mjs` + `makakoo-mcp` pair must run wherever the agent runs (the
-agent needs a reachable `MAKAKOO_MCP_URL`).
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `refusing to overwrite` on create | `--out` dir is non-empty | Pick an empty dir, or delete the old scaffold. |
-| Agent starts but has no `mcp__harvey__*` tools | Proxy not running / wrong `MAKAKOO_MCP_URL` | Start `npm run proxy` first; confirm port `8808` matches `.env`. |
-| `makakoo-mcp` not found in proxy | Binary not on `PATH` | Set `MAKAKOO_MCP_BIN=/usr/local/bin/makakoo-mcp` before `npm run proxy`. |
-| Telegram delivers nothing | Webhook URL/secret mismatch | Re-run `setWebhook`; the URL must be public HTTPS and end `/channels/telegram/webhook`. |
-| `TELEGRAM_BOT_TOKEN is required` | `.env` not loaded / empty | Copy `.env.example` → `.env` and fill both Telegram values. |
+| Symptom | Fix |
+|---|---|
+| A DSH project was generated | Recreate after setting `MAKAKOO_AGENT_ENGINE=flue`. |
+| `slot ... uses the legacy Flue engine` | Expected. Run `npm run proxy` and `npx flue dev` manually. |
+| No Makakoo tools | Start `npm run proxy`; verify `MAKAKOO_MCP_BIN` and `MAKAKOO_MCP_URL`. |
+| Telegram sends nothing | Verify the public HTTPS URL and webhook secret match `.env`. |
 
-## See also
-
-- [`user-manual/agent.md`](../user-manual/agent.md) — the full `agent` CLI
-  reference, including `native` vs `flue` runtime.
-- [`multi-transport-subagents.md`](./multi-transport-subagents.md) — native
-  multi-transport slots supervised by Makakoo's own gateway.
-- [Flue framework](https://flueframework.com) — the TypeScript agent harness
-  this scaffold targets.
+Full agent reference: [`../user-manual/agent.md`](../user-manual/agent.md).

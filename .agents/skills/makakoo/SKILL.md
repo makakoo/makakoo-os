@@ -1,6 +1,6 @@
 ---
 name: makakoo
-version: 1.1.0
+version: 1.2.0
 description: |
   Drop-in onboarding for any AI CLI (Claude Code, Codex, Gemini, OpenCode,
   Cursor, Vibe, Qwen, Kimi, pi) running on a machine that has Makakoo OS
@@ -29,7 +29,7 @@ canonical-url: https://raw.githubusercontent.com/makakoo/makakoo-os/main/.agents
 
 ## What Makakoo OS is (in one paragraph)
 
-Makakoo OS is a **persistent shared-Brain layer** that gives every local AI CLI and IDE agent on the user's machine the same memory: journals, pages, MCP tools, plugins, and proactive tasks. The user's CLI choice (Claude Code, Codex, Gemini, OpenCode, Cursor, Vibe, Qwen, Kimi, pi) is interchangeable; the Brain is shared. Telegram, Slack, Discord, WhatsApp, voice, email, and web are not infected hosts — they attach through scoped `makakoo agent create` slots. Persona is "Harvey" by default. The platform name is "Makakoo OS"; the AI persona is "Harvey" — both names are correct in different contexts.
+Makakoo OS is a **persistent shared-Brain layer** that gives every local AI CLI and IDE agent on the user's machine the same memory: journals, pages, MCP tools, plugins, and proactive tasks. The user's CLI choice (Claude Code, Codex, Gemini, OpenCode, Cursor, Vibe, Qwen, Kimi, pi) is interchangeable; the Brain is shared. Makakoo can also compile a scoped AgentSpec into a supervised DeepSeek Harness runtime. Telegram, Slack, Discord, WhatsApp, voice, email, and web are not infected hosts; DSH V1 preserves channel declarations but does not start those listeners yet. Persona is "Harvey" by default. The platform name is "Makakoo OS"; the AI persona is "Harvey" — both names are correct in different contexts.
 
 ## Hard rules for the AI (you)
 
@@ -38,7 +38,7 @@ Makakoo OS is a **persistent shared-Brain layer** that gives every local AI CLI 
 - **Never run destructive commands** (`rm -rf`, `git reset --hard`, `git push --force`) without explicit user approval.
 - **The user is the boss.** You are the user's autonomous extension, not an independent agent.
 
-## Real `makakoo` subcommands (verified 2026-07-15)
+## Real `makakoo` subcommands (verified 2026-08-26)
 
 Primary command surface — these are real. For the long tail, run `makakoo --help` instead of guessing.
 
@@ -65,8 +65,9 @@ Primary command surface — these are real. For the long tail, run `makakoo --he
 | `makakoo plugin update <name>` / `outdated` | Update from recorded source / dry-run upstream drift list |
 | `makakoo plugin {start,stop,status,restart} <name>` | Drive service-kind or agent-kind plugin entrypoints |
 | `makakoo plugin uninstall <name> [--purge]` | Remove a plugin |
-| `makakoo agent create <slot>` | Create a scoped chat-channel agent slot. Flag mode has first-class Telegram/Slack shortcuts; `--from-toml` handles Discord, WhatsApp, voice, email, web, or multi-transport configs. `--runtime flue` also scaffolds a runnable TypeScript/Flue agent. |
-| `makakoo agent {list,show,validate,inventory,start,stop,restart,status,health,destroy,audit,test-faults}` | Manage scoped agent slots and legacy agent plugin lifecycles. |
+| `makakoo agent create --specs <PATH>` | Compile one YAML/TOML AgentSpec, or a directory of specs, into pinned DeepSeek Harness runtime projects. DSH is the default; `MAKAKOO_AGENT_ENGINE=flue` is the operator-only legacy renderer. |
+| `makakoo agent {start,prompt,stop,restart,status,health,destroy}` | Run and supervise DSH slots. `prompt` calls the authenticated loopback API and accepts `--session <id>` for continuation. |
+| `makakoo agent {list,show,validate,validate-spec,init-spec,provider-set,provider-get,inventory,audit,test-faults}` | Create, inspect, validate, and audit scoped agent slots and legacy plugin migrations. |
 | `makakoo agent-session {open,eval,read,gate}` | Durable child-agent sessions with compact handles and verification gates |
 | `makakoo handle read <handle>` | Bounded reads from Makakoo handles such as `agent-artifact://...` |
 | `makakoo daemon {install,uninstall,status,logs,run,restart}` | LaunchAgent / systemd unit lifecycle |
@@ -168,6 +169,7 @@ After significant work (bug fixed, feature shipped, decision made), append a `- 
 | "connect this vault/folder" / "list brain sources" | `makakoo brain list`, then `makakoo brain add <name> <logseq|obsidian|plain> <path> --read-only` |
 | "import/add this OKF bundle" | `makakoo brain validate <bundle>`, `makakoo brain add <name> okf <bundle>`, then `makakoo sync` |
 | "create knowledge from these files/folders" / "turn this docs folder into a knowledge base" | `makakoo brain ingest <files|folders> --out <bundle> [--name N]`, then optionally `brain add <name> okf <bundle>` + `makakoo sync` |
+| "create an agent" / "run my own agent" | Read `docs/walkthroughs/dsh-agent-runtime.md`; validate an AgentSpec, run `makakoo agent create --specs <file>`, `npm install` in the generated project, then `makakoo agent start` + `makakoo agent prompt`. |
 | "export/share my Brain as OKF" | `makakoo brain export --source default --out <directory>`; use `--public` only for explicitly public documents, then ask before publishing |
 | "tell this CLI about Makakoo" / "set up Makakoo in Codex" / "infect Codex" / "install Makakoo into <cli>" | `makakoo infect --global --target <cli>` (e.g. `--target codex`) — DEFAULT |
 | "infect this project folder" / "make THIS repo Makakoo-aware" / "project-scoped overrides" | `makakoo infect --local --target <cli>` — only when user explicitly wants project-scoped, not system-wide |

@@ -3,6 +3,42 @@
 Common failure modes when running multi-bot subagents and how to
 remediate them.
 
+## DeepSeek Harness runtime failures
+
+New AgentSpec slots use DeepSeek Harness by default. Diagnose them in this
+order:
+
+```sh
+makakoo agent show <slot>
+makakoo agent validate <slot>
+makakoo agent status <slot>
+makakoo agent health <slot>
+```
+
+| Error or symptom | Cause | Fix |
+|---|---|---|
+| `DeepSeek Harness dependencies missing` | The generated project has not run `npm install`, or `node_modules` was removed. | `cd "$MAKAKOO_HOME/agents-dsh/<slot>" && npm install`, then validate again. |
+| `DeepSeek Harness runner missing` | The generated project is incomplete or was edited/deleted. | Recreate from the canonical AgentSpec or restore the archived generated project. |
+| `runtime metadata unavailable ... is the slot started?` | `health` or `prompt` ran before the runtime wrote `runtime.json`. | Start the slot, check status, then retry. |
+| `slot '<slot>' is not responding at 127.0.0.1:<port>` | The supervised child exited, switchAILocal is unavailable, or the endpoint became stale. | Check `status`, the per-slot logs, and switchAILocal health; restart only after the cause is fixed. |
+| `DeepSeek Harness routes through switchAILocal` | The spec or slot override names an explicit cloud provider. | Use `switchailocal/<model>` or an unprefixed switchAILocal model id. |
+| `slot '<slot>' uses the legacy Flue engine` | Flue was explicitly selected. It is not a supervised runtime. | Run the generated `npm run proxy` and `npx flue dev` processes manually, or recreate as default DSH. |
+| Channel is declared but receives nothing | DSH V1 preserves channel metadata but does not start a listener. | Use `makakoo agent prompt`; wait for the Makakoo channel-adapter slice, or explicitly choose the manual Flue compatibility path. |
+| Stop reports live PIDs or service-manager failure | Makakoo could not prove the runtime stopped. | Do not destroy. Fix the service-manager/process problem and retry stop. |
+
+The generated runtime binds only to loopback. Do not expose its bearer endpoint
+directly. Trusted adapters should call it locally; normal operators should use
+`makakoo agent prompt`.
+
+---
+
+## Legacy gateway and transport failures
+
+The sections below describe pre-DSH gateway slots and transport adapters.
+They remain useful for existing migrated slots, but they are not evidence that
+a newly created DSH slot has working Telegram, Slack, Discord, WhatsApp,
+email, voice, or web ingress.
+
 ## "Agent slot 'X' not found"
 
 ```
@@ -326,7 +362,7 @@ LaunchAgent / systemd unit's environment block.
 
 ## Webhook 401 — Slack / WhatsApp / Twilio signature mismatch
 
-`makakoo agent audit <slot> --kind webhook_invalid_signature --last 5`
+`makakoo agent audit --kind webhook_invalid_signature --last 5`
 shows a recent entry, and the upstream UI reports "Webhook delivery
 failed".
 
@@ -397,7 +433,7 @@ Discord developer portal AND set `[transport.config] message_content
 
 ## Discord: messages from a specific guild are silently dropped
 
-`makakoo agent audit secretary --last 20` shows no inbound events
+`makakoo agent audit --last 20` shows no inbound events
 from the affected guild.
 
 **Cause:** the guild id is not in `[transport.config] guild_ids`.

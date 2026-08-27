@@ -19,9 +19,10 @@
 
 use crate::dispatch::{ToolContext, ToolRegistry};
 use crate::framing::{FrameReader, FrameWriter};
-use crate::jsonrpc::{Request, Response, METHOD_NOT_FOUND};
+use crate::jsonrpc::{Request, Response, INTERNAL_ERROR, METHOD_NOT_FOUND};
 use serde_json::{json, Value};
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -31,7 +32,6 @@ use tracing::{debug, info};
 /// streams in tests).
 pub struct McpServer {
     registry: Arc<ToolRegistry>,
-    #[allow(dead_code)]
     ctx: Arc<ToolContext>,
 }
 
@@ -110,10 +110,10 @@ impl McpServer {
 
             "notifications/initialized" => None,
 
-            "tools/list" => Some(Response::success(
-                id,
-                json!({ "tools": self.registry.list() }),
-            )),
+            "tools/list" => match self.scoped_tools() {
+                Ok(tools) => Some(Response::success(id, json!({ "tools": tools }))),
+                Err(message) => Some(Response::failure(id, INTERNAL_ERROR, message)),
+            },
 
             "tools/call" => {
                 let tool_name = req
@@ -128,39 +128,33 @@ impl McpServer {
                     .unwrap_or(Value::Object(Default::default()));
 
                 match tool_name {
-                    Some(name) => match self.registry.call(&name, tool_args).await {
-                        Ok(result) => {
-                            // Python reference wraps results in a content[]
-                            // block with a single text element. The text is
-                            // the stringified JSON payload so MCP clients
-                            // that only show text get something readable.
-                            let text = match &result {
-                                Value::String(s) => s.clone(),
-                                other => serde_json::to_string(other).unwrap_or_default(),
-                            };
-                            Some(Response::success(
-                                id,
-                                json!({
-                                    "content": [{ "type": "text", "text": text }]
-                                }),
-                            ))
-                        }
-                        Err(e) => {
-                            // Matches Python: tool errors come back in the
-                            // result envelope with isError=true, NOT as
-                            // JSON-RPC error objects. This is the MCP
-                            // protocol convention for tool-level failures.
-                            Some(Response::success(
-                                id,
-                                json!({
-                                    "content": [{
-                                        "type": "text",
-                                        "text": format!("Error: {}", e.message)
-                                    }],
-                                    "isError": true
-                                }),
-                            ))
-                        }
+                    Some(name) => match self.authorize_tool(&name, &tool_args) {
+                        Err(message) => Some(Self::tool_error(id, message)),
+                        Ok(()) => match self.registry.call(&name, tool_args).await {
+                            Ok(result) => {
+                                // Python reference wraps results in a content[]
+                                // block with a single text element. The text is
+                                // the stringified JSON payload so MCP clients
+                                // that only show text get something readable.
+                                let text = match &result {
+                                    Value::String(s) => s.clone(),
+                                    other => serde_json::to_string(other).unwrap_or_default(),
+                                };
+                                Some(Response::success(
+                                    id,
+                                    json!({
+                                        "content": [{ "type": "text", "text": text }]
+                                    }),
+                                ))
+                            }
+                            Err(e) => {
+                                // Matches Python: tool errors come back in the
+                                // result envelope with isError=true, NOT as
+                                // JSON-RPC error objects. This is the MCP
+                                // protocol convention for tool-level failures.
+                                Some(Self::tool_error(id, e.message))
+                            }
+                        },
                     },
                     None => Some(Response::failure(
                         id,
@@ -186,6 +180,209 @@ impl McpServer {
                 }
             }
         }
+    }
+
+    fn scoped_tools(&self) -> Result<Vec<crate::dispatch::ToolDescriptor>, String> {
+        let Some(slot) = self.current_slot()? else {
+            return Ok(self.registry.list());
+        };
+        Ok(self
+            .registry
+            .list()
+            .into_iter()
+            .filter(|tool| makakoo_core::agents::check_tool(&slot, &tool.name).is_ok())
+            .collect())
+    }
+
+    fn authorize_tool(&self, name: &str, arguments: &Value) -> Result<(), String> {
+        let Some(slot) = self.current_slot()? else {
+            return Ok(());
+        };
+        makakoo_core::agents::check_tool(&slot, name).map_err(|e| e.to_string())?;
+        for candidate in filesystem_paths(arguments) {
+            let candidate = root_candidate(&self.ctx.home, candidate);
+            makakoo_core::agents::check_path(&slot, &candidate).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn current_slot(&self) -> Result<Option<makakoo_core::agents::AgentSlot>, String> {
+        let Some(slot_id) = crate::dispatch::current_agent_id() else {
+            return Ok(None);
+        };
+        let path = makakoo_core::agents::checked_slot_path(&self.ctx.home, &slot_id)
+            .map_err(|e| format!("invalid agent slot id '{}': {}", slot_id, e))?;
+        makakoo_core::agents::AgentSlot::load_from_file(&path)
+            .map(Some)
+            .map_err(|e| format!("agent slot '{}' scope load failed: {}", slot_id, e))
+    }
+
+    fn tool_error(id: Value, message: impl Into<String>) -> Response {
+        Response::success(
+            id,
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Error: {}", message.into())
+                }],
+                "isError": true
+            }),
+        )
+    }
+}
+
+/// Extract filesystem-bearing MCP arguments before handler dispatch. Tool
+/// schemas use several names (`path`, `file_path`, `source_path`, ...), so the
+/// boundary walks nested objects and treats `*_path`/`*_paths` uniformly.
+/// `source` is included only when it is a local path, not a URL/data URI.
+fn filesystem_paths(arguments: &Value) -> Vec<PathBuf> {
+    fn walk(key: Option<&str>, value: &Value, out: &mut Vec<PathBuf>) {
+        match value {
+            Value::Object(map) => {
+                for (child_key, child) in map {
+                    walk(Some(child_key), child, out);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(key, item, out);
+                }
+            }
+            Value::String(candidate) if key.is_some_and(is_filesystem_key) => {
+                if key.is_some_and(is_remote_capable_source_key)
+                    && looks_like_remote_source(candidate)
+                {
+                    return;
+                }
+                out.push(Path::new(candidate).to_path_buf());
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(None, arguments, &mut out);
+    out
+}
+
+fn is_filesystem_key(key: &str) -> bool {
+    let key = normalize_argument_key(key);
+    if matches!(
+        key.as_str(),
+        "path"
+            | "paths"
+            | "filepath"
+            | "filepaths"
+            | "file"
+            | "files"
+            | "dir"
+            | "dirs"
+            | "directory"
+            | "directories"
+            | "dirname"
+            | "folder"
+            | "folders"
+            | "cwd"
+            | "workdir"
+            | "working_dir"
+            | "working_directory"
+            | "target"
+            | "targets"
+            | "output"
+            | "outputs"
+            | "destination"
+            | "destinations"
+            | "dest"
+            | "source"
+            | "sources"
+    ) || [
+        "_path",
+        "_paths",
+        "_file",
+        "_files",
+        "_dir",
+        "_dirs",
+        "_directory",
+        "_directories",
+        "_folder",
+        "_folders",
+        "_cwd",
+        "_target",
+        "_targets",
+        "_output",
+        "_outputs",
+        "_destination",
+        "_destinations",
+        "_dest",
+        "_source",
+        "_sources",
+    ]
+    .iter()
+    .any(|suffix| key.ends_with(suffix))
+    {
+        return true;
+    }
+    let squashed = key.replace('_', "");
+    [
+        "filepath",
+        "filepaths",
+        "dirname",
+        "workdir",
+        "workingdirectory",
+    ]
+    .iter()
+    .any(|suffix| squashed.ends_with(suffix))
+}
+
+fn normalize_argument_key(key: &str) -> String {
+    let mut normalized = String::with_capacity(key.len());
+    let mut previous_was_lower_or_digit = false;
+    let mut previous_was_separator = false;
+    for character in key.chars() {
+        if character.is_ascii_alphanumeric() {
+            if character.is_ascii_uppercase()
+                && previous_was_lower_or_digit
+                && !previous_was_separator
+            {
+                normalized.push('_');
+            }
+            normalized.push(character.to_ascii_lowercase());
+            previous_was_lower_or_digit =
+                character.is_ascii_lowercase() || character.is_ascii_digit();
+            previous_was_separator = false;
+        } else if !normalized.is_empty() && !previous_was_separator {
+            normalized.push('_');
+            previous_was_lower_or_digit = false;
+            previous_was_separator = true;
+        }
+    }
+    normalized.trim_matches('_').to_string()
+}
+
+fn is_remote_capable_source_key(key: &str) -> bool {
+    matches!(normalize_argument_key(key).as_str(), "source" | "sources")
+}
+
+fn looks_like_remote_source(value: &str) -> bool {
+    if value.starts_with("data:") {
+        return true;
+    }
+    let Some((scheme, _)) = value.split_once("://") else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|character| character.is_ascii_alphanumeric() || "+-.".contains(character))
+        && !scheme.eq_ignore_ascii_case("file")
+}
+
+fn root_candidate(home: &Path, candidate: PathBuf) -> PathBuf {
+    if candidate.is_absolute() || candidate.to_string_lossy().starts_with("~/") {
+        candidate
+    } else {
+        home.join(candidate)
     }
 }
 
@@ -313,6 +510,24 @@ mod tests {
         }
     }
 
+    struct PathEcho;
+
+    #[async_trait]
+    impl ToolHandler for PathEcho {
+        fn name(&self) -> &str {
+            "path_echo"
+        }
+        fn description(&self) -> &str {
+            "returns a path"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {"path": {"type": "string"}}})
+        }
+        async fn call(&self, params: Value) -> Result<Value, RpcError> {
+            Ok(params)
+        }
+    }
+
     #[tokio::test]
     async fn tools_call_handler_error_returns_is_error_in_result() {
         let mut registry = ToolRegistry::new();
@@ -343,6 +558,221 @@ mod tests {
         .unwrap();
         let resp = s.handle(req).await.unwrap();
         assert_eq!(resp.error.unwrap().code, crate::jsonrpc::INVALID_PARAMS);
+    }
+
+    fn scoped_server(home: &std::path::Path) -> McpServer {
+        scoped_server_with_tools(home, vec!["hello".into()])
+    }
+
+    fn scoped_server_with_tools(home: &std::path::Path, tools: Vec<String>) -> McpServer {
+        use makakoo_core::agents::{AgentRegistry, AgentSlot};
+
+        let slot = AgentSlot {
+            slot_id: "scoped".into(),
+            name: "Scoped".into(),
+            persona: None,
+            inherit_baseline: false,
+            allowed_paths: vec![],
+            forbidden_paths: vec![],
+            tools,
+            process_mode: "supervised_pair".into(),
+            transports: vec![],
+            llm: None,
+            runtime: None,
+        };
+        AgentRegistry::create(home, &slot).unwrap();
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Hello));
+        registry.register(Arc::new(Boom));
+        McpServer::new(
+            Arc::new(registry),
+            Arc::new(ToolContext::empty(home.to_path_buf())),
+        )
+    }
+
+    #[tokio::test]
+    async fn agent_scope_filters_tool_discovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = scoped_server(tmp.path());
+        let req: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":8,"method":"tools/list"}"#).unwrap();
+        let resp = crate::dispatch::AGENT_ID
+            .scope(Some("scoped".into()), server.handle(req))
+            .await
+            .unwrap();
+        let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "hello");
+    }
+
+    #[tokio::test]
+    async fn empty_agent_tool_list_exposes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = scoped_server_with_tools(tmp.path(), vec![]);
+        let req: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":11,"method":"tools/list"}"#).unwrap();
+        let resp = crate::dispatch::AGENT_ID
+            .scope(Some("scoped".into()), server.handle(req))
+            .await
+            .unwrap();
+        assert!(resp.result.unwrap()["tools"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn agent_scope_rejects_out_of_scope_tool_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = scoped_server(tmp.path());
+        let req: Request = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"boom","arguments":{}}}"#,
+        )
+        .unwrap();
+        let resp = crate::dispatch::AGENT_ID
+            .scope(Some("scoped".into()), server.handle(req))
+            .await
+            .unwrap();
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], true);
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not in scope"));
+    }
+
+    #[tokio::test]
+    async fn agent_scope_fails_closed_when_slot_is_missing() {
+        let server = empty_server();
+        let req: Request =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":10,"method":"tools/list"}"#).unwrap();
+        let resp = crate::dispatch::AGENT_ID
+            .scope(Some("missing".into()), server.handle(req))
+            .await
+            .unwrap();
+        assert_eq!(resp.error.unwrap().code, INTERNAL_ERROR);
+    }
+
+    fn path_scoped_server(home: &std::path::Path) -> McpServer {
+        use makakoo_core::agents::{AgentRegistry, AgentSlot};
+
+        std::fs::create_dir_all(home.join("allowed")).unwrap();
+        let slot = AgentSlot {
+            slot_id: "path-scoped".into(),
+            name: "Path scoped".into(),
+            persona: None,
+            inherit_baseline: false,
+            allowed_paths: vec![home.join("allowed").display().to_string()],
+            forbidden_paths: vec![home.join("allowed/private").display().to_string()],
+            tools: vec!["path_echo".into()],
+            process_mode: "supervised_pair".into(),
+            transports: vec![],
+            llm: None,
+            runtime: None,
+        };
+        AgentRegistry::create(home, &slot).unwrap();
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(PathEcho));
+        McpServer::new(
+            Arc::new(registry),
+            Arc::new(ToolContext::empty(home.to_path_buf())),
+        )
+    }
+
+    async fn scoped_path_call(server: &McpServer, path: &str) -> Value {
+        let req = Request {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(12)),
+            method: "tools/call".into(),
+            params: json!({"name": "path_echo", "arguments": {"path": path}}),
+        };
+        crate::dispatch::AGENT_ID
+            .scope(Some("path-scoped".into()), server.handle(req))
+            .await
+            .unwrap()
+            .result
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn agent_scope_enforces_filesystem_arguments_before_dispatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = path_scoped_server(tmp.path());
+
+        let allowed = scoped_path_call(&server, "allowed/notes.md").await;
+        assert!(allowed.get("isError").is_none());
+
+        let outside = scoped_path_call(&server, "/etc/passwd").await;
+        assert_eq!(outside["isError"], true);
+        assert!(outside["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not in scope"));
+
+        let forbidden = scoped_path_call(&server, "allowed/private/key").await;
+        assert_eq!(forbidden["isError"], true);
+    }
+
+    #[test]
+    fn source_urls_are_not_treated_as_local_paths() {
+        assert!(filesystem_paths(&json!({"source": "https://example.com/a"})).is_empty());
+        assert!(filesystem_paths(&json!({"SOURCES": ["data:image/png;base64,AA"]})).is_empty());
+        assert_eq!(
+            filesystem_paths(&json!({"source_path": "docs/a.md"})),
+            vec![PathBuf::from("docs/a.md")]
+        );
+        assert_eq!(
+            filesystem_paths(&json!({"source": "/tmp/secret://payload"})),
+            vec![PathBuf::from("/tmp/secret://payload")]
+        );
+        assert_eq!(
+            filesystem_paths(&json!({"source": "file:///tmp/secret"})),
+            vec![PathBuf::from("file:///tmp/secret")]
+        );
+    }
+
+    #[test]
+    fn filesystem_argument_names_fail_closed_across_common_aliases() {
+        for key in [
+            "path",
+            "paths",
+            "filepath",
+            "filepaths",
+            "file",
+            "files",
+            "dir",
+            "dirs",
+            "directory",
+            "folder",
+            "cwd",
+            "workdir",
+            "working_directory",
+            "target",
+            "output",
+            "destination",
+            "dest",
+            "source",
+            "sources",
+            "config_path",
+            "OUTPUT_FILE",
+            "myfilepath",
+            "outFilePath",
+            "workingDirectory",
+        ] {
+            assert!(is_filesystem_key(key), "filesystem alias escaped: {key}");
+        }
+        assert!(!is_filesystem_key("query"));
+        assert!(!is_filesystem_key("target_language"));
+    }
+
+    #[test]
+    fn tilde_paths_remain_expandable_at_scope_boundary() {
+        assert_eq!(
+            root_candidate(Path::new("/tmp/home"), PathBuf::from("~/Office/report.md")),
+            PathBuf::from("~/Office/report.md")
+        );
+        assert_eq!(
+            root_candidate(Path::new("/tmp/home"), PathBuf::from("relative/report.md")),
+            PathBuf::from("/tmp/home/relative/report.md")
+        );
     }
 
     #[tokio::test]

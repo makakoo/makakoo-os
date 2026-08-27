@@ -51,8 +51,9 @@ pub fn run(ctx: &CliContext, args: DestroyArgs) -> anyhow::Result<i32> {
     // Confirm.
     if !yes {
         let mut prompt = format!(
-            "About to destroy slot '{slot}'. The TOML and data dir will be \
-             moved to $MAKAKOO_HOME/archive/agents/{slot}-<ts>/. \
+            "About to destroy slot '{slot}'. The TOML, data dir, and managed \
+             generated runtime project will be moved to \
+             $MAKAKOO_HOME/archive/agents/{slot}-<ts>/. \
              Continue? [y/N] "
         );
         if revoke_secrets {
@@ -67,19 +68,46 @@ pub fn run(ctx: &CliContext, args: DestroyArgs) -> anyhow::Result<i32> {
         }
     }
 
-    // Stop (best-effort but loud — a wedged supervisor warrants a
-    // visible warn rather than silent continuation).
-    if crate::commands::agent_lifecycle::is_slot(home, &slot) {
+    // Stop is a hard safety gate: never archive runtime metadata or
+    // credentials out from under a supervisor that may still be alive.
+    let configured_slot = crate::commands::agent_lifecycle::is_slot(home, &slot);
+    if configured_slot {
         match crate::commands::agent_lifecycle::stop_slot(ctx, &slot) {
             Ok(0) => {}
-            Ok(rc) => output::print_warn(format!(
-                "stop returned exit {rc} — supervisor may already be down; continuing"
-            )),
-            Err(e) => output::print_warn(format!(
-                "stop failed ({e}) — supervisor may already be down; continuing"
-            )),
+            Ok(rc) => {
+                output::print_error(format!(
+                    "destroy aborted: stop returned exit {rc}; slot files were not moved"
+                ));
+                return Ok(1);
+            }
+            Err(error) => {
+                output::print_error(format!(
+                    "destroy aborted: could not prove supervisor stopped ({error}); slot files were not moved"
+                ));
+                return Ok(1);
+            }
         }
     }
+
+    // Hold the canonical supervisor lock across archive + run-dir cleanup.
+    // A supervisor already in the exec→lock window loses this lock race, and
+    // once the TOML is archived later starts fail their configuration preflight.
+    #[cfg(unix)]
+    let _destroy_guard = if configured_slot {
+        match crate::commands::agent_lifecycle::acquire_destroy_guard(home, &slot) {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                output::print_error(format!(
+                    "destroy aborted: could not reserve stopped slot ({error}); slot files were not moved"
+                ));
+                return Ok(1);
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(not(unix))]
+    let _destroy_guard: Option<()> = None;
 
     let unix_ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -103,12 +131,33 @@ pub fn run(ctx: &CliContext, args: DestroyArgs) -> anyhow::Result<i32> {
             ));
             return Ok(1);
         }
+        Err(error @ DestroyError::InvalidRuntimeMetadata { .. })
+        | Err(error @ DestroyError::RuntimeArchive { .. })
+        | Err(error @ DestroyError::ArchiveTransaction { .. })
+        | Err(error @ DestroyError::InvalidSlotId { .. }) => {
+            output::print_error(error.to_string());
+            return Ok(1);
+        }
     };
+    remove_destroyed_run_state(home, &slot)?;
 
     println!("destroyed slot '{}':", outcome.slot_id);
     println!("  archive: {}", outcome.archive_dir.display());
     if let Some(d) = &outcome.archived_data_dir {
         println!("  data archived: {}", d.display());
+    }
+    if let Some(runtime) = &outcome.archived_runtime_dir {
+        println!("  runtime archived: {}", runtime.display());
+    } else if let Some(runtime) = &outcome.runtime_project_dir {
+        if runtime.exists() {
+            output::print_warn(format!(
+                "custom runtime project preserved outside managed roots: {}",
+                runtime.display()
+            ));
+        }
+    }
+    if let Some(warning) = &outcome.runtime_archive_warning {
+        output::print_warn(warning);
     }
 
     if !outcome.detected_secrets.is_empty() {
@@ -120,8 +169,8 @@ pub fn run(ctx: &CliContext, args: DestroyArgs) -> anyhow::Result<i32> {
             println!("  - {s}");
         }
         println!(
-            "  (note: secrets nested under [transport.config] sub-tables \
-             or referenced via env-var interpolation are NOT detected)"
+            "  (note: secret refs written as dotted-key assignments or \
+             env-var interpolation are NOT detected)"
         );
 
         // Decide revoke (locked Q3 truth table — see decide_revoke).
@@ -162,6 +211,54 @@ pub fn run(ctx: &CliContext, args: DestroyArgs) -> anyhow::Result<i32> {
 
     println!("\n{}", render_restore_one_liner(&outcome, home));
     Ok(0)
+}
+
+fn remove_destroyed_run_state(home: &std::path::Path, slot_id: &str) -> anyhow::Result<()> {
+    let run_dir = makakoo_core::agents::supervisor::checked_run_dir(home, slot_id)?;
+    #[cfg(unix)]
+    {
+        if !crate::commands::agent_lifecycle::destroy_guard_is_held(&run_dir)? {
+            anyhow::bail!(
+                "slot archived but destroy no longer owns {}; refusing to unlink its runtime lock",
+                run_dir.display()
+            );
+        }
+        let entries = match std::fs::read_dir(&run_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_name() == "supervisor.lock" {
+                continue;
+            }
+            let path = entry.path();
+            let result = if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            result.map_err(|error| {
+                anyhow::anyhow!(
+                    "slot archived but remove ephemeral run state {} failed: {error}",
+                    path.display()
+                )
+            })?;
+        }
+        // Keep the locked sentinel inode. Deleting it while the guard is open
+        // would let an exec-window supervisor recreate and lock a new inode.
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    match std::fs::remove_dir_all(&run_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(anyhow::anyhow!(
+            "slot archived but remove ephemeral run state {} failed: {error}",
+            run_dir.display()
+        )),
+    }
 }
 
 fn prompt_confirm(prompt: &str) -> bool {
@@ -291,6 +388,26 @@ mod tests {
         let rc = run(&ctx, args("secretary", true)).unwrap();
         assert_eq!(rc, 0);
         assert!(!data.exists(), "data dir must be moved");
+    }
+
+    #[test]
+    fn destroy_removes_ephemeral_run_state_without_unlinking_lock_guard() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_for(tmp.path());
+        write_slot(tmp.path(), "secretary", "slot_id = \"secretary\"\n");
+        let run_dir =
+            makakoo_core::agents::supervisor::checked_run_dir(tmp.path(), "secretary").unwrap();
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(run_dir.join("supervisor.lock"), "").unwrap();
+        fs::write(run_dir.join("stale.sock"), "").unwrap();
+        assert_eq!(run(&ctx, args("secretary", true)).unwrap(), 0);
+        #[cfg(unix)]
+        {
+            assert!(run_dir.join("supervisor.lock").exists());
+            assert!(!run_dir.join("stale.sock").exists());
+        }
+        #[cfg(not(unix))]
+        assert!(!run_dir.exists());
     }
 
     // ── Round-2 (codex review) regressions ────────────────────────

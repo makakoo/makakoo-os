@@ -1,17 +1,17 @@
 # weather-bot — monitor weather, alert on severe conditions
 #
-# Channels: telegram (inbound + outbound via @flue/telegram)
-# Triggers: cron (every 6 hours, dispatch to agent for health check)
+# Channels/triggers: declarations preserved, not executed by DSH V1
 # Tools: brain_search, web_search, write_file
 # Scope: ~/MAKAKOO/data/weather/** (read/write allowed)
 #
 # Try it:
 #   makakoo agent validate-spec ./weather-bot.yaml
 #   makakoo agent create --specs ./weather-bot.yaml
-#   cd $MAKAKOO_HOME/agents-flue/weather-bot
+#   cd $MAKAKOO_HOME/agents-dsh/weather-bot
 #   npm install
-#   # fill .env from .env.example, then:
-#   npm run proxy & npx flue dev
+#   makakoo agent start weather-bot
+#   makakoo agent prompt weather-bot "Check the current forecast"
+# Add the Makakoo/Flue channel-adapter slice before expecting Telegram or cron.
 #
 # See docs/agents/spec.md for the full schema.
 

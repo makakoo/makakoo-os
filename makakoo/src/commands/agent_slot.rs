@@ -27,10 +27,17 @@ pub fn list(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
             .slots
             .iter()
             .map(|s| {
+                let runtime_ready =
+                    s.runtime.is_some() && crate::commands::agent_runtime::preflight(s).is_ok();
                 serde_json::json!({
                     "slot_id": s.slot_id,
                     "name": s.name,
                     "configured": s.is_configured(),
+                    "ready": runtime_ready || s.is_configured(),
+                    "runtime_ready": runtime_ready,
+                    "transport_configured": s.is_configured(),
+                    "engine": s.runtime.as_ref().map(|runtime| runtime.engine.to_string()),
+                    "project_dir": s.runtime.as_ref().map(|runtime| &runtime.project_dir),
                     "transports": s.transport_summary(),
                 })
             })
@@ -42,13 +49,32 @@ pub fn list(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
         println!("No agent slots configured. Run `makakoo agent create <slot>` to add one.");
         return Ok(0);
     }
-    println!("{:<24}{:<24}{:<14}TRANSPORTS", "SLOT", "NAME", "STATUS");
+    println!(
+        "{:<24}{:<24}{:<14}{:<20}TRANSPORTS",
+        "SLOT", "NAME", "STATUS", "ENGINE"
+    );
     for slot in &registry.slots {
-        let status = if slot.is_configured() {
-            "OK"
-        } else {
-            "UNCONFIGURED"
-        };
+        let status =
+            if slot.runtime.as_ref().is_some_and(|runtime| {
+                runtime.engine == makakoo_core::agents::AgentRuntimeEngine::Flue
+            }) {
+                "MANUAL"
+            } else if slot.runtime.is_some() {
+                if crate::commands::agent_runtime::preflight(slot).is_ok() {
+                    "READY"
+                } else {
+                    "GENERATED"
+                }
+            } else if slot.is_configured() {
+                "OK"
+            } else {
+                "UNCONFIGURED"
+            };
+        let engine = slot
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.engine.to_string())
+            .unwrap_or_else(|| "legacy".into());
         let transports = slot
             .transport_summary()
             .into_iter()
@@ -61,8 +87,8 @@ pub fn list(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
             transports
         };
         println!(
-            "{:<24}{:<24}{:<14}{}",
-            slot.slot_id, slot.name, status, transports
+            "{:<24}{:<24}{:<14}{:<20}{}",
+            slot.slot_id, slot.name, status, engine, transports
         );
     }
     Ok(0)
@@ -71,7 +97,7 @@ pub fn list(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
 /// `makakoo agent show <slot>` — print the resolved TOML with
 /// every secret-bearing field redacted.
 pub fn show(ctx: &CliContext, slot_id: &str, json: bool) -> anyhow::Result<i32> {
-    let path = slot_path(ctx.home(), slot_id);
+    let path = makakoo_core::agents::checked_slot_path(ctx.home(), slot_id)?;
     if !path.exists() {
         output::print_error(format!(
             "agent slot '{}' not found at {}",
@@ -103,7 +129,7 @@ pub fn show(ctx: &CliContext, slot_id: &str, json: bool) -> anyhow::Result<i32> 
 /// resolve from the local secret store, WITHOUT a network call or
 /// starting the agent. Reports first failure.
 pub fn validate(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
-    let path = slot_path(ctx.home(), slot_id);
+    let path = makakoo_core::agents::checked_slot_path(ctx.home(), slot_id)?;
     if !path.exists() {
         output::print_error(format!(
             "agent slot '{}' not found at {}",
@@ -137,6 +163,15 @@ pub fn validate(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
                         failures.push(format!("  ✗ {} ({}): {}", entry.id, entry.kind, e));
                     }
                 }
+            }
+            if slot.runtime.as_ref().is_some_and(|runtime| {
+                runtime.engine == makakoo_core::agents::AgentRuntimeEngine::Flue
+            }) {
+                println!("  - runtime: Flue is manual-only; preflight skipped");
+            } else if let Err(error) = crate::commands::agent_runtime::preflight(&slot) {
+                failures.push(format!("  ✗ runtime: {}", error));
+            } else if slot.runtime.is_some() {
+                println!("  ✓ runtime: generated project and dependencies present");
             }
             if failures.is_empty() {
                 println!("agent slot '{}' validate OK", slot_id);
@@ -288,8 +323,8 @@ pub struct CreateArgs {
 /// registry. Pre-validates each transport's config + secret
 /// references (unless --skip-credential-check) BEFORE writing files.
 pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
-    // Branch: --specs drives spec-based creation. All other paths
-    // remain (--from-toml, inline transport flags).
+    // Branch: --specs drives spec-based creation. The other supported
+    // path is the inline Telegram/Slack quick-start shorthand.
     if let Some(specs_path) = args.specs.as_ref() {
         return create_from_specs(ctx, specs_path, &args);
     }
@@ -297,9 +332,7 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
     // Quick-start path needs a slot id. --specs path uses the
     // spec's name; the early return above skips this check.
     if args.slot.is_empty() {
-        anyhow::bail!(
-            "agent create requires a <SLOT> argument when --specs is not used"
-        );
+        anyhow::bail!("agent create requires a <SLOT> argument when --specs is not used");
     }
     makakoo_core::agents::validate_slot_id(&args.slot)?;
     let target = slot_path(ctx.home(), &args.slot);
@@ -317,7 +350,7 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
     // from the flags, derives a slot from it, and pre-fills `.env`
     // with the inline tokens.
     let spec = build_spec_from_flags(&args)?;
-    let slot = spec.to_slot().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut slot = spec.to_slot().map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // The credential check still runs for the quick-start path
     // (inline tokens) unless the operator passes --skip-credential-check.
@@ -340,31 +373,43 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         }
     }
 
-    AgentRegistry::create(ctx.home(), &slot)?;
+    let engine = crate::commands::agent_engine::selected_engine()?;
+    let out_dir = args.out.clone().unwrap_or_else(|| {
+        crate::commands::agent_engine::default_project_dir(ctx.home(), &slot.slot_id, engine)
+    });
+    if !out_dir.is_absolute() {
+        anyhow::bail!(
+            "agent runtime output must be an absolute path: {}",
+            out_dir.display()
+        );
+    }
+    crate::commands::agent_engine::validate_model(engine, &spec.model)?;
+    slot.runtime = Some(makakoo_core::agents::AgentRuntime {
+        engine,
+        project_dir: out_dir.clone(),
+    });
+    let inline_secrets = collect_inline_secrets(&args);
+    let runtime =
+        crate::commands::agent_engine::scaffold(engine, &spec, &out_dir, &inline_secrets, None)?;
+    crate::commands::agent_engine::persist_slot(ctx.home(), &slot, &runtime)?;
     output::print_info(format!(
         "agent slot '{}' created at {}",
         slot.slot_id,
         target.display()
     ));
-
-    // Always scaffold a Flue (TypeScript) project. Flue is the only
-    // creation engine in Phase 3+. Inline secrets (from the quick-start
-    // flags) pre-fill the generated `.env` so the operator can run
-    // `npx flue dev` without a manual copy step.
-    let inline_secrets = collect_inline_secrets(&args);
-    let out_dir = args
-        .out
-        .clone()
-        .unwrap_or_else(|| ctx.home().join("agents-flue").join(&slot.slot_id));
-    crate::commands::flue_scaffold::scaffold_flue_project(&spec, &out_dir, &inline_secrets, None)?;
     output::print_info(format!(
-        "flue agent project scaffolded at {}",
+        "{} agent project scaffolded at {}",
+        runtime.engine,
         out_dir.display()
     ));
-    println!(
-        "Next: cd {} && npm install; fill .env from `makakoo secret`; then `npm run proxy` + `npx flue dev`. See README.md.",
-        out_dir.display()
-    );
+    if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness
+        && !spec.channels.is_empty()
+    {
+        output::print_warn(
+            "DSH V1 exposes the authenticated runtime API; declared channel ingress still requires the Makakoo/Flue channel-adapter slice.",
+        );
+    }
+    crate::commands::agent_engine::print_next(&slot.slot_id, &runtime);
     Ok(0)
 }
 
@@ -373,9 +418,8 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
 /// `.yml`/`.toml` file, a directory of specs (non-recursive, sorted),
 /// or `.` to scan the current folder.
 ///
-/// Always targets Flue (TypeScript) as the runtime engine. The
-/// spec is copied verbatim to `$MAKAKOO_HOME/agents-flue/<slot>/
-/// spec.yaml` for reproducibility.
+/// DeepSeek Harness is the default runtime engine. Operators can use
+/// `MAKAKOO_AGENT_ENGINE=flue` as a compatibility escape hatch.
 fn create_from_specs(
     ctx: &CliContext,
     specs_path: &std::path::Path,
@@ -399,8 +443,7 @@ fn create_from_specs(
     // Step 2: pre-flight duplicate-name check across the batch
     // (atomicity — if two specs produce the same slot_id, refuse
     // the whole batch rather than writing half of it).
-    let mut seen: std::collections::HashMap<String, &AgentSpec> =
-        std::collections::HashMap::new();
+    let mut seen: std::collections::HashMap<String, &AgentSpec> = std::collections::HashMap::new();
     for spec in &specs {
         if let Some(prev) = seen.get(&spec.name) {
             anyhow::bail!(
@@ -426,143 +469,117 @@ fn create_from_specs(
         }
     }
 
-    // Step 4: convert + write each spec.
-    let mut count = 0;
-    for spec in &specs {
-        let slot = spec.to_slot().map_err(|e| anyhow::anyhow!("{}", e))?;
-        AgentRegistry::create(ctx.home(), &slot)?;
+    let engine = crate::commands::agent_engine::selected_engine()?;
+
+    // Step 4: DSH always routes through switchAILocal. Provider discovery
+    // only exists for the operator-selected legacy Flue scaffolder.
+    let providers = if engine == makakoo_core::agents::AgentRuntimeEngine::Flue {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(makakoo_core::agents::llm_provider::discover_providers())
+        })
+    } else {
+        Vec::new()
+    };
+
+    // Prepare every slot before mutating either registry or project tree.
+    let mut prepared = Vec::new();
+    for original in &specs {
+        let (spec, provider) = if engine == makakoo_core::agents::AgentRuntimeEngine::Flue {
+            crate::commands::agent_provider::choose(original, &providers)
+        } else {
+            (original.clone(), None)
+        };
+        crate::commands::agent_engine::validate_model(engine, &spec.model)?;
+        let mut slot = spec.to_slot().map_err(|e| anyhow::anyhow!("{}", e))?;
+        let out_dir =
+            crate::commands::agent_engine::default_project_dir(ctx.home(), &slot.slot_id, engine);
+        if out_dir.exists() {
+            anyhow::bail!(
+                "agent runtime output {} already exists — refusing to overwrite",
+                out_dir.display()
+            );
+        }
+        slot.runtime = Some(makakoo_core::agents::AgentRuntime {
+            engine,
+            project_dir: out_dir.clone(),
+        });
+        prepared.push((spec, slot, out_dir, provider));
+    }
+
+    // Scaffold all projects first. A render failure removes every project
+    // produced by this batch, leaving the canonical registry unchanged.
+    let mut runtimes = Vec::new();
+    for (spec, _, out_dir, provider) in &prepared {
+        match crate::commands::agent_engine::scaffold(
+            engine,
+            spec,
+            out_dir,
+            &std::collections::HashMap::new(),
+            provider.as_ref(),
+        ) {
+            Ok(runtime) => runtimes.push(runtime),
+            Err(error) => {
+                for runtime in &runtimes {
+                    crate::commands::agent_engine::remove_generated(runtime);
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    // Persist registry only after every project renders. Roll back both
+    // surfaces if an unexpected registry write fails midway.
+    let mut written_slots: Vec<std::path::PathBuf> = Vec::new();
+    for (_, slot, _, _) in &prepared {
+        if let Err(error) = AgentRegistry::create(ctx.home(), slot) {
+            for path in &written_slots {
+                let _ = std::fs::remove_file(path);
+            }
+            for runtime in &runtimes {
+                crate::commands::agent_engine::remove_generated(runtime);
+            }
+            return Err(anyhow::anyhow!(error));
+        }
+        written_slots.push(slot_path(ctx.home(), &slot.slot_id));
+    }
+
+    for ((spec, slot, out_dir, _), runtime) in prepared.iter().zip(&runtimes) {
         output::print_info(format!(
             "agent slot '{}' created at {}",
             slot.slot_id,
             slot_path(ctx.home(), &slot.slot_id).display()
         ));
-
-        // Phase 6: detect available LLM providers, let the user pick one,
-        // then update the spec's `model` field and pass the provider
-        // to the scaffolder (which writes `src/app.ts`).
-        use std::io::IsTerminal;
-        let providers = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(makakoo_core::agents::llm_provider::discover_providers())
-        });
-        // Sort: local providers first (switchailocal, ollama), then
-        // env-var cloud providers. This gives sensible auto-selection
-        // when multiple providers are available without a TTY.
-        let mut sorted: Vec<_> = providers.into_iter().collect();
-        sorted.sort_by_key(|p| match &p.source {
-            makakoo_core::agents::llm_provider::ProviderSource::Local { .. } => 0,
-            makakoo_core::agents::llm_provider::ProviderSource::EnvVar { .. } => 1,
-            makakoo_core::agents::llm_provider::ProviderSource::Catalog => 2,
-        });
-        // Respect the spec's chosen provider if it's in the detected
-        // list. e.g. spec.model = "ollama/qwen3:8b" + Ollama detected
-        // → prefer Ollama even if switchailocal is also available.
-        let spec_provider_id = spec.model.split('/').next().unwrap_or("").to_string();
-        let preferred = sorted
-            .iter()
-            .find(|p| p.id == spec_provider_id)
-            .cloned();
-        let chosen = if let Some(p) = preferred {
-            // Spec's provider is available — use it (overrides sort).
-            if sorted.len() > 1 {
-                output::print_info(format!(
-                    "Spec uses '{}' — using it (ignoring {} other provider(s))",
-                    p.id,
-                    sorted.len() - 1
-                ));
-            }
-            Some(p)
-        } else {
-            match sorted.len() {
-                0 => {
-                    output::print_warn(
-                        "No LLM providers detected. Set ANTHROPIC_API_KEY or start switchailocal.",
-                    );
-                    None
-                }
-                1 => Some(sorted.into_iter().next().unwrap()),
-                _ => {
-                    if std::io::stdin().is_terminal() {
-                        println!("Multiple LLM providers detected. Which one to use?");
-                        for (i, p) in sorted.iter().enumerate() {
-                            println!("  {}. {} — model: {}", i + 1, p.display_name, p.default_model);
-                        }
-                        print!("Enter choice [1]: ");
-                        use std::io::Write;
-                        std::io::stdout().flush().ok();
-                        let mut input = String::new();
-                        std::io::stdin().read_line(&mut input).ok();
-                        let choice: usize = input.trim().parse().unwrap_or(1);
-                        if (1..=sorted.len()).contains(&choice) {
-                            Some(sorted[choice - 1].clone())
-                        } else {
-                            output::print_warn("Invalid choice, falling back to spec's hardcoded model.");
-                            None
-                        }
-                    } else {
-                        let auto = sorted[0].clone();
-                        output::print_warn(format!(
-                            "Multiple LLM providers detected; auto-selecting '{}' (local-first). Set AGENT_MODEL in spec to override.",
-                            auto.id,
-                        ));
-                        Some(auto)
-                    }
-                }
-            }
-        };
-
-        // Update the spec's `model` field to match the chosen provider.
-        // Respect the user's specific model choice if the spec already
-        // names `<provider>/<model>` (e.g. "ollama/gemma4:12b") —
-        // only fill in the discovery's `default_model` when the spec
-        // just has the provider prefix (e.g. "ollama/") or is empty.
-        let mut spec = spec.clone();
-        if let Some(ref p) = chosen {
-            let user_named_specific = spec
-                .model
-                .split_once('/')
-                .map(|(_, m)| !m.is_empty())
-                .unwrap_or(false);
-            if !user_named_specific {
-                let new_model = format!("{}/{}", p.id, p.default_model);
-                if spec.model != new_model {
-                    println!("Updating spec model: {} -> {}", spec.model, new_model);
-                    spec.model = new_model;
-                }
-            } else {
-                println!("Spec already names a model ({}) — using it.", spec.model);
-            }
-        }
-
-        // Phase 4: pass the spec directly to the scaffolder. The
-        // spec is the source of truth — the scaffold writes the
-        // project, the instructions, the env template, the assistant
-        // agent, and a verbatim `spec.yaml` copy.
-        let out_dir = ctx.home().join("agents-flue").join(&slot.slot_id);
-        crate::commands::flue_scaffold::scaffold_flue_project(
-            &spec,
-            &out_dir,
-            &std::collections::HashMap::new(),
-            chosen.as_ref(),
-        )?;
         output::print_info(format!(
-            "flue agent project scaffolded at {}",
+            "{} agent project scaffolded at {}",
+            runtime.engine,
             out_dir.display()
         ));
-
-        if let Some(w) = triggers_warning(&spec) {
-            output::print_warn(w);
+        if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness
+            && !spec.channels.is_empty()
+        {
+            output::print_warn(
+                "DSH V1 exposes the authenticated runtime API; declared channel ingress still requires the Makakoo/Flue channel-adapter slice.",
+            );
         }
-
-        count += 1;
+        if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness {
+            if let Some(warning) = triggers_warning(spec) {
+                output::print_warn(warning);
+            }
+        }
     }
 
+    let count = prepared.len();
     if count == 1 {
         let s = &specs[0];
-        let out_dir = ctx.home().join("agents-flue").join(&s.name);
-        println!(
-            "Next: cd {} && npm install; fill .env from `makakoo secret`; then `npm run proxy` + `npx flue dev`. See README.md.",
-            out_dir.display()
+        let out_dir =
+            crate::commands::agent_engine::default_project_dir(ctx.home(), &s.name, engine);
+        crate::commands::agent_engine::print_next(
+            &s.name,
+            &makakoo_core::agents::AgentRuntime {
+                engine,
+                project_dir: out_dir,
+            },
         );
     } else {
         println!(
@@ -573,16 +590,6 @@ fn create_from_specs(
     Ok(0)
 }
 
-/// If the user passed a single spec file, return its path; otherwise
-/// `None` (the spec was loaded from a directory and we re-serialize).
-fn specs_path_if_file(p: &std::path::Path) -> Option<std::path::PathBuf> {
-    if p.is_file() {
-        Some(p.to_path_buf())
-    } else {
-        None
-    }
-}
-
 /// `makakoo agent validate-spec <PATH>` — parse and validate one or
 /// more spec files without creating anything. Exits 0 if all
 /// validate, 1 if any fail.
@@ -590,25 +597,30 @@ pub fn validate_spec(ctx: &CliContext, path: &std::path::Path) -> anyhow::Result
     use makakoo_core::agents::spec::convert::triggers_warning;
     use makakoo_core::agents::spec::discovery::discover_specs;
 
-    let _ = ctx; // ctx unused for now; reserved for future $MAKAKOO_HOME-aware checks
+    let _ = ctx; // reserved for future $MAKAKOO_HOME-aware checks
+    let engine = crate::commands::agent_engine::selected_engine()?;
 
     let specs = discover_specs(path).map_err(|e| anyhow::anyhow!("{}", e))?;
     if specs.is_empty() {
-        output::print_warn(format!(
-            "no specs found at {}",
-            path.display()
-        ));
+        output::print_warn(format!("no specs found at {}", path.display()));
         return Ok(0);
     }
 
     let mut ok = 0;
     let mut failed = 0;
     for spec in &specs {
-        match spec.validate() {
+        match validate_spec_for_engine(spec, engine) {
             Ok(()) => {
                 println!("[OK]   {}", spec.name);
-                if let Some(w) = triggers_warning(spec) {
-                    println!("       note: {}", w);
+                if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness {
+                    if !spec.channels.is_empty() {
+                        println!(
+                            "       note: DSH V1 does not execute declared channel ingress; add the Makakoo/Flue channel-adapter slice"
+                        );
+                    }
+                    if let Some(w) = triggers_warning(spec) {
+                        println!("       note: {}", w);
+                    }
                 }
                 ok += 1;
             }
@@ -626,6 +638,14 @@ pub fn validate_spec(ctx: &CliContext, path: &std::path::Path) -> anyhow::Result
     } else {
         Ok(0)
     }
+}
+
+fn validate_spec_for_engine(
+    spec: &AgentSpec,
+    engine: makakoo_core::agents::AgentRuntimeEngine,
+) -> anyhow::Result<()> {
+    spec.validate().map_err(|error| anyhow::anyhow!(error))?;
+    crate::commands::agent_engine::validate_model(engine, &spec.model)
 }
 
 /// Build a `AgentSpec` from the quick-start CLI flags. The spec is
@@ -679,7 +699,8 @@ fn build_spec_from_flags(args: &CreateArgs) -> anyhow::Result<AgentSpec> {
     let spec = AgentSpec {
         name: args.slot.clone(),
         description,
-        model: "anthropic/claude-sonnet-4-6".into(),
+        model: makakoo_core::agents::llm_provider_default::get_default()
+            .unwrap_or_else(|| "switchailocal/ail-compound".into()),
         instructions: args
             .persona
             .clone()
@@ -697,8 +718,8 @@ fn build_spec_from_flags(args: &CreateArgs) -> anyhow::Result<AgentSpec> {
 }
 
 /// Collect inline secrets from the quick-start flags. Used to
-/// pre-fill the generated `.env` so the operator can run
-/// `npx flue dev` without a manual copy step.
+/// pre-fill the generated `.env`. DSH reserves channel credentials
+/// for the Makakoo adapter; legacy Flue consumes them directly.
 fn collect_inline_secrets(args: &CreateArgs) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     if let Some(t) = &args.telegram_token {
@@ -706,10 +727,8 @@ fn collect_inline_secrets(args: &CreateArgs) -> std::collections::HashMap<String
         // Telegram also needs a webhook secret. We don't have one
         // inline; emit a clearly-dev-only placeholder. The operator
         // must replace it before production use.
-        out.entry(
-            "TELEGRAM_WEBHOOK_SECRET_TOKEN".into(),
-        )
-        .or_insert_with(|| "dev_only_replace_me".into());
+        out.entry("TELEGRAM_WEBHOOK_SECRET_TOKEN".into())
+            .or_insert_with(|| "dev_only_replace_me".into());
     }
     if let Some(t) = &args.slack_bot_token {
         out.insert("SLACK_BOT_TOKEN".into(), t.clone());
@@ -795,18 +814,14 @@ pub fn migrate_harveychat(ctx: &CliContext) -> anyhow::Result<i32> {
 /// the right questions and writes a correct spec. With `--minimal`,
 /// emits a 10-line "hello world" spec.
 ///
-/// Project default (`makakoo provider set <p> <m>`) is used as the
+/// Project default (`makakoo agent provider-set <p> <m>`) is used as the
 /// initial model choice. The user can accept it (just press Enter)
 /// or pick a different one.
-pub fn init_spec(
-    _ctx: &CliContext,
-    path: &std::path::Path,
-    minimal: bool,
-) -> anyhow::Result<i32> {
-    use std::io::{IsTerminal, Write};
+pub fn init_spec(_ctx: &CliContext, path: &std::path::Path, minimal: bool) -> anyhow::Result<i32> {
     use makakoo_core::agents::llm_provider::{discover_providers, DiscoveredProvider};
     use makakoo_core::agents::llm_provider_default;
-    use makakoo_core::agents::spec::{ChannelSpec, ScopeSpec, TriggerSpec, AgentSpec};
+    use makakoo_core::agents::spec::{AgentSpec, ChannelSpec, ScopeSpec, TriggerSpec};
+    use std::io::{IsTerminal, Write};
 
     if !std::io::stdin().is_terminal() {
         anyhow::bail!("init-spec requires a TTY (interactive)");
@@ -840,41 +855,80 @@ pub fn init_spec(
     std::io::stdin().read_line(&mut desc)?;
     let desc = desc.trim().to_string();
 
-    // 3. Discover providers
-    println!("\nDetecting available LLM providers...");
-    let providers = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(discover_providers())
-    });
-
-    // 4. Provider + model choice
-    let (provider_id, model_id) = if providers.is_empty() {
-        println!("  ⚠ No LLM providers detected (no switchailocal, ollama, or env vars).");
-        println!("  Defaulting to anthropic/claude-sonnet-4-6 (set ANTHROPIC_API_KEY later).");
-        ("anthropic".to_string(), "claude-sonnet-4-6".to_string())
+    // 3–4. DSH is switchAILocal-only. Provider discovery and arbitrary
+    // provider selection remain available only for the legacy Flue engine.
+    let engine = crate::commands::agent_engine::selected_engine()?;
+    let (provider_id, model_id) = if engine
+        == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness
+    {
+        let configured = project_default
+            .as_deref()
+            .filter(|model| crate::commands::agent_engine::validate_model(engine, model).is_ok())
+            .unwrap_or("switchailocal/ail-compound");
+        let model = configured
+            .strip_prefix("switchailocal/")
+            .unwrap_or(configured)
+            .to_string();
+        println!("\nDeepSeek Harness uses switchAILocal model: {model}");
+        ("switchailocal".to_string(), model)
     } else {
-        let pd_idx = project_default_provider_id
-            .as_ref()
-            .and_then(|pd| providers.iter().position(|p| &p.id == pd));
-        println!("\n  Available providers:");
-        for (i, p) in providers.iter().enumerate() {
-            let marker = if Some(i) == pd_idx { " ← project default" } else { "" };
-            println!("    {}. {} — model: {}{}", i + 1, p.display_name, p.default_model, marker);
-        }
-        if let Some(idx) = pd_idx {
-            print!("\nWhich provider? [Enter for project default `{}`] > ", providers[idx].id);
+        println!("\nDetecting available LLM providers...");
+        let providers = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(discover_providers())
+        });
+        if providers.is_empty() {
+            println!("  ⚠ No LLM providers detected (no switchailocal, ollama, or env vars).");
+            println!("  Defaulting to anthropic/claude-sonnet-4-6 (set ANTHROPIC_API_KEY later).");
+            ("anthropic".to_string(), "claude-sonnet-4-6".to_string())
         } else {
-            print!("\nWhich provider? [1] > ");
+            let pd_idx = project_default_provider_id
+                .as_ref()
+                .and_then(|pd| providers.iter().position(|p| &p.id == pd));
+            println!("\n  Available providers:");
+            for (i, p) in providers.iter().enumerate() {
+                let marker = if Some(i) == pd_idx {
+                    " ← project default"
+                } else {
+                    ""
+                };
+                println!(
+                    "    {}. {} — model: {}{}",
+                    i + 1,
+                    p.display_name,
+                    p.default_model,
+                    marker
+                );
+            }
+            if let Some(idx) = pd_idx {
+                print!(
+                    "\nWhich provider? [Enter for project default `{}`] > ",
+                    providers[idx].id
+                );
+            } else {
+                print!("\nWhich provider? [1] > ");
+            }
+            std::io::stdout().flush()?;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let chosen_idx = if input.trim().is_empty() {
+                pd_idx.unwrap_or(0)
+            } else {
+                let choice = input
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| anyhow::anyhow!("provider choice must be a number"))?;
+                if !(1..=providers.len()).contains(&choice) {
+                    anyhow::bail!(
+                        "provider choice {} is out of range 1..={}",
+                        choice,
+                        providers.len()
+                    );
+                }
+                choice - 1
+            };
+            let p: &DiscoveredProvider = &providers[chosen_idx];
+            (p.id.clone(), p.default_model.clone())
         }
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let chosen_idx = if input.trim().is_empty() {
-            pd_idx.unwrap_or(0)
-        } else {
-            input.trim().parse::<usize>().unwrap_or(1).saturating_sub(1)
-        };
-        let p: &DiscoveredProvider = providers.get(chosen_idx).unwrap_or(&providers[0]);
-        (p.id.clone(), p.default_model.clone())
     };
 
     // 5. Minimal mode → just name, description, model, instructions
@@ -889,7 +943,11 @@ pub fn init_spec(
             channels: vec![],
             scope: ScopeSpec {
                 allowed_paths: vec!["~/MAKAKOO/data/**".to_string()],
-                forbidden_paths: vec!["~/.ssh/**".to_string(), "~/.aws/**".to_string(), "~/.gnupg/**".to_string()],
+                forbidden_paths: vec![
+                    "~/.ssh/**".to_string(),
+                    "~/.aws/**".to_string(),
+                    "~/.gnupg/**".to_string(),
+                ],
             },
         };
         if let Err(e) = spec.validate() {
@@ -899,7 +957,13 @@ pub fn init_spec(
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, format!("# Generated by `makakoo agent init-spec --minimal`\n{}\n", yaml))?;
+        std::fs::write(
+            path,
+            format!(
+                "# Generated by `makakoo agent init-spec --minimal`\n{}\n",
+                yaml
+            ),
+        )?;
         println!("\n✓ Wrote {} (minimal)", path.display());
         println!("Next: makakoo agent create --specs {}", path.display());
         return Ok(0);
@@ -929,17 +993,32 @@ pub fn init_spec(
             std::io::stdout().flush()?;
             let mut te = String::new();
             std::io::stdin().read_line(&mut te)?;
-            let token_env = if te.trim().is_empty() { "TELEGRAM_BOT_TOKEN".to_string() } else { te.trim().to_string() };
+            let token_env = if te.trim().is_empty() {
+                "TELEGRAM_BOT_TOKEN".to_string()
+            } else {
+                te.trim().to_string()
+            };
             print!("  Allowed user IDs (comma-sep, Enter to skip)? > ");
             std::io::stdout().flush()?;
             let mut au = String::new();
             std::io::stdin().read_line(&mut au)?;
-            let allowed_users: Vec<String> = au.trim().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-            channels.push(ChannelSpec::Telegram { token_env, allowed_users });
+            let allowed_users: Vec<String> = au
+                .trim()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            channels.push(ChannelSpec::Telegram {
+                token_env,
+                allowed_users,
+            });
         }
-        "none" | "n" | "" => {},
+        "none" | "n" | "" => {}
         _ => {
-            println!("  Unknown channel kind `{}`, skipping channels.", channel_kind);
+            println!(
+                "  Unknown channel kind `{}`, skipping channels.",
+                channel_kind
+            );
         }
     }
 
@@ -961,12 +1040,19 @@ pub fn init_spec(
             std::io::stdout().flush()?;
             let mut tz = String::new();
             std::io::stdin().read_line(&mut tz)?;
-            let timezone = if tz.trim().is_empty() { "UTC".to_string() } else { tz.trim().to_string() };
+            let timezone = if tz.trim().is_empty() {
+                "UTC".to_string()
+            } else {
+                tz.trim().to_string()
+            };
             triggers.push(TriggerSpec::Cron { schedule, timezone });
         }
-        "none" | "n" | "" => {},
+        "none" | "n" | "" => {}
         _ => {
-            println!("  Unknown trigger kind `{}`, skipping triggers.", trigger_kind);
+            println!(
+                "  Unknown trigger kind `{}`, skipping triggers.",
+                trigger_kind
+            );
         }
     }
 
@@ -978,7 +1064,11 @@ pub fn init_spec(
     let tools: Vec<String> = if ti.trim().is_empty() || ti.trim().eq_ignore_ascii_case("none") {
         vec![]
     } else {
-        ti.trim().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        ti.trim()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     };
 
     // 10. Scope
@@ -989,7 +1079,11 @@ pub fn init_spec(
     let allowed_paths: Vec<String> = if sp.trim().is_empty() {
         vec!["~/MAKAKOO/data/**".to_string()]
     } else {
-        sp.trim().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        sp.trim()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     };
 
     // 11. Build the spec
@@ -1020,7 +1114,10 @@ pub fn init_spec(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, format!("# Generated by `makakoo agent init-spec`\n{}\n", yaml))?;
+    std::fs::write(
+        path,
+        format!("# Generated by `makakoo agent init-spec`\n{}\n", yaml),
+    )?;
     println!("\n✓ Wrote {}", path.display());
     println!("  model: {}/{}", provider_id, model_id);
     println!("  channels: {}", spec.channels.len());
@@ -1029,4 +1126,42 @@ pub fn init_spec(
     println!("\nNext: makakoo agent create --specs {}", path.display());
 
     Ok(0)
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+    use makakoo_core::agents::spec::ScopeSpec;
+    use makakoo_core::agents::AgentRuntimeEngine;
+
+    fn spec(model: &str) -> AgentSpec {
+        AgentSpec {
+            name: "validator-test".into(),
+            description: "validation test".into(),
+            model: model.into(),
+            instructions: "Reply concisely.".into(),
+            tools: vec![],
+            triggers: vec![],
+            channels: vec![],
+            scope: ScopeSpec {
+                allowed_paths: vec!["~/MAKAKOO/data/test/**".into()],
+                forbidden_paths: vec!["~/.ssh/**".into()],
+            },
+        }
+    }
+
+    #[test]
+    fn validate_spec_applies_selected_engine_model_contract() {
+        validate_spec_for_engine(
+            &spec("switchailocal/ail-compound"),
+            AgentRuntimeEngine::DeepseekHarness,
+        )
+        .unwrap();
+        assert!(validate_spec_for_engine(
+            &spec("ollama/qwen3:8b"),
+            AgentRuntimeEngine::DeepseekHarness,
+        )
+        .is_err());
+        validate_spec_for_engine(&spec("ollama/qwen3:8b"), AgentRuntimeEngine::Flue).unwrap();
+    }
 }

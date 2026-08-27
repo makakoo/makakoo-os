@@ -161,7 +161,9 @@ fn add(
         return Err(anyhow!("host name must not be empty"));
     }
     if SLOTS.iter().any(|s| s.name.eq_ignore_ascii_case(&name)) {
-        eprintln!("'{name}' is a built-in host — already covered by `makakoo infect`. Nothing to do.");
+        eprintln!(
+            "'{name}' is a built-in host — already covered by `makakoo infect`. Nothing to do."
+        );
         return Ok(1);
     }
 
@@ -190,7 +192,11 @@ fn add(
         (None, None)
     } else {
         let file = mcp_file
-            .or_else(|| preset.as_ref().and_then(|p| p.mcp.map(|(f, _)| f.to_string())))
+            .or_else(|| {
+                preset
+                    .as_ref()
+                    .and_then(|p| p.mcp.map(|(f, _)| f.to_string()))
+            })
             .or_else(|| first_present(&cfg_abs, MCP_CANDIDATES));
         match file {
             Some(f) => {

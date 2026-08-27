@@ -16,8 +16,8 @@
 
 use regex::Regex;
 
-use crate::{MakakooError, Result};
 use super::{AgentSpec, ChannelSpec, ScopeSpec, TriggerSpec, NAME_REGEX};
+use crate::{MakakooError, Result};
 
 pub fn validate(spec: &AgentSpec) -> Result<()> {
     validate_name(&spec.name)?;
@@ -56,9 +56,7 @@ fn validate_description(desc: &str) -> Result<()> {
 
 fn validate_model(model: &str) -> Result<()> {
     if model.trim().is_empty() {
-        return Err(MakakooError::InvalidInput(
-            "model must not be empty".into(),
-        ));
+        return Err(MakakooError::InvalidInput("model must not be empty".into()));
     }
     Ok(())
 }
@@ -78,7 +76,10 @@ fn validate_tools(tools: &[String]) -> Result<()> {
 
 fn validate_channel(c: &ChannelSpec) -> Result<()> {
     match c {
-        ChannelSpec::Telegram { token_env, allowed_users } => {
+        ChannelSpec::Telegram {
+            token_env,
+            allowed_users,
+        } => {
             require_env_name(token_env, "channels[telegram].token_env")?;
             validate_user_ids(allowed_users, "channels[telegram].allowed_users")?;
         }
@@ -93,7 +94,10 @@ fn validate_channel(c: &ChannelSpec) -> Result<()> {
             require_env_name(team_id_env, "channels[slack].team_id_env")?;
             validate_user_ids(allowed_users, "channels[slack].allowed_users")?;
         }
-        ChannelSpec::Discord { token_env, allowed_users } => {
+        ChannelSpec::Discord {
+            token_env,
+            allowed_users,
+        } => {
             require_env_name(token_env, "channels[discord].token_env")?;
             validate_user_ids(allowed_users, "channels[discord].allowed_users")?;
         }
@@ -376,7 +380,7 @@ mod tests {
     fn rejects_invalid_cron_schedule() {
         let mut s = minimal_spec();
         s.triggers = vec![TriggerSpec::Cron {
-            schedule: "0 */6 *".into(),  // only 3 fields
+            schedule: "0 */6 *".into(), // only 3 fields
             timezone: "".into(),
         }];
         let err = s.validate().unwrap_err();
@@ -397,7 +401,7 @@ mod tests {
     fn rejects_cron_field_out_of_range() {
         let mut s = minimal_spec();
         s.triggers = vec![TriggerSpec::Cron {
-            schedule: "60 * * * *".into(),  // minute 60 invalid
+            schedule: "60 * * * *".into(), // minute 60 invalid
             timezone: "".into(),
         }];
         assert!(s.validate().is_err());

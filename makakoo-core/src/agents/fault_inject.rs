@@ -275,6 +275,7 @@ fn scope_test_slot() -> crate::agents::AgentSlot {
         process_mode: "supervised_pair".into(),
         transports: vec![],
         llm: None,
+        runtime: None,
     }
 }
 

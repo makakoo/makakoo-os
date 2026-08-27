@@ -1,5 +1,10 @@
 # Walkthrough — Discord bot subagent
 
+> **Legacy gateway reference.** DSH V1 can preserve a Discord declaration but
+> does not start a Discord listener. Do not use this page to deploy a new DSH
+> slot. Start with [`dsh-agent-runtime.md`](./dsh-agent-runtime.md); use this
+> page only to understand or maintain an existing legacy gateway slot.
+
 End-to-end recipe: stand up a Discord-backed subagent slot under
 Makakoo OS. ~10 minutes, no Docker, no hosted service.
 
@@ -66,9 +71,9 @@ makakoo agent create secretary \
 ```
 
 This writes `~/MAKAKOO/config/agents/secretary.toml`. Open it and
-add the Discord transport block (`makakoo agent create` does the
-single-Telegram and single-Slack shapes natively today; Discord
-goes through `--from-toml` or hand-editing the slot file):
+add the Discord transport block. The current CLI no longer imports raw slot
+TOML during creation; this manual-edit shape applies only to an existing
+legacy gateway slot:
 
 ```toml
 [[transport]]
@@ -112,7 +117,7 @@ Within ~5 seconds the bot should appear online in your guild.
 |---|---|---|
 | "BadOrigin" / 401 in audit log | Token mismatch | Re-fetch via `secret set`, restart |
 | Empty content in guild messages | MESSAGE_CONTENT intent off (expected) | Mention the bot, or DM it |
-| Bot not online after `agent start` | Supervisor crashloop | `makakoo agent audit secretary --kind gateway_crash --last 20` |
+| Bot not online after `agent start` | Supervisor crashloop | `makakoo agent audit --kind gateway_crash --last 20` |
 | Rate limited | 60 msg/5min per sender | Wait or bump `[rate_limit] per_sender` in slot TOML |
 
 ## Stopping + destroying

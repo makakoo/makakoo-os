@@ -300,7 +300,8 @@ impl Transport for SubprocessTransport {
         // only if explicitly provided — otherwise inherit the process env.
         if let Some(env) = &ctx.env {
             cmd.env_clear();
-            for (k, v) in env {
+            let env = stdio_child_env(env, std::env::var(crate::agents::AGENT_SLOT_ENV_VAR).ok());
+            for (k, v) in &env {
                 cmd.env(k, v);
             }
         }
@@ -342,6 +343,19 @@ impl Transport for SubprocessTransport {
     }
 }
 
+fn stdio_child_env(
+    configured: &HashMap<String, String>,
+    inherited_agent_slot: Option<String>,
+) -> HashMap<String, String> {
+    let mut env = configured.clone();
+    if !env.contains_key(crate::agents::AGENT_SLOT_ENV_VAR) {
+        if let Some(slot) = inherited_agent_slot {
+            env.insert(crate::agents::AGENT_SLOT_ENV_VAR.to_string(), slot);
+        }
+    }
+    env
+}
+
 // ──────────────────────── MCP (minimal) ──────────────────────────
 //
 // v0.3 ships single-shot MCP handlers: send one `tools/call` request,
@@ -375,7 +389,8 @@ impl Transport for McpStdioTransport {
             .stderr(Stdio::piped());
         if let Some(env) = &ctx.env {
             cmd.env_clear();
-            for (k, v) in env {
+            let env = stdio_child_env(env, std::env::var(crate::agents::AGENT_SLOT_ENV_VAR).ok());
+            for (k, v) in &env {
                 cmd.env(k, v);
             }
         }
@@ -487,6 +502,20 @@ impl Transport for McpHttpTransport {
 #[derive(Debug, Default)]
 pub struct McpHttpSignedTransport;
 
+fn signed_http_agent_id(ctx: &CallContext) -> Result<Option<String>, TransportError> {
+    let Some(agent_id) = ctx.resolve_env(crate::agents::AGENT_SLOT_ENV_VAR) else {
+        return Ok(None);
+    };
+    crate::agents::validate_slot_id(&agent_id).map_err(|error| {
+        TransportError::BadManifest(format!(
+            "invalid {} attribution '{}': {error}",
+            crate::agents::AGENT_SLOT_ENV_VAR,
+            agent_id
+        ))
+    })?;
+    Ok(Some(agent_id))
+}
+
 #[async_trait]
 impl Transport for McpHttpSignedTransport {
     async fn call(
@@ -521,8 +550,12 @@ impl Transport for McpHttpSignedTransport {
         let body_bytes = serde_json::to_vec(&body_json)
             .map_err(|e| TransportError::Http(format!("serialize body: {e}")))?;
 
+        // Agent-bound callers propagate their slot identity into both the
+        // signature digest and the HTTP header. Calls outside a slot remain
+        // explicit peer-administrator requests.
+        let agent_id = signed_http_agent_id(ctx)?;
         let ts = peer::now_millis();
-        let sig = peer::sign_request(&signing, &body_bytes, ts);
+        let sig = peer::sign_request_for_agent(&signing, &body_bytes, ts, agent_id.as_deref());
 
         let timeout = Duration::from_secs(ctx.timeout_seconds.unwrap_or(60));
         let client = reqwest::Client::builder()
@@ -531,16 +564,17 @@ impl Transport for McpHttpSignedTransport {
             .map_err(|e| TransportError::Http(e.to_string()))?;
 
         let start = Instant::now();
-        let resp = match client
+        let mut request = client
             .post(url)
             .header(peer::PEER_HEADER, peer_name)
             .header(peer::TS_HEADER, ts.to_string())
             .header(peer::SIG_HEADER, format!("{}{}", peer::SIG_PREFIX, sig))
             .header("Content-Type", "application/json")
-            .body(body_bytes)
-            .send()
-            .await
-        {
+            .body(body_bytes);
+        if let Some(agent_id) = agent_id {
+            request = request.header(peer::AGENT_ID_HEADER, agent_id);
+        }
+        let resp = match request.send().await {
             Ok(r) => r,
             Err(e) if e.is_timeout() => {
                 return Err(TransportError::Timeout {
@@ -661,6 +695,57 @@ mod tests {
         let ctx = CallContext::default().with_env(env);
         let out = expand_env("${A}${B}${A}", &ctx).unwrap();
         assert_eq!(out, "121");
+    }
+
+    #[test]
+    fn signed_http_propagates_valid_agent_slot_from_context() {
+        let mut env = HashMap::new();
+        env.insert(
+            crate::agents::AGENT_SLOT_ENV_VAR.to_string(),
+            "researcher".to_string(),
+        );
+        let ctx = CallContext::default().with_env(env);
+        assert_eq!(
+            signed_http_agent_id(&ctx).unwrap().as_deref(),
+            Some("researcher")
+        );
+    }
+
+    #[test]
+    fn signed_http_rejects_invalid_agent_slot_from_context() {
+        let mut env = HashMap::new();
+        env.insert(
+            crate::agents::AGENT_SLOT_ENV_VAR.to_string(),
+            "../escape".to_string(),
+        );
+        let ctx = CallContext::default().with_env(env);
+        assert!(matches!(
+            signed_http_agent_id(&ctx),
+            Err(TransportError::BadManifest(_))
+        ));
+    }
+
+    #[test]
+    fn stdio_env_clear_preserves_agent_attribution() {
+        let configured = HashMap::from([("PATH".to_string(), "/bin".to_string())]);
+        let merged = stdio_child_env(&configured, Some("researcher".into()));
+        assert_eq!(
+            merged
+                .get(crate::agents::AGENT_SLOT_ENV_VAR)
+                .map(String::as_str),
+            Some("researcher")
+        );
+
+        let explicit = HashMap::from([(
+            crate::agents::AGENT_SLOT_ENV_VAR.to_string(),
+            "explicit".to_string(),
+        )]);
+        assert_eq!(
+            stdio_child_env(&explicit, Some("inherited".into()))
+                .get(crate::agents::AGENT_SLOT_ENV_VAR)
+                .map(String::as_str),
+            Some("explicit")
+        );
     }
 
     #[test]

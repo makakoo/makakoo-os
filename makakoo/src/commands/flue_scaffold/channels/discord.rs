@@ -49,5 +49,6 @@ export const channel = createDiscordChannel({
     return { type: 1 };
   },
 });
-"##.to_string())
+"##
+    .to_string())
 }

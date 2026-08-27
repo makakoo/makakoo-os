@@ -9,18 +9,20 @@
 # Try it:
 #   makakoo agent validate-spec ./scheduled-reporter.yaml
 #   makakoo agent create --specs ./scheduled-reporter.yaml
-#   cd $MAKAKOO_HOME/agents-flue/scheduled-reporter
+#   cd $MAKAKOO_HOME/agents-dsh/scheduled-reporter
 #   npm install
-#   npm run proxy & npx flue dev
-#   # Every Monday at 09:00 UTC the agent runs and writes a report
-#   # to ~/MAKAKOO/data/reports/weekly-YYYY-MM-DD.md
+#   makakoo agent start scheduled-reporter
+#   makakoo agent prompt scheduled-reporter "Generate this week's report"
+#
+# DSH V1 validates and preserves the cron declaration but does not schedule it.
+# Connect an external scheduler to `makakoo agent prompt` before relying on it.
 #
 # See docs/agents/spec.md for the full schema.
 
 name: scheduled-reporter
 description: "Weekly autonomous report generator (no channels)"
 
-model: anthropic/claude-sonnet-4-6
+model: switchailocal/ail-compound
 
 instructions: |
   You are an autonomous reporting agent. Every Monday at 09:00 UTC, you
@@ -36,7 +38,7 @@ tools:
   - brain_search
   - write_file
 
-# No channels — this agent is purely autonomous.
+# No channels. The cron policy below is declaration-only in DSH V1.
 
 triggers:
   - kind: cron

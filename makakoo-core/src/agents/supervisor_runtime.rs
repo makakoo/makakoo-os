@@ -83,6 +83,29 @@ pub fn spawn_gateway(spec: &GatewayLaunchSpec) -> Result<Child> {
     if let Some(dir) = &spec.cwd {
         cmd.current_dir(dir);
     }
+    // Give every gateway its own process group. A DSH gateway starts a
+    // JSON-RPC runtime which can in turn start MCP children; signalling only
+    // the direct child would leave that tree alive after supervisor shutdown.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.as_std_mut().process_group(0);
+    }
+    // Linux can notify the gateway immediately if the supervisor is killed
+    // before the generated runtime's portable parent watchdog starts.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.as_std_mut().pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() == 1 {
+                libc::raise(libc::SIGTERM);
+            }
+            Ok(())
+        });
+    }
     cmd.kill_on_drop(true);
     cmd.spawn()
         .map_err(|e| MakakooError::Internal(format!("spawn gateway '{}': {e}", spec.program)))
@@ -199,15 +222,19 @@ pub async fn run_gateway_watcher(
                 #[cfg(unix)]
                 {
                     if let Some(pid) = pid {
-                        unsafe {
-                            libc::kill(pid as i32, libc::SIGTERM);
-                        }
+                        signal_process_group(pid, libc::SIGTERM);
                     }
                     let exited = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
                     if exited.is_err() {
-                        let _ = child.start_kill();
-                        let _ = child.wait().await;
+                        if let Some(pid) = pid {
+                            signal_process_group(pid, libc::SIGKILL);
+                        }
+                    } else if let Some(pid) = pid {
+                        // The leader can exit while a descendant ignores
+                        // SIGTERM. Kill any residue in the dedicated group.
+                        signal_process_group(pid, libc::SIGKILL);
                     }
+                    let _ = child.wait().await;
                 }
                 #[cfg(not(unix))]
                 {
@@ -221,6 +248,15 @@ pub async fn run_gateway_watcher(
                 return Ok(());
             }
         }
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(group_leader: u32, signal: i32) {
+    // Negative PID targets the process group created in `spawn_gateway`.
+    // ESRCH is expected when every member already exited.
+    unsafe {
+        libc::kill(-(group_leader as i32), signal);
     }
 }
 
@@ -340,6 +376,18 @@ mod tests {
         let mut child = spawn_gateway(&spec).expect("sleep should spawn");
         assert!(child.id().is_some());
         child.start_kill().unwrap();
+        let _ = child.wait().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_gateway_leads_its_own_process_group() {
+        let spec = MockGateway::sleep_forever();
+        let mut child = spawn_gateway(&spec).expect("sleep should spawn");
+        let pid = child.id().unwrap() as i32;
+        let group = unsafe { libc::getpgid(pid) };
+        assert_eq!(group, pid);
+        signal_process_group(pid as u32, libc::SIGKILL);
         let _ = child.wait().await;
     }
 

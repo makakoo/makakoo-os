@@ -76,31 +76,27 @@ The first fourteen are a **linear tour** (read 01→14 in order on your first ti
 | [13](./13-shared-storage-garagetytus.md) | Shared S3 storage with garagetytus | Put a file into a bucket and read it back from another machine. Two flavors: laptop daemon or `garagetytus.traylinx.com`. | ~8 min |
 | [14](./14-brain-network.md) | Brain Network: Harvey ↔ Donna | Install the federation distro, activate Octopus safely, pair trust, register endpoints, and run signed remote Brain search. | ~12 min |
 
-## Multi-bot subagents — per-transport recipes (v2.0)
+## Agent runtimes and channel compatibility
 
-Each subagent ("slot") can be reached over one or more chat transports
-simultaneously. Start with the flagship walkthrough — it builds three
-slots end-to-end with one slot dual-homed on Telegram + Slack.
+Start with the supervised DSH runtime. Channel declarations are preserved in
+AgentSpec, but DSH V1 does not start channel listeners. The older channel
+pages are legacy gateway references unless they explicitly select the manual
+Flue compatibility renderer.
 
 | Walkthrough | What you'll do | Time |
 |---|---|---|
-| [Telegram bot with Flue (`--runtime flue`)](./flue-telegram-bot.md) | Scaffold a **runnable** standalone TypeScript Telegram agent in one command. Makakoo owns identity/scope/secrets; Flue runs the loop; MCP bridges every `mcp__harvey__*` tool. | ~15 min |
-| [Multi-transport subagents (flagship)](./multi-transport-subagents.md) | Three slots — `harveychat` (legacy migrate), `secretary` (Telegram + Slack), `career` (Telegram-only). End-to-end live dogfood. | ~25 min |
-| [Discord bot](./discord-bot.md) | Stand up a Discord-bound slot. Per-guild allowlist; MESSAGE_CONTENT intent default OFF. | ~10 min |
-| [WhatsApp Business](./whatsapp-business.md) | Wire a WhatsApp Cloud API number into a slot via the shared webhook router. | ~12 min |
-| [Voice (Twilio quickstart)](./voice-quickstart.md) | Inbound phone calls → push-to-talk slot. Real-time `<Stream>` lands in v2.1. | ~10 min |
-| [Email secretary](./email-secretary.md) | SMTP outbound + parse helpers today; IMAP IDLE listener arrives in v2.1. | ~8 min |
-| [Web chat (static demo client)](./web-chat-demo.html) | Drop-in widget. HMAC-SHA256 visitor cookies + Origin allowlist. | ~5 min |
+| [DeepSeek Harness runtime](./dsh-agent-runtime.md) | Create, supervise, prompt, continue, stop, and archive a scoped local agent. | ~10 min |
+| [Telegram bot with legacy Flue](./flue-telegram-bot.md) | Explicit compatibility path using `MAKAKOO_AGENT_ENGINE=flue`; manual proxy/dev lifecycle. | ~15 min |
+| [Multi-transport support boundary](./multi-transport-subagents.md) | What is preserved, what works in legacy paths, and what the DSH adapter still needs. | ~5 min |
+| [Discord legacy gateway reference](./discord-bot.md) | Existing legacy slots only; not a DSH V1 deployment guide. | reference |
+| [WhatsApp legacy gateway reference](./whatsapp-business.md) | Existing legacy slots only; not a DSH V1 deployment guide. | reference |
+| [Voice legacy gateway reference](./voice-quickstart.md) | Existing legacy slots only; not a DSH V1 deployment guide. | reference |
+| [Email legacy gateway reference](./email-secretary.md) | Existing legacy slots only; not a DSH V1 deployment guide. | reference |
+| [Web chat legacy demo](./web-chat-demo.html) | Static client for the older gateway contract. | reference |
 
-**Don't want to write the TOML from scratch?** The
-[agent slot template gallery](../../templates/agents/) has 11
-copy-paste starters organized into 3 tiers. Tier 1 ("set-up-once,
-payback-every-week") covers the highest-impact archetypes:
-freelance secretary, invoice chaser, expense receipts (snap a
-photo of a receipt → tax-categorized), meeting prep (Brain ×
-Calendar briefing 30min before each event), and lead qualifier
-(first-touch sales filter). Pick one, fill in the `<PLACEHOLDER>`
-fields, run `makakoo agent create`.
+For new runtimes, start from [`examples/agents/`](../../examples/agents/) and
+use `makakoo agent validate-spec` before creation. The older TOML template
+gallery describes legacy slot metadata, not canonical AgentSpec input.
 
 Reference docs for the surface above:
 [`user-manual/agent.md`](../user-manual/agent.md) (CLI),

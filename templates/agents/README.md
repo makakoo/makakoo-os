@@ -2,27 +2,26 @@
 
 Copy-paste-ready TOML files for the most common subagent archetypes.
 
-## How to use
+## Status: legacy reference only
+
+These TOML files describe the pre-DSH channel-gateway slot format. They are
+**not valid input** to `makakoo agent create`, and the removed raw-TOML import
+flag must not be used. Keep them only for inspecting or migrating an existing
+legacy deployment.
+
+For a new supervised agent, start from
+[`examples/agents/local-researcher.yaml`](../../examples/agents/local-researcher.yaml)
+and follow the
+[DSH walkthrough](../../docs/walkthroughs/dsh-agent-runtime.md):
 
 ```sh
-# 1. Pick a template that matches your goal
-cp ~/makakoo-os/templates/agents/secretary-freelance.toml ~/secretary.toml
-
-# 2. Open it and replace every <PLACEHOLDER> — the file fails fast if you miss one
-${EDITOR:-vim} ~/secretary.toml
-
-# 3. Stash the secrets it references
-makakoo secret set agent/secretary/telegram-main/bot_token  '<paste>'
-makakoo secret set agent/secretary/slack-main/bot_token     'xoxb-…'
-makakoo secret set agent/secretary/slack-main/app_token     'xapp-…'
-
-# 4. Create the slot — credentials are verified BEFORE any file is written
-makakoo agent create secretary --from-toml ~/secretary.toml
-
-# 5. Start it
-makakoo agent start secretary
-makakoo agent status secretary
+makakoo agent validate-spec ./agent.yaml
+makakoo agent create --specs ./agent.yaml
 ```
+
+DSH V1 is prompt-driven. Channel and trigger declarations are preserved but no
+channel listener or scheduler is started. The gallery below therefore does not
+promise working Telegram, Slack, email, voice, or web delivery on DSH.
 
 ## The gallery
 
@@ -92,7 +91,7 @@ Every template uses the same top-level shape:
 | `allowed_paths` | yes | Filesystem paths the slot can write to (in addition to its own data dir) |
 | `forbidden_paths` | no | Explicit deny — overrides allowed_paths on conflict |
 | `tools` | yes | MCP tool names + plugin command names the slot can invoke |
-| `process_mode` | no | `supervised_pair` (default) — supervisor + Python gateway as a process pair |
+| `process_mode` | no | `supervised_pair` (default) — supervisor + configured runtime as a process pair |
 | `[[transport]]` | yes (≥1) | One block per chat channel. See per-template TOML for shape. |
 
 ## Reference docs

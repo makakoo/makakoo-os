@@ -238,6 +238,12 @@ def _print_report(all_outcomes: dict[Path, list[Outcome]]) -> int:
                     file=sys.stderr,
                 )
     total = passes + skips + fails
+    if passes == 0:
+        fails += 1
+        print(
+            "FAIL  manifest is vacuous: at least one shell block must execute",
+            file=sys.stderr,
+        )
     print()
     print(f"Total: {total}    Pass: {passes}    Skip: {skips}    Fail: {fails}")
     return 1 if fails else 0
@@ -338,8 +344,10 @@ def main() -> int:
             for path, outs in all_outcomes.items()
         }
         print(json.dumps(payload, indent=2))
-        any_fail = any(o.status == "fail" for outs in all_outcomes.values() for o in outs)
-        return 1 if any_fail else 0
+        outcomes = [o for outs in all_outcomes.values() for o in outs]
+        any_fail = any(o.status == "fail" for o in outcomes)
+        any_pass = any(o.status == "pass" for o in outcomes)
+        return 1 if any_fail or not any_pass else 0
 
     return _print_report(all_outcomes)
 

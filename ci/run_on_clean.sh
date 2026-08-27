@@ -48,17 +48,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ───── Provision makakoo if not already on $PATH (or forced fresh) ─────
+# ───── Provision the current worktree, never an older PATH install ─────
 if [[ "$SKIP_INSTALL" == "0" ]]; then
-    if ! command -v makakoo >/dev/null 2>&1; then
-        echo "==> makakoo not on PATH; installing from source"
-        cargo install --path makakoo --locked
-        cargo install --path makakoo-mcp --locked
-    else
-        echo "==> makakoo already on PATH: $(command -v makakoo)"
-    fi
+    TOOL_ROOT="$SCRATCH_HOME/toolchain"
+    echo "==> installing current worktree binaries under $TOOL_ROOT"
+    cargo install --path makakoo --locked --root "$TOOL_ROOT"
+    cargo install --path makakoo-mcp --locked --root "$TOOL_ROOT"
+    export PATH="$TOOL_ROOT/bin:$PATH"
     echo "==> running makakoo install (--yes --skip-daemon --skip-infect --no-setup for CI)"
     makakoo install --yes --skip-daemon --skip-infect --no-setup
+fi
+
+# CI downloads binaries built from the same commit. Local --skip-install
+# callers must prepend target/debug (or another current-tree build) to PATH.
+EXPECTED_VERSION="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+ACTUAL_VERSION="$(makakoo --version 2>/dev/null || true)"
+if [[ "$ACTUAL_VERSION" != *"$EXPECTED_VERSION"* ]]; then
+    echo "error: docs gate requires makakoo $EXPECTED_VERSION from this worktree; found: ${ACTUAL_VERSION:-missing}" >&2
+    echo "hint: cargo build --locked -p makakoo -p makakoo-mcp && PATH=\"$REPO_ROOT/target/debug:\$PATH\" ci/run_on_clean.sh --skip-install" >&2
+    exit 2
 fi
 
 # ───── Run the docs verifier ─────

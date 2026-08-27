@@ -1,152 +1,121 @@
-# Migrating from slot TOML to agent spec
+# Migrate a legacy slot TOML to a DSH AgentSpec
 
-If you have an existing slot TOML at
-`$MAKAKOO_HOME/config/agents/<slot>.toml`, here's how to convert it
-to a spec.
+Legacy slot TOML files under `$MAKAKOO_HOME/config/agents/` are runtime policy
+records, not accepted `agent create` input. New agents start from YAML or TOML
+**AgentSpec** files and compile to a supervised DeepSeek Harness (DSH) project.
+There is no automatic slot-TOML importer.
 
-## Quick conversion (hand)
+The safest migration is parallel: create a new DSH slot with a temporary id,
+verify it, then archive the legacy slot.
 
-| slot TOML field | spec field |
-|-----------------|------------|
+## 1. Map the policy fields
+
+| legacy slot TOML | AgentSpec |
+|---|---|
 | `slot_id` | `name` |
 | `name` | `description` |
 | `persona` | `instructions` |
 | `tools` | `tools` |
 | `allowed_paths` | `scope.allowed_paths` |
 | `forbidden_paths` | `scope.forbidden_paths` |
-| `[[transport]]` (kind=telegram) | `channels[]` (kind=telegram) |
-| `[[transport]]` (kind=slack) | `channels[]` (kind=slack) |
-| `[[transport]]` (kind=discord) | `channels[]` (kind=discord) |
-| `[[transport]]` (kind=web) | `channels[]` (kind=webhook) |
-| `[[transport]]` (kind=email) | `channels[]` (kind=email) |
-| `[[transport]]` (kind=voice_twilio) | `channels[]` (kind=voice) |
 | `[llm.override].model` | `model` |
-| (no equivalent) | `triggers` |
+| `[[transport]]` | `channels[]` declaration only; see boundary below |
 
-## Steps
+Use a new id while both slots exist:
 
-1. **Copy the slot TOML aside.** Don't delete it yet — you'll
-   verify the new spec produces the same result.
+```yaml
+name: harveychat-dsh
+description: Local DSH replacement for the legacy HarveyChat slot
+model: switchailocal/ail-compound
+instructions: |
+  Sharp professional secretary. Draft external messages and wait for approval.
+tools:
+  - brain_search
+channels: []
+triggers: []
+scope:
+  allowed_paths:
+    - "~/MAKAKOO/data/harveychat/**"
+  forbidden_paths:
+    - "~/.ssh/**"
+    - "~/.aws/**"
+```
 
-2. **Write a new spec file** at e.g. `~/projects/agents/<slot>.yaml`
-   using the slot fields above. Example:
+DSH model routes are switchAILocal-only. Replace legacy provider prefixes such
+as `anthropic/...` with `switchailocal/<model>` or an unprefixed model id served
+by switchAILocal.
 
-   ```yaml
-   # From slot_id = "harveychat"
-   name: harveychat
-   description: "Harvey chat agent"
+## 2. Validate before writing state
 
-   # From [llm.override].model = "anthropic/claude-sonnet-4-6"
-   model: anthropic/claude-sonnet-4-6
+```sh
+makakoo agent validate-spec ./harveychat-dsh.yaml
+makakoo agent show harveychat       # inspect the old policy for comparison
+```
 
-   # From persona = "Sharp professional secretary"
-   instructions: "Sharp professional secretary"
+Validation does not create files, install packages, start processes, or call a
+channel.
 
-   # From tools = ["email", "calendar"]
-   tools: [email, calendar]
+## 3. Create and install
 
-   # From [[transport]] (kind=telegram, secret_env="HARVEYCHAT_TELEGRAM_TOKEN")
-   channels:
-     - kind: telegram
-       token_env: HARVEYCHAT_TELEGRAM_TOKEN
-       allowed_users: ["746496145"]
+```sh
+makakoo agent create --specs ./harveychat-dsh.yaml
+cd "$MAKAKOO_HOME/agents-dsh/harveychat-dsh"
+npm install
+npm run check
+makakoo agent validate harveychat-dsh
+```
 
-   scope:
-     allowed_paths: ["~/MAKAKOO/data/harveychat/"]
-     forbidden_paths: ["~/.ssh/", "~/.aws/"]
-   ```
+The generated project contains `runner.mjs`, `cordis.yml`, `spec.yaml`, and an
+`.env.example`. Runtime state lives under
+`$MAKAKOO_HOME/agents-dsh/harveychat-dsh/`, not `agents-flue/`.
 
-3. **Validate without creating:**
-   ```bash
-   makakoo agent validate-spec ~/projects/agents/harveychat.yaml
-   ```
+## 4. Verify the local runtime
 
-4. **Compare with the existing slot:**
-   ```bash
-   makakoo agent show harveychat
-   # ... check the redacted TOML matches your spec
-   ```
+```sh
+makakoo agent start harveychat-dsh
+makakoo agent health harveychat-dsh
+makakoo agent prompt harveychat-dsh "State your role and allowed tools" --session migration
+makakoo agent stop harveychat-dsh
+```
 
-5. **Create the new slot from the spec:**
-   ```bash
-   makakoo agent create --specs ~/projects/agents/harveychat.yaml
-   ```
+Confirm model behavior, tool scope, filesystem scope, restart, and stop before
+retiring anything.
 
-6. **Verify the Flue project is correct:**
-   ```bash
-   cd $MAKAKOO_HOME/agents-flue/harveychat
-   ls -la
-   cat spec.yaml           # the spec verbatim
-   cat package.json        # deps match your channels/triggers
-   cat .env.example        # all env vars listed
-   cat README.md           # channels/triggers documented
-   ```
+## Channel and trigger boundary
 
-7. **Test the agent end-to-end** (trigger a channel message, verify
-   the agent responds).
+DSH V1 preserves channel and trigger declarations in the spec and slot
+metadata, but does **not** start Telegram, Slack, Discord, WhatsApp, email,
+voice, webhook, or cron listeners. Do not migrate a working channel bot and
+assume message delivery survived. Keep the legacy runtime until a Makakoo
+channel adapter is available, or explicitly use the manually operated Flue
+compatibility path documented in
+[`../walkthroughs/flue-telegram-bot.md`](../walkthroughs/flue-telegram-bot.md).
 
-8. **Remove the old slot only after verification:**
-   ```bash
-   makakoo agent destroy harveychat
-   ```
+## 5. Archive the old slot only after verification
 
-## Field mapping details
+```sh
+makakoo agent destroy harveychat
+```
 
-### Channels
+`destroy` stops the service and archives managed configuration, data, and
+runtime files. It does not revoke secrets unless `--revoke-secrets` is
+explicit. Keep the new temporary id unless preserving the old id is important;
+renaming requires a fresh spec and a second verified create/destroy cycle.
 
-slot TOML `[[transport]]` blocks map to spec `channels[]` entries.
-The kind names differ slightly:
+## Known mapping limits
 
-| slot kind | spec kind |
-|-----------|-----------|
-| `telegram` | `telegram` |
-| `slack` | `slack` |
-| `discord` | `discord` |
-| `web` | `webhook` (spec adds the "hook" suffix for clarity) |
-| `email` | `email` |
-| `voice_twilio` | `voice` (spec drops the implementation detail) |
-
-The `secret_env` / `app_token_env` / `team_id_env` / `secret_ref` /
-`inline_secret_dev` / etc. fields all become env-var references in
-the spec. The spec only stores the env var **name**; the actual
-secret value lives in the operator's environment or secret store.
-
-### LLM override
-
-slot TOML `[llm.override].model` becomes spec `model`. The spec is
-simpler — only the model identifier. Other LLM knobs (max_tokens,
-temperature, reasoning_effort) are not yet represented in the spec
-schema; they're deferred to V2.
-
-### What the slot TOML has that the spec doesn't
-
-- `process_mode` — always `"supervised_pair"` in V1. Slot-only field.
-- `inherit_baseline` — always `true` in V1. Slot-only field.
-- Per-transport config (`polling_timeout_seconds`, `allowed_chat_ids`,
-  `team_id`, `mode`, `dm_only`, etc.) — V1 specs don't expose these.
-  The Flue project uses sensible defaults; operators can edit the
-  generated TS file post-scaffold for advanced tuning.
-
-### What the spec has that the slot TOML doesn't
-
-- `description` — shown in `makakoo agent list` and the Flue README
-- `triggers` — cron + webhook trigger sources, not in the slot TOML
-  at all
-- Markdown in `instructions` — slot TOML stores as a plain string
-
-## V1 limitations for migrated slots
-
-- **Email/voice channels**: migrated from a working slot TOML will
-  fail at scaffold time (deferred to V2). Workaround: rewrite as a
-  `webhook` channel + custom `defineTool`, or keep the existing
-  slot TOML and skip the migration.
-- **Advanced per-transport config**: any non-default values (custom
-  polling timeouts, OAuth2 vs app_password, etc.) are lost in the
-  spec → slot round-trip. Operators must edit the generated TS file
-  or the slot TOML directly to preserve them.
+- `description` is retained in generated `spec.yaml`; AgentSlot has no dedicated
+  description field.
+- `inherit_baseline` is not carried forward. AgentSpec tool lists are explicit;
+  `tools: []` exposes no model-facing tools.
+- Per-transport tuning has no lossless AgentSpec round trip.
+- Cron and webhook triggers are not represented in slot TOML and are not
+  scheduled by DSH V1.
+- Filesystem overlap validation is exact-string in V1; retain explicit deny
+  paths.
 
 ## See also
 
-- `docs/agents/spec.md` — full spec schema reference
-- `docs/walkthroughs/create-agent-from-spec.md` — end-to-end walkthrough
-- `docs/user-manual/agent.md` — `makakoo agent` CLI reference
+- [`spec.md`](spec.md) — AgentSpec schema
+- [`../walkthroughs/dsh-agent-runtime.md`](../walkthroughs/dsh-agent-runtime.md) — end-to-end DSH walkthrough
+- [`../user-manual/agent.md`](../user-manual/agent.md) — authoritative CLI reference

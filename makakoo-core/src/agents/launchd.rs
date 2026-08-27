@@ -192,9 +192,9 @@ impl BootstrapError {
 
 /// Render the LaunchAgent plist XML. Locked schema:
 ///
-/// * `KeepAlive=true`   — launchd auto-restarts on crash (the
-///   user-space restart budget short-circuits
-///   before this kicks in for normal cases).
+/// * `KeepAlive.SuccessfulExit=false` — launchd restarts crashes but does not
+///   resurrect an intentionally stopped supervisor or spin on a singleton
+///   lock conflict.
 /// * `RunAtLoad=true`   — start immediately on bootstrap.
 /// * `ProcessType=Interactive` — gives us reasonable scheduling
 ///   priority for foreground UX (Telegram
@@ -258,7 +258,10 @@ fn render_plist_xml(label: &str, makakoo_bin: &Path, slot_id: &str, makakoo_home
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>ThrottleInterval</key>
@@ -314,6 +317,8 @@ mod tests {
         assert!(p.plist_xml.contains("agent-secretary.out.log"));
         assert!(p.plist_xml.contains("agent-secretary.err.log"));
         assert!(p.plist_xml.contains("<key>KeepAlive</key>"));
+        assert!(p.plist_xml.contains("<key>SuccessfulExit</key>"));
+        assert!(p.plist_xml.contains("<false/>"));
         assert!(p.plist_xml.contains("<key>ThrottleInterval</key>"));
     }
 

@@ -53,18 +53,12 @@ pub enum ProviderSource {
 /// are reachable — the caller should fall back to the spec's
 /// hardcoded model.
 pub async fn discover_providers() -> Vec<DiscoveredProvider> {
-    let client = match Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-    {
+    let client = match Client::builder().timeout(Duration::from_secs(2)).build() {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
 
-    let (switchai, ollama) = tokio::join!(
-        probe_switchailocal(&client),
-        probe_ollama(&client),
-    );
+    let (switchai, ollama) = tokio::join!(probe_switchailocal(&client), probe_ollama(&client),);
 
     let mut providers = Vec::new();
     if let Some(p) = switchai {
@@ -78,7 +72,9 @@ pub async fn discover_providers() -> Vec<DiscoveredProvider> {
             id: "anthropic".into(),
             display_name: "Anthropic (cloud, ANTHROPIC_API_KEY set)".into(),
             default_model: "claude-sonnet-4-6".into(),
-            source: ProviderSource::EnvVar { env_var: "ANTHROPIC_API_KEY".into() },
+            source: ProviderSource::EnvVar {
+                env_var: "ANTHROPIC_API_KEY".into(),
+            },
             requires_api_key: true,
             base_url: None,
             api_protocol: "anthropic-messages".into(),
@@ -89,7 +85,9 @@ pub async fn discover_providers() -> Vec<DiscoveredProvider> {
             id: "openai".into(),
             display_name: "OpenAI (cloud, OPENAI_API_KEY set)".into(),
             default_model: "gpt-5.5".into(),
-            source: ProviderSource::EnvVar { env_var: "OPENAI_API_KEY".into() },
+            source: ProviderSource::EnvVar {
+                env_var: "OPENAI_API_KEY".into(),
+            },
             requires_api_key: true,
             base_url: None,
             api_protocol: "openai-completions".into(),
@@ -117,14 +115,20 @@ async fn probe_switchailocal(client: &Client) -> Option<DiscoveredProvider> {
         .iter()
         .find(|m| m.get("id").and_then(|v| v.as_str()) == Some("ail-compound"))
         .and_then(|m| m.get("id").and_then(|v| v.as_str()))
-        .or_else(|| models.first().and_then(|m| m.get("id").and_then(|v| v.as_str())))
+        .or_else(|| {
+            models
+                .first()
+                .and_then(|m| m.get("id").and_then(|v| v.as_str()))
+        })
         .unwrap_or("ail-compound")
         .to_string();
     Some(DiscoveredProvider {
         id: "switchailocal".into(),
         display_name: "switchailocal (local OpenAI-compatible)".into(),
         default_model: model,
-        source: ProviderSource::Local { base_url: "http://127.0.0.1:18080/v1".into() },
+        source: ProviderSource::Local {
+            base_url: "http://127.0.0.1:18080/v1".into(),
+        },
         requires_api_key: false,
         base_url: Some("http://127.0.0.1:18080/v1".into()),
         api_protocol: "openai-completions".into(),
@@ -161,7 +165,9 @@ async fn probe_ollama(client: &Client) -> Option<DiscoveredProvider> {
         id: "ollama".into(),
         display_name: "Ollama (local)".into(),
         default_model: model,
-        source: ProviderSource::Local { base_url: "http://localhost:11434/v1".into() },
+        source: ProviderSource::Local {
+            base_url: "http://localhost:11434/v1".into(),
+        },
         requires_api_key: false,
         base_url: Some("http://localhost:11434/v1".into()),
         api_protocol: "openai-completions".into(),

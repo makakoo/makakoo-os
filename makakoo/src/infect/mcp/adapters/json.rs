@@ -30,12 +30,7 @@ const SERVER_NAME: &str = "harvey";
 
 /// Sync the JSON config at `path`. `is_opencode` switches the parent
 /// key from `mcpServers` to `mcp`.
-pub fn sync(
-    path: &Path,
-    spec: &McpServerSpec,
-    dry_run: bool,
-    is_opencode: bool,
-) -> SyncOutcome {
+pub fn sync(path: &Path, spec: &McpServerSpec, dry_run: bool, is_opencode: bool) -> SyncOutcome {
     let parent_key = if is_opencode { "mcp" } else { "mcpServers" };
 
     // Read the existing config — start from empty `{}` if the file

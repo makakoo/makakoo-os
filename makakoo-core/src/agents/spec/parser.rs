@@ -8,8 +8,8 @@
 use std::fs;
 use std::path::Path;
 
-use crate::{MakakooError, Result};
 use super::AgentSpec;
+use crate::{MakakooError, Result};
 
 /// Parse a spec from a YAML or TOML string.
 ///
@@ -18,12 +18,10 @@ use super::AgentSpec;
 pub fn parse_str(raw: &str, extension_hint: Option<&str>) -> Result<AgentSpec> {
     let ext = extension_hint.unwrap_or("");
     match ext {
-        "yaml" | "yml" => serde_yaml_ng::from_str::<AgentSpec>(raw).map_err(|e| {
-            MakakooError::Config(format!("YAML parse: {}", e))
-        }),
-        "toml" => toml::from_str::<AgentSpec>(raw).map_err(|e| {
-            MakakooError::Config(format!("TOML parse: {}", e))
-        }),
+        "yaml" | "yml" => serde_yaml_ng::from_str::<AgentSpec>(raw)
+            .map_err(|e| MakakooError::Config(format!("YAML parse: {}", e))),
+        "toml" => toml::from_str::<AgentSpec>(raw)
+            .map_err(|e| MakakooError::Config(format!("TOML parse: {}", e))),
         other => Err(MakakooError::InvalidInput(format!(
             "unsupported extension '.{}' (expected .yaml, .yml, .toml)",
             other
@@ -33,28 +31,22 @@ pub fn parse_str(raw: &str, extension_hint: Option<&str>) -> Result<AgentSpec> {
 
 /// Parse a spec from a file path. Auto-detects format by extension.
 pub fn load_from_file(path: &Path) -> Result<AgentSpec> {
-    let raw = fs::read_to_string(path).map_err(|e| {
-        MakakooError::Config(format!("spec file {} read: {}", path.display(), e))
+    let raw = fs::read_to_string(path)
+        .map_err(|e| MakakooError::Config(format!("spec file {} read: {}", path.display(), e)))?;
+    let ext = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+        MakakooError::InvalidInput(format!(
+            "spec file {} has no extension (expected .yaml, .yml, .toml)",
+            path.display()
+        ))
     })?;
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .ok_or_else(|| {
-            MakakooError::InvalidInput(format!(
-                "spec file {} has no extension (expected .yaml, .yml, .toml)",
-                path.display()
-            ))
-        })?;
     let spec = parse_str(&raw, Some(ext)).map_err(|e| match e {
         MakakooError::Config(msg) => MakakooError::Config(format!("{}: {}", path.display(), msg)),
         other => other,
     })?;
     spec.validate().map_err(|e| match e {
-        MakakooError::InvalidInput(msg) => MakakooError::InvalidInput(format!(
-            "{}: {}",
-            path.display(),
-            msg
-        )),
+        MakakooError::InvalidInput(msg) => {
+            MakakooError::InvalidInput(format!("{}: {}", path.display(), msg))
+        }
         other => other,
     })?;
     Ok(spec)
@@ -62,16 +54,14 @@ pub fn load_from_file(path: &Path) -> Result<AgentSpec> {
 
 /// Serialize a spec to YAML.
 pub fn to_yaml(spec: &AgentSpec) -> Result<String> {
-    serde_yaml_ng::to_string(spec).map_err(|e| {
-        MakakooError::Config(format!("spec YAML serialize: {}", e))
-    })
+    serde_yaml_ng::to_string(spec)
+        .map_err(|e| MakakooError::Config(format!("spec YAML serialize: {}", e)))
 }
 
 /// Serialize a spec to TOML.
 pub fn to_toml(spec: &AgentSpec) -> Result<String> {
-    toml::to_string_pretty(spec).map_err(|e| {
-        MakakooError::Config(format!("spec TOML serialize: {}", e))
-    })
+    toml::to_string_pretty(spec)
+        .map_err(|e| MakakooError::Config(format!("spec TOML serialize: {}", e)))
 }
 
 /// Return the canonical spec file extension for a given format.
@@ -162,14 +152,22 @@ scope: {}
         let s = parse_str(raw, Some("yaml")).unwrap();
         assert_eq!(s.channels.len(), 2);
         match &s.channels[0] {
-            ChannelSpec::Telegram { token_env, allowed_users } => {
+            ChannelSpec::Telegram {
+                token_env,
+                allowed_users,
+            } => {
                 assert_eq!(token_env, "TELEGRAM_FOO");
                 assert_eq!(allowed_users, &vec!["123".to_string(), "456".to_string()]);
             }
             _ => panic!("expected telegram"),
         }
         match &s.channels[1] {
-            ChannelSpec::Slack { token_env, app_token_env, team_id_env, .. } => {
+            ChannelSpec::Slack {
+                token_env,
+                app_token_env,
+                team_id_env,
+                ..
+            } => {
                 assert_eq!(token_env, "SLACK_BOT");
                 assert_eq!(app_token_env, "SLACK_APP");
                 assert_eq!(team_id_env, "SLACK_TEAM_ID");

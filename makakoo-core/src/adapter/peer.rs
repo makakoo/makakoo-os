@@ -5,18 +5,21 @@
 //! each other at RPC time: each peer has a signing key; each peer
 //! carries a trust file naming the peers it accepts requests from.
 //!
-//! The wire format is the minimum to prevent replay + tamper:
+//! The wire format prevents tamper and rejects requests outside a bounded
+//! freshness window. It does not nonce-deduplicate identical requests inside
+//! that window; callers needing exactly-once semantics must add an idempotency
+//! key at the application layer.
 //!
 //!   Client sends:
 //!     POST /rpc
 //!     X-Makakoo-Peer: <peer-name>         — selector for trust file
 //!     X-Makakoo-Ts:   <unix-millis>       — request timestamp
-//!     X-Makakoo-Sig:  ed25519=<base64>    — Ed25519 over sha256(body || ts)
+//!     X-Makakoo-Sig:  ed25519=<base64>    — Ed25519 over body, ts, and optional agent id
 //!
 //!   Server verifies:
 //!     1. Lookup peer pubkey in trust file → 401 if unknown.
 //!     2. |now - ts| < DRIFT_WINDOW (60s) → 401 if drift.
-//!     3. Verify signature over sha256(body || ts_bytes) → 401 if bad.
+//!     3. Verify body + timestamp + optional agent attribution → 401 if bad.
 //!
 //! If all three pass the request body is handed to the MCP server as if
 //! it arrived over stdio.
@@ -175,20 +178,33 @@ pub fn load_or_create_signing_key(
             source,
         })?;
     }
-    fs::write(key_path, B64.encode(signing.to_bytes())).map_err(|source| PeerError::Io {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut key_file = options.open(key_path).map_err(|source| PeerError::Io {
         path: key_path.to_path_buf(),
         source,
     })?;
+    use std::io::Write as _;
+    if let Err(source) = key_file
+        .write_all(B64.encode(signing.to_bytes()).as_bytes())
+        .and_then(|_| key_file.sync_all())
+    {
+        drop(key_file);
+        let _ = fs::remove_file(key_path);
+        return Err(PeerError::Io {
+            path: key_path.to_path_buf(),
+            source,
+        });
+    }
     fs::write(pub_path, B64.encode(verifying.to_bytes())).map_err(|source| PeerError::Io {
         path: pub_path.to_path_buf(),
         source,
     })?;
-    // On Unix, chmod 0600 the private key — best-effort.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(key_path, fs::Permissions::from_mode(0o600));
-    }
     Ok((signing, verifying, true))
 }
 
@@ -200,18 +216,33 @@ pub fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// Compute the canonical bytes a signature covers: `sha256(body || ts_decimal_ascii)`.
-fn canonical_digest(body: &[u8], ts: i64) -> [u8; 32] {
+/// Compute the signed digest. Requests without agent attribution retain the
+/// original wire digest; attributed requests append a domain-separated id.
+fn canonical_digest(body: &[u8], ts: i64, agent_id: Option<&str>) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(body);
     h.update(ts.to_string().as_bytes());
+    if let Some(agent_id) = agent_id {
+        h.update(b"\0makakoo-agent-id\0");
+        h.update(agent_id.as_bytes());
+    }
     h.finalize().into()
 }
 
 /// Sign a request body + timestamp. Returns the base64 signature (without
 /// the `ed25519=` prefix — caller composes the final header value).
 pub fn sign_request(signing: &SigningKey, body: &[u8], ts: i64) -> String {
-    let digest = canonical_digest(body, ts);
+    sign_request_for_agent(signing, body, ts, None)
+}
+
+/// Sign a request while binding optional slot attribution to the signature.
+pub fn sign_request_for_agent(
+    signing: &SigningKey,
+    body: &[u8],
+    ts: i64,
+    agent_id: Option<&str>,
+) -> String {
+    let digest = canonical_digest(body, ts, agent_id);
     let sig: Signature = signing.sign(&digest);
     B64.encode(sig.to_bytes())
 }
@@ -222,6 +253,19 @@ pub fn verify_request(
     peer: &str,
     body: &[u8],
     ts: i64,
+    sig_header: &str,
+    now: i64,
+) -> Result<(), PeerError> {
+    verify_request_for_agent(trust, peer, body, ts, None, sig_header, now)
+}
+
+/// Verify a signed request and its optional slot attribution as one message.
+pub fn verify_request_for_agent(
+    trust: &HashMap<String, VerifyingKey>,
+    peer: &str,
+    body: &[u8],
+    ts: i64,
+    agent_id: Option<&str>,
     sig_header: &str,
     now: i64,
 ) -> Result<(), PeerError> {
@@ -246,7 +290,7 @@ pub fn verify_request(
     }
     let arr: [u8; 64] = raw.as_slice().try_into().unwrap();
     let sig = Signature::from_bytes(&arr);
-    let digest = canonical_digest(body, ts);
+    let digest = canonical_digest(body, ts, agent_id);
     key.verify(&digest, &sig)
         .map_err(|_| PeerError::VerifyFailed)
 }
@@ -385,6 +429,14 @@ mod tests {
         let (_s2, v2, gen2) = load_or_create_signing_key(&key, &pub_).unwrap();
         assert!(!gen2);
         assert_eq!(v1.to_bytes(), v2.to_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]
@@ -409,6 +461,25 @@ mod tests {
             ts,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn signed_agent_id_cannot_be_changed_or_removed() {
+        let tmp = TempDir::new().unwrap();
+        let (signing, verifying, _) =
+            load_or_create_signing_key(&tmp.path().join("k"), &tmp.path().join("p")).unwrap();
+        let body = b"body";
+        let ts = 1_700_000_000_000;
+        let sig = sign_request_for_agent(&signing, body, ts, Some("researcher"));
+        let trust = HashMap::from([("peer-a".to_string(), verifying)]);
+        let header = format!("{SIG_PREFIX}{sig}");
+        verify_request_for_agent(&trust, "peer-a", body, ts, Some("researcher"), &header, ts)
+            .unwrap();
+        assert!(
+            verify_request_for_agent(&trust, "peer-a", body, ts, Some("other"), &header, ts,)
+                .is_err()
+        );
+        assert!(verify_request(&trust, "peer-a", body, ts, &header, ts).is_err());
     }
 
     #[test]

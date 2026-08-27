@@ -69,10 +69,9 @@ pub fn render(ctx: &RenderContext) -> String {
 
 fn channel_deps(c: &ChannelSpec) -> Vec<(&'static str, &'static str)> {
     match c {
-        ChannelSpec::Telegram { .. } => vec![
-            ("@flue/telegram", "^1.0.0-beta.1"),
-            ("grammy", "^1.0.0"),
-        ],
+        ChannelSpec::Telegram { .. } => {
+            vec![("@flue/telegram", "^1.0.0-beta.1"), ("grammy", "^1.0.0")]
+        }
         ChannelSpec::Slack { .. } => vec![
             // V1: @flue/slack doesn't expose a bot client; operators
             // wire their own outbound tool. No @slack/bolt needed.

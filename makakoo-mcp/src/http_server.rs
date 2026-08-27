@@ -12,6 +12,7 @@
 //! X-Makakoo-Peer: <name>                  required
 //! X-Makakoo-Ts:   <unix-millis>           required
 //! X-Makakoo-Sig:  ed25519=<base64>        required
+//! X-Makakoo-Agent-Id: <slot-id>            optional, signed when present
 //! Content-Type:   application/json        required
 //!
 //! <json-rpc 2.0 request body>
@@ -35,6 +36,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
+    extract::DefaultBodyLimit,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -44,6 +46,7 @@ use axum::{
 use ed25519_dalek::VerifyingKey;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tower::limit::ConcurrencyLimitLayer;
 use tracing::{debug, info, warn};
 
 use makakoo_core::adapter::peer::{
@@ -83,9 +86,14 @@ impl HttpState {
 
 /// Build the axum router. Exposed so tests can hit the handler directly
 /// without actually binding a TCP socket.
+const MAX_RPC_BODY_BYTES: usize = 1024 * 1024;
+const MAX_CONCURRENT_RPC_REQUESTS: usize = 64;
+
 pub fn router(state: Arc<HttpState>) -> Router {
     Router::new()
         .route("/rpc", post(handle_rpc))
+        .layer(DefaultBodyLimit::max(MAX_RPC_BODY_BYTES))
+        .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_RPC_REQUESTS))
         .with_state(state)
 }
 
@@ -132,13 +140,22 @@ async fn handle_rpc(
         Err(_) => return bad_request(format!("{TS_HEADER} must be a unix-millis integer")),
     };
 
+    // Agent attribution is security-sensitive and therefore parsed before
+    // signature verification, validated as a slot id, and included in the
+    // signed digest when present.
+    let agent_id = match optional_agent_id(&headers) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
     // 2. Verify against the trust store + clock window.
     let trust = state.trust.read().await;
-    if let Err(err) = peer::verify_request(
+    if let Err(err) = peer::verify_request_for_agent(
         &trust,
         &peer_name,
         &body,
         ts,
+        agent_id.as_deref(),
         sig_header.as_str(),
         peer::now_millis(),
     ) {
@@ -152,16 +169,6 @@ async fn handle_rpc(
         Err(e) => return bad_request(format!("malformed JSON-RPC body: {e}")),
     };
 
-    // 3b. Read the optional originating-agent header so tool
-    //     handlers can attribute the call to the right slot.
-    //     Phase 3 spec: HTTP path reads X-Makakoo-Agent-Id;
-    //     stdio path reads MAKAKOO_AGENT_SLOT env var.  Either
-    //     way the value lands in the AGENT_ID OnceCell read by
-    //     downstream dispatch code.
-    let agent_id = headers
-        .get(AGENT_ID_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
     if let Some(ref id) = agent_id {
         debug!(peer = %peer_name, agent_id = %id, "agent-attributed mcp call");
     }
@@ -198,6 +205,19 @@ fn header_str(headers: &HeaderMap, name: &'static str) -> Result<String, Respons
     }
 }
 
+#[allow(clippy::result_large_err)]
+fn optional_agent_id(headers: &HeaderMap) -> Result<Option<String>, Response> {
+    let Some(value) = headers.get(AGENT_ID_HEADER) else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| bad_request(format!("{AGENT_ID_HEADER} must be valid ASCII")))?;
+    makakoo_core::agents::validate_slot_id(value)
+        .map_err(|error| bad_request(format!("invalid {AGENT_ID_HEADER}: {error}")))?;
+    Ok(Some(value.to_string()))
+}
+
 fn bad_request(msg: impl Into<String>) -> Response {
     let body = serde_json::json!({ "error": msg.into() });
     (
@@ -228,6 +248,7 @@ mod tests {
     use base64::Engine;
     use ed25519_dalek::SigningKey;
     use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Hello;
 
@@ -244,6 +265,31 @@ mod tests {
         }
         async fn call(&self, _: Value) -> Result<Value, RpcError> {
             Ok(json!("hi from http"))
+        }
+    }
+
+    struct Slow {
+        active: Arc<AtomicUsize>,
+        maximum: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ToolHandler for Slow {
+        fn name(&self) -> &str {
+            "slow"
+        }
+        fn description(&self) -> &str {
+            "holds a request briefly"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn call(&self, _: Value) -> Result<Value, RpcError> {
+            let current = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.maximum.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(json!("done"))
         }
     }
 
@@ -280,6 +326,26 @@ mod tests {
                 SIG_HEADER.to_string(),
                 format!("{}{}", peer::SIG_PREFIX, sig),
             ),
+            ("Content-Type".to_string(), "application/json".to_string()),
+        ]
+    }
+
+    fn signed_headers_for_agent(
+        signing: &SigningKey,
+        body: &[u8],
+        peer_name: &str,
+        agent_id: &str,
+    ) -> Vec<(String, String)> {
+        let ts = peer::now_millis();
+        let sig = peer::sign_request_for_agent(signing, body, ts, Some(agent_id));
+        vec![
+            (PEER_HEADER.to_string(), peer_name.to_string()),
+            (TS_HEADER.to_string(), ts.to_string()),
+            (
+                SIG_HEADER.to_string(),
+                format!("{}{}", peer::SIG_PREFIX, sig),
+            ),
+            (AGENT_ID_HEADER.to_string(), agent_id.to_string()),
             ("Content-Type".to_string(), "application/json".to_string()),
         ]
     }
@@ -389,6 +455,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oversized_rpc_body_returns_413_before_dispatch() {
+        let (state, signing) = test_state();
+        let body = vec![b'x'; MAX_RPC_BODY_BYTES + 1];
+        let headers = signed_headers(&signing, &body, "clienta");
+        let (status, _) = post_via_axum(state, headers, &body).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn rpc_load_never_exceeds_concurrency_limit() {
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+        use tower::ServiceExt;
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Slow {
+            active: active.clone(),
+            maximum: maximum.clone(),
+        }));
+        let ctx = Arc::new(ToolContext::empty(PathBuf::from("/tmp")));
+        let mut seed = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut seed);
+        let signing = SigningKey::from_bytes(&seed);
+        let mut trust = HashMap::new();
+        trust.insert("clienta".to_string(), signing.verifying_key());
+        let state = Arc::new(HttpState::new(
+            Arc::new(registry),
+            ctx,
+            trust,
+            PathBuf::from("/tmp/unused-trust"),
+        ));
+        let app = router(state);
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow","arguments":{}}}"#;
+        let headers = signed_headers(&signing, body, "clienta");
+        let mut pending = FuturesUnordered::new();
+        for _ in 0..96 {
+            let mut builder = axum::http::Request::post("/rpc");
+            for (name, value) in &headers {
+                builder = builder.header(name, value);
+            }
+            let request = builder.body(axum::body::Body::from(body.to_vec())).unwrap();
+            let service = app.clone();
+            pending.push(async move { service.oneshot(request).await.unwrap().status() });
+        }
+        while let Some(status) = pending.next().await {
+            assert_eq!(status, StatusCode::OK);
+        }
+        assert!(maximum.load(Ordering::SeqCst) <= MAX_CONCURRENT_RPC_REQUESTS);
+    }
+
+    #[tokio::test]
     async fn ping_returns_empty_object() {
         let (state, signing) = test_state();
         let body = br#"{"jsonrpc":"2.0","id":42,"method":"ping"}"#;
@@ -433,10 +551,25 @@ mod tests {
 
     fn capture_state(
         capture: Arc<tokio::sync::Mutex<Option<String>>>,
-    ) -> (Arc<HttpState>, SigningKey) {
+    ) -> (Arc<HttpState>, SigningKey, tempfile::TempDir) {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(CaptureAgentId(capture)));
-        let ctx = Arc::new(ToolContext::empty(std::path::PathBuf::from("/tmp")));
+        let home = tempfile::tempdir().unwrap();
+        let slot = makakoo_core::agents::AgentSlot {
+            slot_id: "harveychat".into(),
+            name: "HarveyChat".into(),
+            persona: None,
+            inherit_baseline: false,
+            allowed_paths: vec![],
+            forbidden_paths: vec![],
+            tools: vec!["capture_agent_id".into()],
+            process_mode: "supervised_pair".into(),
+            transports: vec![],
+            llm: None,
+            runtime: None,
+        };
+        makakoo_core::agents::AgentRegistry::create(home.path(), &slot).unwrap();
+        let ctx = Arc::new(ToolContext::empty(home.path().to_path_buf()));
 
         use rand::RngCore;
         let mut s = [0u8; 32];
@@ -452,16 +585,15 @@ mod tests {
             trust,
             PathBuf::from("/tmp/unused-trust"),
         ));
-        (state, signing)
+        (state, signing, home)
     }
 
     #[tokio::test]
     async fn agent_id_header_propagates_to_tool_handler() {
         let captured = Arc::new(tokio::sync::Mutex::new(None));
-        let (state, signing) = capture_state(captured.clone());
+        let (state, signing, _home) = capture_state(captured.clone());
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capture_agent_id","arguments":{}}}"#;
-        let mut headers = signed_headers(&signing, body, "clienta");
-        headers.push((AGENT_ID_HEADER.to_string(), "harveychat".to_string()));
+        let headers = signed_headers_for_agent(&signing, body, "clienta", "harveychat");
         let (status, _resp) = post_via_axum(state, headers, body).await;
         assert_eq!(status, StatusCode::OK);
         let observed = captured.lock().await.clone();
@@ -471,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn missing_agent_id_header_yields_none_in_handler() {
         let captured = Arc::new(tokio::sync::Mutex::new(None));
-        let (state, signing) = capture_state(captured.clone());
+        let (state, signing, _home) = capture_state(captured.clone());
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capture_agent_id","arguments":{}}}"#;
         let headers = signed_headers(&signing, body, "clienta");
         // No AGENT_ID_HEADER in the request.
@@ -479,5 +611,23 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let observed = captured.lock().await.clone();
         assert!(observed.is_none(), "expected None, got {observed:?}");
+    }
+
+    #[tokio::test]
+    async fn agent_id_header_is_signed_and_validated() {
+        let captured = Arc::new(tokio::sync::Mutex::new(None));
+        let (state, signing, _home) = capture_state(captured);
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+
+        let mut tampered = signed_headers_for_agent(&signing, body, "clienta", "harveychat");
+        tampered.retain(|(name, _)| name != AGENT_ID_HEADER);
+        tampered.push((AGENT_ID_HEADER.to_string(), "other".to_string()));
+        let (status, _) = post_via_axum(state.clone(), tampered, body).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let mut invalid = signed_headers(&signing, body, "clienta");
+        invalid.push((AGENT_ID_HEADER.to_string(), "../escape".to_string()));
+        let (status, _) = post_via_axum(state, invalid, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

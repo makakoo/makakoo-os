@@ -9,14 +9,14 @@
 //! | spec field             | slot field                                  |
 //! |------------------------|---------------------------------------------|
 //! | `name`                 | `slot_id`, `name`                           |
-//! | `description`          | (dropped; surfaced via Flue scaffold)       |
+//! | `description`          | (dropped; retained in generated spec.yaml)  |
 //! | `model`                | `llm.override.model`                        |
 //! | `instructions`         | `persona`                                   |
 //! | `tools`                | `tools`                                     |
 //! | `scope.allowed_paths`  | `allowed_paths`                             |
 //! | `scope.forbidden_paths`| `forbidden_paths`                           |
 //! | `channels[]`           | `transports[]` (one TransportEntry each)    |
-//! | `triggers[]`           | (deferred to Phase 4 — Flue scaffold)       |
+//! | `triggers[]`           | (not scheduled by the DSH V1 runtime)       |
 //!
 //! Channel → transport kind mapping (spec kind → slot kind):
 //!
@@ -54,7 +54,10 @@ impl AgentSpec {
             slot_id: self.name.clone(),
             name: self.name.clone(),
             persona: Some(self.instructions.clone()),
-            inherit_baseline: true,
+            // AgentSpec.tools is an explicit allowlist. Generated runtimes
+            // never inherit an implicit MCP baseline: `tools: []` means no
+            // model-facing tools.
+            inherit_baseline: false,
             allowed_paths: self.scope.allowed_paths.clone(),
             forbidden_paths: self.scope.forbidden_paths.clone(),
             tools: self.tools.clone(),
@@ -69,6 +72,7 @@ impl AgentSpec {
                     reasoning_effort: Some(ReasoningEffort::Medium),
                 }),
             }),
+            runtime: None,
         };
         Ok(slot)
     }
@@ -81,7 +85,10 @@ fn channel_to_transport(
 ) -> Result<TransportEntry> {
     let id = format!("{}-{}", transport_id_stem(c), index);
     match c {
-        super::ChannelSpec::Telegram { token_env, allowed_users } => Ok(TransportEntry {
+        super::ChannelSpec::Telegram {
+            token_env,
+            allowed_users,
+        } => Ok(TransportEntry {
             id,
             kind: "telegram".into(),
             enabled: true,
@@ -120,9 +127,9 @@ fn channel_to_transport(
             config: TransportConfig::Slack(SlackConfig {
                 // V1: team_id is a hardcoded String in SlackConfig. The
                 // converter can't store an env-var reference, so it
-                // emits a sentinel the operator must replace. Phase 4
-                // will add `team_id_env` to SlackConfig so the runtime
-                // resolves it.
+                // emits a sentinel the operator must replace if this slot is
+                // consumed by a legacy channel runtime. DSH V1 does not
+                // attach Slack adapters.
                 team_id: format!("T_FROM_{}", team_id_env),
                 mode: "socket".into(),
                 dm_only: true,
@@ -130,7 +137,10 @@ fn channel_to_transport(
                 support_thread: false,
             }),
         }),
-        super::ChannelSpec::Discord { token_env, allowed_users } => Ok(TransportEntry {
+        super::ChannelSpec::Discord {
+            token_env,
+            allowed_users,
+        } => Ok(TransportEntry {
             id,
             kind: "discord".into(),
             enabled: true,
@@ -151,12 +161,9 @@ fn channel_to_transport(
         }),
         super::ChannelSpec::Webhook { path, secret_env } => {
             // WebConfig (the slot's WS transport) doesn't carry a
-            // `path` field; webhook endpoints are wired in the Flue
-            // scaffold directly from the spec. We surface the path
-            // via `account_id` so it's not lost, and the renderer
-            // will read it back. Phase 4 will replace this with a
-            // proper field once the Flue scaffold takes the spec
-            // directly.
+            // `path` field. Keep the secret reference in the slot; DSH V1
+            // does not attach channel adapters and therefore does not serve
+            // this webhook path.
             let _ = path;
             Ok(TransportEntry {
                 id,
@@ -204,9 +211,9 @@ fn channel_to_transport(
                     account_id: format!("EMAIL_FROM_{}", agent_name),
                     auth_mode: "app_password".into(),
                     imap_server: imap_host.clone(),
-                    imap_port: 993,  // implicit TLS (port 143 rejected)
+                    imap_port: 993, // implicit TLS (port 143 rejected)
                     smtp_server: smtp_host.clone(),
-                    smtp_port: 587,  // STARTTLS (port 25 rejected)
+                    smtp_port: 587, // STARTTLS (port 25 rejected)
                     ..Default::default()
                 }),
             })
@@ -251,16 +258,17 @@ fn transport_id_stem(c: &super::ChannelSpec) -> &'static str {
 
 /// If the spec declares triggers, return a one-line warning
 /// describing that the slot TOML doesn't (yet) represent them.
-/// Phase 4 (Flue scaffold) will read triggers directly from the
-/// spec; this helper is a safety net for Phase 2.
+/// DSH V1 persists triggers in generated `spec.yaml`, but does not schedule
+/// them. This warning prevents users from mistaking declaration for runtime
+/// activation.
 pub fn triggers_warning(spec: &AgentSpec) -> Option<String> {
     if spec.triggers.is_empty() {
         return None;
     }
     let kinds: Vec<String> = spec.triggers.iter().map(trigger_kind_name).collect();
     Some(format!(
-        "spec '{}' declares {} trigger(s) ({}) — slot TOML will not \
-         represent them in Phase 2; they will be read by the Flue scaffold in Phase 4",
+        "spec '{}' declares {} trigger(s) ({}) — slot TOML does not represent them and \
+         the DeepSeek Harness V1 runtime does not schedule them",
         spec.name,
         spec.triggers.len(),
         kinds.join(", ")
@@ -310,6 +318,7 @@ mod tests {
         let llm = slot.llm.as_ref().unwrap();
         let over = llm.overrides.as_ref().unwrap();
         assert_eq!(over.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
+        assert!(!slot.inherit_baseline);
     }
 
     #[test]
@@ -437,5 +446,13 @@ mod tests {
         let mut s = minimal_spec();
         s.name = "INVALID NAME".into();
         assert!(s.to_slot().is_err());
+    }
+
+    #[test]
+    fn empty_spec_tool_list_is_least_privilege() {
+        let mut spec = minimal_spec();
+        spec.tools.clear();
+        let slot = spec.to_slot().unwrap();
+        assert!(crate::agents::check_tool(&slot, "brain_search").is_err());
     }
 }

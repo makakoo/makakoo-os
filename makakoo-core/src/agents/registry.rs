@@ -5,7 +5,8 @@
 //! lifecycle here (Phase 3 wires the per-slot Python gateway
 //! supervisor).
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use crate::agents::slot::{registry_dir, slot_path, AgentSlot};
 use crate::{MakakooError, Result};
@@ -68,7 +69,19 @@ impl AgentRegistry {
         }
         let raw = toml::to_string_pretty(slot)
             .map_err(|e| MakakooError::Internal(format!("agent slot serialise: {}", e)))?;
-        std::fs::write(&path, raw)?;
+        let tmp = write_private_temp(&path, raw.as_bytes())?;
+        if let Err(error) = std::fs::hard_link(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(MakakooError::InvalidInput(format!(
+                    "agent slot '{}' already exists at {} — refusing to overwrite",
+                    slot.slot_id,
+                    path.display()
+                )));
+            }
+            return Err(error.into());
+        }
+        std::fs::remove_file(tmp)?;
         Ok(())
     }
 
@@ -85,13 +98,33 @@ impl AgentRegistry {
                 path.display()
             )));
         }
-        let tmp = path.with_extension("toml.tmp");
         let raw = toml::to_string_pretty(slot)
             .map_err(|e| MakakooError::Internal(format!("agent slot serialise: {}", e)))?;
-        std::fs::write(&tmp, raw)?;
+        let tmp = write_private_temp(&path, raw.as_bytes())?;
         std::fs::rename(&tmp, &path)?;
         Ok(())
     }
+}
+
+fn write_private_temp(target: &Path, body: &[u8]) -> Result<PathBuf> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmp = target.with_extension(format!("toml.{}.{nonce}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    if let Err(error) = file.write_all(body).and_then(|_| file.sync_all()) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error.into());
+    }
+    Ok(tmp)
 }
 
 #[cfg(test)]
@@ -129,6 +162,7 @@ mod tests {
             process_mode: "supervised_pair".into(),
             transports: vec![telegram_block("telegram-main")],
             llm: None,
+            runtime: None,
         }
     }
 
@@ -154,6 +188,20 @@ mod tests {
         AgentRegistry::create(dir.path(), &slot("harveychat")).unwrap();
         let err = AgentRegistry::create(dir.path(), &slot("harveychat")).unwrap_err();
         assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_writes_private_slot_toml() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        AgentRegistry::create(dir.path(), &slot("harveychat")).unwrap();
+        let mode = std::fs::metadata(slot_path(dir.path(), "harveychat"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

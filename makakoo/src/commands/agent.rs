@@ -59,6 +59,11 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 status(ctx, &name)
             }
         }
+        AgentCmd::Prompt {
+            slot,
+            prompt,
+            session,
+        } => crate::commands::agent_prompt::run(ctx, &slot, &prompt, &session),
         AgentCmd::Restart { name } => {
             if agent_lifecycle::is_slot(ctx.home(), &name) {
                 agent_lifecycle::restart_slot(ctx, &name)
@@ -68,7 +73,11 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             }
         }
         AgentCmd::Supervisor { slot } => agent_lifecycle::run_supervisor_command(ctx, &slot),
-        AgentCmd::Health { name } => hook(ctx, &name, Hook::Health),
+        AgentCmd::Health { name } => match health_route(ctx.home(), &name)? {
+            HealthRoute::DeepseekHarness => crate::commands::agent_prompt::health(ctx, &name),
+            HealthRoute::LegacySlot => agent_lifecycle::status_slot(ctx, &name),
+            HealthRoute::Plugin => hook(ctx, &name, Hook::Health),
+        },
 
         // Phase 2 multi-bot subagent registry.
         AgentCmd::List { json } => crate::commands::agent_slot::list(ctx, json),
@@ -88,8 +97,7 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 None => {
                     use makakoo_core::agents::llm_provider::discover_providers;
                     let providers = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current()
-                            .block_on(discover_providers())
+                        tokio::runtime::Handle::current().block_on(discover_providers())
                     });
                     let p = providers.iter().find(|p| p.id == provider);
                     match p {
@@ -100,10 +108,7 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             };
             match makakoo_core::agents::llm_provider_default::set_default(&specifier) {
                 Ok(()) => {
-                    output::print_info(format!(
-                        "✓ Set project default: {}",
-                        specifier
-                    ));
+                    output::print_info(format!("✓ Set project default: {}", specifier));
                     Ok(0)
                 }
                 Err(e) => {
@@ -116,7 +121,9 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             match makakoo_core::agents::llm_provider_default::get_default() {
                 Some(d) => println!("{}", d),
                 None => {
-                    println!("No project default set. Use `makakoo provider set <provider> <model>`.");
+                    println!(
+                        "No project default set. Use `makakoo agent provider-set <provider> <model>`."
+                    );
                     return Ok(1);
                 }
             }
@@ -185,6 +192,28 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             Ok(0)
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum HealthRoute {
+    DeepseekHarness,
+    LegacySlot,
+    Plugin,
+}
+
+fn health_route(home: &Path, name: &str) -> anyhow::Result<HealthRoute> {
+    let path = makakoo_core::agents::checked_slot_path(home, name)?;
+    if !path.exists() {
+        return Ok(HealthRoute::Plugin);
+    }
+    let slot = makakoo_core::agents::AgentSlot::load_from_file(&path)
+        .map_err(|error| anyhow::anyhow!("agent slot '{}' load failed: {}", name, error))?;
+    Ok(match slot.runtime.as_ref().map(|runtime| runtime.engine) {
+        Some(makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness) => {
+            HealthRoute::DeepseekHarness
+        }
+        _ => HealthRoute::LegacySlot,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -282,4 +311,39 @@ fn exec_in(cwd: &Path, cmd: &str) -> anyhow::Result<i32> {
         .current_dir(cwd)
         .status()?;
     Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_slot(home: &Path, name: &str, body: &str) {
+        let dir = home.join("config/agents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.toml")), body).unwrap();
+    }
+
+    #[test]
+    fn health_dispatch_distinguishes_dsh_legacy_and_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_slot(tmp.path(), "legacy", "slot_id = \"legacy\"\n");
+        write_slot(
+            tmp.path(),
+            "dsh",
+            "slot_id = \"dsh\"\n[runtime]\nengine = \"deepseek-harness\"\nproject_dir = \"/tmp/dsh\"\n",
+        );
+
+        assert_eq!(
+            health_route(tmp.path(), "dsh").unwrap(),
+            HealthRoute::DeepseekHarness
+        );
+        assert_eq!(
+            health_route(tmp.path(), "legacy").unwrap(),
+            HealthRoute::LegacySlot
+        );
+        assert_eq!(
+            health_route(tmp.path(), "plugin-only").unwrap(),
+            HealthRoute::Plugin
+        );
+    }
 }

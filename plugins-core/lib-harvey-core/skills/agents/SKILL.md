@@ -24,6 +24,11 @@ tags:
 
 # agents — scaffold, install, inspect, uninstall
 
+> This skill covers **plugin-agent bundles** and the `agent_*` MCP tools. It
+> does not cover supervised AgentSpec slots. For `makakoo agent create`,
+> DeepSeek Harness, `start`, `prompt`, `health`, or durable runtime sessions,
+> read the sibling `deepseek-harness-agent-runtime/SKILL.md` instead.
+
 Makakoo's agent scaffold lives under `$MAKAKOO_HOME/agents/<name>/`.
 Each agent directory has an `agent.toml` that describes its kind,
 entry point, patrol interval, and metadata. Five MCP tools cover the

@@ -1,5 +1,10 @@
 # Walkthrough — WhatsApp Business Cloud API subagent
 
+> **Legacy gateway reference.** DSH V1 preserves WhatsApp metadata but does
+> not start this webhook listener. Do not use this page to deploy a new DSH
+> slot. Start with [`dsh-agent-runtime.md`](./dsh-agent-runtime.md); use the
+> details below only for an existing legacy gateway slot.
+
 End-to-end recipe: stand up a WhatsApp-backed subagent slot under
 Makakoo OS using Meta's Cloud API. ~30 minutes (most of it on Meta's
 side filling out forms).
@@ -93,8 +98,8 @@ handler echoes the challenge if the verify_token matches.
 If validation fails (red error), check the `agent audit` log:
 
 ```bash
-makakoo agent audit secretary --kind webhook_invalid_signature --last 5
-makakoo agent audit secretary --kind webhook_bad_request --last 5
+makakoo agent audit --kind webhook_invalid_signature --last 5
+makakoo agent audit --kind webhook_bad_request --last 5
 ```
 
 ## 6. Send a test message

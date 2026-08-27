@@ -4,6 +4,20 @@ Every error string the `makakoo` binary (or one of its Rust subsystems) can emit
 
 Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your symptom isn't here, the tree's **categories** are still organized by observable symptom and usually have a hit.
 
+## Agent runtime release diagnostics
+
+- **`DSH V1 exposes the authenticated runtime API; declared channel ingress still requires the Makakoo/Flue channel-adapter slice.`** — The spec contains a channel declaration, but the default DSH runtime does not start that listener. Use `makakoo agent prompt` or a supported trusted adapter.
+- **`Flue provider choice <n> is out of range ...; keeping the spec model.`** — The interactive legacy Flue provider selection was invalid. The existing AgentSpec model remains unchanged; rerun creation and choose a listed number if you intended to change it.
+- **`Multiple Flue providers detected; auto-selecting '<provider>' (local-first).`** — Legacy Flue compatibility found several providers and selected the local-first candidate. Review the generated `.env` before running the manual Flue process.
+- **`No Flue LLM providers detected. Set a provider key or start switchAILocal.`** — The explicitly selected legacy Flue renderer has no usable provider. Start switchAILocal or configure a supported provider before running it.
+- **`custom runtime project preserved outside managed roots: <path>`** — Destroy archived the slot but intentionally left a custom external runtime untouched. Review and remove that directory separately only if it is no longer needed.
+- **`destroy aborted: could not prove supervisor stopped (<error>); slot files were not moved`** — Shutdown could not be proven. Inspect the supervisor/service-manager error and retry stop; Makakoo refuses to archive live state.
+- **`destroy aborted: could not reserve stopped slot (<error>); slot files were not moved`** — Another same-slot supervisor owns or is racing for the runtime lock. Stop it, verify its PID/command, then retry destroy.
+- **`destroy aborted: stop returned exit <rc>; slot files were not moved`** — `agent stop` failed. Resolve that stop error first; no slot files were archived.
+- **`slot '<slot>': runtime.project_dir must be absolute`** — The slot runtime metadata points at a relative project directory. Recreate the generated slot or replace it with an absolute contained path.
+- **`slot is stopped and its unit was removed, but systemctl daemon-reload failed: <error>`** — The process is stopped and the unit file is gone; only systemd's cache refresh failed. Run `systemctl --user daemon-reload` and inspect the reported error.
+- **`<slot>: supervisor already owns the runtime lock; duplicate start ignored`** — Another supervisor already owns this slot. Use `makakoo agent status <slot>`; do not start a second copy.
+
 ---
 
 ## A
@@ -107,6 +121,10 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ## S
 
+- **`slot '<slot>' gateway process(es) [...] survived shutdown; refusing cleanup`** — Stop could not terminate a same-user process whose command/runtime metadata still identifies it as this slot. Inspect the PID, terminate it manually only after verifying its command, then retry stop/destroy.
+- **`slot archived but destroy no longer owns <run-dir>; refusing to unlink its runtime lock`** — The destroy transaction lost its exclusive shutdown guard after archiving. Leave the lock file in place, verify no slot supervisor is running, and restore from the printed archive before retrying.
+- **`<slot>: supervisor owns runtime lock after shutdown grace: <error>`** — The supervisor did not release its singleton lock after graceful and identity-checked forced shutdown. Inspect the same-user supervisor PID and service-manager logs; do not destroy until the lock is released.
+- **`<slot>: supervisor process(es) [...] survived forced shutdown`** / **`survived shutdown; refusing cleanup`** — A same-user process still matches `agent _supervisor --slot <slot>` after the stop grace. Verify the PID/command, terminate it, and retry; Makakoo intentionally refuses to remove run state while it survives.
 - **`session <id> has no entries — cannot label`** — Session-tree label was requested on an empty session. Either add at least one entry first or pick an existing session id.
 - **`session <id> not found at <path>`** — Session id doesn't exist in the tree store.
 - **`setup: unexpected end of input`** — `makakoo setup` got EOF before the section finished (non-TTY stdin, truncated pipe). Rerun interactively or with `--non-interactive`.
@@ -203,14 +221,47 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 These are less common subsystem errors, but they are still searchable here so the verifier keeps public error strings covered.
 
-- **`--from-toml file has slot_id '<file-slot>' but CLI requested slot '<slot>' - they must match`** - The agent-create TOML belongs to a different slot than the CLI flag. Use the slot id from the TOML, or edit the TOML and retry.
-- **`--from-toml is mutually exclusive with --telegram-token / --slack-bot-token`** - Pick one agent-create source: a TOML file, Telegram flags, or Slack flags. Do not mix them.
+- **`--specs is mutually exclusive with --telegram-token / --slack-* (use a spec file for declarative channels)`** - Pick one agent-create source: a YAML/TOML AgentSpec, Telegram shorthand, or Slack shorthand. Do not mix spec input with inline transport flags.
 - **`--only-kernel and --only-mcp are mutually exclusive`** - `makakoo update` can target one component at a time. Pass only one flag, or omit both to update both binaries.
 - **`GitHub API returned <status>: <url>`** - GitHub rejected a release/API request. Check network, auth/rate limit, and that the release/tag exists.
 - **`Slack transport requires --slack-app-token`** - Agent creation for Slack needs the app-level token. Re-run with `--slack-app-token <xapp-...>`.
 - **`Slack transport requires --slack-bot-token`** - Agent creation for Slack needs the bot token. Re-run with `--slack-bot-token <xoxb-...>`.
 - **`Slack transport requires --slack-team`** - Agent creation for Slack needs the workspace/team id. Re-run with `--slack-team <team-id>`.
-- **`agent create needs at least one transport: pass --telegram-token <T> OR --slack-bot-token + --slack-app-token + --slack-team OR --from-toml <path>`** - You invoked `makakoo agent create` without a transport. Add Telegram flags, the complete Slack flag set, or `--from-toml`.
+- **`agent create needs at least one transport: pass --telegram-token <T> OR --slack-bot-token + --slack-app-token + --slack-team OR --specs <path-to-spec>`** - You invoked quick-start creation without a transport. Prefer an AgentSpec with `--specs`; otherwise add the complete Telegram or Slack shorthand flags. DSH V1 preserves those channel declarations but does not start channel listeners.
+- **`agent create requires a <SLOT> argument when --specs is not used`** - Inline Telegram/Slack shorthand requires the slot positional argument. With AgentSpec input, omit it and let the spec `name` become the slot id.
+- **`DeepSeek Harness dependencies missing at {}; run cd {} && npm install`** - Install the pinned Node dependencies in the generated project, then rerun `makakoo agent validate <slot>`.
+- **`DeepSeek Harness runner missing at {}; recreate the slot or restore the generated project`** - The generated runtime is incomplete. Restore its archive or recreate from the canonical AgentSpec.
+- **`DeepSeek Harness requires a non-empty switchAILocal model`** - Set the spec model to `switchailocal/<model>`.
+- **`DeepSeek Harness routes through switchAILocal; use 'switchailocal/<model>' or an unprefixed switchAILocal model id, got '{}'`** - Cloud-provider prefixes are rejected for the supervised DSH engine. Route the selected model through switchAILocal.
+- **Node.js 22.9+ is required for DeepSeek Harness; `node --version` failed** - Install Node.js 22.9 or newer and ensure `node` is on `PATH`, then rerun `makakoo agent validate <slot>`.
+- **`agent runtime output must be an absolute path: {}`** - Pass an absolute `--out` path or omit it to use `$MAKAKOO_HOME/agents-dsh/<slot>`.
+- **`agent runtime output {} already exists — refusing to overwrite`** / **`deepseek-harness output dir {} already exists and is non-empty — refusing to overwrite`** - Inspect the existing slot and project. Destroy/archive only after confirmation; do not overwrite generated state blindly.
+- **`duplicate spec name '{}' in batch: first seen at {}, again at {}`** - Two files in a `--specs` directory resolve to the same slot id. Rename one spec before retrying; batch creation writes nothing.
+- **`init-spec requires a TTY (interactive)`** - Run `makakoo agent init-spec` in an interactive terminal, or write YAML/TOML manually and use `validate-spec`.
+- **`provider choice must be a number`** / **`provider choice {} is out of range 1..={}`** - The legacy Flue provider picker needs one displayed numeric choice. DSH does not use this picker.
+- **`inline secret '{}' contains a forbidden control character`** - Remove newline, carriage-return, or NUL bytes. Store the value in the keyring or environment instead of inline flags.
+- **`agent slot '{}' load failed: {}`** / **`slot load: {}`** - The slot TOML is missing or malformed. Inspect `makakoo agent show <slot>` and restore or recreate the canonical slot.
+- **`runtime metadata unavailable at {}: {} (is the slot started?)`** - Start the slot and check status before calling `health` or `prompt`.
+- **`invalid runtime metadata {}: {}`** / **`runtime metadata does not belong to slot '{}'`** - `runtime.json` is malformed or belongs to another slot. Stop the runtime and recreate it; do not hand-edit metadata.
+- **`runtime endpoint must be a non-zero loopback port`** - The runtime contract allows only `127.0.0.1:<non-zero-port>`. Recreate the generated runner if metadata names a remote host or port zero.
+- **`runtime token file escapes the generated project directory`** - The token path failed containment validation. Treat the project as tampered and recreate it.
+- **`read runtime token {}: {}`** - The per-start token is missing or unreadable. Restart the slot so the runtime writes a fresh mode-0600 token.
+- **`slot '{}' is not running (stale runtime metadata for pid {})`** - Remove the failure by restarting the slot; the CLI rejects stale process metadata.
+- **`slot '{}' is not responding at 127.0.0.1:{}: {}`** - Check supervisor status, slot logs, and switchAILocal health before restarting.
+- **`agent runtime returned {}: {}`** / **`agent runtime returned {} with invalid JSON: {} ({})`** / **`agent runtime response missing 'response'`** - The local DSH endpoint failed its response contract. Preserve the status/body, inspect runtime logs, and report a Makakoo runtime bug.
+- **`slot '{}' is not a DeepSeek Harness runtime`** / **`slot '{}' uses the legacy gateway and has no runtime API`** - `makakoo agent prompt` works only for DSH slots. Existing gateway slots keep their legacy channel lifecycle.
+- **`slot '{}' uses the legacy Flue engine; run its proxy and dev scripts from {}`** - Flue is not supervised. Run `npm run proxy` and `npx flue dev` from the generated project, or recreate with default DSH.
+- **`status file slot '{}' does not match requested slot '{}'`** - The run directory contains cross-slot state. Stop both affected services, preserve the files for diagnosis, then remove only the stale status record.
+- **`status read before signal: {error}`** - Foreground shutdown could not read the supervisor snapshot. Check ownership and integrity under `$MAKAKOO_HOME/run/agents/<slot>/`; Makakoo will not guess a PID.
+- **`refusing to signal supervisor: status belongs to '{}'`** - The runtime snapshot names another slot. Preserve it for diagnosis and stop the named services through their own slot ids; Makakoo refuses cross-slot signalling.
+- **`signal foreground supervisor {}: {error}`** - The direct foreground SIGTERM failed. Check that the recorded PID still belongs to the slot and that the current user owns it, then retry.
+- **`remove stale status: {error}`** - Makakoo could not clean `status.json`. Check file ownership and permissions under `$MAKAKOO_HOME/run/agents/<slot>/`.
+- **`slot archived but remove ephemeral run state {} failed: {error}`** - The durable slot TOML/data/runtime archive succeeded, but cleanup under `$MAKAKOO_HOME/run/agents/<slot>/` failed. Confirm no supervisor owns the slot, inspect the printed run directory, then remove only that stopped slot's ephemeral directory.
+- **`spec declares a voice channel, but the @flue/* adapter is not available in V1. Use a webhook channel + a custom defineTool for Twilio, or remove the channel from the spec. Tracked for V2.`** - This is the legacy Flue renderer's explicit limitation; DSH V1 also does not start voice ingress.
+- **`spec declares an email channel, but the @flue/* adapter is not available in V1. Use a webhook channel + a custom defineTool for SMTP/IMAP, or remove the channel from the spec. Tracked for V2.`** - This is the legacy Flue renderer's explicit limitation; DSH V1 also does not start email ingress.
+- **`couldn't infer MCP format for ~/{config_dir}/{f} — pass --mcp-format explicitly`** - A custom CLI host has an unknown MCP config shape. Choose the real on-disk schema with `--mcp-format` rather than guessing.
+- **`unknown --from host '{other}' (known: grok, codex, vibe, gemini, qwen, claude, opencode)`** - Use one of the listed host presets or pass the custom paths explicitly.
+- **`unknown --mcp-format '{other}' (json-mcp-servers | json-opencode | toml-codex | toml-vibe | toml-simple)`** - Pick one of the supported MCP serialization formats.
 - **`expanded scope <path> is a single top-level directory - refuse to grant; pick a subdirectory`** - The permission grant was too broad. Grant a project/subdirectory, not a top-level filesystem directory.
 - **`fault-injection runner is gated - set MAKAKOO_FAULT_INJECTION=1 to enable. This guard prevents prod from triggering destructive test scenarios.`** - You tried to run destructive test scenarios without the explicit test gate. Only set the env var in a safe test environment.
 - **`garage config missing at <path> - run makakoo plugin install --core garage-store first`** - The Garage backing config is absent. Install the `garage-store` core plugin, then rerun the command.

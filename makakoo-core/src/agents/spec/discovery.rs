@@ -11,8 +11,8 @@
 use std::fs;
 use std::path::Path;
 
-use crate::Result;
 use super::AgentSpec;
+use crate::Result;
 
 const SPEC_EXTENSIONS: &[&str] = &["yaml", "yml", "toml"];
 
@@ -41,11 +41,7 @@ pub fn discover_specs(path: &Path) -> Result<Vec<AgentSpec>> {
 fn discover_in_dir(dir: &Path) -> Result<Vec<AgentSpec>> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .map_err(|e| {
-            crate::MakakooError::Config(format!(
-                "spec dir {} read: {}",
-                dir.display(),
-                e
-            ))
+            crate::MakakooError::Config(format!("spec dir {} read: {}", dir.display(), e))
         })?
         .filter_map(|e| e.ok())
         .filter_map(|entry| {
@@ -145,7 +141,11 @@ tools = []
     #[test]
     fn discover_directory_yaml_and_toml() {
         let dir = TempDir::new().unwrap();
-        write_spec(dir.path(), "a.yaml", &MINIMAL_YAML.replace("name: foo", "name: a"));
+        write_spec(
+            dir.path(),
+            "a.yaml",
+            &MINIMAL_YAML.replace("name: foo", "name: a"),
+        );
         write_spec(
             dir.path(),
             "b.toml",
@@ -175,9 +175,21 @@ tools = []
     #[test]
     fn discover_directory_sorted_deterministically() {
         let dir = TempDir::new().unwrap();
-        write_spec(dir.path(), "z.yaml", &MINIMAL_YAML.replace("name: foo", "name: z"));
-        write_spec(dir.path(), "a.yaml", &MINIMAL_YAML.replace("name: foo", "name: a"));
-        write_spec(dir.path(), "m.yaml", &MINIMAL_YAML.replace("name: foo", "name: m"));
+        write_spec(
+            dir.path(),
+            "z.yaml",
+            &MINIMAL_YAML.replace("name: foo", "name: z"),
+        );
+        write_spec(
+            dir.path(),
+            "a.yaml",
+            &MINIMAL_YAML.replace("name: foo", "name: a"),
+        );
+        write_spec(
+            dir.path(),
+            "m.yaml",
+            &MINIMAL_YAML.replace("name: foo", "name: m"),
+        );
         let specs = discover_specs(dir.path()).unwrap();
         let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["a", "m", "z"]);

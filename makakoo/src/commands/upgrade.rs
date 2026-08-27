@@ -165,7 +165,9 @@ pub async fn run(
             }
         } else if daemon_present {
             println!();
-            println!("# daemon: restart skipped (--no-daemon-restart); pick up the new binary with:");
+            println!(
+                "# daemon: restart skipped (--no-daemon-restart); pick up the new binary with:"
+            );
             println!("    {}", daemon_restart_hint());
         }
     }

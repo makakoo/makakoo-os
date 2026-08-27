@@ -57,7 +57,10 @@ pub fn render(ctx: &RenderContext) -> String {
     s.push_str("// Mount channel ingress routes.\n");
     for (i, _c) in ctx.spec.channels.iter().enumerate() {
         let var = channels::import_alias(i, _c);
-        s.push_str(&format!("void {var}_channel; // imported for side effect (route registration)\n", var = var));
+        s.push_str(&format!(
+            "void {var}_channel; // imported for side effect (route registration)\n",
+            var = var
+        ));
     }
     s.push('\n');
 
@@ -69,8 +72,11 @@ pub fn render(ctx: &RenderContext) -> String {
         s.push_str(&format!("    {var}(ctx.id),\n", var = var));
     }
     s.push_str("  ];\n");
-    s.push_str(&format!("  return {{\n"));
-    s.push_str(&format!("    model: process.env.AGENT_MODEL ?? '{}',\n", ctx.spec.model));
+    s.push_str("  return {\n");
+    s.push_str(&format!(
+        "    model: process.env.AGENT_MODEL ?? '{}',\n",
+        ctx.spec.model
+    ));
     s.push_str("    instructions,\n");
     s.push_str("    tools: [...tools, ...channelTools],\n");
     s.push_str("  };\n");
@@ -84,7 +90,10 @@ pub fn render(ctx: &RenderContext) -> String {
     for (i, t) in ctx.spec.triggers.iter().enumerate() {
         let path = triggers::rel_path(i, t);
         let import_path = path.strip_prefix("src/").unwrap_or(&path);
-        s.push_str(&format!("import '../{import_path}';\n", import_path = import_path));
+        s.push_str(&format!(
+            "import '../{import_path}';\n",
+            import_path = import_path
+        ));
     }
 
     s

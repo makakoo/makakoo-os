@@ -18,7 +18,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::agents::slot::{slot_path, AgentSlot};
+use crate::agents::slot::{checked_slot_path, AgentSlot};
 
 /// Canonical env var name (Q3 locked).
 pub const ENV_VAR: &str = "MAKAKOO_AGENT_SLOT";
@@ -57,6 +57,9 @@ pub enum IdentityError {
         #[source]
         source: crate::MakakooError,
     },
+
+    #[error("invalid agent slot id '{slot_id}': {message}")]
+    InvalidSlotId { slot_id: String, message: String },
 }
 
 impl IdentityError {
@@ -80,7 +83,11 @@ pub fn slot_from_env() -> Result<String, IdentityError> {
 /// validation; this just translates a `not found` into the
 /// locked structured error.
 pub fn load_identity(makakoo_home: &Path, slot_id: &str) -> Result<AgentIdentity, IdentityError> {
-    let path = slot_path(makakoo_home, slot_id);
+    let path =
+        checked_slot_path(makakoo_home, slot_id).map_err(|error| IdentityError::InvalidSlotId {
+            slot_id: slot_id.to_string(),
+            message: error.to_string(),
+        })?;
     if !path.exists() {
         return Err(IdentityError::SlotNotFound {
             slot_id: slot_id.to_string(),
@@ -126,8 +133,10 @@ pub fn render_identity_block(identity: &AgentIdentity, transport_kind: Option<&s
     } else {
         identity.slot.name.as_str()
     };
-    let tools = if identity.slot.tools.is_empty() {
+    let tools = if identity.slot.tools.is_empty() && identity.slot.inherit_baseline {
         "(baseline)".to_string()
+    } else if identity.slot.tools.is_empty() {
+        "(none — least-privilege default)".to_string()
     } else {
         identity.slot.tools.join(", ")
     };
@@ -191,6 +200,7 @@ mod tests {
             process_mode: "supervised_pair".into(),
             transports: vec![telegram_block("telegram-main")],
             llm: None,
+            runtime: None,
         }
     }
 
@@ -206,6 +216,13 @@ mod tests {
             "missing locked CTA in message: {msg}"
         );
         assert!(msg.contains("config/agents/nonexistent.toml"));
+    }
+
+    #[test]
+    fn invalid_slot_id_is_rejected_before_path_construction() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = load_identity(dir.path(), "../escape").unwrap_err();
+        assert!(matches!(error, IdentityError::InvalidSlotId { .. }));
     }
 
     #[test]
@@ -257,6 +274,19 @@ mod tests {
         assert!(block.contains("This message arrived via telegram."));
         assert!(block.contains("Your allowed tools are brain_search, write_file."));
         assert!(block.contains("Your allowed paths are ~/MAKAKOO/data/harveychat/."));
+    }
+
+    #[test]
+    fn least_privilege_empty_tools_are_rendered_as_none() {
+        let mut candidate = slot("restricted");
+        candidate.inherit_baseline = false;
+        candidate.tools.clear();
+        let identity = AgentIdentity {
+            slot_id: "restricted".into(),
+            slot: candidate,
+        };
+        assert!(render_identity_block(&identity, None)
+            .contains("allowed tools are (none — least-privilege default)"));
     }
 
     #[test]

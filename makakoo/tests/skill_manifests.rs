@@ -27,6 +27,7 @@ const SKILL_PATHS: &[&str] = &[
     "plugins-core/agent-multimodal-knowledge/SKILL.md",
     "plugins-core/agent-pi/SKILL.md",
     "plugins-core/lib-harvey-core/skills/agents/SKILL.md",
+    "plugins-core/lib-harvey-core/skills/deepseek-harness-agent-runtime/SKILL.md",
     "plugins-core/lib-harvey-core/skills/wiki/SKILL.md",
     "plugins-core/lib-harvey-core/skills/skill_discover/SKILL.md",
 ];
@@ -70,6 +71,10 @@ fn expected_tools() -> BTreeMap<&'static str, Vec<&'static str>> {
             "agent_install",
             "agent_uninstall",
         ],
+    );
+    m.insert(
+        "plugins-core/lib-harvey-core/skills/deepseek-harness-agent-runtime/SKILL.md",
+        vec!["shell"],
     );
     m.insert(
         "plugins-core/lib-harvey-core/skills/wiki/SKILL.md",

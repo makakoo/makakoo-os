@@ -37,12 +37,14 @@ from file_enforcement import (  # type: ignore[import-not-found]
     PathNotInScopeError,
     PathScope,
     check_path,
+    filesystem_paths,
 )
 from tool_dispatcher import (  # type: ignore[import-not-found]
     ToolNotInScopeError,
     ToolScope,
     check_tool,
 )
+from parent_watchdog import start_parent_watchdog  # type: ignore[import-not-found]
 
 
 # ── Slot config loader ──────────────────────────────────────────────
@@ -182,11 +184,13 @@ def preflight_request(cfg: SlotConfig, req: LlmRequest) -> None:
     with the LLM call until the LLM either retracts the offending
     tool call or rephrases."""
     for call in req.pending_tool_calls:
-        tool = call.get("tool")
+        tool = next(
+            (value for key, value in call.items() if str(key).casefold() == "tool"),
+            None,
+        )
         if tool:
             preflight_tool_call(cfg, tool)
-        path = call.get("path")
-        if path:
+        for path in filesystem_paths(call):
             preflight_path_access(cfg, path)
 
 
@@ -299,7 +303,11 @@ def main() -> None:
 
     slot_id = args.slot or env_slot_id()
     makakoo_home = env_makakoo_home()
-    asyncio.run(run_gateway_loop(makakoo_home, slot_id))
+    watchdog = start_parent_watchdog()
+    try:
+        asyncio.run(run_gateway_loop(makakoo_home, slot_id))
+    finally:
+        watchdog.close()
 
 
 if __name__ == "__main__":

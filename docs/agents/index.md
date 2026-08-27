@@ -5,12 +5,13 @@ Makakoo ships ~15 **agent plugins** in `plugins-core/agent-*/`. It also ships **
 Read the cross-cutting model in [Walkthrough 08 — Use an agent](../walkthroughs/08-use-agent.md) first. Then use this page as a reference when you need to know what a specific agent does.
 
 
-Makakoo has two related agent surfaces:
+Makakoo has three related agent surfaces:
 
 - **Agent plugins** are long-running workers from `plugins-core/agent-*`. The daemon supervises them.
-- **Agent slots** are scoped chat-channel agents created with `makakoo agent create <slot>`. Slots attach transports like Telegram, Slack, Discord, WhatsApp, voice, email, or web. These channels are not infected hosts. They are doorways into a Makakoo-controlled agent.
+- **Agent runtime slots** compile an AgentSpec into a supervised DeepSeek Harness project. Use `makakoo agent create --specs <PATH>`, install the generated Node dependencies, then use `start`, `prompt`, `health`, `restart`, and `destroy`.
+- **Agent Sessions** are bounded child-agent work records. They are not long-running services.
 
-Use [`user-manual/agent.md`](../user-manual/agent.md) for slot creation, including `--runtime flue` for a runnable TypeScript channel agent.
+Start with the [DeepSeek Harness runtime walkthrough](../walkthroughs/dsh-agent-runtime.md), then use [`user-manual/agent.md`](../user-manual/agent.md) for the full slot reference. AgentSpec can preserve channel and trigger declarations, but DSH V1 does not start those listeners or schedulers. The legacy Flue renderer is available only through the explicit `MAKAKOO_AGENT_ENGINE=flue` compatibility switch and is not supervised by `makakoo agent start`.
 
 ## The catalog
 
@@ -52,7 +53,7 @@ If an agent's behavior diverges from this template (e.g. `agent-dreams` is actua
 ## Related docs
 
 - [Walkthrough 08 — Use an agent](../walkthroughs/08-use-agent.md) — the cross-cutting agent lifecycle walkthrough.
-- [`makakoo agent`](../user-manual/agent.md) — create native slots, attach chat transports, scaffold Flue agents.
+- [`makakoo agent`](../user-manual/agent.md) — compile AgentSpecs into supervised DSH runtime slots.
 - [`makakoo agent-session`](../user-manual/makakoo-agent-session.md) — durable child-agent session CLI reference.
 - [`mascots/index.md`](../mascots/) — the mascot specialization of agents.
 - [`plugins/`](../plugins/) — how agent plugins fit into the broader plugin model.

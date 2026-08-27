@@ -98,6 +98,10 @@ _NON_AGENT_PAGES = frozenset(
         # Durable local child-agent sessions live in the CLI/kernel, not as
         # a long-running plugins-core/agent-* entrypoint.
         "agent-sessions",
+        # Declarative slot schema and migration guide live in docs/agents/
+        # but are cross-cutting references, not plugin manuals.
+        "spec",
+        "spec-migration",
     }
 )
 

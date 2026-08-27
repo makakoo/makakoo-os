@@ -80,12 +80,21 @@ fn read_doc(path: &Path) -> std::io::Result<DocumentMut> {
 /// "did anything change?" short-circuit. We compare only fields we own so
 /// a user hand-adding `startup_timeout_sec` doesn't force a rewrite.
 fn render_harvey(doc: &DocumentMut) -> Option<String> {
-    let h = doc.get("mcp_servers")?.as_table()?.get(SERVER_KEY)?.as_table()?;
+    let h = doc
+        .get("mcp_servers")?
+        .as_table()?
+        .get(SERVER_KEY)?
+        .as_table()?;
     let command = h.get("command").and_then(|v| v.as_str()).unwrap_or("");
     let args = h
         .get("args")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(","))
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
         .unwrap_or_default();
     let description = h.get("description").and_then(|v| v.as_str()).unwrap_or("");
     let enabled = h.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
@@ -284,7 +293,9 @@ foo = true
         let path = dir.path().join("config.toml");
         assert_eq!(
             sync(&path, &spec(), true),
-            SyncOutcome::WouldChange { kind: ChangeKind::Add }
+            SyncOutcome::WouldChange {
+                kind: ChangeKind::Add
+            }
         );
         assert!(!path.exists());
     }
@@ -294,6 +305,9 @@ foo = true
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         fs::write(&path, "bad = = =").unwrap();
-        assert!(matches!(sync(&path, &spec(), false), SyncOutcome::Error { .. }));
+        assert!(matches!(
+            sync(&path, &spec(), false),
+            SyncOutcome::Error { .. }
+        ));
     }
 }

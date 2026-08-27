@@ -3,8 +3,9 @@
 The agent spec is the source of truth for every agent on Makakoo OS. A
 spec is a YAML (preferred) or TOML file that declares **what** an agent
 is — its cognitive core, communications interfaces, and trigger sources.
-Makakoo's scaffolder then renders the spec into a runnable Flue (TypeScript)
-project + slot TOML.
+Makakoo compiles the spec into an AgentSlot plus a pinned DeepSeek Harness
+runtime project. The slot remains the policy authority; generated runtime
+files are replaceable build artifacts.
 
 ```bash
 makakoo agent create --specs ./weather-bot.yaml   # one agent
@@ -31,7 +32,7 @@ daemon, no UI).
 # Identity
 name: weather-bot                    # required, regex ^[a-z0-9][a-z0-9-]{0,62}$
 description: "Monitor weather…"      # required, non-empty
-model: anthropic/claude-sonnet-4-6   # required, non-empty
+model: switchailocal/ail-compound    # required, routed through switchAILocal
 
 # Cognitive core
 instructions: |                      # required, multi-line, markdown allowed
@@ -42,7 +43,8 @@ tools:                               # required, list of mcp__harvey__* names
   - write_file
   - web_search
 
-# Communications interfaces (zero or many)
+# Communications interfaces (zero or many). DSH V1 preserves these
+# declarations but does not start channel listeners yet.
 channels:
   - kind: telegram
     token_env: TELEGRAM_BOT_TOKEN
@@ -62,18 +64,16 @@ channels:
     path: /hooks/weather
     secret_env: WEATHER_WEBHOOK_SECRET
 
-  # V1: deferred — no first-party @flue/* adapter. See "Limitations" below.
   - kind: email
     smtp_host: smtp.example.com
     imap_host: imap.example.com
     secret_env: EMAIL_CREDS
 
-  # V1: deferred — no first-party @flue/* adapter. See "Limitations" below.
   - kind: voice
     twilio_account_sid_env: TWILIO_ACCOUNT_SID
     secret_env: TWILIO_AUTH_TOKEN
 
-# Trigger sources (zero or many)
+# Trigger sources (zero or many). DSH V1 preserves but does not schedule them.
 triggers:
   - kind: cron                       # standard 5-field cron expression
     schedule: "0 */6 * * *"          # required
@@ -85,7 +85,7 @@ triggers:
 
 # Filesystem read/write boundaries
 scope:
-  allowed_paths:                    # globs, must resolve under $MAKAKOO_HOME
+  allowed_paths:                    # filesystem prefixes/globs; absolute and ~/ paths supported
     - "~/MAKAKOO/data/weather/**"
   forbidden_paths:                  # globs, always denied
     - "~/.ssh/**"
@@ -95,26 +95,31 @@ scope:
 ## Field reference
 
 ### `name` (required, string)
-Agent identity. Regex: `^[a-z0-9][a-z0-9-]{0,62}$`. Matches Flue project
-naming. Also becomes the `slot_id` in the slot TOML and the Flue
-project directory name.
+Agent identity. Regex: `^[a-z0-9][a-z0-9-]{0,62}$`. It becomes the
+`slot_id` in the slot TOML and the DSH project directory name.
 
 ### `description` (required, string)
 Human-facing one-liner. Shown in `makakoo agent list`. Non-empty after
 trim.
 
 ### `model` (required, string)
-Model identifier passed to the Flue runtime (e.g.
-`anthropic/claude-sonnet-4-6`). Non-empty after trim.
+Model route passed through switchAILocal to DSH (for example
+`switchailocal/ail-compound`). An unprefixed switchAILocal model id is also
+accepted. An explicit different provider prefix is rejected during creation
+and start; the `switchailocal/` prefix is removed before the OpenAI-compatible
+request. Non-empty after trim.
 
 ### `instructions` (required, string)
 System prompt / persona. Multi-line string, markdown allowed. No length
 limit but be concise.
 
 ### `tools` (required, list of strings)
-Whitelist of `mcp__harvey__*` tool names this agent may invoke.
-Validated at create time against the registered MCP tool set. Each
-name must match `^[a-z][a-z0-9_]*$` (allows `mcp__harvey__*`).
+Whitelist of Makakoo MCP tool names this agent may invoke. Raw names such as
+`brain_search` and model-facing names such as `mcp__harvey__brain_search` are
+treated as the same tool at the server-side enforcement boundary. Each name
+must match `^[a-z][a-z0-9_]*$` (which permits the double underscores in
+`mcp__harvey__*`). `tools: []` is valid and exposes no model-facing tools;
+AgentSpec-generated slots never inherit an implicit baseline.
 
 ### `channels` (optional, list)
 Communications interfaces. Zero or many. See "Channel kinds" below.
@@ -124,202 +129,55 @@ Trigger sources. Zero or many. See "Trigger kinds" below.
 
 ### `scope` (required, object)
 Filesystem read/write boundaries. Two fields:
-- `allowed_paths` — globs, must resolve under `$MAKAKOO_HOME`
+- `allowed_paths` — filesystem prefixes/globs; absolute paths and `~/...` are supported
 - `forbidden_paths` — globs, always denied (overrides `allowed_paths`)
 
 V1: overlap detection is exact-string match. Proper glob overlap
 detection requires the `globset` crate and is deferred to V2.
 
-## LLM provider resolution
+## Runtime and model routing
 
-`makakoo agent create --specs <PATH>` detects available LLM providers
-at scaffold time and emits the right `registerProvider` call in
-`src/app.ts`. You don't need to hand-edit `app.ts` after scaffolding.
+The DSH renderer does not auto-select a cloud provider. Autonomous agent calls
+go through the fixed switchAILocal endpoint at `http://127.0.0.1:18080/v1`; the model part after
+the first `/` is sent as the OpenAI-compatible model id. This keeps one key,
+one routing layer, and one audit surface.
 
-### Provider detection
+Generated projects pin their direct DSH runtime packages to `0.1.1-rc.2`,
+exclude the full DSH CLI bundle, persist sessions as compressed JSONL, apply
+semantic checkpoints and compaction, and expose only Makakoo MCP tools. Native
+DSH bash and filesystem tools are deliberately not mounted.
 
-At create time, the CLI probes (in order, concurrently, 2s timeout each):
+The operator-only environment variable `MAKAKOO_AGENT_ENGINE=flue` selects the
+legacy Flue renderer. Only that compatibility path runs local/cloud provider
+discovery and emits `src/app.ts`.
 
-1. `http://localhost:18080/v1/models` — **switchailocal** (local OpenAI-compat gateway)
-2. `http://localhost:11434/api/tags` — **Ollama** (local). Prefers `:cloud` chat-capable models; falls back to any non-embedding model.
-3. `ANTHROPIC_API_KEY` env var — **Anthropic** (cloud)
-4. `OPENAI_API_KEY` env var — **OpenAI** (cloud)
+## Channels and triggers
 
-Each detected provider has a `default_model` (the first available model).
-The CLI sorts local-first, then cloud.
+The schema accepts Telegram, Slack, Discord, webhook, email, and voice channel
+declarations plus cron and webhook triggers. They are preserved in AgentSpec,
+compiled into AgentSlot transport metadata where a slot representation exists,
+and their environment-variable names are emitted into `.env.example`.
 
-### Spec → provider selection
+**DSH V1 does not start these listeners or schedulers.** Creation emits a
+warning when channels are present. A future Makakoo channel adapter will
+authenticate inbound events, choose a stable session id, and call the runtime's
+authenticated `/v1/run` endpoint. Until that slice lands, use
+`makakoo agent prompt` or call the loopback API through a trusted local adapter.
 
-The spec's `model` field drives which provider is used:
+Supported declaration shapes remain:
 
-- Spec's `model` starts with a known provider ID (`switchailocal/`,
-  `ollama/`, `anthropic/`, `openai/`) → that provider is preferred, even
-  if it sorts lower in the local-first order.
-- Spec's `model` names a specific model (`ollama/gemma4:12b`) → kept as-is,
-  not overwritten by the discovery's `default_model`.
-- Spec's `model` is just a provider prefix (`ollama/`) → filled in with
-  the discovery's `default_model`.
-- Spec's `model` is the default (`anthropic/claude-sonnet-4-6`) → uses that.
+- `telegram`: `token_env`, optional `allowed_users`
+- `slack`: `token_env`, `app_token_env`, `team_id_env`, optional `allowed_users`
+- `discord`: `token_env`, optional `allowed_users`
+- `webhook`: `path`, `secret_env`
+- `email`: `smtp_host`, `imap_host`, `secret_env`
+- `voice`: `twilio_account_sid_env`, `secret_env`
+- cron trigger: five-field `schedule`, optional IANA `timezone`
+- webhook trigger: `path`, `secret_env`
 
-If multiple providers are available and stdin is a TTY, the CLI prompts
-the user to pick. Otherwise it auto-selects local-first and prints a
-clear `warn:` line.
-
-### What the scaffolder writes
-
-`src/app.ts` is always emitted (Phase 6 of SPRINT-FLUE-DEFAULT-AGENT-SPECS).
-The `registerProvider` call depends on the provider type:
-
-**Local (switchailocal, ollama)** — needs `api` + `baseUrl` + the lope
-team fix:
-
-```ts
-registerProvider('switchailocal', {
-  api: 'openai-completions',
-  baseUrl: process.env.SWITCHAI_BASE_URL ?? 'http://127.0.0.1:18080/v1',
-  apiKey: process.env.AIL_API_KEY ?? 'sk-test-123',
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-});
-```
-
-Ollama is keyless — the scaffolder uses `'ollama'` as a placeholder
-key because Flue v1.0.0-beta.9 rejects empty `apiKey`.
-
-**Cloud catalog (anthropic, openai)** — only `apiKey` is needed
-(catalog provides `contextWindow` + `maxTokens`):
-
-```ts
-registerProvider('anthropic', {
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-```
-
-### Lope team fix: `contextWindow: 128_000` + `maxTokens: 8_192`
-
-Flue v1.0.0-beta.9 silently defaults `contextWindow: 0` and
-`maxTokens: 0` for non-catalog providers, which limits the LLM
-output to **one token** and looks like a "hang". The scaffolder
-**always sets both to safe values** (`128_000` and `8_192`) for local
-providers. This is the single most important thing to get right —
-without it, the LLM calls complete but produce nothing.
-
-## Channel kinds
-
-### `telegram` ✓ V1
-```yaml
-- kind: telegram
-  token_env: TELEGRAM_BOT_TOKEN        # required, uppercase env var name
-  allowed_users: ["123456"]            # optional, list of Telegram user IDs
-```
-
-The Flue channel verifies inbound webhooks via
-`TELEGRAM_WEBHOOK_SECRET_TOKEN` (auto-added to `.env.example`). The
-`allowed_users` list is enforced **inside the webhook handler** before
-`dispatch()` (not on the channel config — `@flue/telegram` has no
-`allowedUsers` option).
-
-### `slack` ✓ V1 (inbound only — V1 outbound requires operator tool)
-```yaml
-- kind: slack
-  token_env: SLACK_BOT_TOKEN          # required
-  app_token_env: SLACK_APP_TOKEN      # required
-  team_id_env: SLACK_TEAM_ID          # required
-  allowed_users: ["U0123"]            # optional
-```
-
-The Flue channel verifies inbound request signatures using
-`SLACK_SIGNING_SECRET` (auto-added to `.env.example`). It does NOT
-take `botToken` / `appToken` / `teamId` — the channel only signs
-inbound. For **outbound** messaging, the generated `post_slack_message`
-tool calls the Slack Web API directly with `SLACK_BOT_TOKEN`.
-
-### `discord` ✓ V1 (interactions only)
-```yaml
-- kind: discord
-  token_env: DISCORD_BOT_TOKEN        # required (used by outbound tool)
-  allowed_users: ["987654"]            # optional
-```
-
-The Flue channel verifies inbound interactions using
-`DISCORD_PUBLIC_KEY` (auto-added to `.env.example`). It receives
-**interactions** (slash commands, component clicks, modals) — NOT
-free-form message events. Handlers are `interactions(input)`, not
-`messageCreate`. To post back, operators wire their own `defineTool`
-that calls the Discord REST API with `DISCORD_BOT_TOKEN`.
-
-### `webhook` ✓ V1
-```yaml
-- kind: webhook
-  path: /hooks/weather               # required, must start with /
-  secret_env: WEATHER_WEBHOOK_SECRET  # required
-```
-
-Inbound-only HTTP endpoint with HMAC-SHA256 signature verification
-(X-Signature header). No outbound tool — this channel only receives.
-
-### `email` ⏳ V1 deferred
-```yaml
-- kind: email
-  smtp_host: smtp.example.com        # required
-  imap_host: imap.example.com        # required
-  secret_env: EMAIL_CREDS            # required (JSON: {"user":"…","pass":"…"})
-```
-
-**V1 limitation**: there is no first-party `@flue/email` package on
-npm. `makakoo agent create --specs` with an `email` channel writes the
-slot TOML but errors at scaffold time:
-
-```
-spec declares an `email` channel, but the @flue/* adapter is not
-available in V1. Use a `webhook` channel + a custom `defineTool` for
-SMTP/IMAP, or remove the channel from the spec. Tracked for V2.
-```
-
-**Workaround**: use a `webhook` channel + a `defineTool` that calls
-`nodemailer` for SMTP send and `imapflow` for IMAP receive.
-
-### `voice` ⏳ V1 deferred
-```yaml
-- kind: voice
-  twilio_account_sid_env: TWILIO_ACCOUNT_SID  # required
-  secret_env: TWILIO_AUTH_TOKEN               # required
-```
-
-**V1 limitation**: same as email — no first-party `@flue/voice`
-package. Workaround: `webhook` channel + `defineTool` that calls
-Twilio's REST API.
-
-## Trigger kinds
-
-### `cron` ✓ V1
-```yaml
-- kind: cron
-  schedule: "0 */6 * * *"            # required, 5-field cron
-  timezone: "UTC"                    # optional, default "UTC"
-```
-
-V1 implementation uses `node-cron` directly. Standard 5-field cron
-expressions. Each field range is validated at spec-parse time:
-
-| Field | Range | Example |
-|-------|-------|---------|
-| minute | 0-59 | `0`, `*/15`, `0,30` |
-| hour | 0-23 | `*/6`, `9-17` |
-| day of month | 1-31 | `1`, `15` |
-| month | 1-12 | `*`, `6,12` |
-| day of week | 0-6 | `0` (Sunday) |
-
-### `webhook` ✓ V1
-```yaml
-- kind: webhook
-  path: /triggers/manual            # required, must start with /
-  secret_env: MANUAL_TRIGGER_SECRET  # required
-```
-
-Standalone Hono server on port 8809 (convention — MCP proxy is on
-8808) with HMAC-SHA256 signature verification. Override port with
-`MAKAKOO_TRIGGER_PORT` env var.
+The operator-selected Flue compatibility renderer still generates its legacy
+channel and trigger modules. That does not make them part of the default DSH
+runtime or Makakoo supervisor contract.
 
 ## Validation rules
 
@@ -338,41 +196,25 @@ Standalone Hono server on port 8809 (convention — MCP proxy is on
 - `scope.allowed_paths` and `scope.forbidden_paths` entries must be
   non-empty; exact-string overlap between the two lists is rejected
 
-## V1 limitations (tracked for V2)
+## V1 limitations
 
-1. **Email & voice channels deferred** — no first-party `@flue/*`
-   adapter. Workaround: `webhook` + custom `defineTool`. Tracked for V2.
-2. **Slack/Discord outbound is operator-supplied** — the Flue channel
-   only handles inbound. Outbound requires a `defineTool` that calls
-   the platform's Web/REST API directly. The generated template
-   includes a `post_slack_message` starter tool.
-3. **Telegram `allowedUsers` is handler-enforced** — not a channel
-   config option. The webhook handler checks the sender ID before
-   `dispatch()`.
-4. **Cron uses `node-cron` directly** — `@flue/runtime` has no
-   `defineTrigger` export. Standard 5-field cron only.
-5. **Webhook trigger is a standalone Hono server** — separate port
-   from the Flue app. Triggers are loaded as side-effecting imports
-   from `assistant.ts`.
-6. **Scope overlap detection is exact-string only** — proper glob
-   overlap requires `globset`. V2.
-7. **Flue v1.0.0-beta.9 LLM dispatch bug for some cloud models** —
-   `flue dev` accepts the webhook, starts the agent session, but the
-   background worker never fires the LLM call for some providers
-   (observed: all Ollama `:cloud` models hang at the dispatch step;
-   switchailocal works fine). The LLM itself is fine (direct
-   `curl` to the provider works in <1s). The bug is in the Flue
-   runtime's background worker, not the LLM. Track at
-   <https://github.com/withastro/flue/issues>.
-8. **Provider detection is best-effort** — the 2s probe timeout
-   means a slow LLM gateway (cold start, network latency) might be
-   missed. The spec's `model` field is the source of truth; if the
-   auto-detection misses your provider, set `AGENT_MODEL` in `.env`
-   or set the spec's `model` explicitly.
+1. **Channel and trigger execution is not connected to DSH yet.** Declarations
+   survive compilation, but no listener or scheduler calls `/v1/run`.
+2. **Filesystem scope overlap detection is exact-string only.** Proper glob
+   overlap still requires `globset`.
+3. **The harness packages are a release candidate.** Direct dependencies are
+   exact-pinned and covered by the Makakoo smoke suite, but the engine is not a
+   stable upstream release.
+4. **The runtime API is local-only.** It intentionally binds to `127.0.0.1`;
+   remote ingress belongs behind a Makakoo-authenticated adapter, not an exposed
+   bearer endpoint.
+5. **Flue is compatibility-only.** It is scaffolded only when
+   `MAKAKOO_AGENT_ENGINE=flue` is explicit and remains a manually operated path.
 
 ## Examples
 
 See `examples/agents/`:
+- `local-researcher.yaml` — prompt-driven DSH agent with no channel/trigger declarations
 - `weather-bot.yaml` — cron + telegram + tools + scope
 - `scheduled-reporter.yaml` — cron only, no channels
 - `webhook-worker.yaml` — webhook channel + webhook trigger
@@ -380,7 +222,7 @@ See `examples/agents/`:
 ## See also
 
 - `spec-migration.md` — "I had a slot TOML, now what?" migration guide
-- `walkthroughs/create-agent-from-spec.md` — end-to-end walkthrough
-- `walkthroughs/flue-telegram-bot.md` — note: spec-driven is the new default
+- `walkthroughs/dsh-agent-runtime.md` — end-to-end supervised runtime walkthrough
+- `walkthroughs/flue-telegram-bot.md` — legacy Flue compatibility path
 - **`makakoo agent init-spec <PATH>`** — interactive starter; asks the right questions, discovers providers, writes a correct spec. Use `--minimal` for a 10-line "hello world" spec.
-- **`makakoo provider set <provider> [model]`** / **`makakoo provider get`** — project-level LLM default (stored at `$MAKAKOO_HOME/config/llm-default`). `init-spec` uses it as the default model choice.
+- **`makakoo agent provider-set <provider> [model]`** / **`makakoo agent provider-get`** — project-level LLM default (stored at `$MAKAKOO_HOME/config/llm-default`). `init-spec` uses it as the default model choice.

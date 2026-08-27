@@ -30,10 +30,10 @@ hex = "0.4"
 sha2 = { workspace = true }
 hmac = "0.12"
 futures-util = "0.3"
+tower = { version = "0.5", features = ["limit", "util"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = "3"
 wiremock = "0.6"
-tower = "0.5"
 reqwest = { workspace = true }

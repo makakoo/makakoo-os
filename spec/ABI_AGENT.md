@@ -153,8 +153,10 @@ If the agent process exits unexpectedly (not via `stop`):
 3. Restarts with exponential backoff: 1s, 2s, 5s, 15s, 60s, 300s,
    max 600s
 4. After 5 consecutive crashes within 15 minutes, agent is marked
-   **quarantined** and not restarted until the user runs
-   `makakoo agent unquarantine <name>`
+   **quarantined** and not restarted. The proposed
+   `makakoo agent unquarantine <name>` command is not implemented in v0.3.0;
+   after fixing the crash cause, use `makakoo agent restart <name>` to start a
+   fresh supervisor and reset its in-memory circuit breaker.
 
 **State integrity:** the agent is responsible for leaving its state
 dir in a consistent state across crashes. Recommended pattern:

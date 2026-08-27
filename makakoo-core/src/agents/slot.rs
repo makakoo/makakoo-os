@@ -19,6 +19,30 @@ use serde::{Deserialize, Serialize};
 use crate::transport::config::{validate_transport_list, TransportEntry};
 use crate::{MakakooError, Result};
 
+/// Execution engine owned by the Makakoo slot supervisor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentRuntimeEngine {
+    DeepseekHarness,
+    Flue,
+}
+
+impl std::fmt::Display for AgentRuntimeEngine {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::DeepseekHarness => "deepseek-harness",
+            Self::Flue => "flue",
+        })
+    }
+}
+
+/// Runtime artifact produced from the canonical AgentSpec.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRuntime {
+    pub engine: AgentRuntimeEngine,
+    pub project_dir: PathBuf,
+}
+
 /// One agent slot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSlot {
@@ -81,6 +105,11 @@ pub struct AgentSlot {
     /// system defaults.
     #[serde(default, rename = "llm")]
     pub llm: Option<LlmSection>,
+
+    /// Compiled execution runtime. Missing on legacy slots, which keeps
+    /// their existing HarveyChat gateway behavior.
+    #[serde(default)]
+    pub runtime: Option<AgentRuntime>,
 }
 
 /// Container that wraps the `[llm.inherit]` (docs-only) and
@@ -123,6 +152,14 @@ impl AgentSlot {
             )));
         }
         validate_transport_list(&self.transports)?;
+        if let Some(runtime) = &self.runtime {
+            if !runtime.project_dir.is_absolute() {
+                return Err(MakakooError::InvalidInput(format!(
+                    "slot '{}': runtime.project_dir must be absolute",
+                    self.slot_id
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -217,7 +254,14 @@ pub fn registry_dir(makakoo_home: &Path) -> PathBuf {
 
 /// Canonical TOML path for a slot: `<makakoo_home>/config/agents/<slot_id>.toml`.
 pub fn slot_path(makakoo_home: &Path, slot_id: &str) -> PathBuf {
-    registry_dir(makakoo_home).join(format!("{}.toml", slot_id))
+    checked_slot_path(makakoo_home, slot_id)
+        .unwrap_or_else(|_| registry_dir(makakoo_home).join(".invalid-slot-id"))
+}
+
+/// Checked path constructor for every user- or environment-controlled slot id.
+pub fn checked_slot_path(makakoo_home: &Path, slot_id: &str) -> Result<PathBuf> {
+    validate_slot_id(slot_id)?;
+    Ok(registry_dir(makakoo_home).join(format!("{}.toml", slot_id)))
 }
 
 #[cfg(test)]
@@ -254,6 +298,7 @@ mod tests {
             process_mode: default_process_mode(),
             transports: vec![telegram_block("telegram-main")],
             llm: None,
+            runtime: None,
         }
     }
 
@@ -284,6 +329,17 @@ mod tests {
         s.process_mode = "multiplexed".into();
         let err = s.validate().unwrap_err();
         assert!(format!("{err}").contains("supervised_pair"));
+    }
+
+    #[test]
+    fn validate_rejects_relative_runtime_project_dir() {
+        let mut s = slot("harveychat");
+        s.runtime = Some(AgentRuntime {
+            engine: AgentRuntimeEngine::DeepseekHarness,
+            project_dir: PathBuf::from("agents-dsh/harveychat"),
+        });
+        let err = s.validate().unwrap_err();
+        assert!(format!("{err}").contains("runtime.project_dir must be absolute"));
     }
 
     #[test]
@@ -380,6 +436,16 @@ support_thread = true
         assert_eq!(
             p,
             PathBuf::from("/tmp/makakoo/config/agents/harveychat.toml")
+        );
+    }
+
+    #[test]
+    fn invalid_slot_path_fails_closed_inside_registry() {
+        let home = Path::new("/tmp/makakoo");
+        assert!(checked_slot_path(home, "../escape").is_err());
+        assert_eq!(
+            slot_path(home, "../escape"),
+            registry_dir(home).join(".invalid-slot-id")
         );
     }
 }

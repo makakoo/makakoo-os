@@ -1,5 +1,10 @@
 # Walkthrough — Voice (Twilio) subagent quickstart
 
+> **Legacy gateway reference.** DSH V1 preserves voice metadata but does not
+> start this Twilio listener. Do not use this page to deploy a new DSH slot.
+> Start with [`dsh-agent-runtime.md`](./dsh-agent-runtime.md); use the details
+> below only for an existing legacy gateway slot.
+
 End-to-end recipe: stand up a Twilio Voice slot under Makakoo OS.
 Push-to-talk model — the caller leaves a message, the slot processes
 it, future v2.1 will play the reply back. ~20 minutes.
@@ -87,7 +92,7 @@ emits an inbound frame with:
 Verify in the audit log:
 
 ```bash
-makakoo agent audit secretary --last 10
+makakoo agent audit --last 10
 ```
 
 ## v2.1 deferred items
