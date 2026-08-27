@@ -55,33 +55,39 @@ impl AgentRegistry {
 
     /// Write a new slot to disk.  Refuses to overwrite an existing
     /// file (Phase 2 spec — duplicate slot rejection by filename).
+    /// `create_new(true)` gives atomic no-overwrite directly on the
+    /// target, so no hard-link-capable filesystem is required.
     pub fn create(makakoo_home: &Path, slot: &AgentSlot) -> Result<()> {
         slot.validate()?;
         let dir = registry_dir(makakoo_home);
         std::fs::create_dir_all(&dir)?;
         let path = slot_path(makakoo_home, &slot.slot_id);
-        if path.exists() {
-            return Err(MakakooError::InvalidInput(format!(
-                "agent slot '{}' already exists at {} — refusing to overwrite",
-                slot.slot_id,
-                path.display()
-            )));
-        }
         let raw = toml::to_string_pretty(slot)
             .map_err(|e| MakakooError::Internal(format!("agent slot serialise: {}", e)))?;
-        let tmp = write_private_temp(&path, raw.as_bytes())?;
-        if let Err(error) = std::fs::hard_link(&tmp, &path) {
-            let _ = std::fs::remove_file(&tmp);
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = match options.open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(MakakooError::InvalidInput(format!(
                     "agent slot '{}' already exists at {} — refusing to overwrite",
                     slot.slot_id,
                     path.display()
                 )));
             }
+            Err(error) => return Err(error.into()),
+        };
+        // A failed write must not leave a half-written slot behind —
+        // the file did not exist before this call, so removing it is safe.
+        if let Err(error) = file.write_all(raw.as_bytes()).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(&path);
             return Err(error.into());
         }
-        std::fs::remove_file(tmp)?;
         Ok(())
     }
 
@@ -187,7 +193,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         AgentRegistry::create(dir.path(), &slot("harveychat")).unwrap();
         let err = AgentRegistry::create(dir.path(), &slot("harveychat")).unwrap_err();
+        assert!(
+            matches!(err, MakakooError::InvalidInput(_)),
+            "duplicate create must map to InvalidInput, got {err:?}"
+        );
         assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[test]
+    fn create_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        AgentRegistry::create(dir.path(), &slot("harveychat")).unwrap();
+        let entries: Vec<_> = std::fs::read_dir(registry_dir(dir.path()))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(entries, vec!["harveychat.toml".to_string()]);
     }
 
     #[cfg(unix)]

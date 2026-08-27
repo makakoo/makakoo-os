@@ -82,6 +82,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## M
 
 - **`mascot: <name>`** (stray mention in logs) — Diagnostic line from a mascot mission — usually not an error. Check the surrounding context for an actual `error:` or `ok` marker.
+- **`max_tokens <n> is out of range for DeepSeek Harness; expected 1 through 65536`** — The slot's `[llm.override] max_tokens` (or the AgentSpec value) is outside the range the generated runner accepts. `agent start` refuses up front instead of letting the supervisor crash-loop. Set the TOML value between 1 and 65536 (or remove the override), then start again.
 
 ## N
 

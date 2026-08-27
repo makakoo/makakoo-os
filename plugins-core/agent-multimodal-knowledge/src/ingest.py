@@ -14,9 +14,11 @@ CLI:
 With --json, stdout emits one JSON line; human progress goes to stderr.
 """
 import argparse
+import ipaddress
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -108,8 +110,44 @@ def _download_youtube(url: str, outdir: Path, log) -> Path:
     return files[-1]
 
 
+def _check_url_allowed(url: str) -> None:
+    """SSRF guard for server-side fetches: http/https only, standard
+    ports only, and the hostname must not resolve to a loopback,
+    private, link-local, reserved, or otherwise non-global address.
+
+    Note: DNS-rebinding TOCTOU is out of scope — the connection is not
+    pinned to the address checked here.
+    """
+    u = urlparse(url)
+    if u.scheme not in ("http", "https"):
+        raise RuntimeError(f"URL scheme not allowed: {u.scheme!r}")
+    host = u.hostname
+    if not host:
+        raise RuntimeError(f"URL has no hostname: {url}")
+    try:
+        port = u.port
+    except ValueError:
+        raise RuntimeError(f"URL port not allowed in: {url}")
+    if port not in (None, 80, 443):
+        raise RuntimeError(f"URL port not allowed: {port}")
+    try:
+        infos = socket.getaddrinfo(
+            host, port or (443 if u.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as e:
+        raise RuntimeError(f"cannot resolve host {host!r}: {e}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            raise RuntimeError(
+                f"refusing to fetch {url}: {host!r} resolves to non-public address {ip}"
+            )
+
+
 def _download_http(url: str, outdir: Path, log) -> Path:
     """Generic http(s) download. Uses requests if available, urllib otherwise."""
+    _check_url_allowed(url)
     log(f"http: downloading {url}")
     try:
         import requests

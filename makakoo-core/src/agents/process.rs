@@ -170,9 +170,39 @@ pub fn executable_for_current_user(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
-#[cfg(not(unix))]
+/// Returns whether `pid` currently names a live process visible to this user.
+/// This is a liveness check, not a process-identity proof.
+#[cfg(windows)]
 pub fn pid_is_alive(pid: u32) -> bool {
-    pid != 0
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    if pid == 0 {
+        return false;
+    }
+    // Query-only access: OpenProcess fails for dead PIDs and for processes
+    // this user may not inspect — both count as "not alive" here.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let mut exit_code = 0u32;
+    let ok = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+    unsafe {
+        CloseHandle(handle);
+    }
+    ok != 0 && exit_code == STILL_ACTIVE as u32
+}
+
+/// No portable liveness primitive exists outside unix/windows. Report dead
+/// (with this doc comment as the honesty clause) so lifecycle callers fail
+/// open on a PID they could never verify, instead of treating every nonzero
+/// PID as alive and blocking cleanup forever.
+#[cfg(not(any(unix, windows)))]
+pub fn pid_is_alive(_pid: u32) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -181,6 +211,8 @@ mod tests {
 
     #[test]
     fn current_process_is_alive_and_invalid_pids_are_not() {
+        // The non-unix/non-windows fallback stub reports dead for everything.
+        #[cfg(any(unix, windows))]
         assert!(pid_is_alive(std::process::id()));
         assert!(!pid_is_alive(0));
         assert!(!pid_is_alive(u32::MAX));

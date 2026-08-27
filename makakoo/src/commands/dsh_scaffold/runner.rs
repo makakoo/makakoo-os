@@ -19,9 +19,11 @@ import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 
 const projectDir = dirname(fileURLToPath(import.meta.url))
 // AgentSpec is the source of truth. Project .env files cannot impersonate a
-// different slot or silently replace the compiled model/persona.
+// different slot or silently replace the compiled persona.
 const slot = __SLOT__
-const model = __MODEL__
+// The supervisor exports the validated per-slot override as DSH_MODEL; the
+// compiled AgentSpec model is only the fallback.
+const model = process.env.DSH_MODEL ?? __MODEL__
 const systemPrompt = __PROMPT__
 const home = process.env.MAKAKOO_HOME
 if (!home) throw new Error('MAKAKOO_HOME is required')
@@ -62,7 +64,7 @@ const childEnv = {
   // Makakoo's DSH contract is switchAILocal-only. Generated project env cannot redirect it.
   DEEPSEEK_BASE_URL: 'http://127.0.0.1:18080/v1',
   DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ?? process.env.AIL_API_KEY ?? 'makakoo-local',
-  DSH_MODEL: model,
+  DSH_MODEL: process.env.DSH_MODEL ?? model,
   DSH_CONTEXT_WINDOW: process.env.DSH_CONTEXT_WINDOW ?? '262144',
   DSH_SYSTEM_PROMPT: systemPrompt,
   DSH_SESSION_ROOT: sessionRoot,
@@ -375,7 +377,8 @@ mod tests {
             scope: ScopeSpec::default(),
         };
         let output = render(&spec);
-        assert!(output.contains("const model = \"ail-compound\""));
+        assert!(output.contains("const model = process.env.DSH_MODEL ?? \"ail-compound\""));
+        assert!(output.contains("DSH_MODEL: process.env.DSH_MODEL ?? model"));
         assert!(output.contains("const slot = \"researcher\""));
         assert!(output.contains("Your Makakoo slot id is researcher"));
         assert!(!output.contains("switchailocal/ail-compound"));

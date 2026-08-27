@@ -7,8 +7,11 @@ Scans the Rust workspace under `makakoo-core/src/`, `makakoo/src/`, and
 each appears in `docs/troubleshooting/symptoms.md`.
 
 Diagnostics that predate the expanded scanner are recorded explicitly in
-`scripts/troubleshooting_legacy_baseline.json`. They remain visible debt, but
-cannot hide any newly introduced diagnostic.
+`scripts/troubleshooting_legacy_baseline.json`. They remain visible debt, and
+any newly introduced diagnostic whose text differs from every baselined entry
+is still caught. Known limitation: the check compares string-set identity, not
+call sites, so a NEW error path that emits a message byte-identical to a
+baselined diagnostic is masked by the baseline.
 
 A string is considered "present" in symptoms.md if any significant word from
 the Rust string appears in the document — this is deliberately loose because

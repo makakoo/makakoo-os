@@ -327,10 +327,17 @@ mod tests {
     fn health_dispatch_distinguishes_dsh_legacy_and_plugin() {
         let tmp = tempfile::tempdir().unwrap();
         write_slot(tmp.path(), "legacy", "slot_id = \"legacy\"\n");
+        let project_dir = tmp
+            .path()
+            .join("dsh")
+            .to_string_lossy()
+            .replace('\\', "\\\\");
         write_slot(
             tmp.path(),
             "dsh",
-            "slot_id = \"dsh\"\n[runtime]\nengine = \"deepseek-harness\"\nproject_dir = \"/tmp/dsh\"\n",
+            &format!(
+                "slot_id = \"dsh\"\n[runtime]\nengine = \"deepseek-harness\"\nproject_dir = \"{project_dir}\"\n"
+            ),
         );
 
         assert_eq!(

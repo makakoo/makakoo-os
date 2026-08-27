@@ -15,6 +15,7 @@ makakoo --version
 node --version
 makakoo agent --help
 ```
+<!-- verify: skip reason="requires Node.js 22.9 or newer on PATH; clean verification machine has no Node" -->
 
 Node must report `v22.9` or newer. If switchAILocal requires authentication,
 export `AIL_API_KEY` before starting the slot. The generated runner maps that

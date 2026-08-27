@@ -98,6 +98,13 @@ pub struct SupervisorStatusFile {
     pub transports: Vec<crate::agents::status::TransportStatusSnapshot>,
     pub restart_count: u32,
     pub circuit_break_until: Option<DateTime<Utc>>,
+    /// Absolute path of the executable the supervisor is actually running,
+    /// recorded at snapshot time. The CLI matches a live supervisor against
+    /// THIS path (not its own `current_exe`), so status/stop keep working
+    /// after an in-place upgrade replaces the binary on disk. Absent in
+    /// pre-0.3.0 snapshots — those fall back to the current-exe comparison.
+    #[serde(default)]
+    pub supervisor_exe: Option<std::path::PathBuf>,
     pub written_at: DateTime<Utc>,
 }
 
@@ -315,6 +322,7 @@ impl SupervisorInner {
             transports,
             restart_count: self.restart.count() as u32,
             circuit_break_until,
+            supervisor_exe: std::env::current_exe().ok(),
             written_at: Utc::now(),
         }
     }
@@ -421,6 +429,7 @@ mod tests {
             transports: Vec::new(),
             restart_count: 0,
             circuit_break_until: None,
+            supervisor_exe: None,
             written_at: Utc::now(),
         };
         snap.write_atomic(tmp.path()).unwrap();
@@ -428,6 +437,27 @@ mod tests {
         assert_eq!(back.slot_id, "secretary");
         assert_eq!(back.state, SupervisorState::Running);
         assert_eq!(back.gateway.pid, Some(123));
+    }
+
+    #[test]
+    fn status_file_without_supervisor_exe_still_reads() {
+        // Pre-0.3.0 snapshots lack the field; serde default must keep
+        // them readable so the CLI can fall back to current-exe matching.
+        let tmp = TempDir::new().unwrap();
+        let body = serde_json::json!({
+            "slot_id": "secretary",
+            "state": "running",
+            "supervisor_pid": 42,
+            "gateway": {"alive": true, "pid": 123, "last_frame_at": null},
+            "transports": [],
+            "restart_count": 0,
+            "circuit_break_until": null,
+            "written_at": Utc::now(),
+        });
+        std::fs::write(tmp.path().join("status.json"), body.to_string()).unwrap();
+        let back = SupervisorStatusFile::read(tmp.path()).unwrap().unwrap();
+        assert_eq!(back.slot_id, "secretary");
+        assert!(back.supervisor_exe.is_none());
     }
 
     #[test]

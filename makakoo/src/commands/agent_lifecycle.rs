@@ -339,11 +339,25 @@ pub fn stop_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn stop_slot(_ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
-    output::print_error(format!(
-        "platform not supported — cannot stop slot {slot_id}"
-    ));
-    Ok(2)
+pub fn stop_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
+    let home = ctx.home();
+    makakoo_core::agents::validate_slot_id(slot_id)?;
+    // No launchd / systemd here: the only way a supervisor can be alive is a
+    // foreground run (MAKAKOO_AGENT_SUPERVISOR=foreground), which holds the
+    // canonical runtime lock. Never claim a stop we cannot prove — refuse
+    // while the lock (or any detectable live process) says otherwise, so
+    // `agent destroy` cannot archive files out from under a live supervisor.
+    if status_has_live_process(home, slot_id)? {
+        output::print_error(format!(
+            "{slot_id}: supervisor still owns the runtime lock and this platform has no \
+             service manager to stop it — terminate the foreground supervisor process, \
+             then retry"
+        ));
+        return Ok(1);
+    }
+    // Offline / generated-only slot: nothing can be running, so the shared
+    // cleanup path (quiescent lock + status removal) is safe to reuse.
+    finish_stop(home, slot_id, 0, "")
 }
 
 // ── restart ────────────────────────────────────────────────────────
@@ -380,7 +394,15 @@ fn status_slot_with_process_check(
                     slot_id
                 );
             }
-            if !process_matches(st.supervisor_pid, slot_id) {
+            // Prefer the supervisor-recorded executable when present (see
+            // supervisor_snapshot_matches); the injected process check stays
+            // the fallback for pre-0.3.0 snapshots.
+            let alive = if st.supervisor_exe.is_some() {
+                supervisor_snapshot_matches(&st)
+            } else {
+                process_matches(st.supervisor_pid, slot_id)
+            };
+            if !alive {
                 remove_status_file(&dir)?;
                 println!(
                     "{slot_id}: not running (removed stale status for supervisor pid {})",
@@ -439,7 +461,7 @@ pub fn run_supervisor_command(ctx: &CliContext, slot_id: &str) -> anyhow::Result
     let dir = checked_run_dir(&home, slot_id)?;
     let _supervisor_lock = match acquire_supervisor_lock(&dir) {
         Ok(lock) => lock,
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+        Err(error) if lock_is_contended(&error) => {
             output::print_warn(format!(
                 "{slot_id}: supervisor already owns the runtime lock; duplicate start ignored"
             ));
@@ -520,12 +542,33 @@ fn status_has_live_process(home: &Path, slot_id: &str) -> anyhow::Result<bool> {
         .map_err(|error| anyhow::anyhow!("status read before stop: {error}"))?;
     Ok(status.is_some_and(|snapshot| {
         snapshot.slot_id == slot_id
-            && (supervisor_process_matches(snapshot.supervisor_pid, slot_id)
+            && (supervisor_snapshot_matches(&snapshot)
                 || snapshot
                     .gateway
                     .pid
                     .is_some_and(|pid| gateway_process_matches(home, slot_id, pid)))
     }))
+}
+
+/// Supervisor identity check for a status.json snapshot. When the supervisor
+/// recorded its own executable path (v0.3.0+), match against that instead of
+/// the CLI's `current_exe` — after an in-place upgrade the two differ while
+/// the old supervisor keeps running.
+#[cfg(unix)]
+fn supervisor_snapshot_matches(snapshot: &SupervisorStatusFile) -> bool {
+    match snapshot.supervisor_exe.as_deref() {
+        Some(recorded) => supervisor_process_matches_recorded(
+            snapshot.supervisor_pid,
+            &snapshot.slot_id,
+            recorded,
+        ),
+        None => supervisor_process_matches(snapshot.supervisor_pid, &snapshot.slot_id),
+    }
+}
+
+#[cfg(not(unix))]
+fn supervisor_snapshot_matches(_snapshot: &SupervisorStatusFile) -> bool {
+    false
 }
 
 fn supervisor_already_running(home: &Path, slot_id: &str) -> anyhow::Result<bool> {
@@ -549,6 +592,11 @@ fn acquire_supervisor_lock(dir: &Path) -> std::io::Result<File> {
     }
     file.try_lock_exclusive()?;
     Ok(file)
+}
+
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || (cfg!(windows) && error.raw_os_error() == Some(33))
 }
 
 fn acquire_quiescent_supervisor_lock(dir: &Path, slot_id: &str) -> anyhow::Result<File> {
@@ -578,7 +626,7 @@ fn acquire_quiescent_supervisor_lock(dir: &Path, slot_id: &str) -> anyhow::Resul
                 }
                 return Ok(lock);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(error) if lock_is_contended(&error) => {
                 if Instant::now() >= deadline {
                     signal_matching_supervisors(slot_id, true);
                     std::thread::sleep(Duration::from_millis(100));
@@ -625,7 +673,7 @@ fn supervisor_lock_held(dir: &Path) -> std::io::Result<bool> {
             FileExt::unlock(&file)?;
             Ok(false)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) if lock_is_contended(&error) => Ok(true),
         Err(error) => Err(error),
     }
 }
@@ -663,7 +711,7 @@ fn signal_foreground_supervisor(home: &Path, slot_id: &str) -> anyhow::Result<()
                     status.slot_id
                 );
             }
-            if !supervisor_process_matches(status.supervisor_pid, slot_id) {
+            if !supervisor_snapshot_matches(&status) {
                 anyhow::bail!(
                     "refusing to signal supervisor pid {}: process identity does not match slot '{}'",
                     status.supervisor_pid,
@@ -699,30 +747,86 @@ fn supervisor_process_matches(pid: u32, slot_id: &str) -> bool {
     let Some(command) = makakoo_core::agents::process::command_for_current_user(pid) else {
         return false;
     };
-    supervisor_command_matches(pid, &command, slot_id)
+    let Ok(current_exe) = std::env::current_exe() else {
+        return false;
+    };
+    supervisor_command_matches(pid, &command, slot_id, &current_exe)
+}
+
+/// Variant used when status.json recorded the supervisor's own executable
+/// path. After an in-place upgrade the running supervisor still executes the
+/// OLD binary, so comparing against the CLI's `current_exe` would misreport a
+/// live supervisor as dead; the recorded path is the same generation as the
+/// running process and stays the correct reference.
+#[cfg(unix)]
+fn supervisor_process_matches_recorded(pid: u32, slot_id: &str, recorded_exe: &Path) -> bool {
+    let Some(command) = makakoo_core::agents::process::command_for_current_user(pid) else {
+        return false;
+    };
+    supervisor_command_matches(pid, &command, slot_id, recorded_exe)
 }
 
 #[cfg(unix)]
-fn supervisor_command_matches(pid: u32, command: &str, slot_id: &str) -> bool {
-    let tokens: Vec<_> = command.split_whitespace().collect();
-    if tokens.len() != 5 || tokens[1..] != ["agent", "_supervisor", "--slot", slot_id] {
+fn supervisor_command_matches(pid: u32, command: &str, slot_id: &str, expected_exe: &Path) -> bool {
+    if !supervisor_argv_matches(command, slot_id, expected_exe) {
         return false;
     }
     let Some(process_exe) = makakoo_core::agents::process::executable_for_current_user(pid) else {
         return false;
     };
-    let Ok(current_exe) = std::env::current_exe() else {
-        return false;
-    };
-    paths_name_same(&process_exe, &current_exe)
+    exe_paths_match(&process_exe, expected_exe)
+}
+
+/// Pure argv-structure check, separated from the live-process exe lookup for
+/// testability. `expected_exe` doubles as the reference for resolving a
+/// whitespace-containing argv0.
+#[cfg(unix)]
+fn supervisor_argv_matches(command: &str, slot_id: &str, expected_exe: &Path) -> bool {
+    let args_suffix = format!(" agent _supervisor --slot {slot_id}");
+    let tokens: Vec<_> = command.split_whitespace().collect();
+    // Fast path: exactly `<argv0> agent _supervisor --slot <id>`. Covers
+    // PATH-style invocations where argv0 is a bare name.
+    if tokens.len() == 5 && tokens[1..] == ["agent", "_supervisor", "--slot", slot_id] {
+        return true;
+    }
+    // argv0 itself contains whitespace (e.g. `/opt/My Apps/makakoo`):
+    // split the known argument suffix off and prove the remaining
+    // invocation path resolves to the expected executable. Impostors
+    // embedding the suffix in a larger command line (`python -c ...`)
+    // fail here because their prefix is not a path to the binary.
+    command
+        .strip_suffix(&args_suffix)
+        .is_some_and(|invocation| {
+            !invocation.is_empty() && paths_name_same(Path::new(invocation), expected_exe)
+        })
+}
+
+/// Compare a running process's executable against an expected path. Linux
+/// reports binaries replaced by an in-place upgrade as `<path> (deleted)`;
+/// strip that marker so an upgraded-out-from-under supervisor still matches
+/// its recorded path.
+#[cfg(unix)]
+fn exe_paths_match(process_exe: &Path, expected_exe: &Path) -> bool {
+    let process_exe = process_exe
+        .to_str()
+        .and_then(|s| s.strip_suffix(" (deleted)"))
+        .map(Path::new)
+        .unwrap_or(process_exe);
+    paths_name_same(process_exe, expected_exe)
 }
 
 #[cfg(unix)]
 fn matching_supervisor_pids(slot_id: &str) -> Vec<u32> {
+    // Process-table scans have no status snapshot, so the CLI's own exe is
+    // the only reference. A pre-upgrade supervisor stopped via the service
+    // manager is already gone by the time sweeps run, so this stays correct.
+    let Ok(current_exe) = std::env::current_exe() else {
+        return Vec::new();
+    };
     makakoo_core::agents::process::process_table_for_current_user()
         .into_iter()
         .filter_map(|process| {
-            supervisor_command_matches(process.pid, &process.command, slot_id)
+            supervisor_command_matches(process.pid, &process.command, slot_id, &current_exe)
                 .then_some(process.pid)
         })
         .collect()
@@ -777,13 +881,25 @@ fn gateway_command_matches(home: &Path, slot_id: &str, pid: u32, command: &str) 
     {
         return false;
     }
-    let Ok(body) = std::fs::read(runtime.project_dir.join("runtime.json")) else {
-        return false;
-    };
-    let Ok(info) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return false;
-    };
-    info["pid"].as_u64() == Some(u64::from(pid)) && info["slot"].as_str() == Some(slot_id)
+    // The exact argv + per-slot cwd + node-executable triple above is already
+    // strong identity. runtime.json confirms it once the runner has written
+    // its pid/slot marker — but a supervisor SIGKILLed in the spawn→write
+    // window leaves a gateway with no marker, and cleanup must still find it.
+    // So: when the file exists and carries both fields, require an exact
+    // match (stale-pid protection); when it is absent or not yet complete,
+    // accept on the triple alone (startup-window orphan coverage).
+    match std::fs::read(runtime.project_dir.join("runtime.json")) {
+        Ok(body) => match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(info) => match (info["pid"].as_u64(), info["slot"].as_str()) {
+                (Some(marker_pid), Some(marker_slot)) => {
+                    marker_pid == u64::from(pid) && marker_slot == slot_id
+                }
+                _ => true,
+            },
+            Err(_) => true,
+        },
+        Err(_) => true,
+    }
 }
 
 #[cfg(unix)]
@@ -876,18 +992,38 @@ fn signal_processes(pids: &[u32], signal: i32, include_process_group: bool) {
 fn terminate_matching_gateways(home: &Path, slot_id: &str) -> anyhow::Result<()> {
     let roots = matching_gateway_pids(home, slot_id);
     let targets = process_tree_pids(&roots);
+    // Record each target's command line at selection time. A pid recycled by
+    // an unrelated same-user process inside the TERM→KILL window must not
+    // receive our SIGKILL, so every later step re-validates identity before
+    // acting on or reporting a pid.
+    let known: std::collections::HashMap<u32, String> =
+        makakoo_core::agents::process::process_table_for_current_user()
+            .into_iter()
+            .filter(|process| targets.contains(&process.pid))
+            .map(|process| (process.pid, process.command))
+            .collect();
+    let confirmed = |pids: Vec<u32>| -> Vec<u32> {
+        pids.into_iter()
+            .filter(|pid| {
+                known.get(pid).is_some_and(|recorded| {
+                    makakoo_core::agents::process::command_for_current_user(*pid).as_deref()
+                        == Some(recorded.as_str())
+                })
+            })
+            .collect()
+    };
     signal_processes(&targets, libc::SIGTERM, true);
     let deadline = Instant::now() + Duration::from_secs(2);
-    while !active_process_pids(&targets).is_empty() && Instant::now() < deadline {
+    while !confirmed(active_process_pids(&targets)).is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
-    let remaining = active_process_pids(&targets);
+    let remaining = confirmed(active_process_pids(&targets));
     signal_processes(&remaining, libc::SIGKILL, true);
     let deadline = Instant::now() + Duration::from_secs(1);
-    while !active_process_pids(&targets).is_empty() && Instant::now() < deadline {
+    while !confirmed(active_process_pids(&targets)).is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
-    let remaining = active_process_pids(&targets);
+    let remaining = confirmed(active_process_pids(&targets));
     if !remaining.is_empty() {
         anyhow::bail!(
             "slot '{slot_id}' gateway process(es) {remaining:?} survived shutdown; refusing cleanup"
@@ -1047,13 +1183,64 @@ mod tests {
         let first = acquire_supervisor_lock(&dir).unwrap();
         assert!(supervisor_lock_held(&dir).unwrap());
         let duplicate = acquire_supervisor_lock(&dir).unwrap_err();
-        assert_eq!(duplicate.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(lock_is_contended(&duplicate));
         drop(first);
         let deadline = Instant::now() + Duration::from_secs(1);
         while supervisor_lock_held(&dir).unwrap() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(!supervisor_lock_held(&dir).unwrap());
+    }
+
+    #[test]
+    fn lock_contention_detection_never_masks_unrelated_errors() {
+        assert!(lock_is_contended(&std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "contended"
+        )));
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::Other,
+        ] {
+            assert!(
+                !lock_is_contended(&std::io::Error::new(kind, "unrelated")),
+                "{kind:?} must not be treated as lock contention"
+            );
+        }
+        #[cfg(windows)]
+        {
+            // ERROR_LOCK_VIOLATION (33) is how fs2 surfaces contention on
+            // Windows; other raw codes (e.g. ERROR_ACCESS_DENIED = 5) are
+            // unrelated I/O errors and must not be masked.
+            assert!(lock_is_contended(&std::io::Error::from_raw_os_error(33)));
+            assert!(!lock_is_contended(&std::io::Error::from_raw_os_error(5)));
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[test]
+    fn stop_slot_unsupported_platform_succeeds_for_offline_slot() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let dir = checked_run_dir(tmp.path(), "secretary").unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("status.json"), b"{not-json").unwrap();
+        assert_eq!(stop_slot(&ctx, "secretary").unwrap(), 0);
+        assert!(!dir.join("status.json").exists());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[test]
+    fn stop_slot_unsupported_platform_refuses_while_lock_held() {
+        // A foreground supervisor can run on any platform; while it owns the
+        // runtime lock, stop must fail rather than claim a stop it cannot prove.
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let dir = checked_run_dir(tmp.path(), "secretary").unwrap();
+        let _guard = acquire_supervisor_lock(&dir).unwrap();
+        assert_eq!(stop_slot(&ctx, "secretary").unwrap(), 1);
+        assert!(supervisor_lock_held(&dir).unwrap());
     }
 
     #[cfg(unix)]
@@ -1076,12 +1263,53 @@ mod tests {
         let pid = std::process::id();
         let exe = std::env::current_exe().unwrap();
         let exact = format!("{} agent _supervisor --slot exact", exe.display());
-        assert!(supervisor_command_matches(pid, &exact, "exact"));
+        assert!(supervisor_command_matches(pid, &exact, "exact", &exe));
         assert!(!supervisor_command_matches(
             pid,
             &format!("python -c payload {exact}"),
-            "exact"
+            "exact",
+            &exe
         ));
+        // Slot id is a full-suffix match: `--slot exact-2` must not match
+        // a query for slot `exact`.
+        assert!(!supervisor_command_matches(
+            pid,
+            &format!("{} agent _supervisor --slot exact-2", exe.display()),
+            "exact",
+            &exe
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervisor_match_tolerates_whitespace_in_invocation_path() {
+        // `ps` re-joins argv, so a binary below a directory with spaces
+        // tokenizes into more than 5 fields; the suffix + resolved-prefix
+        // path must still match.
+        let exe = std::env::current_exe().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let spaced_dir = tmp.path().join("dir with spaces");
+        fs::create_dir_all(&spaced_dir).unwrap();
+        let spaced_exe = spaced_dir.join(exe.file_name().unwrap());
+        fs::hard_link(&exe, &spaced_exe).unwrap();
+        let command = format!("{} agent _supervisor --slot spaced", spaced_exe.display());
+        assert!(supervisor_argv_matches(&command, "spaced", &spaced_exe));
+        // Same trick with a prefix that is not a plain path → impostor.
+        assert!(!supervisor_argv_matches(
+            &format!("sh -c '{command}'"),
+            "spaced",
+            &spaced_exe
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exe_match_ignores_linux_deleted_marker() {
+        let exe = std::env::current_exe().unwrap();
+        let deleted_string = format!("{} (deleted)", exe.display());
+        let deleted = Path::new(&deleted_string);
+        assert!(exe_paths_match(deleted, &exe));
+        assert!(!exe_paths_match(Path::new("/bin/false"), &exe));
     }
 
     #[cfg(unix)]
@@ -1225,6 +1453,7 @@ mod tests {
             transports: Vec::new(),
             restart_count: 0,
             circuit_break_until: None,
+            supervisor_exe: None,
             written_at: chrono::Utc::now(),
         };
         snap.write_atomic(&dir).unwrap();
@@ -1253,6 +1482,7 @@ mod tests {
             transports: Vec::new(),
             restart_count: 0,
             circuit_break_until: None,
+            supervisor_exe: None,
             written_at: chrono::Utc::now(),
         };
         snap.write_atomic(&dir).unwrap();
@@ -1277,6 +1507,7 @@ mod tests {
             transports: Vec::new(),
             restart_count: 0,
             circuit_break_until: None,
+            supervisor_exe: None,
             written_at: chrono::Utc::now(),
         };
         snap.write_atomic(&dir).unwrap();
@@ -1313,6 +1544,7 @@ mod tests {
             transports: Vec::new(),
             restart_count: 0,
             circuit_break_until: None,
+            supervisor_exe: None,
             written_at: chrono::Utc::now(),
         };
         snap.write_atomic(&dir).unwrap();

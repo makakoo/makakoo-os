@@ -149,6 +149,29 @@ def test_concatenated_and_camel_case_filesystem_keys_are_detected(key):
     assert is_filesystem_key(key)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "filename",
+        "filenames",
+        "fileName",
+        "FILENAME",
+        "src",
+        "dst",
+        "SRC",
+        "fullpath",
+        "fullpaths",
+        "fullPath",
+        "output_filename",
+        "backup_dst",
+        "avatar_src",
+        "logFullPath",
+    ],
+)
+def test_filename_src_dst_fullpath_keys_are_detected(key):
+    assert is_filesystem_key(key)
+
+
 def test_remote_source_exemption_requires_scheme_at_start_and_rejects_file_uri():
     assert filesystem_paths({"source": "https://example.com/a"}) == []
     assert filesystem_paths({"source": "data:text/plain,hello"}) == []

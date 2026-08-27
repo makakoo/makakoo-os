@@ -52,6 +52,24 @@ fn require_str<'a>(p: &'a Value, key: &str) -> Result<&'a str, RpcError> {
         .ok_or_else(|| RpcError::invalid_params(format!("missing '{key}'")))
 }
 
+/// Resolve the caller-supplied `slot_id`. When the MCP call is
+/// attributed to a scoped agent (`MAKAKOO_AGENT_SLOT` on stdio or the
+/// signed agent-id header on HTTP), the argument must name that same
+/// slot — otherwise one agent could drive another agent's transports.
+/// Trusted local peers (no agent id in scope) keep the caller-supplied
+/// value unchanged.
+fn require_slot(p: &Value) -> Result<&str, RpcError> {
+    let slot = require_str(p, "slot_id")?;
+    if let Some(id) = crate::dispatch::current_agent_id() {
+        if slot != id {
+            return Err(RpcError::invalid_params(format!(
+                "slot_id '{slot}' does not match the calling agent '{id}'"
+            )));
+        }
+    }
+    Ok(slot)
+}
+
 fn require_str_array(p: &Value, key: &str) -> Result<Vec<String>, RpcError> {
     let arr = p
         .get(key)
@@ -184,7 +202,7 @@ impl ToolHandler for ChannelDirectoryListChannelsHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let adapter = reg
             .lookup_directory(slot, transport)
@@ -225,7 +243,7 @@ impl ToolHandler for ChannelDirectoryListUsersHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let adapter = reg
             .lookup_directory(slot, transport)
@@ -268,7 +286,7 @@ impl ToolHandler for ChannelDirectoryLookupUserHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let query = require_str(&params, "query")?;
         let adapter = reg
@@ -312,7 +330,7 @@ impl ToolHandler for ChannelMessagingSendDmHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let user_id = require_str(&params, "user_id")?;
         let text = require_str(&params, "text")?;
@@ -358,7 +376,7 @@ impl ToolHandler for ChannelMessagingSendChannelHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let channel_id = require_str(&params, "channel_id")?;
         let text = require_str(&params, "text")?;
@@ -405,7 +423,7 @@ impl ToolHandler for ChannelMessagingBroadcastHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let channel_ids = require_str_array(&params, "channel_ids")?;
         let text = require_str(&params, "text")?;
@@ -507,7 +525,7 @@ impl ToolHandler for ChannelThreadingCreateThreadHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let parent = parse_thread_parent(&params)?;
         let title = params.get("title").and_then(Value::as_str);
@@ -553,7 +571,7 @@ impl ToolHandler for ChannelThreadingListThreadsHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let channel_id = require_str(&params, "channel_id")?;
         let adapter = reg
@@ -600,7 +618,7 @@ impl ToolHandler for ChannelThreadingFollowThreadHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let thread_id = require_str(&params, "thread_id")?;
         let adapter = reg
@@ -647,7 +665,7 @@ impl ToolHandler for ChannelApprovalRequestHandler {
     }
     async fn call(&self, params: Value) -> Result<Value, RpcError> {
         let reg = registry(&self.ctx)?;
-        let slot = require_str(&params, "slot_id")?;
+        let slot = require_slot(&params)?;
         let transport = require_str(&params, "transport_id")?;
         let channel_id = require_str(&params, "channel_id")?;
         let prompt = require_str(&params, "prompt")?;
@@ -964,6 +982,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v["outcome"], "approved");
+    }
+
+    #[tokio::test]
+    async fn scoped_agent_cannot_target_another_agents_slot() {
+        let ctx = build_ctx().await;
+        let h = ChannelDirectoryListChannelsHandler::new(ctx);
+        let call = h.call(json!({ "slot_id": "secretary", "transport_id": "telegram-main" }));
+        let err = crate::dispatch::AGENT_ID
+            .scope(Some("career".into()), call)
+            .await
+            .unwrap_err();
+        let s = format!("{err:?}");
+        assert!(s.contains("does not match the calling agent"), "{s}");
+    }
+
+    #[tokio::test]
+    async fn scoped_agent_can_target_its_own_slot() {
+        let ctx = build_ctx().await;
+        let h = ChannelDirectoryListChannelsHandler::new(ctx);
+        let call = h.call(json!({ "slot_id": "secretary", "transport_id": "telegram-main" }));
+        let v = crate::dispatch::AGENT_ID
+            .scope(Some("secretary".into()), call)
+            .await
+            .unwrap();
+        assert_eq!(v["channels"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unscoped_call_keeps_caller_supplied_slot() {
+        // Trusted local peer (no agent id in scope): behavior unchanged.
+        let ctx = build_ctx().await;
+        let h = ChannelMessagingSendDmHandler::new(ctx);
+        let v = h
+            .call(json!({
+                "slot_id": "secretary",
+                "transport_id": "telegram-main",
+                "user_id": "U1",
+                "text": "hi"
+            }))
+            .await
+            .unwrap();
+        assert_eq!(v["channel_id"], "DM-U1");
     }
 
     // Suppress unused-import warning for ApprovalKey in this test

@@ -47,8 +47,14 @@ _FILESYSTEM_KEYS = frozenset(
         "destination",
         "destinations",
         "dest",
+        "dst",
         "source",
         "sources",
+        "src",
+        "filename",
+        "filenames",
+        "fullpath",
+        "fullpaths",
     }
 )
 _FILESYSTEM_SUFFIXES = (
@@ -70,8 +76,14 @@ _FILESYSTEM_SUFFIXES = (
     "_destination",
     "_destinations",
     "_dest",
+    "_dst",
     "_source",
     "_sources",
+    "_src",
+    "_filename",
+    "_filenames",
+    "_fullpath",
+    "_fullpaths",
 )
 
 
@@ -121,6 +133,10 @@ def _resolve(path: str) -> Path:
     `strict=False` preserves not-yet-created write targets while still
     resolving every existing ancestor. Component containment below avoids
     string-prefix collisions such as `/tmp/allowed` vs `/tmp/allowed-evil`.
+
+    This is a check-time snapshot: a symlink swapped in after this
+    preflight but before the write (TOCTOU) is not caught here — the
+    Rust MCP/grant layer is the authoritative write-time enforcer.
     """
     return Path(path).expanduser().resolve(strict=False)
 
@@ -178,6 +194,10 @@ def is_filesystem_key(key: str) -> bool:
         (
             "filepath",
             "filepaths",
+            "filename",
+            "filenames",
+            "fullpath",
+            "fullpaths",
             "dirname",
             "workdir",
             "workingdirectory",

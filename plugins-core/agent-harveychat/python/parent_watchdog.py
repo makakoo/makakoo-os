@@ -41,6 +41,13 @@ def start_parent_watchdog(
     terminate: Callable[[], None] | None = None,
 ) -> ParentWatchdog:
     """Start a daemon watchdog pinned to the gateway's initial parent."""
+    if os.name == "nt":
+        # On Windows, os.kill(pid, 0) maps to TerminateProcess and would kill
+        # the Rust supervisor; parent-death cleanup is handled Rust-side there.
+        stop = threading.Event()
+        thread = threading.Thread(target=lambda: None, daemon=True)
+        thread.start()
+        return ParentWatchdog(stop, thread)
     expected_pid = getppid()
     stop = threading.Event()
     if terminate is None:

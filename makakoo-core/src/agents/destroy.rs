@@ -271,33 +271,45 @@ pub fn render_restore_one_liner(outcome: &DestroyOutcome, makakoo_home: &Path) -
     let slot = &outcome.slot_id;
     let archive = &outcome.archive_dir;
     let cfg = makakoo_home.join("config/agents");
-    let mut commands = vec![format!(
-        "mv {} {}",
-        shell_quote(&archive.join(format!("{slot}.toml"))),
-        shell_quote(&cfg)
-    )];
+    let mut commands = vec![render_move(&archive.join(format!("{slot}.toml")), &cfg)];
     if outcome.archived_data_dir.is_some() {
         let data = slot_data_dir(makakoo_home, slot);
-        commands.push(format!(
-            "mv {} {}",
-            shell_quote(&archive.join("data")),
-            shell_quote(&data)
-        ));
+        commands.push(render_move(&archive.join("data"), &data));
     }
     if outcome.archived_runtime_dir.is_some() {
         if let Some(runtime) = outcome.runtime_project_dir.as_ref() {
-            commands.push(format!(
-                "mv {} {}",
-                shell_quote(&archive.join("runtime")),
-                shell_quote(runtime)
-            ));
+            commands.push(render_move(&archive.join("runtime"), runtime));
         }
     }
     format!("to restore: {}", commands.join(" && "))
 }
 
+/// Unix restore step: POSIX `mv` with single-quote escaping.
+#[cfg(not(windows))]
+fn render_move(source: &Path, destination: &Path) -> String {
+    format!("mv {} {}", shell_quote(source), shell_quote(destination))
+}
+
+/// Windows restore step: PowerShell `Move-Item` with single-quote
+/// escaping. The `&&` join above is valid in PowerShell 7+.
+#[cfg(windows)]
+fn render_move(source: &Path, destination: &Path) -> String {
+    format!(
+        "Move-Item -LiteralPath {} -Destination {}",
+        powershell_quote(source),
+        powershell_quote(destination)
+    )
+}
+
+#[cfg(not(windows))]
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+/// PowerShell single-quoted literal — the only escape is doubling `'`.
+#[cfg(windows)]
+fn powershell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
 }
 
 #[cfg(test)]
@@ -475,6 +487,7 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn restore_one_liner_includes_archive_path() {
         let outcome = DestroyOutcome {
@@ -495,6 +508,7 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
         assert!(normalized.contains("/m/archive/agents/secretary-1700000000/data"));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn restore_one_liner_omits_data_arm_when_no_data_archived() {
         // Round-2 fix: the restore line must not reference a data/ dir
@@ -520,6 +534,7 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn restore_one_liner_shell_quotes_spaces_and_apostrophes() {
         let outcome = DestroyOutcome {
@@ -535,6 +550,27 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
         let line = render_restore_one_liner(&outcome, Path::new("/tmp/My Makakoo"));
         assert!(line.contains("'/tmp/Makakoo'\"'\"'s Archive/secretary-1/secretary.toml'"));
         assert!(line.contains("'/tmp/My Makakoo/config/agents'"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restore_one_liner_renders_powershell_move_item() {
+        let outcome = DestroyOutcome {
+            slot_id: "secretary".into(),
+            archive_dir: PathBuf::from("C:\\Makakoo's Archive\\secretary-1"),
+            archived_toml: PathBuf::new(),
+            archived_data_dir: Some(PathBuf::from("data")),
+            runtime_project_dir: None,
+            archived_runtime_dir: None,
+            runtime_archive_warning: None,
+            detected_secrets: vec![],
+        };
+        let line = render_restore_one_liner(&outcome, Path::new("C:\\My Makakoo"));
+        assert!(!line.contains("mv "), "no POSIX mv on Windows; got: {line}");
+        // PowerShell escapes a single quote by doubling it.
+        assert!(line.contains(
+            "Move-Item -LiteralPath 'C:\\Makakoo''s Archive\\secretary-1\\secretary.toml' -Destination 'C:\\My Makakoo\\config\\agents'"
+        ));
     }
 
     #[test]
@@ -577,7 +613,8 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
             "TOKEN=secret"
         );
         let restore = render_restore_one_liner(&outcome, tmp.path());
-        assert!(restore.contains("/runtime"));
+        let normalized = restore.replace('\\', "/");
+        assert!(normalized.contains("/runtime"));
         assert!(restore.contains(&runtime.display().to_string()));
     }
 

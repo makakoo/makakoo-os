@@ -112,6 +112,15 @@ fn dsh_launch_spec(
         AgentRuntimeEngine::DeepseekHarness,
         &effective_llm.model.0,
     )?;
+    // The runner enforces DSH_MAX_TOKENS as an integer from 1 through 65536;
+    // reject anything else here so a bad override fails fast instead of
+    // crash-looping the supervised runtime.
+    let max_tokens = effective_llm.max_tokens.0;
+    if !(1..=65536).contains(&max_tokens) {
+        anyhow::bail!(
+            "max_tokens {max_tokens} is out of range for DeepSeek Harness; expected 1 through 65536"
+        );
+    }
     let model = effective_llm
         .model
         .0
@@ -125,7 +134,7 @@ fn dsh_launch_spec(
         .env("MAKAKOO_AGENT_SLOT", &slot.slot_id)
         .env("MAKAKOO_MCP_BIN", resolve_mcp_binary())
         .env("DSH_MODEL", model)
-        .env("DSH_MAX_TOKENS", effective_llm.max_tokens.0.to_string())
+        .env("DSH_MAX_TOKENS", max_tokens.to_string())
         .cwd(project_dir.to_path_buf()))
 }
 
@@ -145,7 +154,7 @@ fn sibling_binary(name: &str) -> Option<PathBuf> {
     std::env::current_exe()
         .ok()?
         .parent()
-        .map(|dir| dir.join(name))
+        .map(|dir| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
 }
 
 #[cfg(test)]
@@ -262,5 +271,35 @@ mod tests {
         let error =
             launch_spec(Path::new("/tmp/makakoo"), &slot(tmp.path().into()), &llm).unwrap_err();
         assert!(error.to_string().contains("routes through switchAILocal"));
+    }
+
+    #[test]
+    fn launch_rejects_out_of_range_max_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("runner.mjs"), "").unwrap();
+        std::fs::create_dir_all(tmp.path().join("node_modules/@deepseek-ai/dsh-sdk-client"))
+            .unwrap();
+        for value in [0, 65537] {
+            let mut llm = effective();
+            llm.max_tokens.0 = value;
+            let error =
+                launch_spec(Path::new("/tmp/makakoo"), &slot(tmp.path().into()), &llm).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("max_tokens {value} is out of range")),
+                "unexpected error for {value}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn sibling_binary_appends_platform_exe_suffix() {
+        let path = sibling_binary("makakoo-mcp").unwrap();
+        assert!(
+            path.ends_with(format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX)),
+            "unexpected sibling candidate: {}",
+            path.display()
+        );
     }
 }

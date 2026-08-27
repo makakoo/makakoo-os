@@ -295,6 +295,12 @@ fn is_filesystem_key(key: &str) -> bool {
             | "dest"
             | "source"
             | "sources"
+            | "src"
+            | "dst"
+            | "filename"
+            | "filenames"
+            | "fullpath"
+            | "fullpaths"
     ) || [
         "_path",
         "_paths",
@@ -316,6 +322,12 @@ fn is_filesystem_key(key: &str) -> bool {
         "_dest",
         "_source",
         "_sources",
+        "_src",
+        "_dst",
+        "_filename",
+        "_filenames",
+        "_fullpath",
+        "_fullpaths",
     ]
     .iter()
     .any(|suffix| key.ends_with(suffix))
@@ -329,6 +341,10 @@ fn is_filesystem_key(key: &str) -> bool {
         "dirname",
         "workdir",
         "workingdirectory",
+        "filename",
+        "filenames",
+        "fullpath",
+        "fullpaths",
     ]
     .iter()
     .any(|suffix| squashed.ends_with(suffix))
@@ -363,19 +379,15 @@ fn is_remote_capable_source_key(key: &str) -> bool {
     matches!(normalize_argument_key(key).as_str(), "source" | "sources")
 }
 
+/// Mirrors the downstream remote-source predicates exactly
+/// (`LlmClient::encode_source` in makakoo-core/src/llm.rs and
+/// `resolve_source` in plugins-core/agent-multimodal-knowledge/src/ingest.py):
+/// only `http://`, `https://`, and `data:` are remote. Anything else —
+/// including `file://` URIs and Windows drive-letter paths such as
+/// `C://Users/...` whose "scheme" would parse as `C` — is a local path
+/// and must pass `check_path`.
 fn looks_like_remote_source(value: &str) -> bool {
-    if value.starts_with("data:") {
-        return true;
-    }
-    let Some((scheme, _)) = value.split_once("://") else {
-        return false;
-    };
-    let mut chars = scheme.chars();
-    chars
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic())
-        && chars.all(|character| character.is_ascii_alphanumeric() || "+-.".contains(character))
-        && !scheme.eq_ignore_ascii_case("file")
+    value.starts_with("http://") || value.starts_with("https://") || value.starts_with("data:")
 }
 
 fn root_candidate(home: &Path, candidate: PathBuf) -> PathBuf {
@@ -730,6 +742,29 @@ mod tests {
     }
 
     #[test]
+    fn non_http_schemes_are_local_paths_at_scope_boundary() {
+        // Downstream consumers treat only http/https/data as remote, so
+        // the boundary must too: a Windows drive-letter path whose
+        // "scheme" is `C` (or any other non-http scheme) must still go
+        // through `check_path` instead of bypassing allowed_paths.
+        for value in [
+            "C://Users/victim/secret.txt",
+            "c://windows/system32/config/sam",
+            "ftp://example.com/a",
+            "gopher://example.com/a",
+        ] {
+            assert_eq!(
+                filesystem_paths(&json!({"source": value})),
+                vec![PathBuf::from(value)],
+                "non-http scheme escaped check_path: {value}"
+            );
+        }
+        assert!(filesystem_paths(&json!({"source": "http://example.com/a"})).is_empty());
+        assert!(filesystem_paths(&json!({"source": "https://example.com/a"})).is_empty());
+        assert!(filesystem_paths(&json!({"source": "data:text/plain,hello"})).is_empty());
+    }
+
+    #[test]
     fn filesystem_argument_names_fail_closed_across_common_aliases() {
         for key in [
             "path",
@@ -756,6 +791,14 @@ mod tests {
             "myfilepath",
             "outFilePath",
             "workingDirectory",
+            "src",
+            "dst",
+            "filename",
+            "filenames",
+            "fullpath",
+            "fullPath",
+            "output_filename",
+            "backup_dst",
         ] {
             assert!(is_filesystem_key(key), "filesystem alias escaped: {key}");
         }
