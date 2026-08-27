@@ -64,6 +64,26 @@ complement, focused on user-visible changes and migration notes.
 - Destroy remains confirmation-gated, proves shutdown before moving state, and
   archives managed runtime/data/TOML transactionally. Secret revocation remains
   separately explicit.
+- The MCP scope boundary now counts only `http`/`https`/`data:` sources as
+  remote (Windows drive-letter paths can no longer bypass `allowed_paths`),
+  channel tools reject a `slot_id` that is not the calling agent, and
+  server-side knowledge ingest refuses loopback/private/link-local URLs.
+
+### Fixed
+
+- `agent stop`/`destroy` on platforms without launchd/systemd now prove the
+  slot is offline before reporting success and refuse while a foreground
+  supervisor holds the runtime lock.
+- `agent status`/`stop` keep matching a supervisor started from a pre-upgrade
+  binary (status.json records the supervisor's own executable path), tolerate
+  install paths containing spaces, and the gateway cleanup never signals a pid
+  that was recycled inside the TERM→KILL window.
+- The generated DSH runner honors the per-slot `[llm.override].model` (the
+  compiled spec model is the fallback), out-of-range `max_tokens` fails fast at
+  start instead of crash-looping, and the runtime finds a sibling
+  `makakoo-mcp.exe` on Windows.
+- The legacy gateway's parent watchdog no longer terminates its supervisor on
+  Windows, where `os.kill(pid, 0)` maps to `TerminateProcess`.
 
 ### Known limitations
 
