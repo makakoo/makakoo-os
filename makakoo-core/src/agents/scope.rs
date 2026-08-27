@@ -493,9 +493,10 @@ mod tests {
             _ => panic!("wrong variant"),
         }
         // Verify the Display rendering still mentions the
-        // allowed-list contents.
+        // allowed-list contents. Separators are normalized because
+        // Windows renders canonicalized paths with backslashes.
         let err = check_path(&s, Path::new("/etc/passwd")).unwrap_err();
-        let msg = format!("{err}");
+        let msg = format!("{err}").replace('\\', "/");
         assert!(msg.contains("tmp/secretary"));
         assert!(msg.contains("etc/passwd"));
     }

@@ -567,10 +567,16 @@ secret_ref = "agent/secretary/telegram-main/bot_token"
         };
         let line = render_restore_one_liner(&outcome, Path::new("C:\\My Makakoo"));
         assert!(!line.contains("mv "), "no POSIX mv on Windows; got: {line}");
-        // PowerShell escapes a single quote by doubling it.
-        assert!(line.contains(
-            "Move-Item -LiteralPath 'C:\\Makakoo''s Archive\\secretary-1\\secretary.toml' -Destination 'C:\\My Makakoo\\config\\agents'"
-        ));
+        // PowerShell escapes a single quote by doubling it. Joined literals
+        // like `config/agents` keep their forward slash on Windows, so
+        // compare with separators normalized.
+        let normalized = line.replace('\\', "/");
+        assert!(
+            normalized.contains(
+                "Move-Item -LiteralPath 'C:/Makakoo''s Archive/secretary-1/secretary.toml' -Destination 'C:/My Makakoo/config/agents'"
+            ),
+            "unexpected restore line: {line}"
+        );
     }
 
     #[test]
