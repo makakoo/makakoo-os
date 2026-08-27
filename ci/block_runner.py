@@ -216,7 +216,9 @@ def _relpath(path: Path) -> Path | str:
         return path
 
 
-def _print_report(all_outcomes: dict[Path, list[Outcome]]) -> int:
+def _print_report(
+    all_outcomes: dict[Path, list[Outcome]], *, require_pass: bool = False
+) -> int:
     fails = 0
     skips = 0
     passes = 0
@@ -238,7 +240,7 @@ def _print_report(all_outcomes: dict[Path, list[Outcome]]) -> int:
                     file=sys.stderr,
                 )
     total = passes + skips + fails
-    if passes == 0:
+    if require_pass and passes == 0:
         fails += 1
         print(
             "FAIL  manifest is vacuous: at least one shell block must execute",
@@ -347,9 +349,9 @@ def main() -> int:
         outcomes = [o for outs in all_outcomes.values() for o in outs]
         any_fail = any(o.status == "fail" for o in outcomes)
         any_pass = any(o.status == "pass" for o in outcomes)
-        return 1 if any_fail or not any_pass else 0
+        return 1 if any_fail or (args.manifest is not None and not any_pass) else 0
 
-    return _print_report(all_outcomes)
+    return _print_report(all_outcomes, require_pass=args.manifest is not None)
 
 
 if __name__ == "__main__":
