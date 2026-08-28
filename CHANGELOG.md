@@ -34,8 +34,32 @@ complement, focused on user-visible changes and migration notes.
   capability. Exit codes: `0` healthy, `1` liveness or capability failed, `2`
   the target has no LLM route to probe.
 
+- **`write_file` is now a native MCP tool.** It was documented, referenced
+  throughout the agent guides, and offered by the create wizard, but no Rust
+  handler served it — a slot naming it got a tool that silently did not exist.
+  The Rust port enforces the same sandbox as the Python implementation
+  (baseline roots + active user grants) and adds slot-aware authorisation: an
+  agent slot is bounded by its own `allowed_paths` / `forbidden_paths` and
+  cannot reach the operator's baseline roots. Writes are atomic and, on Unix,
+  never follow a symlink — closing threat-model card
+  `v0.3.1-O-NOFOLLOW-FD-HOLD-WRITES` (R1) in the Rust path. A refusal without
+  a slot returns the exact `grant_write_access` call that would unblock it,
+  per `spec/USER_GRANTS.md §12` Flow 1.
+- **AgentSpec tool names are validated at create and validate time.** A
+  well-formed name for a tool no handler serves used to produce a slot that
+  looked correct and could not do its job, because the server filters the
+  registry down to the intersection. Unknown names now fail fast with no slot
+  or project written. Per-machine `pattern_*` tools are accepted by prefix. A
+  drift test in `makakoo-mcp` fails CI if a handler is added without a
+  catalog entry.
+
 ### Fixed
 
+- **The `agent create` wizard no longer offers `web_search`,** which has never
+  been a registered tool — every agent created with the wizard's suggested
+  answer got one that did not exist. The offered list now comes from the
+  shared catalog. `docs/agents/spec.md` carried the same claim in its example
+  and has been corrected.
 - **Windows lock contention no longer misreads a lost open race as a hard
   failure.** `ERROR_SHARING_VIOLATION` (32) is now treated as contention
   alongside `ERROR_LOCK_VIOLATION` (33), in both the lock predicate and

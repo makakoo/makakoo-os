@@ -8,7 +8,9 @@
 //! * `name` — must match `^[a-z0-9][a-z0-9-]{0,62}$`
 //! * `description` — non-empty after trim
 //! * `model` — non-empty after trim
-//! * `tools` — each name must be lowercase alphanumeric + underscore
+//! * `tools` — each name must be lowercase alphanumeric + underscore,
+//!   AND must name a tool some registered MCP handler actually serves
+//!   (see `agents::tool_catalog`)
 //! * `channels` — kind-specific required fields per `ChannelSpec` variant
 //! * `triggers` — `cron.schedule` must be 5 valid cron fields,
 //!   `webhook.path` must start with `/`
@@ -70,6 +72,20 @@ fn validate_tools(tools: &[String]) -> Result<()> {
                 t
             )));
         }
+    }
+    // A well-formed name for a tool that does not exist is worse than a
+    // malformed one: `scoped_tools` filters the registry to the intersection,
+    // so the slot is created, looks correct, and silently cannot do the job.
+    let unknown = crate::agents::tool_catalog::unknown_tools(tools);
+    if !unknown.is_empty() {
+        return Err(MakakooError::InvalidInput(format!(
+            concat!(
+                "unknown tool(s): {}. No registered MCP handler serves {}. ",
+                "Run `makakoo-mcp --list-tools` for the full list."
+            ),
+            unknown.join(", "),
+            if unknown.len() == 1 { "it" } else { "them" }
+        )));
     }
     Ok(())
 }
@@ -373,6 +389,51 @@ mod tests {
     fn accepts_mcp_harvey_double_underscore() {
         let mut s = minimal_spec();
         s.tools = vec!["mcp__harvey__brain_search".into()];
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_a_well_formed_name_for_a_tool_that_does_not_exist() {
+        // The failure this closes: `web_search` passes every character rule,
+        // so the slot was created and then quietly had no such tool. It was
+        // the wizard's own suggested answer.
+        let mut s = minimal_spec();
+        s.tools = vec!["web_search".into()];
+        let err = format!("{}", s.validate().unwrap_err());
+        assert!(err.contains("unknown tool"), "{err}");
+        assert!(err.contains("web_search"), "{err}");
+        assert!(
+            err.contains("--list-tools"),
+            "must say how to find the real names: {err}"
+        );
+    }
+
+    #[test]
+    fn names_every_unknown_tool_not_just_the_first() {
+        let mut s = minimal_spec();
+        s.tools = vec![
+            "brain_search".into(),
+            "made_up_one".into(),
+            "made_up_two".into(),
+        ];
+        let err = format!("{}", s.validate().unwrap_err());
+        assert!(
+            err.contains("made_up_one") && err.contains("made_up_two"),
+            "{err}"
+        );
+        assert!(
+            !err.contains("brain_search"),
+            "must not blame a valid tool: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_per_machine_pattern_tools() {
+        // Pattern tools are discovered from $MAKAKOO_HOME at boot and cannot
+        // be in a compile-time catalog. Rejecting one the user has installed
+        // would be a worse failure than accepting one they have not.
+        let mut s = minimal_spec();
+        s.tools = vec!["pattern_summarize".into()];
         s.validate().unwrap();
     }
 

@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod browse;
 pub mod channel_ops;
+pub mod files;
 pub mod infect;
 pub mod journal;
 pub mod knowledge;
@@ -84,6 +85,9 @@ pub fn register_tier_b(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     registry.register(Arc::new(perms::GrantWriteAccessHandler::new(ctx.clone())));
     registry.register(Arc::new(perms::RevokeWriteAccessHandler::new(ctx.clone())));
     registry.register(Arc::new(perms::ListWriteGrantsHandler::new(ctx.clone())));
+
+    // SPRINT-013 T3.1: the write the grants above exist to authorise.
+    registry.register(Arc::new(files::WriteFileHandler::new(ctx.clone())));
 
     // v2-MEGA Phase 6: OpenClaw-parity channel-ops trait surface.
     registry.register(Arc::new(

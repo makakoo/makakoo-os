@@ -253,7 +253,10 @@ fn list_summary_msg(
     )
 }
 
-fn baseline_roots_for(home: &std::path::Path) -> Vec<String> {
+/// Layer 1 of the three-layer model (`spec/CAPABILITIES.md §1.11`). Shared
+/// with the `write_file` handler so the roots it enforces and the roots this
+/// tool reports can never drift apart.
+pub(crate) fn baseline_roots_for(home: &std::path::Path) -> Vec<String> {
     vec![
         home.join("data/reports").to_string_lossy().to_string(),
         home.join("data/drafts").to_string_lossy().to_string(),

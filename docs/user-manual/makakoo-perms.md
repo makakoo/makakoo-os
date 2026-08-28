@@ -312,17 +312,32 @@ human turn, and they're allowed to call without `origin_turn_id`.
 
 ---
 
-## Three-layer resolver
+## Layered resolver
 
-When `write_file` is called on a path, the handler checks three layers
-in order (all additive; a match anywhere permits the write):
+`spec/CAPABILITIES.md §1.11` defines a three-layer additive model —
+baseline roots, plugin-manifest grants, user grants. A write is allowed
+if *any* layer matches; layers never subtract from one another.
+
+**What `write_file` actually checks today** is two of those three, in
+order:
 
 1. **Baseline roots** — hardcoded. `~/MAKAKOO/data/reports`,
    `~/MAKAKOO/data/drafts`, `~/MAKAKOO/tmp`, `/tmp`.
-2. **Plugin-manifest grants** — declarative grants in
-   `plugins-core/<plugin>/plugin.toml` under `[capabilities].grants`.
-3. **User grants** — everything `makakoo perms grant` or the
+2. **User grants** — everything `makakoo perms grant` or the
    conversational tools created.
+
+**Layer 2 (plugin-manifest grants) is not consulted by `write_file`** in
+either the Python or the Rust implementation. `resolve_grants` builds a
+plugin's `GrantTable` at install time, but nothing wires it into the
+write path. Being additive, its absence can only make the sandbox
+*narrower* than the spec allows — a plugin whose manifest grants
+`fs/write` on some path still has to go through a user grant. Tracked as
+a spec/implementation gap; do not assume manifest grants authorise a
+write.
+
+A **scoped agent slot** does not use these layers at all: its
+`allowed_paths` / `forbidden_paths` are the whole authority, so an agent
+cannot reach the baseline roots or a machine-global user grant.
 
 If none match, you get:
 

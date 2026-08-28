@@ -41,7 +41,6 @@ instructions: |                      # required, multi-line, markdown allowed
 tools:                               # required, list of mcp__harvey__* names
   - brain_search
   - write_file
-  - web_search
 
 # Communications interfaces (zero or many). DSH V1 preserves these
 # declarations but does not start channel listeners yet.
@@ -120,6 +119,17 @@ treated as the same tool at the server-side enforcement boundary. Each name
 must match `^[a-z][a-z0-9_]*$` (which permits the double underscores in
 `mcp__harvey__*`). `tools: []` is valid and exposes no model-facing tools;
 AgentSpec-generated slots never inherit an implicit baseline.
+
+**Names are validated at create and validate time.** A name that no
+registered handler serves is rejected before any slot is written — a
+well-formed name for a nonexistent tool used to produce a slot that looked
+correct and silently could not do the job, because the server filters the
+registry down to the intersection. Run `makakoo-mcp --list-tools` for the
+authoritative list; any of those names is valid here, as are the per-machine
+`pattern_*` tools discovered from `$MAKAKOO_HOME/plugins/pattern-*/`.
+
+The example above previously listed `web_search`, which has never been a
+registered tool.
 
 ### `channels` (optional, list)
 Communications interfaces. Zero or many. See "Channel kinds" below.

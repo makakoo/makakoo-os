@@ -1069,7 +1069,14 @@ pub fn init_spec(_ctx: &CliContext, path: &std::path::Path, minimal: bool) -> an
     }
 
     // 9. Tools
-    print!("\nTools? [brain_search, brain_recent, write_file, web_search, none] (comma-sep) > ");
+    // Offered names come from the shared catalog, so the wizard cannot go on
+    // suggesting a tool that no handler serves — it offered `web_search` for
+    // months, and every agent created with the default answer got a tool that
+    // did not exist.
+    print!(
+        "\nTools? [{}, none] (comma-sep) > ",
+        makakoo_core::agents::WIZARD_TOOL_CHOICES.join(", ")
+    );
     std::io::stdout().flush()?;
     let mut ti = String::new();
     std::io::stdin().read_line(&mut ti)?;

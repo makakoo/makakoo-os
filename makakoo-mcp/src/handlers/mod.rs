@@ -184,6 +184,76 @@ mod handler_contract_tests {
     }
 
     #[test]
+    fn catalog_matches_the_registered_tool_names() {
+        // The drift gate. makakoo-core cannot see the registry and makakoo-mcp
+        // cannot see AgentSpec validation, so this test — in the crate that
+        // links both — is the only place the two can be compared. Adding a
+        // handler without a catalog entry makes every spec naming it fail
+        // validation for no visible reason; this fails CI first.
+        //
+        // Temp home: `register_pattern_tools` walks
+        // `$MAKAKOO_HOME/plugins/pattern-*/`, so a developer with patterns
+        // installed would otherwise see spurious extras.
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(ToolContext::empty(tmp.path().to_path_buf()));
+        let mut reg = ToolRegistry::new();
+        register_all(&mut reg, &ctx);
+
+        let mut registered: Vec<String> = reg.list().into_iter().map(|d| d.name).collect();
+        registered.sort();
+        let catalog: Vec<String> = makakoo_core::agents::TOOL_CATALOG
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let missing: Vec<_> = registered
+            .iter()
+            .filter(|name| !catalog.contains(name))
+            .collect();
+        let stale: Vec<_> = catalog
+            .iter()
+            .filter(|name| !registered.contains(name))
+            .collect();
+        assert!(
+            missing.is_empty() && stale.is_empty(),
+            "TOOL_CATALOG has drifted from the registry.\n               registered but not in catalog: {missing:?}\n               in catalog but not registered: {stale:?}\n               Fix: update makakoo-core/src/agents/tool_catalog.rs"
+        );
+    }
+
+    #[test]
+    fn write_file_is_registered_and_reachable_by_a_slot_that_names_it() {
+        // Two things must hold together for the sandbox to be usable:
+        // the tool is registered at all, and `scoped_tools` (which filters
+        // `registry.list()` through `check_tool`) still surfaces it to a slot
+        // whose spec grants it. Losing either silently removes the agent's
+        // only way to write, and no other test would notice.
+        let (reg, _) = registry_with_all();
+        let names: HashSet<String> = reg.list().into_iter().map(|d| d.name).collect();
+        assert!(names.contains("write_file"), "write_file is not registered");
+
+        let slot = makakoo_core::agents::AgentSlot {
+            slot_id: "scribe".into(),
+            name: "Scribe".into(),
+            persona: None,
+            inherit_baseline: false,
+            allowed_paths: vec![],
+            forbidden_paths: vec![],
+            tools: vec!["write_file".into()],
+            process_mode: "supervised_pair".into(),
+            transports: vec![],
+            llm: None,
+            runtime: None,
+        };
+        assert!(makakoo_core::agents::check_tool(&slot, "write_file").is_ok());
+        // The MCP client spelling must resolve to the same identity.
+        assert!(makakoo_core::agents::check_tool(&slot, "mcp__harvey__write_file").is_ok());
+        // A slot that did not ask for it still cannot reach it.
+        let mut narrow = slot.clone();
+        narrow.tools = vec!["brain_search".into()];
+        assert!(makakoo_core::agents::check_tool(&narrow, "write_file").is_err());
+    }
+
+    #[test]
     fn pi_handlers_are_registered() {
         // v0.2 B.3+B.4 regression guard — the six pi_* tools must survive
         // every refactor of register_tier_b.

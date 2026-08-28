@@ -30,6 +30,7 @@ pub mod rate_limit;
 pub mod registry;
 pub mod rlimits;
 mod runtime_archive;
+pub mod safe_write;
 pub mod scaffold;
 pub mod scope;
 pub mod slot;
@@ -37,6 +38,7 @@ pub mod spec;
 pub mod status;
 pub mod supervisor;
 pub mod supervisor_runtime;
+pub mod tool_catalog;
 
 pub mod service_env;
 
@@ -51,11 +53,13 @@ pub use identity::{
     ENV_VAR as AGENT_SLOT_ENV_VAR, EX_USAGE as AGENT_SLOT_EXIT_CODE,
 };
 pub use registry::AgentRegistry;
-pub use scope::{check_path, check_tool, ScopeError};
+pub use safe_write::{write_atomic_nofollow, MAX_WRITE_BYTES};
+pub use scope::{check_path, check_tool, resolve_scope_path, ScopeError};
 pub use slot::{
     checked_slot_path, registry_dir, slot_path, validate_slot_id, AgentRuntime, AgentRuntimeEngine,
     AgentSlot,
 };
+pub use tool_catalog::{is_known_tool, unknown_tools, TOOL_CATALOG, WIZARD_TOOL_CHOICES};
 
 pub use lifecycle::{AgentLaunchSpec, AgentProcess, AgentSupervisor, HealthStatus};
 pub use scaffold::{AgentKind, AgentScaffold, AgentSpec};

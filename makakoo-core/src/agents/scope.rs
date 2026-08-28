@@ -224,6 +224,16 @@ fn canonicalise_scope_prefix(configured: &str) -> Option<PathBuf> {
     canonicalise(Path::new(prefix))
 }
 
+/// Resolve a path the way scope enforcement does.
+///
+/// Exported so that anything authorising a write — `check_path` here, the
+/// `write_file` handler in makakoo-mcp — resolves the candidate identically.
+/// Two resolvers that disagree by one `..` or one symlink is precisely how a
+/// sandbox gets bypassed, so there is exactly one.
+pub fn resolve_scope_path(path: &Path) -> Option<PathBuf> {
+    canonicalise(path)
+}
+
 /// Expand `~/`, resolve symlinks through the nearest existing ancestor, and
 /// lexically collapse `.`/`..` for not-yet-created write targets.
 /// Returns `None` when resolution encounters a dangling symlink.
