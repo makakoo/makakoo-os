@@ -944,6 +944,13 @@ pub enum AgentCmd {
     Health {
         /// Slot id or legacy plugin name.
         name: String,
+        /// Also ask the slot's LLM route whether it can serve a
+        /// multi-turn tool call, by sending a synthetic request that
+        /// already contains a tool call and its result. Reports the
+        /// upstream status and message on refusal. Does not start the
+        /// slot and does not consume an agent turn.
+        #[arg(long)]
+        probe: bool,
     },
 
     // ── Multi-bot subagent registry (Phase 2) ─────────────────────
@@ -1064,6 +1071,12 @@ pub enum AgentCmd {
         /// tokens you'll fix up afterward.
         #[arg(long)]
         skip_credential_check: bool,
+        /// Skip the automatic `npm install` in the generated project.
+        /// The slot is still created; run the install by hand before
+        /// `makakoo agent start`. Also honoured via
+        /// MAKAKOO_SKIP_DEPS_INSTALL for scripted/offline provisioning.
+        #[arg(long)]
+        no_install: bool,
         /// Output dir for the generated runtime project.
         /// Defaults to $MAKAKOO_HOME/agents-dsh/<slot>.
         #[arg(long, value_name = "DIR")]

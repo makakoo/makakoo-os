@@ -13,6 +13,7 @@ pub mod agent_audit;
 pub mod agent_destroy;
 pub mod agent_engine;
 pub mod agent_lifecycle;
+pub mod agent_probe;
 pub mod agent_prompt;
 pub mod agent_provider;
 pub mod agent_runtime;

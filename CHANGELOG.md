@@ -8,6 +8,43 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
+## [Unreleased]
+
+### Added
+
+- **`makakoo agent create` installs the generated project's dependencies.**
+  A create used to leave the user one undocumented `npm install` away from a
+  working agent; `agent start` then failed with "dependencies missing" on what
+  had looked like a successful setup. The install now runs in the scaffolded
+  project using the same `node` that passed the version gate. `--no-install`
+  (or `MAKAKOO_SKIP_DEPS_INSTALL=1` for scripted or offline provisioning)
+  reproduces the previous flow. A failed install never rolls back the create —
+  the slot and project are already durable — and prints the exact shell-quoted
+  command to finish by hand.
+- **`makakoo agent health <slot> --probe` checks the LLM route, not just the
+  process.** Plain `health` only answers "is the runtime up", which says
+  nothing about whether the route can still serve a conversation containing a
+  tool call — the shape every agent turn after the first one uses. `--probe`
+  sends that exact shape directly to the slot's provider endpoint, so it is
+  deterministic, consumes no agent turn, and works on a stopped slot. It is
+  provider-agnostic (switchAILocal, ollama, OpenAI, Anthropic, resolved from
+  the slot's model specifier) and prints the upstream status and message
+  verbatim on refusal. Operational failures — auth, quota, unknown model,
+  provider outages — are reported as *inconclusive* rather than blamed on
+  capability. Exit codes: `0` healthy, `1` liveness or capability failed, `2`
+  the target has no LLM route to probe.
+
+### Fixed
+
+- **Windows lock contention no longer misreads a lost open race as a hard
+  failure.** `ERROR_SHARING_VIOLATION` (32) is now treated as contention
+  alongside `ERROR_LOCK_VIOLATION` (33), in both the lock predicate and
+  `supervisor_lock_held`, whose `OpenOptions::open` could return 32 while a
+  peer supervisor held the handle and surfaced it as an I/O error.
+- **Flue runtime slots are no longer classified as legacy slots** by
+  `agent health`, which had made them ineligible for `--probe` despite
+  carrying a real LLM route.
+
 ## [0.3.1] - 2026-08-28
 
 ### Fixed

@@ -315,6 +315,9 @@ pub struct CreateArgs {
     pub slack_team: Option<String>,
     pub slack_allowed: Vec<String>,
     pub skip_credential_check: bool,
+    /// Skip the post-scaffold `npm install`, reproducing the pre-0.4.0
+    /// flow where the user runs it by hand.
+    pub no_install: bool,
     pub out: Option<PathBuf>,
     pub specs: Option<PathBuf>,
 }
@@ -409,7 +412,8 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
             "DSH V1 exposes the authenticated runtime API; declared channel ingress still requires the Makakoo/Flue channel-adapter slice.",
         );
     }
-    crate::commands::agent_engine::print_next(&slot.slot_id, &runtime);
+    let deps = crate::commands::agent_engine::install_deps(&runtime, args.no_install);
+    crate::commands::agent_engine::print_next(&slot.slot_id, &runtime, deps);
     Ok(0)
 }
 
@@ -569,6 +573,13 @@ fn create_from_specs(
         }
     }
 
+    // Installs run after every slot is durable, so a network failure here
+    // cannot leave a half-registered batch behind.
+    let mut deps = crate::commands::agent_engine::DepsInstall::MissingManifest;
+    for runtime in &runtimes {
+        deps = crate::commands::agent_engine::install_deps(runtime, args.no_install);
+    }
+
     let count = prepared.len();
     if count == 1 {
         let s = &specs[0];
@@ -580,6 +591,7 @@ fn create_from_specs(
                 engine,
                 project_dir: out_dir,
             },
+            deps,
         );
     } else {
         println!(

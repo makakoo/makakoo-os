@@ -599,9 +599,27 @@ fn acquire_supervisor_lock(dir: &Path) -> std::io::Result<File> {
     Ok(file)
 }
 
+/// Windows raw OS codes that mean "another process holds this file", as
+/// opposed to a genuine I/O failure we must surface.
+///
+/// `fs2` surfaces contention as ERROR_LOCK_VIOLATION (33) once the file is
+/// open, but the `OpenOptions::open` that precedes `try_lock_exclusive` can
+/// itself lose the race and fail with ERROR_SHARING_VIOLATION (32) while a
+/// peer supervisor holds the handle. Both mean "retry", neither means "broken".
+///
+/// Kept as a free function (not `cfg(windows)`-gated) so the code table is
+/// unit-testable on every platform; the gate lives in `lock_is_contended`.
+fn windows_lock_code_is_contended(code: i32) -> bool {
+    // 32 = ERROR_SHARING_VIOLATION, 33 = ERROR_LOCK_VIOLATION.
+    matches!(code, 32 | 33)
+}
+
 fn lock_is_contended(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::WouldBlock
-        || (cfg!(windows) && error.raw_os_error() == Some(33))
+        || (cfg!(windows)
+            && error
+                .raw_os_error()
+                .is_some_and(windows_lock_code_is_contended))
 }
 
 fn acquire_quiescent_supervisor_lock(dir: &Path, slot_id: &str) -> anyhow::Result<File> {
@@ -671,6 +689,10 @@ fn supervisor_lock_held(dir: &Path) -> std::io::Result<bool> {
     let file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        // Windows can refuse the open itself while a peer supervisor holds
+        // the handle (ERROR_SHARING_VIOLATION). We never got far enough to
+        // ask about the lock, but the answer is already known: held.
+        Err(error) if lock_is_contended(&error) => return Ok(true),
         Err(error) => return Err(error),
     };
     match file.try_lock_exclusive() {
@@ -1215,11 +1237,29 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            // ERROR_LOCK_VIOLATION (33) is how fs2 surfaces contention on
-            // Windows; other raw codes (e.g. ERROR_ACCESS_DENIED = 5) are
-            // unrelated I/O errors and must not be masked.
+            // ERROR_SHARING_VIOLATION (32) and ERROR_LOCK_VIOLATION (33) are
+            // how Windows surfaces contention; other raw codes (e.g.
+            // ERROR_ACCESS_DENIED = 5) are unrelated I/O errors and must not
+            // be masked.
+            assert!(lock_is_contended(&std::io::Error::from_raw_os_error(32)));
             assert!(lock_is_contended(&std::io::Error::from_raw_os_error(33)));
             assert!(!lock_is_contended(&std::io::Error::from_raw_os_error(5)));
+        }
+    }
+
+    #[test]
+    fn windows_lock_codes_cover_sharing_and_lock_violations() {
+        // Runs on every platform: the Windows-only assertions above never
+        // execute in CI on macOS/Linux, so the code table itself is tested
+        // here. 32 was missing until 2026-08-28 and made a losing open() race
+        // look like a hard failure instead of a retry.
+        assert!(windows_lock_code_is_contended(32));
+        assert!(windows_lock_code_is_contended(33));
+        for unrelated in [1, 2, 5, 13, 31, 34, 231] {
+            assert!(
+                !windows_lock_code_is_contended(unrelated),
+                "raw code {unrelated} must not be treated as lock contention"
+            );
         }
     }
 

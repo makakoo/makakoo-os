@@ -28,6 +28,7 @@ declare them, but DSH V1 does not start their listeners yet.
 | `makakoo agent restart <slot>` | Stop + start through the per-slot supervisor. A failed stop blocks the restart. |
 | `makakoo agent status <slot>` | Show the supervisor and runtime process state. Legacy gateway slots also show per-transport status. |
 | `makakoo agent health <slot>` | Probe the running DSH loopback endpoint (exit 0 = healthy). Legacy slots use supervisor status; legacy plugin names use their health hook. |
+| `makakoo agent health <slot> --probe` | Also ask the slot's LLM route whether it can serve a multi-turn tool call. See [Capability probe](#capability-probe). |
 | `makakoo agent destroy <slot>` | Interactive teardown. Stops the supervisor and archives TOML, data, and a managed generated runtime under `$MAKAKOO_HOME/archive/agents/<slot>-<unix_ts>/`. Custom runtime paths are preserved and reported. `--yes` skips the prompt. `--revoke-secrets` clears detected keyring entries (off by default). |
 | `makakoo agent audit [--last N] [--kind K] [--json]` | Tail the per-machine audit log. Filter by `--kind scope_tool / webhook_invalid_signature / rate_limit / fault_test / ...`. |
 | `makakoo agent test-faults [--scenario S] [--json]` | Run the fault-injection scenario suite. Gated behind `MAKAKOO_DEV_FAULTS=1`. |
@@ -129,17 +130,28 @@ loop and durable JSONL sessions. The generated runtime:
 Prerequisites: Node.js 22.9 or newer, a running switchAILocal endpoint, and
 `makakoo-mcp` on `PATH` (or set `MAKAKOO_MCP_BIN`).
 
-Install dependencies once, then let Makakoo own lifecycle:
+`agent create` installs the generated project's Node dependencies for you,
+so a fresh slot is startable immediately:
 
 ```sh
-cd "$MAKAKOO_HOME/agents-dsh/weather-bot"
-npm install
-npm run check
 makakoo agent validate weather-bot
 makakoo agent start weather-bot
 makakoo agent prompt weather-bot "Check current priorities" --session daily
 makakoo agent status weather-bot
 ```
+
+Pass `--no-install` (or export `MAKAKOO_SKIP_DEPS_INSTALL=1` for scripted or
+offline provisioning) to skip it and run the install yourself:
+
+```sh
+cd "$MAKAKOO_HOME/agents-dsh/weather-bot"
+npm install
+npm run check
+```
+
+A failed install never rolls back the create — the slot and the generated
+project are already durable, and the command prints the exact
+`cd … && npm install` to finish by hand.
 
 Direct DSH runtime packages are pinned to `0.1.1-rc.2`; the full DSH CLI
 bundle is deliberately excluded because it multiplies install size and is not
@@ -154,6 +166,50 @@ DSH model calls always use switchAILocal. Specs may use
 an explicit different provider prefix is rejected during creation and start.
 The runner uses `DEEPSEEK_API_KEY`, falls back to `AIL_API_KEY`, then uses a
 local placeholder for gateways that do not require authentication.
+
+### Capability probe
+
+Plain `agent health` answers one question: is the runtime process up. That is
+not the question that breaks agents. A slot whose process is perfectly healthy
+still fails every real request if its model route can no longer accept a
+conversation that already contains a tool call — which is what every agent turn
+after the first one looks like.
+
+`makakoo agent health <slot> --probe` asks that question directly:
+
+```sh
+makakoo agent health weather-bot --probe
+```
+
+It builds a synthetic request containing an assistant `tool_call` and its
+`tool` result and sends it **straight to the slot's provider endpoint** —
+not through the agent runtime. That makes it deterministic (it does not
+depend on the model choosing to call a tool), free (no agent turn is
+consumed), and usable on a stopped slot.
+
+The endpoint is resolved from the slot's effective model specifier, so the
+probe is provider-agnostic:
+
+| Model specifier | Endpoint | Protocol |
+|---|---|---|
+| `ail-compound` (bare) or `switchailocal/<model>` | `http://127.0.0.1:18080/v1` | OpenAI-compatible |
+| `ollama/<model>` | `http://127.0.0.1:11434/v1` | OpenAI-compatible |
+| `openai/<model>` | `https://api.openai.com/v1` | OpenAI-compatible |
+| `anthropic/<model>` | `https://api.anthropic.com/v1` | Anthropic Messages |
+
+On refusal the upstream status and message are printed verbatim, because the
+provider's own words identify the cause better than any paraphrase:
+
+```
+error: weather-bot: route cannot serve multi-turn tool calls — ollama smollm2:135m returned HTTP 400
+upstream: {"error":{"message":"registry.ollama.ai/library/smollm2:135m does not support tools", …}}
+```
+
+Exit codes: `0` route is good (and, if the slot is running, so is it), `1`
+liveness or capability failed, `2` the target is a legacy slot or a plugin
+and has no LLM route to probe. Under `--probe` a liveness failure is reported
+as a warning rather than aborting, so a stopped slot still gets its capability
+answer. `--probe` only ever adds a reason to fail, never removes one.
 
 ### V1 channel boundary
 

@@ -73,8 +73,43 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             }
         }
         AgentCmd::Supervisor { slot } => agent_lifecycle::run_supervisor_command(ctx, &slot),
-        AgentCmd::Health { name } => match health_route(ctx.home(), &name)? {
-            HealthRoute::DeepseekHarness => crate::commands::agent_prompt::health(ctx, &name),
+        AgentCmd::Health { name, probe } => match health_route(ctx.home(), &name)? {
+            HealthRoute::DeepseekHarness => {
+                if !probe {
+                    return crate::commands::agent_prompt::health(ctx, &name);
+                }
+                // Under --probe, a liveness failure is reported but does not
+                // abort: the capability answer is independent of whether the
+                // slot is running, and a stopped slot is exactly when you
+                // want to know whether its route is worth starting.
+                let liveness = match crate::commands::agent_prompt::health(ctx, &name) {
+                    Ok(code) => code,
+                    Err(error) => {
+                        output::print_warn(format!("{name}: liveness unavailable ({error})"));
+                        1
+                    }
+                };
+                // --probe only ever adds a reason to fail, never removes one.
+                let capability = probe_slot_route(ctx.home(), &name)?;
+                Ok(liveness.max(capability))
+            }
+            // Flue is not supervised, so `agent status` is its liveness
+            // answer — but its LLM route is probeable like any other.
+            HealthRoute::FlueRuntime if probe => probe_slot_route(ctx.home(), &name),
+            HealthRoute::FlueRuntime => agent_lifecycle::status_slot(ctx, &name),
+            // A slot with no runtime section carries no model specifier.
+            HealthRoute::LegacySlot if probe => {
+                output::print_error(format!(
+                    "--probe needs a runtime slot with an LLM route; '{name}' is a legacy gateway slot"
+                ));
+                Ok(2)
+            }
+            HealthRoute::Plugin if probe => {
+                output::print_error(format!(
+                    "--probe needs a runtime slot with an LLM route; '{name}' is a plugin"
+                ));
+                Ok(2)
+            }
             HealthRoute::LegacySlot => agent_lifecycle::status_slot(ctx, &name),
             HealthRoute::Plugin => hook(ctx, &name, Hook::Health),
         },
@@ -144,6 +179,7 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
             slack_team,
             slack_allowed,
             skip_credential_check,
+            no_install,
             out,
             specs,
         } => crate::commands::agent_slot::create(
@@ -162,6 +198,7 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
                 slack_team,
                 slack_allowed,
                 skip_credential_check,
+                no_install,
                 out,
                 specs,
             },
@@ -197,6 +234,10 @@ pub fn run(ctx: &CliContext, cmd: AgentCmd) -> anyhow::Result<i32> {
 #[derive(Debug, PartialEq, Eq)]
 enum HealthRoute {
     DeepseekHarness,
+    /// A Flue runtime slot. It has no supervised loopback endpoint, but it
+    /// does carry an LLM route — so it has no liveness answer and a real
+    /// capability answer.
+    FlueRuntime,
     LegacySlot,
     Plugin,
 }
@@ -212,8 +253,40 @@ fn health_route(home: &Path, name: &str) -> anyhow::Result<HealthRoute> {
         Some(makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness) => {
             HealthRoute::DeepseekHarness
         }
-        _ => HealthRoute::LegacySlot,
+        Some(makakoo_core::agents::AgentRuntimeEngine::Flue) => HealthRoute::FlueRuntime,
+        None => HealthRoute::LegacySlot,
     })
+}
+
+/// Resolve the slot's effective model, then ask its provider endpoint
+/// directly whether it accepts a conversation containing tool history.
+fn probe_slot_route(home: &Path, name: &str) -> anyhow::Result<i32> {
+    use crate::commands::agent_probe;
+
+    let path = makakoo_core::agents::checked_slot_path(home, name)?;
+    let slot = makakoo_core::agents::AgentSlot::load_from_file(&path)
+        .map_err(|error| anyhow::anyhow!("agent slot '{}' load failed: {}", name, error))?;
+    let defaults = makakoo_core::agents::llm_override::LlmDefaults::builtin_fallback();
+    let over = slot
+        .llm
+        .as_ref()
+        .and_then(|section| section.effective_override());
+    let effective = makakoo_core::agents::llm_override::resolve_effective(over.as_ref(), &defaults);
+    let target = agent_probe::resolve_target(&effective.model.0)?;
+    // The generated project's .env is one of the two places the runtime finds
+    // its credential; probing without it produces a false 401.
+    let project_dir = slot
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.project_dir.clone());
+    let outcome = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(agent_probe::run_probe(
+            &target,
+            project_dir.as_deref(),
+            agent_probe::ProbeOutcome::DEFAULT_TIMEOUT,
+        ))
+    });
+    Ok(agent_probe::report(name, &target, &outcome))
 }
 
 #[derive(Clone, Copy)]
