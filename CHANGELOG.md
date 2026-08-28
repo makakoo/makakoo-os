@@ -8,6 +8,38 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
+## [0.3.1] - 2026-08-28
+
+### Fixed
+
+- **`makakoo agent start` now works on macOS and Linux.** v0.3.0 generated a
+  LaunchAgent plist (and systemd user unit) whose environment held only
+  `MAKAKOO_AGENT_SLOT`. Because launchd and systemd-user start services with a
+  deliberately minimal environment, the supervisor could not see
+  `MAKAKOO_HOME` and exited with `slot '<name>' not found`; once that was
+  supplied it failed again with `Node.js 22.9+ is required`, because
+  `PATH=/usr/bin:/bin:/usr/sbin:/sbin` excludes every nvm and Homebrew node.
+  Background start was unusable — only the `MAKAKOO_AGENT_SUPERVISOR=foreground`
+  escape hatch worked. Both backends now export `MAKAKOO_HOME`, prepend the
+  directory of the `node` that passed the version gate to the service `PATH`,
+  and load `~/.env` for LLM credentials. `MAKAKOO_HOME` is pinned *after* the
+  `~/.env` load, so a stale entry there cannot redirect a supervisor at a home
+  that does not contain the slot.
+- **A failed agent turn no longer reports success with an empty answer.** When
+  the model loop ended in an error — an upstream 4xx/5xx, or exhausted
+  retries — the generated runtime returned `200 {"response": ""}`. The failure
+  was invisible to `makakoo agent prompt`, indistinguishable from a model that
+  simply had nothing to say, and recoverable only by decompressing the session
+  trace by hand. The runtime now walks back to the terminating `turn/end`,
+  and returns `502` with the upstream message, error code, and status.
+
+### Notes
+
+- Not every switchAILocal model can drive a tool-using agent. `ail-compound`
+  has no backend advertising `chat_multiturn_tools` and fails with HTTP 422 the
+  moment a tool result is fed back; `ail-fast` handles the full loop. With the
+  fix above this now surfaces as a clear error instead of an empty response.
+
 ## [0.3.0] - 2026-08-27
 
 ### Added
