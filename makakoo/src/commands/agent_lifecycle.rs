@@ -486,9 +486,31 @@ pub fn run_supervisor_command(ctx: &CliContext, slot_id: &str) -> anyhow::Result
     let eff = makakoo_core::agents::llm_override::resolve_effective(over.as_ref(), &defaults);
     let spec = crate::commands::agent_runtime::launch_spec(&home, &slot_cfg, &eff)?;
 
+    // The supervisor hosts the slot's chat transports alongside the
+    // gateway child. Planning is fallible (an unresolvable bot token),
+    // but a transport we decline to start never blocks the runtime.
+    let bridge = match crate::commands::agent_transport::plan_bridge(&slot_cfg) {
+        Ok(plan) => {
+            for skipped in &plan.skipped {
+                output::print_warn(format!(
+                    "{slot_id}: transport '{}' not started — {}",
+                    skipped.transport_id, skipped.reason
+                ));
+            }
+            plan.bridge
+        }
+        Err(error) => {
+            output::print_error(format!("{slot_id}: transport config: {error}"));
+            return Ok(1);
+        }
+    };
+
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            makakoo_core::agents::supervisor_runtime::run_supervisor(spec, h, dir).await
+            makakoo_core::agents::supervisor_runtime::run_supervisor_with_bridge(
+                spec, h, dir, bridge,
+            )
+            .await
         })
     })
     .map_err(|e| anyhow::anyhow!("supervisor: {e}"))?;
@@ -499,7 +521,12 @@ fn preflight_slot(home: &Path, slot_id: &str) -> anyhow::Result<()> {
     let path = checked_slot_path(home, slot_id)?;
     let slot = makakoo_core::agents::AgentSlot::load_from_file(&path)
         .map_err(|e| anyhow::anyhow!("slot load: {}", e))?;
-    crate::commands::agent_runtime::preflight(&slot)
+    crate::commands::agent_runtime::preflight(&slot)?;
+    // Transport checks run here, in the operator's terminal, rather
+    // than only in the detached supervisor: `agent start` returns as
+    // soon as status.json appears, so anything reported later would be
+    // invisible unless the operator went looking in the log.
+    crate::commands::agent_transport::preflight(&slot)
 }
 
 fn finish_stop(home: &Path, slot_id: &str, exit_code: i32, stderr: &str) -> anyhow::Result<i32> {

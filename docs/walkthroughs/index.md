@@ -78,10 +78,10 @@ The first fourteen are a **linear tour** (read 01→14 in order on your first ti
 
 ## Agent runtimes and channel compatibility
 
-Start with the supervised DSH runtime. Channel declarations are preserved in
-AgentSpec, but DSH V1 does not start channel listeners. The older channel
-pages are legacy gateway references unless they explicitly select the manual
-Flue compatibility renderer.
+Start with the supervised DSH runtime. A `telegram` channel declaration is
+started by the supervisor; the other kinds are preserved without a listener.
+The older channel pages are legacy gateway references unless they explicitly
+select the manual Flue compatibility renderer.
 
 | Walkthrough | What you'll do | Time |
 |---|---|---|

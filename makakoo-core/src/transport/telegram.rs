@@ -27,6 +27,17 @@ use crate::{MakakooError, Result};
 
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 
+/// Drop the URL from a transport error before it becomes a message.
+///
+/// Telegram authenticates by putting the bot token in the path
+/// (`/bot<token>/getMe`), and `reqwest::Error`'s Display includes the
+/// URL it failed on. Without this, a DNS failure or a timeout prints
+/// the bot's credentials into a log the operator may well paste
+/// somewhere.
+fn strip_url(error: reqwest::Error) -> MakakooError {
+    MakakooError::Http(error.without_url())
+}
+
 /// Telegram adapter.
 pub struct TelegramAdapter {
     pub ctx: TransportContext,
@@ -183,13 +194,18 @@ impl Transport for TelegramAdapter {
     }
 
     async fn verify_credentials(&self) -> Result<VerifiedIdentity> {
+        // The bot token rides in the URL path, and a reqwest error's
+        // Display prints its URL — so every error out of this adapter
+        // is stripped of it. A support log must never carry the token.
         let resp: TelegramApiResponse<TelegramUser> = self
             .http
             .get(self.url("getMe"))
             .send()
-            .await?
+            .await
+            .map_err(strip_url)?
             .json()
-            .await?;
+            .await
+            .map_err(strip_url)?;
         if !resp.ok {
             return Err(MakakooError::Config(format!(
                 "telegram getMe failed: {}",
@@ -243,9 +259,11 @@ impl Transport for TelegramAdapter {
             .post(self.url("sendMessage"))
             .json(&body)
             .send()
-            .await?
+            .await
+            .map_err(strip_url)?
             .json()
-            .await?;
+            .await
+            .map_err(strip_url)?;
         if !resp.ok {
             return Err(MakakooError::Internal(format!(
                 "telegram sendMessage failed: {}",
@@ -285,7 +303,7 @@ impl Gateway for TelegramAdapter {
                     tracing::warn!(
                         target: "makakoo_core::transport::telegram",
                         transport_id = self.ctx.transport_id,
-                        error = %e,
+                        error = %e.without_url(),
                         "telegram getUpdates transport error — backing off 2s"
                     );
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -298,7 +316,7 @@ impl Gateway for TelegramAdapter {
                     tracing::warn!(
                         target: "makakoo_core::transport::telegram",
                         transport_id = self.ctx.transport_id,
-                        error = %e,
+                        error = %e.without_url(),
                         "telegram getUpdates JSON parse failure — backing off 2s"
                     );
                     tokio::time::sleep(Duration::from_secs(2)).await;

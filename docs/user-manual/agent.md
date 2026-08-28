@@ -8,8 +8,9 @@ whitelist, and path scope.
 
 Important distinction: `makakoo infect` is for local agentic hosts that can
 load Makakoo instructions and MCP tools. Telegram, Slack, Discord, WhatsApp,
-voice, email, and web are transports, not infectable hosts. AgentSpec can
-declare them, but DSH V1 does not start their listeners yet.
+voice, email, and web are transports, not infectable hosts. AgentSpec declares
+them; the supervisor starts the `telegram` ones and preserves the rest as
+declarations only.
 
 ## Slot lifecycle
 
@@ -211,14 +212,35 @@ and has no LLM route to probe. Under `--probe` a liveness failure is reported
 as a warning rather than aborting, so a stopped slot still gets its capability
 answer. `--probe` only ever adds a reason to fail, never removes one.
 
-### V1 channel boundary
+### Telegram channels
 
-Telegram, Slack, Discord, email, voice, webhook, and cron declarations remain
-in AgentSpec and AgentSlot, but they are not wired into the DSH loop yet. V1
-delivers a strong local agent runtime and authenticated invocation contract.
-The next slice is a Makakoo channel adapter that calls the same `/v1/run`
-endpoint. Creation prints a warning when a DSH spec declares channels so this
-limitation cannot be mistaken for a working deployment.
+`agent start` hosts a slot's enabled `telegram` transports in the supervisor,
+next to the runtime. Each one long-polls `getUpdates`; an allowlisted message
+becomes a `POST /v1/run` on the slot's loopback API under a stable per-chat
+session id (`tg:<chat_id>`), and the answer goes back with `sendMessage`. The
+bridge only ever replies to an inbound message.
+
+| Behaviour | Detail |
+|---|---|
+| Allowlist | Matched against the **sender** id. The union of `allowed_users` and `config.allowed_chat_ids`. Empty = deny-all, and such a transport is not started at all. |
+| `allowed_group_ids` | **Ignored.** A group id is not a sender id. `agent start` says so rather than letting the ACL look active. |
+| Session | Separated by transport, chat, forum topic, and — in a group — sender, so members do not share a memory. Preserved across a restart. |
+| Concurrency | One worker per conversation; 4 *runs* in flight at once. Past 64 live conversations, or 8 queued messages in one, the sender is told the agent is busy rather than queued indefinitely. |
+| Long replies | Split into Telegram-sized messages (measured in UTF-16 units, as Telegram counts them), capped at 8 with a truncation marker. |
+| Runtime errors | Reported into the chat, not swallowed. |
+| Bot token | From `secret_env` / `secret_ref` only — never the spec or the slot TOML. Under launchd the service sources `~/.env`, so a token written there reaches the supervisor. |
+| Bad token | Fails `agent start` with the reason. An *unreachable* Telegram is only a warning; the poll loop retries. |
+| Failure isolation | A transport that dies never touches the gateway child or the other transports. Its listener restarts on the gateway's budget, then stays down instead of retrying forever. |
+
+Stopping the slot stops the transports with it; an in-flight answer is
+abandoned rather than delaying shutdown.
+
+### Everything else is still declaration-only
+
+Slack, Discord, email, voice, webhook, and cron declarations remain in
+AgentSpec and AgentSlot without a listener or scheduler. `agent start` names
+every transport it declines to start and why, so a slot never looks connected
+when it is not.
 
 ## Slot id rules
 

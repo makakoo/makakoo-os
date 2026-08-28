@@ -45,6 +45,67 @@ complement, focused on user-visible changes and migration notes.
   `v0.3.1-O-NOFOLLOW-FD-HOLD-WRITES` (R1) in the Rust path. A refusal without
   a slot returns the exact `grant_write_access` call that would unblock it,
   per `spec/USER_GRANTS.md §12` Flow 1.
+- **Telegram channels are live.** A spec's `channels:` block compiled into
+  slot transport metadata that nothing ever read: the adapter, the frame
+  schema, and the authenticated runtime API all existed, and no code connected
+  them, so `agent create` warned that declared ingress would not run. The
+  supervisor now hosts a slot's telegram transports alongside the gateway.
+  Allowlisted inbound messages reach `/v1/run` under a stable session id, so a
+  conversation survives a restart; replies go back with `sendMessage`, split
+  into Telegram-sized messages, and a runtime failure is reported into the chat
+  rather than swallowed. The bridge replies only to inbound messages — it
+  cannot send unsolicited output.
+
+  The session id separates what are genuinely different conversations —
+  transport, chat, forum topic, and (in a group, where `chat.id != from.id`)
+  the sender. Keying on the chat alone would have given every member of a
+  group one shared memory and collapsed every forum topic into it.
+
+  Conversations run independently: each gets its own worker, so one long
+  answer no longer blocks every other chat the bot serves. Four *runs* may be
+  in flight at once, matching the runtime's own concurrency admission — the
+  bound is on work, not on conversations, and an idle worker retires. Past 64
+  live conversations, or 8 messages queued in one of them, a sender is told
+  the agent is busy rather than silently queued behind hours of work; that
+  notice is rate-limited per conversation so it cannot be amplified.
+
+  An empty allowlist is deny-all, and a transport whose allowlist is empty is
+  not started at all rather than polling forever to refuse everything.
+  `agent start` verifies the bot token before handing off to the service
+  manager: a token Telegram rejects fails the command with the reason, while
+  an unreachable API is only a warning, because the poll loop recovers from
+  that on its own. A transport that fails never affects the gateway child or
+  the other transports — its listener restarts on the same budget the gateway
+  uses and then stays down instead of retrying forever. Tokens are read from
+  the env var named by `token_env` or from `makakoo secret`, never from the
+  spec or the slot TOML.
+
+  `allowed_group_ids` is reported as ignored rather than honoured: the ACL
+  matches a message's sender, and a group id can never equal a member's sender
+  id — folding it in would have authorised nothing except an anonymous admin
+  post while looking like it granted the group.
+
+  Slack, Discord, WhatsApp, email, voice, webhook, and cron declarations
+  remain preserved-but-not-started; `agent start` now names each transport it
+  declines to start, and why.
+
+### Security
+
+- **The Telegram bot token can no longer reach a log.** Telegram authenticates
+  by putting the token in the URL path, and a `reqwest::Error`'s `Display`
+  prints the URL it failed on — so a DNS failure, a timeout, or a decode error
+  printed the bot's credentials into the supervisor log and, through
+  `agent start`, the operator's terminal. Adapter errors are now stripped of
+  their URL at the source, with secret redaction behind it as a second layer.
+- **A prompt is no longer sent to a listener that has not identified itself.**
+  `runtime.json` records a pid and an ephemeral port, and validation checked
+  only that the pid was alive. A runtime killed with `SIGKILL` leaves the file
+  behind; if that pid were recycled and something else bound the port, the
+  user's message and the runtime bearer token would go to an unrelated local
+  process. The unauthenticated `/health` endpoint names the slot, and is now
+  checked before anything is sent. The token file must also be exactly
+  `<project>/.runtime-token` — containment was not identity, so any file under
+  the project (or a symlink out of it) had been accepted.
 - **AgentSpec tool names are validated at create and validate time.** A
   well-formed name for a tool no handler serves used to produce a slot that
   looked correct and could not do its job, because the server filters the

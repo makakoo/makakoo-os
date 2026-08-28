@@ -14,12 +14,17 @@ deploy a configuration the default DeepSeek Harness runtime cannot serve.
 - The explicit Flue compatibility renderer can generate its older channel
   modules, but it must be run manually.
 
-## What DSH V1 does not do
+## What the supervisor starts
 
-DSH V1 does not start Telegram, Slack, Discord, WhatsApp, email, voice,
-webhook, or cron listeners. A spec with those declarations emits a warning at
-creation. `makakoo agent start` supervises the DSH runtime, not a channel
-gateway.
+`makakoo agent start` hosts the slot's **telegram** transports alongside the
+runtime: allowlisted inbound messages reach `/v1/run` under a stable per-chat
+session, and replies go back through `sendMessage`. See
+[the spec reference](../agents/spec.md#channels-and-triggers) for the
+allowlist and token rules.
+
+Slack, Discord, WhatsApp, email, voice, webhook, and cron declarations are
+still preserved without a listener or scheduler — `agent start` reports each
+one it will not start, so a slot never looks connected when it is not.
 
 ## Safe path for a new agent
 

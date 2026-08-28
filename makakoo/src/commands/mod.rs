@@ -20,6 +20,7 @@ pub mod agent_runtime;
 pub mod agent_session;
 pub mod agent_slot;
 pub mod agent_test_faults;
+pub mod agent_transport;
 pub mod brain;
 pub mod bucket;
 pub mod buddy;

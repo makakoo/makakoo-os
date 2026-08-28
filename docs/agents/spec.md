@@ -42,8 +42,8 @@ tools:                               # required, list of mcp__harvey__* names
   - brain_search
   - write_file
 
-# Communications interfaces (zero or many). DSH V1 preserves these
-# declarations but does not start channel listeners yet.
+# Communications interfaces (zero or many). A telegram channel is
+# started by the supervisor; the other kinds are declaration-only.
 channels:
   - kind: telegram
     token_env: TELEGRAM_BOT_TOKEN
@@ -168,11 +168,33 @@ declarations plus cron and webhook triggers. They are preserved in AgentSpec,
 compiled into AgentSlot transport metadata where a slot representation exists,
 and their environment-variable names are emitted into `.env.example`.
 
-**DSH V1 does not start these listeners or schedulers.** Creation emits a
-warning when channels are present. A future Makakoo channel adapter will
-authenticate inbound events, choose a stable session id, and call the runtime's
-authenticated `/v1/run` endpoint. Until that slice lands, use
-`makakoo agent prompt` or call the loopback API through a trusted local adapter.
+**Telegram channels are live.** `makakoo agent start` hosts them in the
+supervisor: the adapter long-polls `getUpdates`, refuses any sender outside the
+allowlist, and calls the runtime's authenticated `/v1/run` with a stable
+session id, so a conversation keeps its context across restarts. That id
+separates transports, chats, forum topics, and — in a group — senders, so two
+people in one group do not share the agent's memory. Replies go back with `sendMessage`, split into
+Telegram-sized messages; a runtime failure is reported into the chat rather
+than swallowed. The bridge only ever replies to an inbound message — nothing in
+it can send unsolicited output.
+
+Two properties are worth knowing before you configure one:
+
+- **An empty allowlist is deny-all**, and a transport whose allowlist is empty
+  is not started at all — it could do nothing but log refusals. Set
+  `allowed_users` (or `config.allowed_chat_ids` in the slot TOML).
+- **The bot token never lives in the spec or the slot TOML.** It is read from
+  the env var named by `token_env`, or from `makakoo secret`. Under launchd the
+  service sources `~/.env`, so a token written there reaches the supervisor.
+
+`agent start` verifies the token before handing off to the service manager: a
+token Telegram rejects fails the command, while an unreachable API is only a
+warning (the poll loop retries). A transport that cannot start never blocks the
+runtime API — `makakoo agent prompt` keeps working either way.
+
+**The other channel kinds and all triggers remain declaration-only.** They are
+preserved in the spec and compiled into slot metadata, but nothing starts a
+listener or a scheduler for them.
 
 Supported declaration shapes remain:
 

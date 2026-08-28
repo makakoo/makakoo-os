@@ -11,7 +11,7 @@ Makakoo has three related agent surfaces:
 - **Agent runtime slots** compile an AgentSpec into a supervised DeepSeek Harness project. Use `makakoo agent create --specs <PATH>`, install the generated Node dependencies, then use `start`, `prompt`, `health`, `restart`, and `destroy`.
 - **Agent Sessions** are bounded child-agent work records. They are not long-running services.
 
-Start with the [DeepSeek Harness runtime walkthrough](../walkthroughs/dsh-agent-runtime.md), then use [`user-manual/agent.md`](../user-manual/agent.md) for the full slot reference. AgentSpec can preserve channel and trigger declarations, but DSH V1 does not start those listeners or schedulers. The legacy Flue renderer is available only through the explicit `MAKAKOO_AGENT_ENGINE=flue` compatibility switch and is not supervised by `makakoo agent start`.
+Start with the [DeepSeek Harness runtime walkthrough](../walkthroughs/dsh-agent-runtime.md), then use [`user-manual/agent.md`](../user-manual/agent.md) for the full slot reference. AgentSpec compiles a `telegram` channel into a live transport the supervisor hosts; the other channel kinds and all triggers are preserved as declarations without a listener or scheduler. The legacy Flue renderer is available only through the explicit `MAKAKOO_AGENT_ENGINE=flue` compatibility switch and is not supervised by `makakoo agent start`.
 
 ## The catalog
 

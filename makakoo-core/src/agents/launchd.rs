@@ -359,6 +359,35 @@ mod tests {
         );
     }
 
+    /// A transport bot token lives in `~/.env`, never in the slot TOML.
+    /// The supervisor reads it with `std::env::var`, so the plist must
+    /// EXPORT what it sources — `set -a` before the dot, `set +a`
+    /// after. Sourcing without `set -a` leaves the value as a plain
+    /// shell variable that `exec` does not pass on, and the bridge
+    /// would see an unset token. This chain has shipped broken before.
+    #[test]
+    fn plist_exports_sourced_env_so_a_transport_token_reaches_the_supervisor() {
+        let home = TempDir::new().unwrap();
+        let bin = PathBuf::from("/usr/local/bin/makakoo");
+        let p =
+            LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
+        let cmd = p
+            .plist_xml
+            .split("<string>")
+            .find(|s| s.contains("agent _supervisor"))
+            .expect("supervisor command")
+            .to_string();
+        let cmd = cmd.as_str();
+        let set_a = cmd.find("set -a").expect("must enable auto-export");
+        let source = cmd.find("$HOME/.env").expect("must source ~/.env");
+        let set_plus_a = cmd.find("set +a").expect("must restore auto-export");
+        assert!(
+            set_a < source && source < set_plus_a,
+            "~/.env must be sourced between `set -a` and `set +a`, or its values \
+             are not exported to the supervisor:\n{cmd}"
+        );
+    }
+
     /// The pin must come AFTER the source, otherwise a stale MAKAKOO_HOME
     /// in ~/.env silently wins and the supervisor looks in the wrong home.
     #[test]

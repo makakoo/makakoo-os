@@ -37,6 +37,7 @@ use crate::agents::supervisor::{
     GatewayLaunchSpec, RestartDecision, SupervisorHandle, SupervisorState, SHUTDOWN_GRACE,
     STATUS_WRITE_INTERVAL,
 };
+use crate::agents::transport_bridge::TransportBridge;
 use crate::error::{MakakooError, Result};
 
 /// Durable shutdown subscriber. `wait()` returns immediately if the
@@ -294,6 +295,22 @@ pub async fn run_supervisor(
     handle: SupervisorHandle,
     run_dir: PathBuf,
 ) -> Result<()> {
+    run_supervisor_with_bridge(spec, handle, run_dir, None).await
+}
+
+/// `run_supervisor`, additionally hosting the slot's chat transports.
+///
+/// The bridge is supervised separately from the gateway child on
+/// purpose. A transport that cannot authenticate, or whose listener
+/// gives up, must not take down a runtime that is answering the
+/// authenticated API perfectly well — so a failed `verify_all` is
+/// logged and the supervisor continues with no transports.
+pub async fn run_supervisor_with_bridge(
+    spec: GatewayLaunchSpec,
+    handle: SupervisorHandle,
+    run_dir: PathBuf,
+    bridge: Option<TransportBridge>,
+) -> Result<()> {
     let supervisor_pid = std::process::id();
     let (trigger, signal) = shutdown_pair();
 
@@ -313,11 +330,54 @@ pub async fn run_supervisor(
         let _ = run_signal_listener(signal_trigger).await;
     });
 
+    // Transports come up before the gateway so an inbound message that
+    // races startup finds the bridge already listening; the bridge
+    // waits for `runtime.json` rather than failing that first message.
+    let bridge_handles = match bridge {
+        Some(bridge) => {
+            let (handles, refused) = bridge.verify_and_spawn(signal.clone()).await;
+            for transport in refused {
+                tracing::error!(
+                    target: "makakoo_core::agents::supervisor_runtime",
+                    transport_id = transport.transport_id,
+                    reason = transport.reason,
+                    "transport not started — the rest of the slot is unaffected"
+                );
+            }
+            handles
+        }
+        None => Vec::new(),
+    };
+
     // Watcher runs to completion. Whether it succeeds or errors,
     // signal shutdown so the writer exits.
     let watcher_result = run_gateway_watcher(spec, handle, signal).await;
     trigger.fire();
 
+    // Bridge tasks observe the same shutdown signal and abandon any
+    // in-flight run, so this is a formality — bounded anyway so a
+    // wedged transport cannot hold the supervisor open. ONE deadline
+    // covers all of them: SHUTDOWN_GRACE per transport would multiply
+    // the stop time by the number of transports. A timeout only DROPS
+    // a join handle, which detaches the task rather than stopping it,
+    // so stragglers are aborted explicitly.
+    if !bridge_handles.is_empty() {
+        let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+        let mut stragglers = Vec::new();
+        for handle in bridge_handles {
+            let mut handle = Box::pin(handle);
+            if tokio::time::timeout_at(deadline, &mut handle)
+                .await
+                .is_err()
+            {
+                handle.abort();
+                stragglers.push(handle);
+            }
+        }
+        for handle in &mut stragglers {
+            let _ = handle.await;
+        }
+    }
     let _ = writer_handle.await;
 
     watcher_result

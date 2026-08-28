@@ -405,13 +405,6 @@ pub fn create(ctx: &CliContext, args: CreateArgs) -> anyhow::Result<i32> {
         runtime.engine,
         out_dir.display()
     ));
-    if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness
-        && !spec.channels.is_empty()
-    {
-        output::print_warn(
-            "DSH V1 exposes the authenticated runtime API; declared channel ingress still requires the Makakoo/Flue channel-adapter slice.",
-        );
-    }
     let deps = crate::commands::agent_engine::install_deps(&runtime, args.no_install);
     crate::commands::agent_engine::print_next(&slot.slot_id, &runtime, deps);
     Ok(0)
@@ -559,13 +552,6 @@ fn create_from_specs(
             runtime.engine,
             out_dir.display()
         ));
-        if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness
-            && !spec.channels.is_empty()
-        {
-            output::print_warn(
-                "DSH V1 exposes the authenticated runtime API; declared channel ingress still requires the Makakoo/Flue channel-adapter slice.",
-            );
-        }
         if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness {
             if let Some(warning) = triggers_warning(spec) {
                 output::print_warn(warning);
@@ -625,11 +611,6 @@ pub fn validate_spec(ctx: &CliContext, path: &std::path::Path) -> anyhow::Result
             Ok(()) => {
                 println!("[OK]   {}", spec.name);
                 if engine == makakoo_core::agents::AgentRuntimeEngine::DeepseekHarness {
-                    if !spec.channels.is_empty() {
-                        println!(
-                            "       note: DSH V1 does not execute declared channel ingress; add the Makakoo/Flue channel-adapter slice"
-                        );
-                    }
                     if let Some(w) = triggers_warning(spec) {
                         println!("       note: {}", w);
                     }

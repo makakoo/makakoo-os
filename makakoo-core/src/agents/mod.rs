@@ -30,6 +30,7 @@ pub mod rate_limit;
 pub mod registry;
 pub mod rlimits;
 mod runtime_archive;
+pub mod runtime_client;
 pub mod safe_write;
 pub mod scaffold;
 pub mod scope;
@@ -39,6 +40,7 @@ pub mod status;
 pub mod supervisor;
 pub mod supervisor_runtime;
 pub mod tool_catalog;
+pub mod transport_bridge;
 
 pub mod service_env;
 
