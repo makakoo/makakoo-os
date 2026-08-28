@@ -237,6 +237,30 @@ async function bodyOf(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
+// A turn can finish cleanly at the transport level while the model loop
+// itself ended in an error (provider 4xx/5xx, exhausted retries). The SDK
+// reports that as an empty `finalResponse`, which would otherwise be
+// returned as `200 {"response": ""}` — a silent failure that is
+// indistinguishable from "the model had nothing to say". Walk back to the
+// last turn/end and surface its error instead.
+function terminalFailure(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (!event || event.type !== 'turn/end') continue
+    const reason = event.data && event.data.reason
+    if (!reason || reason.kind !== 'error') return null
+    const error = reason.error || {}
+    return {
+      message: typeof error.message === 'string' && error.message !== ''
+        ? error.message
+        : 'agent turn ended in an error',
+      code: typeof error.code === 'string' ? error.code : null,
+      upstream_status: typeof error.status === 'number' ? error.status : null,
+    }
+  }
+  return null
+}
+
 function validSessionId(value) {
   return typeof value === 'string'
     && value !== '.'
@@ -287,7 +311,17 @@ const server = createServer(async (request, response) => {
         }
       }),
     )
-    send(response, 200, { session_id: result.sessionId, response: result.finalResponse })
+    const answer = typeof result.finalResponse === 'string' ? result.finalResponse : ''
+    const failure = answer.trim() === '' ? terminalFailure(result.events || []) : null
+    if (failure) {
+      return send(response, 502, {
+        session_id: result.sessionId,
+        error: failure.message,
+        code: failure.code,
+        upstream_status: failure.upstream_status,
+      })
+    }
+    send(response, 200, { session_id: result.sessionId, response: answer })
   } catch (error) {
     const status = error instanceof RuntimeLimitError ? error.status : 500
     send(response, status, { error: error instanceof Error ? error.message : String(error) })

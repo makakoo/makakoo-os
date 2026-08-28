@@ -38,6 +38,8 @@ pub mod status;
 pub mod supervisor;
 pub mod supervisor_runtime;
 
+pub mod service_env;
+
 #[cfg(target_os = "macos")]
 pub mod launchd;
 

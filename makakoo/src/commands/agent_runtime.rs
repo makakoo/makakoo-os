@@ -74,6 +74,20 @@ fn preflight_dsh(project_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Directory containing the `node` that satisfies the version gate.
+///
+/// launchd and systemd-user hand the supervisor a minimal PATH that
+/// excludes nvm and Homebrew, so the start path must record where the
+/// verified interpreter actually lives. Resolved by walking the
+/// caller's PATH — the same lookup `Command::new("node")` performs.
+pub fn resolve_node_bin_dir() -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find(|dir| {
+        let candidate = dir.join("node");
+        std::fs::metadata(&candidate).is_ok_and(|meta| meta.is_file())
+    })
+}
+
 fn preflight_node_version() -> anyhow::Result<()> {
     let output = std::process::Command::new("node")
         .arg("--version")

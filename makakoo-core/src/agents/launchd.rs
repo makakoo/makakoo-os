@@ -16,6 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::agents::service_env::{service_path, shell_quote};
 use crate::agents::slot::validate_slot_id;
 use crate::error::{MakakooError, Result};
 
@@ -44,12 +45,18 @@ impl LaunchAgentPlist {
     /// MUST land under `$HOME/Library/LaunchAgents/` (launchd
     /// requirement, not configurable).
     /// `makakoo_home` is the Makakoo install root — used for log
-    /// file paths under `$MAKAKOO_HOME/data/log/`.
+    /// file paths under `$MAKAKOO_HOME/data/log/` and exported as
+    /// `MAKAKOO_HOME` so the supervisor can find the slot.
+    /// `node_bin_dir` is the directory holding the `node` binary that
+    /// passed the version gate, prepended to the service PATH. launchd
+    /// does not inherit the caller's PATH, so an nvm / Homebrew node is
+    /// invisible to the supervisor without this.
     pub fn from_slot(
         slot_id: &str,
         makakoo_bin: &Path,
         os_home: &Path,
         makakoo_home: &Path,
+        node_bin_dir: Option<&Path>,
     ) -> Result<Self> {
         validate_slot_id(slot_id)
             .map_err(|e| MakakooError::Internal(format!("invalid slot id '{slot_id}': {e}")))?;
@@ -57,7 +64,7 @@ impl LaunchAgentPlist {
         let plist_path = os_home
             .join("Library/LaunchAgents")
             .join(format!("{label}.plist"));
-        let xml = render_plist_xml(&label, makakoo_bin, slot_id, makakoo_home);
+        let xml = render_plist_xml(&label, makakoo_bin, slot_id, makakoo_home, node_bin_dir);
         Ok(Self {
             label,
             plist_xml: xml,
@@ -220,8 +227,13 @@ fn xml_escape(s: &str) -> String {
     out
 }
 
-fn render_plist_xml(label: &str, makakoo_bin: &Path, slot_id: &str, makakoo_home: &Path) -> String {
-    let bin = xml_escape(&makakoo_bin.to_string_lossy());
+fn render_plist_xml(
+    label: &str,
+    makakoo_bin: &Path,
+    slot_id: &str,
+    makakoo_home: &Path,
+    node_bin_dir: Option<&Path>,
+) -> String {
     let label_e = xml_escape(label);
     let slot_e = xml_escape(slot_id);
     let stdout = xml_escape(
@@ -234,6 +246,23 @@ fn render_plist_xml(label: &str, makakoo_bin: &Path, slot_id: &str, makakoo_home
             .join(format!("data/log/agent-{slot_id}.err.log"))
             .to_string_lossy(),
     );
+    // launchd starts services with a bare environment: no MAKAKOO_HOME,
+    // no LLM credentials, and PATH=/usr/bin:/bin:/usr/sbin:/sbin. A direct
+    // exec therefore fails with "slot not found", and — once that is fixed —
+    // "Node.js 22.9+ is required", because an nvm/Homebrew node is not on
+    // that PATH. The daemon plist solved this in `makakoo-platform`; the
+    // agent supervisor needs the same treatment. `sh -c` sources ~/.env for
+    // credentials (AIL_API_KEY et al), then MAKAKOO_HOME is pinned AFTER the
+    // source so a stale ~/.env entry cannot redirect the supervisor at a
+    // home that does not contain this slot.
+    let shell_cmd = xml_escape(&format!(
+        r#"set -a; [ -f "$HOME/.env" ] && . "$HOME/.env"; set +a; MAKAKOO_HOME={home_q}; export MAKAKOO_HOME; exec {bin_q} agent _supervisor --slot {slot_q}"#,
+        home_q = shell_quote(&makakoo_home.to_string_lossy()),
+        bin_q = shell_quote(&makakoo_bin.to_string_lossy()),
+        slot_q = shell_quote(slot_id),
+    ));
+    let path_value = xml_escape(&service_path(node_bin_dir));
+    let home_e = xml_escape(&makakoo_home.to_string_lossy());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -244,16 +273,18 @@ fn render_plist_xml(label: &str, makakoo_bin: &Path, slot_id: &str, makakoo_home
     <string>{label_e}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{bin}</string>
-        <string>agent</string>
-        <string>_supervisor</string>
-        <string>--slot</string>
-        <string>{slot_e}</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>{shell_cmd}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
         <key>MAKAKOO_AGENT_SLOT</key>
         <string>{slot_e}</string>
+        <key>MAKAKOO_HOME</key>
+        <string>{home_e}</string>
+        <key>PATH</key>
+        <string>{path_value}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -287,11 +318,72 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Regression — v0.3.0 shipped a plist whose `EnvironmentVariables`
+    /// held only `MAKAKOO_AGENT_SLOT`. launchd starts services with a bare
+    /// environment, so the supervisor could not find `MAKAKOO_HOME`
+    /// ("slot not found"), had no LLM credentials, and could not see an
+    /// nvm/Homebrew `node` on `PATH=/usr/bin:/bin:/usr/sbin:/sbin`
+    /// ("Node.js 22.9+ is required"). `makakoo agent start` was unusable
+    /// on macOS. The daemon plist already solved this in makakoo-platform;
+    /// these assertions stop the agent plist regressing into a direct exec.
+    #[test]
+    fn plist_propagates_home_credentials_and_node_path() {
+        let home = TempDir::new().unwrap();
+        let bin = PathBuf::from("/usr/local/bin/makakoo");
+        let node = PathBuf::from("/Users/x/.nvm/versions/node/v22.22.3/bin");
+        let p =
+            LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path(), Some(&node))
+                .unwrap();
+        let xml = &p.plist_xml;
+        assert!(
+            xml.contains("<string>/bin/sh</string>") && xml.contains("<string>-c</string>"),
+            "plist must use a sh -c wrapper so it can source ~/.env:\n{xml}"
+        );
+        assert!(
+            xml.contains("$HOME/.env"),
+            "plist must source ~/.env for LLM credentials:\n{xml}"
+        );
+        assert!(
+            xml.contains("<key>MAKAKOO_HOME</key>"),
+            "plist must export MAKAKOO_HOME or the supervisor cannot find the slot:\n{xml}"
+        );
+        assert!(
+            xml.contains("<key>PATH</key>")
+                && xml.contains("/Users/x/.nvm/versions/node/v22.22.3/bin"),
+            "plist PATH must lead with the verified node dir:\n{xml}"
+        );
+        assert!(
+            xml.contains("MAKAKOO_HOME=") && xml.contains("export MAKAKOO_HOME"),
+            "MAKAKOO_HOME must be pinned after the ~/.env source so a stale \
+             entry cannot redirect the supervisor:\n{xml}"
+        );
+    }
+
+    /// The pin must come AFTER the source, otherwise a stale MAKAKOO_HOME
+    /// in ~/.env silently wins and the supervisor looks in the wrong home.
+    #[test]
+    fn plist_pins_makakoo_home_after_sourcing_env() {
+        let home = TempDir::new().unwrap();
+        let bin = PathBuf::from("/usr/local/bin/makakoo");
+        let p =
+            LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
+        let xml = &p.plist_xml;
+        let source_at = xml.find("$HOME/.env").expect("must source ~/.env");
+        let pin_at = xml
+            .find("export MAKAKOO_HOME")
+            .expect("must pin MAKAKOO_HOME");
+        assert!(
+            pin_at > source_at,
+            "MAKAKOO_HOME pin must follow the ~/.env source:\n{xml}"
+        );
+    }
+
     #[test]
     fn plist_path_is_under_user_library_launchagents() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let p = LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
+        let p =
+            LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
         assert_eq!(p.label, "com.makakoo.agent.secretary");
         assert!(
             p.plist_path
@@ -305,14 +397,22 @@ mod tests {
     fn plist_xml_embeds_slot_id_supervisor_subcommand_and_logs() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let p = LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
+        let p =
+            LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
         assert!(p
             .plist_xml
             .contains("<string>com.makakoo.agent.secretary</string>"));
+        // The binary and its args now live inside the sh -c command string
+        // (see plist_propagates_home_credentials_and_node_path), not as
+        // standalone ProgramArguments entries.
+        // Quotes are XML-escaped (&apos;) in the sh -c string; launchd
+        // decodes them before handing the command to /bin/sh.
         assert!(p
             .plist_xml
-            .contains("<string>/usr/local/bin/makakoo</string>"));
-        assert!(p.plist_xml.contains("<string>_supervisor</string>"));
+            .contains("exec &apos;/usr/local/bin/makakoo&apos;"));
+        assert!(p
+            .plist_xml
+            .contains("agent _supervisor --slot &apos;secretary&apos;"));
         assert!(p.plist_xml.contains("<string>secretary</string>"));
         assert!(p.plist_xml.contains("agent-secretary.out.log"));
         assert!(p.plist_xml.contains("agent-secretary.err.log"));
@@ -326,7 +426,8 @@ mod tests {
     fn plist_rejects_invalid_slot_id() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let err = LaunchAgentPlist::from_slot("Bad Slot!", &bin, home.path(), home.path()).err();
+        let err =
+            LaunchAgentPlist::from_slot("Bad Slot!", &bin, home.path(), home.path(), None).err();
         assert!(err.is_some(), "expected validation error");
     }
 
@@ -335,8 +436,14 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let p = LaunchAgentPlist::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
-            .unwrap();
+        let p = LaunchAgentPlist::from_slot(
+            "secretary",
+            &bin,
+            os_home.path(),
+            makakoo_home.path(),
+            None,
+        )
+        .unwrap();
         assert!(
             p.plist_path.starts_with(os_home.path()),
             "plist must land under OS home, not Makakoo home. Got: {}",
@@ -359,8 +466,14 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/opt/My Apps & Tools/<makakoo>");
-        let p = LaunchAgentPlist::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
-            .unwrap();
+        let p = LaunchAgentPlist::from_slot(
+            "secretary",
+            &bin,
+            os_home.path(),
+            makakoo_home.path(),
+            None,
+        )
+        .unwrap();
         assert!(
             !p.plist_xml.contains("/<makakoo>"),
             "raw '<' in path must be escaped"
@@ -373,7 +486,8 @@ mod tests {
     fn plist_write_creates_launchagents_dir_and_file() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let p = LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
+        let p =
+            LaunchAgentPlist::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
         let path = p.write().unwrap();
         assert!(path.exists(), "plist file must be created");
         let body = std::fs::read_to_string(path).unwrap();

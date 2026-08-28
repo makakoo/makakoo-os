@@ -29,19 +29,22 @@ pub struct SystemdUserUnit {
 impl SystemdUserUnit {
     /// `os_home` is the OS user $HOME — the unit MUST land under
     /// `$HOME/.config/systemd/user/` (systemd-user requirement).
-    /// `makakoo_home` is the Makakoo install root — used for log
-    /// file paths under `$MAKAKOO_HOME/data/log/`.
+    /// `makakoo_home` is the Makakoo install root — used for log file
+    /// paths and exported as `MAKAKOO_HOME`.
+    /// `node_bin_dir` is the directory of the verified `node`, prepended
+    /// to the unit PATH (a user unit does not inherit the caller's).
     pub fn from_slot(
         slot_id: &str,
         makakoo_bin: &Path,
         os_home: &Path,
         makakoo_home: &Path,
+        node_bin_dir: Option<&Path>,
     ) -> Result<Self> {
         validate_slot_id(slot_id)
             .map_err(|e| MakakooError::Internal(format!("invalid slot id '{slot_id}': {e}")))?;
         let unit_name = format!("makakoo-agent-{slot_id}.service");
         let unit_path = os_home.join(".config/systemd/user").join(&unit_name);
-        let body = render_unit_body(slot_id, makakoo_bin, makakoo_home);
+        let body = render_unit_body(slot_id, makakoo_bin, makakoo_home, node_bin_dir);
         Ok(Self {
             unit_name,
             unit_body: body,
@@ -115,7 +118,12 @@ fn run(args: &[&str]) -> Result<SystemctlOutput> {
 /// Path quoting: `ExecStart` and `StandardOutput=append:` accept
 /// double-quoted strings to handle paths with spaces. We always
 /// quote, even when not strictly needed, for resilience.
-fn render_unit_body(slot_id: &str, makakoo_bin: &Path, makakoo_home: &Path) -> String {
+fn render_unit_body(
+    slot_id: &str,
+    makakoo_bin: &Path,
+    makakoo_home: &Path,
+    node_bin_dir: Option<&Path>,
+) -> String {
     let bin = systemd_quote(&makakoo_bin.to_string_lossy());
     let stdout = systemd_quote(
         &makakoo_home
@@ -127,6 +135,12 @@ fn render_unit_body(slot_id: &str, makakoo_bin: &Path, makakoo_home: &Path) -> S
             .join(format!("data/log/agent-{slot_id}.err.log"))
             .to_string_lossy(),
     );
+    // A systemd user unit inherits a minimal environment: no MAKAKOO_HOME,
+    // no LLM credentials, and no Homebrew/nvm on PATH. `EnvironmentFile=-%h/.env`
+    // supplies credentials (optional, hence the `-`); MAKAKOO_HOME is pinned
+    // AFTER it so a stale ~/.env entry cannot redirect the supervisor.
+    let home = systemd_quote(&makakoo_home.to_string_lossy());
+    let path = systemd_quote(&crate::agents::service_env::service_path(node_bin_dir));
     format!(
         r#"[Unit]
 Description=Makakoo agent slot {slot_id}
@@ -135,7 +149,10 @@ After=default.target
 [Service]
 Type=simple
 ExecStart={bin} agent _supervisor --slot {slot_id}
+EnvironmentFile=-%h/.env
 Environment=MAKAKOO_AGENT_SLOT={slot_id}
+Environment=MAKAKOO_HOME={home}
+Environment=PATH={path}
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:{stdout}
@@ -159,11 +176,46 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Regression — mirrors the launchd fix. A systemd user unit inherits
+    /// a minimal environment, so v0.3.0's unit (which set only
+    /// MAKAKOO_AGENT_SLOT) left the supervisor without MAKAKOO_HOME, LLM
+    /// credentials, or a PATH containing an nvm/Homebrew node.
+    #[test]
+    fn unit_propagates_home_credentials_and_node_path() {
+        let home = TempDir::new().unwrap();
+        let bin = PathBuf::from("/usr/local/bin/makakoo");
+        let node = PathBuf::from("/home/x/.nvm/versions/node/v22.22.3/bin");
+        let u =
+            SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path(), Some(&node))
+                .unwrap();
+        let body = &u.unit_body;
+        assert!(
+            body.contains("EnvironmentFile=-%h/.env"),
+            "unit must optionally load ~/.env for credentials:\n{body}"
+        );
+        assert!(
+            body.contains("Environment=MAKAKOO_HOME="),
+            "unit must export MAKAKOO_HOME:\n{body}"
+        );
+        assert!(
+            body.contains("/home/x/.nvm/versions/node/v22.22.3/bin"),
+            "unit PATH must lead with the verified node dir:\n{body}"
+        );
+        // The pin must follow the file load, or a stale ~/.env wins.
+        let file_at = body.find("EnvironmentFile").unwrap();
+        let pin_at = body.find("Environment=MAKAKOO_HOME").unwrap();
+        assert!(
+            pin_at > file_at,
+            "MAKAKOO_HOME must be pinned last:\n{body}"
+        );
+    }
+
     #[test]
     fn unit_path_is_under_user_systemd_config() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let u = SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
+        let u =
+            SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
         assert_eq!(u.unit_name, "makakoo-agent-secretary.service");
         assert!(
             u.unit_path
@@ -177,7 +229,8 @@ mod tests {
     fn unit_body_embeds_slot_supervisor_invocation() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let u = SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
+        let u =
+            SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
         assert!(u
             .unit_body
             .contains("Description=Makakoo agent slot secretary"));
@@ -203,7 +256,9 @@ mod tests {
     fn unit_rejects_invalid_slot_id() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        assert!(SystemdUserUnit::from_slot("Bad Slot!", &bin, home.path(), home.path()).is_err());
+        assert!(
+            SystemdUserUnit::from_slot("Bad Slot!", &bin, home.path(), home.path(), None).is_err()
+        );
     }
 
     #[test]
@@ -211,8 +266,14 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let u = SystemdUserUnit::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
-            .unwrap();
+        let u = SystemdUserUnit::from_slot(
+            "secretary",
+            &bin,
+            os_home.path(),
+            makakoo_home.path(),
+            None,
+        )
+        .unwrap();
         assert!(u.unit_path.starts_with(os_home.path()));
         assert!(!u.unit_path.starts_with(makakoo_home.path()));
         let mh = makakoo_home.path().to_string_lossy().into_owned();
@@ -229,8 +290,14 @@ mod tests {
         let os_home = TempDir::new().unwrap();
         let makakoo_home = TempDir::new().unwrap();
         let bin = PathBuf::from("/opt/My Apps/makakoo");
-        let u = SystemdUserUnit::from_slot("secretary", &bin, os_home.path(), makakoo_home.path())
-            .unwrap();
+        let u = SystemdUserUnit::from_slot(
+            "secretary",
+            &bin,
+            os_home.path(),
+            makakoo_home.path(),
+            None,
+        )
+        .unwrap();
         assert!(
             u.unit_body
                 .contains(r#"ExecStart="/opt/My Apps/makakoo" agent _supervisor"#),
@@ -243,7 +310,8 @@ mod tests {
     fn unit_write_creates_systemd_user_dir() {
         let home = TempDir::new().unwrap();
         let bin = PathBuf::from("/usr/local/bin/makakoo");
-        let u = SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path()).unwrap();
+        let u =
+            SystemdUserUnit::from_slot("secretary", &bin, home.path(), home.path(), None).unwrap();
         let path = u.write().unwrap();
         assert!(path.exists());
         let body = std::fs::read_to_string(path).unwrap();

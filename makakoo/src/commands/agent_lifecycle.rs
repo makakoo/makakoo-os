@@ -115,7 +115,10 @@ pub fn start_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
     }
 
     let bin = std::env::current_exe().map_err(|e| anyhow::anyhow!("read current_exe: {e}"))?;
-    let plist = LaunchAgentPlist::from_slot(slot_id, &bin, &os_home(), home)
+    // Resolved here, in the caller's environment. The service gets a bare
+    // PATH, so where `node` lives must be captured before we hand off.
+    let node_dir = crate::commands::agent_runtime::resolve_node_bin_dir();
+    let plist = LaunchAgentPlist::from_slot(slot_id, &bin, &os_home(), home, node_dir.as_deref())
         .map_err(|e| anyhow::anyhow!("plist generation: {e}"))?;
     plist
         .write()
@@ -192,7 +195,9 @@ pub fn start_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
     }
 
     let bin = std::env::current_exe().map_err(|e| anyhow::anyhow!("read current_exe: {e}"))?;
-    let unit = SystemdUserUnit::from_slot(slot_id, &bin, &os_home(), home)
+    // See the launchd path: resolve node before the service strips PATH.
+    let node_dir = crate::commands::agent_runtime::resolve_node_bin_dir();
+    let unit = SystemdUserUnit::from_slot(slot_id, &bin, &os_home(), home, node_dir.as_deref())
         .map_err(|e| anyhow::anyhow!("unit generation: {e}"))?;
     unit.write()
         .map_err(|e| anyhow::anyhow!("unit write: {e}"))?;
@@ -274,7 +279,7 @@ pub fn stop_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
     let home = ctx.home();
     makakoo_core::agents::validate_slot_id(slot_id)?;
     let bin = std::env::current_exe()?;
-    let plist = LaunchAgentPlist::from_slot(slot_id, &bin, &os_home(), home)
+    let plist = LaunchAgentPlist::from_slot(slot_id, &bin, &os_home(), home, None)
         .map_err(|e| anyhow::anyhow!("plist: {e}"))?;
     if !plist.plist_path.exists() {
         if status_has_live_process(home, slot_id)? {
@@ -304,7 +309,7 @@ pub fn stop_slot(ctx: &CliContext, slot_id: &str) -> anyhow::Result<i32> {
     let home = ctx.home();
     makakoo_core::agents::validate_slot_id(slot_id)?;
     let bin = std::env::current_exe()?;
-    let unit = SystemdUserUnit::from_slot(slot_id, &bin, &os_home(), home)
+    let unit = SystemdUserUnit::from_slot(slot_id, &bin, &os_home(), home, None)
         .map_err(|e| anyhow::anyhow!("unit: {e}"))?;
     if !unit.unit_path.exists() {
         if status_has_live_process(home, slot_id)? {
