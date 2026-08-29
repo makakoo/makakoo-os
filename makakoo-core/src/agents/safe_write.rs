@@ -417,30 +417,29 @@ mod tests {
         );
         // `..` must be refused on EVERY platform. Unix rejected this
         // only as a side effect of the component walk; Windows
-        // normalises the path first, so without an explicit check the
-        // write lands outside the directory that was authorised.
+        // normalises the path before the filesystem sees it, so without
+        // an explicit check the write lands outside the directory that
+        // was authorised.
         //
-        // Each component is joined separately on purpose. `canonicalize`
-        // returns a verbatim path on Windows, where forward slashes are
-        // NOT separators — joining "a/../../x.md" as one string would
-        // make it a single literal file name and quietly stop testing
-        // anything.
+        // Built from `tmp.path()`, NOT `canonical(&tmp)`. On Windows
+        // `canonicalize` returns a verbatim (`\\?\`) path, and because
+        // the OS will not resolve `..` inside one, `PathBuf::push`
+        // collapses the component away to keep the path usable — the
+        // test would then assert against a path with no `..` in it at
+        // all and silently prove nothing. `TempDir::path()` is a normal
+        // path on both platforms and preserves the component.
         let tmp = tempdir().unwrap();
-        let sneaky = canonical(&tmp).join("a").join("..").join("..").join("x.md");
+        let sneaky = tmp.path().join("a").join("..").join("..").join("x.md");
         let err = write_atomic_nofollow(&sneaky, b"x").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
 
         // A `..` that resolves to a real, writable directory is the
         // dangerous shape: it must fail because of the component, not
         // because the intermediate directory happens to be missing.
-        let escape = canonical(&tmp).join("..").join("escaped.md");
+        let escape = tmp.path().join("..").join("escaped.md");
         let err = write_atomic_nofollow(&escape, b"x").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
-        assert!(!canonical(&tmp)
-            .parent()
-            .unwrap()
-            .join("escaped.md")
-            .exists());
+        assert!(!tmp.path().parent().unwrap().join("escaped.md").exists());
 
         // A single `.` is NOT a hazard and is not asserted here:
         // `Path::components()` elides CurDir, so `/a/./b` and `/a/b` are
