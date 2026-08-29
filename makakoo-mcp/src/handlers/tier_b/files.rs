@@ -381,9 +381,13 @@ mod tests {
     /// pure accident of platform. Anchor the scratch tree in `target/`
     /// instead, which no baseline root covers.
     fn scratch() -> TempDir {
-        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../target/test-homes");
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-homes");
         std::fs::create_dir_all(&base).unwrap();
+        // Canonicalise the base before handing it to TempDir: the literal
+        // `..` above survives into every path built from `tmp.path()`,
+        // while the handler canonicalises its home, so the two stop
+        // comparing equal and every scope decision inverts.
+        let base = base.canonicalize().unwrap();
         TempDir::new_in(&base).unwrap()
     }
 
