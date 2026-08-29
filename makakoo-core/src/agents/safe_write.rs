@@ -77,6 +77,25 @@ pub fn write_atomic_nofollow(target: &Path, content: &[u8]) -> io::Result<()> {
             "write target must be absolute and already resolved",
         ));
     }
+    // "Already resolved" has to be enforced, not assumed. On unix the
+    // per-component `openat` walk happens to fail on a `..` because the
+    // literal component does not exist, but that is incidental: on
+    // Windows the path is normalised before it reaches the filesystem,
+    // so `<authorised>/a/../../x.md` resolves cleanly OUTSIDE the
+    // authorised directory and the write succeeds. The scope check ran
+    // against the unresolved string, so this is a sandbox escape on one
+    // platform only. Refuse the components explicitly on every platform.
+    if target.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "write target must be already resolved: '.' and '..' components are refused",
+        ));
+    }
     write_impl(parent, name, content)
 }
 
@@ -391,9 +410,31 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidInput
         );
+        // `..` must be refused on EVERY platform. Unix rejected this
+        // only as a side effect of the component walk; Windows
+        // normalises the path first, so without an explicit check the
+        // write lands outside the directory that was authorised.
         let tmp = tempdir().unwrap();
         let sneaky = canonical(&tmp).join("a/../../x.md");
-        assert!(write_atomic_nofollow(&sneaky, b"x").is_err());
+        let err = write_atomic_nofollow(&sneaky, b"x").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+
+        // A `..` that resolves to a real, writable directory is the
+        // dangerous shape: it must fail because of the component, not
+        // because the intermediate directory happens to be missing.
+        let escape = canonical(&tmp).join("..").join("escaped.md");
+        let err = write_atomic_nofollow(&escape, b"x").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+        assert!(!canonical(&tmp)
+            .parent()
+            .unwrap()
+            .join("escaped.md")
+            .exists());
+
+        // A single `.` is NOT a hazard and is not asserted here:
+        // `Path::components()` elides CurDir, so `/a/./b` and `/a/b` are
+        // the same path. `..` is the component that can leave the
+        // authorised directory.
     }
 
     #[cfg(unix)]

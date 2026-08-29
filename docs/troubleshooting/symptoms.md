@@ -276,6 +276,28 @@ These are less common subsystem errors, but they are still searchable here so th
 - **`unknown audit kind '<kind>' - see makakoo_core::agents::audit::AuditKind for accepted values`** - An agent audit event used an unsupported kind. Update the caller to emit a valid audit kind.
 - **`unknown scenario '<name>' - known: <known>`** - The fault-injection runner was given an unknown scenario. Pick one of the printed known scenario names.
 
+- **`could not run npm ({error}) — the slot and project are intact; finish with: {}`** / **`npm install exited with {} — the slot and project are intact; finish with: {}`** - `agent create` scaffolded the slot and project but could not install dependencies. Nothing is rolled back; run the printed shell-quoted command in the project directory, or re-create with `--no-install` for offline provisioning.
+- **`--probe needs a runtime slot with an LLM route; '{name}' is a legacy gateway slot`** / **`--probe needs a runtime slot with an LLM route; '{name}' is a plugin`** - `agent health --probe` only applies to slots that own an LLM route. Legacy gateway slots and plugins have none; use plain `agent health` for liveness.
+- **`cannot probe provider '{other}'; supported: switchailocal, ollama, openai, anthropic`** - The slot's model specifier names a provider the probe cannot reach. Use a supported provider prefix or drop `--probe`.
+- **`model specifier '{spec}' names provider '{provider}' with no model`** - A `<provider>/<model>` specifier is missing its model half. Write the full `provider/model`, or an unprefixed switchAILocal model id.
+- **`slot has no model configured; nothing to probe`** - The slot has no `[llm.override] model`. Set one before probing.
+- **`build http client: {e}`** - The probe could not construct its HTTP client. This is a local TLS/proxy environment problem, not a provider outage.
+- **`{}: cannot probe {} without a credential; set {}`** - The probe found no API key for the resolved provider. Export the named variable, or put it in the generated project's `.env`.
+- **`{}: route cannot serve multi-turn tool calls — {} {} returned HTTP {}`** - The provider rejected the exact request shape every agent turn after the first one uses. Pick a model that supports tools; the upstream text is printed verbatim.
+- **`{}: probe inconclusive — {} {} returned HTTP {} ({}); capability unknown`** - A 401/429/5xx says nothing about tool-calling capability. Fix the credential, quota or outage first, then re-probe — do not treat this as a model verdict.
+- **`{}: {} did not answer within {}s at {} — capability unknown`** - The provider did not answer in the probe budget. A cold local model load can legitimately take over a minute; retry once warm before concluding anything.
+- **`{name}: liveness unavailable ({error})`** - Makakoo could not determine whether the process is alive. Inspect the run directory and process table directly rather than assuming it is down.
+- **`{}\ncheck the bot token in the transport's secret_env / secret_ref`** - Telegram rejected the bot token at `agent start`. Fix the value behind `secret_env`/`secret_ref`; an *unreachable* API is only a warning, but a rejected token is fatal for that transport.
+- **`cron schedule '{}' must have 5 space-separated fields (min hour dom mon dow), got {}`** - Trigger schedules are standard 5-field cron. Do not include a seconds field.
+- **`cron schedule '{}' has an invalid day-of-week field '{}' (expected 0-7, names, ranges, lists or steps)`** - Day-of-week accepts `0`-`7` (Sunday is 0 **and** 7, as crontab), names such as `Mon`, ranges, lists and steps.
+- **`cron schedule '{}' is not valid: {e}`** - The expression parsed as five fields but is not a valid cron. Check each field against its range.
+- **`cron schedule '{}' never fires (no matching date exists)`** - The schedule can never match a real date (for example `30 2 *` on February). A trigger that never fires is refused at create time rather than idling forever.
+- **`cron timezone '{}' is not an IANA timezone (e.g. 'UTC', 'Europe/Berlin')`** - The timezone is validated against the real IANA database. A typo is refused rather than silently running in UTC at the wrong hour.
+- **`triggers[cron]: {}`** - Prefix for any cron trigger problem found while validating a spec. The rest of the message names the exact fault.
+- **`slot '{slot_id}': trigger id '{}' must be 1-96 chars of [A-Za-z0-9._-]`** - Trigger ids become runtime session ids (`cron:<id>`), so they are charset- and length-limited.
+- **`slot '{slot_id}': duplicate trigger id '{}' — ids become session ids, so two schedules would share one conversation`** - Two `[[trigger]]` blocks declare the same id. Give each a distinct id, or their turns interleave into one conversation history.
+- **`{slot_id}: trigger '{}' not scheduled — {}`** - A trigger was skipped at start with the printed reason (disabled, non-cron kind, bad schedule, or an unknown `deliver_to` target). The slot's other triggers and channels still start.
+
 ---
 
 ## About this index

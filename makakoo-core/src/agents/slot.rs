@@ -299,8 +299,7 @@ pub fn validate_trigger_list(slot_id: &str, triggers: &[TriggerEntry]) -> Result
         }
         if seen.contains(&t.id.as_str()) {
             return Err(MakakooError::InvalidInput(format!(
-                "slot '{slot_id}': duplicate trigger id '{}' — ids become session ids, \
-                 so two schedules would share one conversation",
+                "slot '{slot_id}': duplicate trigger id '{}' — ids become session ids, so two schedules would share one conversation",
                 t.id
             )));
         }
