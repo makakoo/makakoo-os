@@ -371,10 +371,26 @@ mod tests {
     use crate::dispatch::AGENT_ID;
     use tempfile::TempDir;
 
+    /// A scratch directory that is NOT under the system temp dir.
+    ///
+    /// `/tmp` is itself a baseline root (`spec/USER_GRANTS.md` §12), so a
+    /// fake `$MAKAKOO_HOME` created by `TempDir::new()` lands *inside*
+    /// the sandbox on Linux and every "must be refused" case is
+    /// legitimately allowed. On macOS the same call returns
+    /// `/var/folders/...`, outside `/tmp`, so these tests passed there by
+    /// pure accident of platform. Anchor the scratch tree in `target/`
+    /// instead, which no baseline root covers.
+    fn scratch() -> TempDir {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/test-homes");
+        std::fs::create_dir_all(&base).unwrap();
+        TempDir::new_in(&base).unwrap()
+    }
+
     /// A home with the baseline roots materialised, so `resolve_scope_path`
     /// can canonicalise them.
     fn home() -> TempDir {
-        let tmp = TempDir::new().unwrap();
+        let tmp = scratch();
         for sub in ["data/reports", "data/drafts", "tmp", "config"] {
             std::fs::create_dir_all(tmp.path().join(sub)).unwrap();
         }
@@ -731,7 +747,7 @@ mod tests {
         // link inside a baseline root is what makes the resolved-path check
         // here load-bearing rather than redundant.
         let home = home();
-        let outside = TempDir::new().unwrap();
+        let outside = scratch();
         let secret = outside.path().join("secret.txt");
         std::fs::write(&secret, "untouched").unwrap();
 
@@ -789,7 +805,7 @@ mod tests {
         // where it actually points, and the guarded walk refuses a symlink at
         // any component if the tree changes afterwards.
         let home = home();
-        let outside = TempDir::new().unwrap();
+        let outside = scratch();
         std::fs::create_dir_all(outside.path().join("parent")).unwrap();
         let link = home.path().join("data/reports/mid");
         std::os::unix::fs::symlink(outside.path(), &link).unwrap();
