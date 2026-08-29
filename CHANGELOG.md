@@ -8,7 +8,7 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
-## [Unreleased]
+## [0.4.0] - 2026-08-29
 
 ### Added
 
