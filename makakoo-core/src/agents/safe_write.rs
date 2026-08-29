@@ -414,8 +414,14 @@ mod tests {
         // only as a side effect of the component walk; Windows
         // normalises the path first, so without an explicit check the
         // write lands outside the directory that was authorised.
+        //
+        // Each component is joined separately on purpose. `canonicalize`
+        // returns a verbatim path on Windows, where forward slashes are
+        // NOT separators — joining "a/../../x.md" as one string would
+        // make it a single literal file name and quietly stop testing
+        // anything.
         let tmp = tempdir().unwrap();
-        let sneaky = canonical(&tmp).join("a/../../x.md");
+        let sneaky = canonical(&tmp).join("a").join("..").join("..").join("x.md");
         let err = write_atomic_nofollow(&sneaky, b"x").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
 
