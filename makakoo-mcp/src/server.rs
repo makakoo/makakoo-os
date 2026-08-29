@@ -591,6 +591,7 @@ mod tests {
             transports: vec![],
             llm: None,
             runtime: None,
+            triggers: Vec::new(),
         };
         AgentRegistry::create(home, &slot).unwrap();
 
@@ -679,6 +680,7 @@ mod tests {
             transports: vec![],
             llm: None,
             runtime: None,
+            triggers: Vec::new(),
         };
         AgentRegistry::create(home, &slot).unwrap();
         let mut registry = ToolRegistry::new();

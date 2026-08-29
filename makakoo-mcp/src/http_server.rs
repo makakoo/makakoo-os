@@ -567,6 +567,7 @@ mod tests {
             transports: vec![],
             llm: None,
             runtime: None,
+            triggers: Vec::new(),
         };
         makakoo_core::agents::AgentRegistry::create(home.path(), &slot).unwrap();
         let ctx = Arc::new(ToolContext::empty(home.path().to_path_buf()));

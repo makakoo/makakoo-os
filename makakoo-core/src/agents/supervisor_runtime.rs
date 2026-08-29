@@ -295,10 +295,11 @@ pub async fn run_supervisor(
     handle: SupervisorHandle,
     run_dir: PathBuf,
 ) -> Result<()> {
-    run_supervisor_with_bridge(spec, handle, run_dir, None).await
+    run_supervisor_with_bridge(spec, handle, run_dir, None, None).await
 }
 
-/// `run_supervisor`, additionally hosting the slot's chat transports.
+/// `run_supervisor`, additionally hosting the slot's chat transports
+/// and cron triggers.
 ///
 /// The bridge is supervised separately from the gateway child on
 /// purpose. A transport that cannot authenticate, or whose listener
@@ -310,6 +311,7 @@ pub async fn run_supervisor_with_bridge(
     handle: SupervisorHandle,
     run_dir: PathBuf,
     bridge: Option<TransportBridge>,
+    scheduler: Option<crate::agents::trigger_scheduler::TriggerScheduler>,
 ) -> Result<()> {
     let supervisor_pid = std::process::id();
     let (trigger, signal) = shutdown_pair();
@@ -349,6 +351,21 @@ pub async fn run_supervisor_with_bridge(
         None => Vec::new(),
     };
 
+    // Triggers come up after the transports so a tick that fires
+    // immediately has somewhere to deliver. Like the bridge, a broken
+    // schedule is logged and skipped rather than failing the slot.
+    let trigger_handles = match scheduler {
+        Some(scheduler) => {
+            tracing::info!(
+                target: "makakoo_core::agents::supervisor_runtime",
+                triggers = ?scheduler.trigger_ids(),
+                "hosting cron triggers"
+            );
+            scheduler.spawn(signal.clone())
+        }
+        None => Vec::new(),
+    };
+
     // Watcher runs to completion. Whether it succeeds or errors,
     // signal shutdown so the writer exits.
     let watcher_result = run_gateway_watcher(spec, handle, signal).await;
@@ -361,6 +378,7 @@ pub async fn run_supervisor_with_bridge(
     // the stop time by the number of transports. A timeout only DROPS
     // a join handle, which detaches the task rather than stopping it,
     // so stragglers are aborted explicitly.
+    let bridge_handles: Vec<_> = bridge_handles.into_iter().chain(trigger_handles).collect();
     if !bridge_handles.is_empty() {
         let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
         let mut stragglers = Vec::new();

@@ -199,6 +199,27 @@ pub fn effective_allowlist(entry: &TransportEntry) -> Vec<String> {
 /// Group ids the operator configured that this version cannot honor.
 /// Reported so a group-scoped allowlist never looks like it is in
 /// force when it is not.
+/// Conversations this transport may address without being spoken to
+/// first.
+///
+/// `allowed_chat_ids` are genuine chat ids, so they are the correct
+/// destination set. `allowed_users` are *sender* ids; for a private
+/// chat Telegram makes the two numerically equal, which is why they are
+/// a sound fallback for the common one-to-one bot, but they are not a
+/// destination authorisation in general.
+pub fn delivery_destinations(entry: &TransportEntry) -> Vec<String> {
+    let mut out = match &entry.config {
+        TransportConfig::Telegram(cfg) if !cfg.allowed_chat_ids.is_empty() => {
+            cfg.allowed_chat_ids.clone()
+        }
+        _ => entry.allowed_users.clone(),
+    };
+    out.retain(|v| !v.trim().is_empty());
+    out.sort();
+    out.dedup();
+    out
+}
+
 pub fn ignored_group_ids(entry: &TransportEntry) -> Vec<String> {
     match &entry.config {
         TransportConfig::Telegram(cfg) => cfg
@@ -228,7 +249,14 @@ pub struct BridgePlan {
 /// One configured, credential-bearing telegram transport.
 pub struct BridgedTransport {
     adapter: Arc<TelegramAdapter>,
+    /// Inbound SENDER allowlist — who may talk to the agent.
     allowed: Arc<Vec<String>>,
+    /// Outbound DESTINATION list — which conversations the agent may
+    /// open unprompted. Deliberately separate from `allowed`: a user id
+    /// permitted to post in a group is not the same thing as a chat
+    /// authorised to receive a scheduled report, and using one as the
+    /// other would send a group's briefing into a private DM.
+    destinations: Arc<Vec<String>>,
 }
 
 impl BridgedTransport {
@@ -268,6 +296,58 @@ impl BridgedTransport {
 /// Replace every occurrence of `secret` with a marker. A short or
 /// empty secret is ignored rather than turning the whole string into
 /// markers.
+/// A cheap, cloneable handle for pushing an *unsolicited* message
+/// through an already-planned transport.
+///
+/// Scheduled ticks have no inbound frame to reply to, so they cannot
+/// reuse the request/response path. Delivery goes to
+/// [`delivery_destinations`] — the transport's configured chat ids,
+/// falling back to the sender allowlist only where Telegram makes the
+/// two identical. It is NOT the inbound sender ACL.
+#[derive(Clone)]
+pub struct DeliveryTarget {
+    adapter: Arc<TelegramAdapter>,
+    chats: Arc<Vec<String>>,
+}
+
+impl DeliveryTarget {
+    pub fn transport_id(&self) -> &str {
+        self.adapter.transport_id()
+    }
+
+    /// Authorised destinations for unsolicited sends.
+    pub fn chats(&self) -> &[String] {
+        &self.chats
+    }
+
+    /// True when this transport has nowhere authorised to deliver.
+    pub fn is_empty(&self) -> bool {
+        self.chats.is_empty()
+    }
+
+    /// Send `text` to one chat, chunked to Telegram's message limit.
+    /// Returns the first send error; earlier chunks may already have
+    /// been delivered.
+    pub async fn send_text(&self, chat_id: &str, text: &str) -> Result<()> {
+        for chunk in split_for_telegram(text) {
+            let out = MakakooOutboundFrame {
+                transport_id: self.adapter.transport_id().to_string(),
+                transport_kind: "telegram".to_string(),
+                conversation_id: chat_id.to_string(),
+                thread_id: None,
+                thread_kind: None,
+                text: chunk,
+                // Nothing to reply to — the agent started this exchange.
+                reply_to_message_id: None,
+            };
+            self.adapter.send(&out).await.map_err(|e| {
+                MakakooError::Config(redact_secret(&e.to_string(), &self.adapter.bot_token))
+            })?;
+        }
+        Ok(())
+    }
+}
+
 pub fn redact_secret(text: &str, secret: &str) -> String {
     if secret.len() < 8 {
         return text.to_string();
@@ -467,6 +547,7 @@ impl TransportBridge {
             transports.push(BridgedTransport {
                 adapter: Arc::new(adapter),
                 allowed: Arc::new(allowed),
+                destinations: Arc::new(delivery_destinations(entry)),
             });
         }
 
@@ -488,6 +569,18 @@ impl TransportBridge {
             }),
             skipped,
         })
+    }
+
+    /// Handles for delivering scheduled output. Cloneable and cheap;
+    /// taken before `verify_and_spawn` consumes the bridge.
+    pub fn delivery_targets(&self) -> Vec<DeliveryTarget> {
+        self.transports
+            .iter()
+            .map(|t| DeliveryTarget {
+                adapter: t.adapter.clone(),
+                chats: t.destinations.clone(),
+            })
+            .collect()
     }
 
     pub fn transport_ids(&self) -> Vec<String> {
@@ -577,7 +670,11 @@ async fn run_transport(
     http: reqwest::Client,
     mut shutdown: ShutdownSignal,
 ) {
-    let BridgedTransport { adapter, allowed } = transport;
+    let BridgedTransport {
+        adapter,
+        allowed,
+        destinations: _,
+    } = transport;
     let transport_id = adapter.transport_id().to_string();
     let (tx, mut rx) = mpsc::channel::<MakakooInboundFrame>(INBOUND_QUEUE);
 
@@ -1122,6 +1219,7 @@ mod tests {
                 engine: AgentRuntimeEngine::DeepseekHarness,
                 project_dir,
             }),
+            triggers: Vec::new(),
         }
     }
 

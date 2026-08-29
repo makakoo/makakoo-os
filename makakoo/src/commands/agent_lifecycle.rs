@@ -505,10 +505,35 @@ pub fn run_supervisor_command(ctx: &CliContext, slot_id: &str) -> anyhow::Result
         }
     };
 
+    // Cron triggers deliver through the bridge's transports, so the
+    // delivery handles are taken before the bridge is consumed.
+    let delivery_targets = bridge
+        .as_ref()
+        .map(|b| b.delivery_targets())
+        .unwrap_or_default();
+    let scheduler = match makakoo_core::agents::trigger_scheduler::TriggerScheduler::plan(
+        &slot_cfg,
+        delivery_targets,
+    ) {
+        Ok(plan) => {
+            for skipped in &plan.skipped {
+                output::print_warn(format!(
+                    "{slot_id}: trigger '{}' not scheduled — {}",
+                    skipped.trigger_id, skipped.reason
+                ));
+            }
+            plan.scheduler
+        }
+        Err(error) => {
+            output::print_error(format!("{slot_id}: trigger config: {error}"));
+            return Ok(1);
+        }
+    };
+
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             makakoo_core::agents::supervisor_runtime::run_supervisor_with_bridge(
-                spec, h, dir, bridge,
+                spec, h, dir, bridge, scheduler,
             )
             .await
         })

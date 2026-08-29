@@ -33,6 +33,7 @@ mod runtime_archive;
 pub mod runtime_client;
 pub mod safe_write;
 pub mod scaffold;
+pub mod schedule;
 pub mod scope;
 pub mod slot;
 pub mod spec;
@@ -41,6 +42,7 @@ pub mod supervisor;
 pub mod supervisor_runtime;
 pub mod tool_catalog;
 pub mod transport_bridge;
+pub mod trigger_scheduler;
 
 pub mod service_env;
 

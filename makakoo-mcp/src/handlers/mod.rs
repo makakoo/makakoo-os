@@ -243,6 +243,7 @@ mod handler_contract_tests {
             transports: vec![],
             llm: None,
             runtime: None,
+            triggers: Vec::new(),
         };
         assert!(makakoo_core::agents::check_tool(&slot, "write_file").is_ok());
         // The MCP client spelling must resolve to the same identity.

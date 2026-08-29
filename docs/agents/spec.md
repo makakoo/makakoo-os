@@ -72,11 +72,14 @@ channels:
     twilio_account_sid_env: TWILIO_ACCOUNT_SID
     secret_env: TWILIO_AUTH_TOKEN
 
-# Trigger sources (zero or many). DSH V1 preserves but does not schedule them.
+# Trigger sources (zero or many). Cron triggers are scheduled by the
+# supervisor; webhook triggers are declaration-only.
 triggers:
   - kind: cron                       # standard 5-field cron expression
     schedule: "0 */6 * * *"          # required
     timezone: "UTC"                  # optional, default "UTC"
+    prompt: "Run the six-hourly check."   # optional; default wake message
+    deliver_to: []                   # optional; transport IDs, empty = every channel
 
   - kind: webhook
     path: /triggers/manual
@@ -192,9 +195,35 @@ token Telegram rejects fails the command, while an unreachable API is only a
 warning (the poll loop retries). A transport that cannot start never blocks the
 runtime API — `makakoo agent prompt` keeps working either way.
 
-**The other channel kinds and all triggers remain declaration-only.** They are
-preserved in the spec and compiled into slot metadata, but nothing starts a
-listener or a scheduler for them.
+### Cron triggers
+
+A `cron` trigger is scheduled by the supervisor alongside the transports. On
+each tick it sends `prompt` to the runtime under the stable session id
+`cron:<trigger_id>`, so the schedule keeps its own conversation history —
+separate from every chat, and preserved across restarts.
+
+`schedule` is standard 5-field cron (`min hour dom mon dow`) with **Sunday as
+0** (7 also means Sunday), matching crontab. `timezone` is any IANA name and is
+validated against the real database — a typo fails `agent create` rather than
+silently running in UTC.
+
+Delivery goes to the transport's configured `allowed_chat_ids` — real chat ids
+— falling back to the sender allowlist only for one-to-one bots, where Telegram
+makes a user id and a chat id the same number. `deliver_to` narrows this to named
+transports **by id** (`telegram-0`, ... — see the slot TOML), not by kind. An
+id that matches nothing is reported at start and the trigger still runs,
+delivering to whatever resolved: a stale entry must not cancel the agent's
+work. An agent with **no** channels is a valid headless
+shape — the answer is logged and the agent's real output is its side effects.
+
+Ticks are skipped, never queued. A run that overruns its own period drops the
+ticks it covered instead of building a backlog, and a tick missed because the
+machine slept is reported and dropped rather than replayed — a 08:00 brief
+delivered at 16:00 is worse than no brief.
+
+**The other channel kinds and webhook triggers remain declaration-only.** They
+are preserved in the spec and compiled into slot metadata, but nothing starts a
+listener for them.
 
 Supported declaration shapes remain:
 

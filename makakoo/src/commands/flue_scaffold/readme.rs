@@ -108,7 +108,9 @@ fn channel_env_list(c: &ChannelSpec) -> Vec<String> {
 
 fn trigger_summary(t: &TriggerSpec) -> (&'static str, String) {
     match t {
-        TriggerSpec::Cron { schedule, timezone } => {
+        TriggerSpec::Cron {
+            schedule, timezone, ..
+        } => {
             let tz = if timezone.is_empty() {
                 "UTC".to_string()
             } else {

@@ -5,8 +5,8 @@
 #       npm install
 #       makakoo agent start personal-day-brief
 #       makakoo agent prompt personal-day-brief "Create today's brief"
-# Channel and cron declarations are validated policy only in DSH V1; no
-# Telegram listener or scheduler is started until the adapter slice lands.
+# The Telegram channel and the cron trigger below are both live: `agent start`
+# begins polling and schedules the 08:00 wake.
 #
 # See docs/agents/spec.md for the full schema.
 
@@ -30,18 +30,20 @@ instructions: |
 # Whitelist of Makakoo MCP tools this agent may invoke.
 tools: [brain_search, brain_recent, write_file]
 
-# Communications policy — zero or many. Declaration-only in DSH V1.
+# Communications policy — zero or many. Telegram is hosted by the supervisor.
 channels:
   - kind: telegram
     token_env: TELEGRAM_BOT_TOKEN
     # Get your user ID from @userinfobot on Telegram.
     allowed_users: ["746496145"]
 
-# Trigger policy — zero or many. Declaration-only in DSH V1.
+# Trigger policy — zero or many. Cron triggers are scheduled by the supervisor.
+# The brief is delivered to the allowlisted Telegram chat above.
 triggers:
   - kind: cron
     schedule: "0 8 * * *"     # 08:00 every day
-    timezone: "UTC"
+    timezone: "Europe/Madrid"
+    prompt: "Create today's morning brief."
 
 # Filesystem read/write boundaries. Required field.
 # `allowed_paths` — filesystem prefixes/globs; absolute and ~/ paths supported.

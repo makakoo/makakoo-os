@@ -12,6 +12,23 @@ complement, focused on user-visible changes and migration notes.
 
 ### Added
 
+- **Cron triggers actually run.** `AgentSpec.triggers[]` was accepted,
+  validated and written into the generated `spec.yaml`, but nothing scheduled
+  it: the shipped `scheduled-reporter` example described itself as an
+  "autonomous daemon" while instructing the reader to wire up an external
+  scheduler. The supervisor now hosts cron triggers next to the chat
+  transports and stops them with the slot. On each tick it sends the trigger's
+  `prompt` to the runtime under the stable session id `cron:<trigger_id>`, so a
+  schedule keeps its own conversation history — separate from every chat and
+  preserved across restarts. Two new spec fields: `prompt` (the wake message,
+  defaulted) and `deliver_to` (transport ids, empty means every channel). An
+  agent with no channels is a supported headless shape; its answer stays in the
+  session transcript and its real output is its side effects. Ticks are
+  skipped, never queued, so a run that overruns its own period cannot build a
+  backlog that never drains, and a tick missed because the machine slept is
+  reported and dropped rather than replayed. Webhook triggers remain
+  declaration-only.
+
 - **`makakoo agent create` installs the generated project's dependencies.**
   A create used to leave the user one undocumented `npm install` away from a
   working agent; `agent start` then failed with "dependencies missing" on what
@@ -88,6 +105,26 @@ complement, focused on user-visible changes and migration notes.
   Slack, Discord, WhatsApp, email, voice, webhook, and cron declarations
   remain preserved-but-not-started; `agent start` now names each transport it
   declines to start, and why.
+
+### Fixed
+
+- **Cron day-of-week ran a day early.** The underlying `cron` crate uses Quartz
+  numbering (Sunday = 1); every Makakoo doc and example uses standard crontab
+  numbering (Sunday = 0). Nothing translated between them, so `0 9 * * 1` —
+  shipped in `examples/agents/scheduled-reporter.yaml` under the comment
+  "09:00 every Monday" — would have fired every Sunday, silently and forever.
+  Day-of-week fields are now translated, including ranges, lists, steps,
+  wrapping ranges and `7`-as-Sunday.
+- **Cron day-of-month and day-of-week were intersected instead of unioned.**
+  POSIX/Vixie cron runs a job when *either* day field matches once both are
+  restricted; the crate requires both. `0 0 1 * 1` ("the 1st, or any Monday")
+  matched only Mondays that fell on the 1st — its next firing was five months
+  out, roughly six a decade instead of sixty a year.
+- **`agent create` rejected schedules the scheduler runs.** A second,
+  hand-written cron grammar validated specs before the real parser and was
+  stricter: `0 9 * * 7`, `0 9 * * Mon` and `0 9 * * 5-1` all failed create
+  while the supervisor executed them happily. The duplicate grammar is gone;
+  one parser now defines the dialect for both paths.
 
 ### Security
 

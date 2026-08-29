@@ -16,7 +16,8 @@
 //! | `scope.allowed_paths`  | `allowed_paths`                             |
 //! | `scope.forbidden_paths`| `forbidden_paths`                           |
 //! | `channels[]`           | `transports[]` (one TransportEntry each)    |
-//! | `triggers[]`           | (not scheduled by the DSH V1 runtime)       |
+//! | `triggers[cron]`       | `triggers[]` (one TriggerEntry each)        |
+//! | `triggers[webhook]`    | (declaration-only; no inbound listener)     |
 //!
 //! Channel → transport kind mapping (spec kind → slot kind):
 //!
@@ -50,6 +51,40 @@ impl AgentSpec {
             .map(|(i, c)| channel_to_transport(c, i, &self.name))
             .collect::<Result<Vec<_>>>()?;
 
+        // Cron triggers become scheduled TriggerEntries; webhook
+        // triggers stay declaration-only because they need an inbound
+        // HTTP listener that the supervisor does not yet host.
+        let mut triggers = Vec::new();
+        let mut cron_n = 0usize;
+        for t in &self.triggers {
+            if let super::TriggerSpec::Cron {
+                schedule,
+                timezone,
+                prompt,
+                deliver_to,
+            } = t
+            {
+                cron_n += 1;
+                triggers.push(crate::agents::slot::TriggerEntry {
+                    id: format!("cron-{cron_n}"),
+                    kind: "cron".into(),
+                    enabled: true,
+                    schedule: schedule.clone(),
+                    timezone: if timezone.trim().is_empty() {
+                        "UTC".into()
+                    } else {
+                        timezone.trim().into()
+                    },
+                    prompt: if prompt.trim().is_empty() {
+                        super::DEFAULT_CRON_PROMPT.into()
+                    } else {
+                        prompt.clone()
+                    },
+                    deliver_to: deliver_to.clone(),
+                });
+            }
+        }
+
         let slot = AgentSlot {
             slot_id: self.name.clone(),
             name: self.name.clone(),
@@ -63,6 +98,7 @@ impl AgentSpec {
             tools: self.tools.clone(),
             process_mode: "supervised_pair".into(),
             transports,
+            triggers,
             llm: Some(crate::agents::slot::LlmSection {
                 inherit: None,
                 overrides: Some(LlmOverride {
@@ -262,16 +298,24 @@ fn transport_id_stem(c: &super::ChannelSpec) -> &'static str {
 /// them. This warning prevents users from mistaking declaration for runtime
 /// activation.
 pub fn triggers_warning(spec: &AgentSpec) -> Option<String> {
-    if spec.triggers.is_empty() {
+    // Cron triggers are scheduled by the supervisor as of v0.4.0, so
+    // only the still-declarative kinds warrant a warning. Warning about
+    // a trigger that does work would train users to ignore the message.
+    let undelivered: Vec<String> = spec
+        .triggers
+        .iter()
+        .filter(|t| !matches!(t, super::TriggerSpec::Cron { .. }))
+        .map(trigger_kind_name)
+        .collect();
+    if undelivered.is_empty() {
         return None;
     }
-    let kinds: Vec<String> = spec.triggers.iter().map(trigger_kind_name).collect();
     Some(format!(
-        "spec '{}' declares {} trigger(s) ({}) — slot TOML does not represent them and \
-         the DeepSeek Harness V1 runtime does not schedule them",
+        "spec '{}' declares {} trigger(s) ({}) that the supervisor does not host — \
+         they are recorded in the generated spec.yaml but never fire",
         spec.name,
-        spec.triggers.len(),
-        kinds.join(", ")
+        undelivered.len(),
+        undelivered.join(", ")
     ))
 }
 
@@ -425,14 +469,74 @@ mod tests {
 
     #[test]
     fn triggers_warning_when_present() {
+        // Webhook triggers still have no supervisor-hosted listener.
+        let mut s = minimal_spec();
+        s.triggers = vec![TriggerSpec::Webhook {
+            path: "/hook".into(),
+            secret_env: "HOOK_SECRET".into(),
+        }];
+        let w = triggers_warning(&s);
+        assert!(w.is_some());
+        assert!(w.unwrap().contains("webhook"));
+    }
+
+    /// Cron is scheduled by the supervisor as of v0.4.0. Warning about it
+    /// would train the operator to ignore the message.
+    #[test]
+    fn a_cron_trigger_does_not_warn_because_it_actually_runs() {
         let mut s = minimal_spec();
         s.triggers = vec![TriggerSpec::Cron {
             schedule: "0 0 * * *".into(),
             timezone: "".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
         }];
-        let w = triggers_warning(&s);
-        assert!(w.is_some());
-        assert!(w.unwrap().contains("cron"));
+        assert!(triggers_warning(&s).is_none());
+    }
+
+    #[test]
+    fn a_cron_trigger_becomes_a_scheduled_slot_entry() {
+        let mut s = minimal_spec();
+        s.triggers = vec![TriggerSpec::Cron {
+            schedule: "0 9 * * 1".into(),
+            timezone: "Europe/Berlin".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
+        }];
+        let slot = s.to_slot().expect("converts");
+        assert_eq!(slot.triggers.len(), 1);
+        let t = &slot.triggers[0];
+        assert_eq!(t.kind, "cron");
+        assert_eq!(t.schedule, "0 9 * * 1");
+        assert_eq!(t.timezone, "Europe/Berlin");
+        assert!(t.enabled);
+        // An empty spec prompt must become a real wake message, not "".
+        assert!(!t.prompt.trim().is_empty());
+    }
+
+    #[test]
+    fn an_empty_timezone_becomes_utc_in_the_slot() {
+        let mut s = minimal_spec();
+        s.triggers = vec![TriggerSpec::Cron {
+            schedule: "0 9 * * *".into(),
+            timezone: "".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
+        }];
+        let slot = s.to_slot().expect("converts");
+        assert_eq!(slot.triggers[0].timezone, "UTC");
+    }
+
+    /// A webhook trigger must not silently occupy a cron slot id.
+    #[test]
+    fn a_webhook_trigger_produces_no_slot_entry() {
+        let mut s = minimal_spec();
+        s.triggers = vec![TriggerSpec::Webhook {
+            path: "/hook".into(),
+            secret_env: "HOOK_SECRET".into(),
+        }];
+        let slot = s.to_slot().expect("converts");
+        assert!(slot.triggers.is_empty());
     }
 
     #[test]

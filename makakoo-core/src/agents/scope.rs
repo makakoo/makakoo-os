@@ -412,6 +412,7 @@ mod tests {
             }],
             llm: None,
             runtime: None,
+            triggers: Vec::new(),
         }
     }
 

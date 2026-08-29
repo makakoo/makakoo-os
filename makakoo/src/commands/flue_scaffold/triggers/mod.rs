@@ -36,7 +36,9 @@ fn kind_slug(t: &TriggerSpec) -> &'static str {
 pub fn render(i: usize, t: &TriggerSpec) -> Result<String> {
     let _ = i; // index is encoded by the caller via rel_path/import_alias
     let body = match t {
-        TriggerSpec::Cron { schedule, timezone } => cron::render(schedule, timezone),
+        TriggerSpec::Cron {
+            schedule, timezone, ..
+        } => cron::render(schedule, timezone),
         TriggerSpec::Webhook { path, secret_env } => webhook::render(path, secret_env),
     };
     body.with_context(|| format!("rendering trigger {:?}", t))

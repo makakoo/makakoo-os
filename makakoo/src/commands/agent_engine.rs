@@ -326,6 +326,7 @@ mod tests {
             transports: vec![],
             llm: None,
             runtime: Some(runtime.clone()),
+            triggers: Vec::new(),
         };
         assert!(persist_slot(tmp.path(), &slot, &runtime).is_err());
         assert!(!project.exists());

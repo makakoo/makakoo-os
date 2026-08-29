@@ -146,15 +146,18 @@ fn validate_channel(c: &ChannelSpec) -> Result<()> {
 
 fn validate_trigger(t: &TriggerSpec) -> Result<()> {
     match t {
-        TriggerSpec::Cron { schedule, timezone } => {
+        TriggerSpec::Cron {
+            schedule, timezone, ..
+        } => {
             require_non_empty(schedule, "triggers[cron].schedule")?;
-            validate_cron(schedule)?;
-            if !timezone.is_empty() && !is_valid_timezone(timezone) {
-                return Err(MakakooError::InvalidInput(format!(
-                    "triggers[cron].timezone '{}' must be empty, 'UTC', or an IANA timezone (e.g. 'Europe/Berlin')",
-                    timezone
-                )));
-            }
+            // The ONLY dialect gate. A second, hand-written grammar
+            // used to run first and was stricter than the scheduler:
+            // it rejected `7`, `Mon` and wrapping ranges that the
+            // supervisor runs happily, so `agent create` refused
+            // schedules that would have worked. One parser, one dialect.
+            crate::agents::schedule::CronSchedule::parse(schedule, timezone).map_err(|e| {
+                MakakooError::InvalidInput(format!("triggers[cron]: {}", plain(&e)))
+            })?;
         }
         TriggerSpec::Webhook { path, secret_env } => {
             require_webhook_path(path, "triggers[webhook].path")?;
@@ -164,105 +167,14 @@ fn validate_trigger(t: &TriggerSpec) -> Result<()> {
     Ok(())
 }
 
-/// Validate a 5-field cron expression.
-fn validate_cron(schedule: &str) -> Result<()> {
-    let parts: Vec<&str> = schedule.split_whitespace().collect();
-    if parts.len() != 5 {
-        return Err(MakakooError::InvalidInput(format!(
-            "cron.schedule '{}' must have 5 space-separated fields (got {})",
-            schedule,
-            parts.len()
-        )));
+/// Strip the outer error-kind prefix so a nested message does not read
+/// "invalid input: ... invalid input: ...".
+fn plain(e: &MakakooError) -> String {
+    let t = e.to_string();
+    match t.split_once(": ") {
+        Some((_, rest)) if t.starts_with("invalid input") => rest.to_string(),
+        _ => t,
     }
-    // Field ranges per standard cron (no extensions like L/W/#).
-    let ranges = [(0u32, 59u32), (0, 23), (1, 31), (1, 12), (0, 6)];
-    for (i, field) in parts.iter().enumerate() {
-        let (lo, hi) = ranges[i];
-        if !is_valid_cron_field(field, lo, hi) {
-            return Err(MakakooError::InvalidInput(format!(
-                "cron.schedule field {} ('{}') is not a valid cron field (range {}-{})",
-                i + 1,
-                field,
-                lo,
-                hi
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Validate a single cron field against its numeric range.
-fn is_valid_cron_field(field: &str, min: u32, max: u32) -> bool {
-    if field == "*" {
-        return true;
-    }
-    // Split on optional /step first.
-    let (range_part, step) = match field.split_once('/') {
-        Some((r, s)) => {
-            let step = match s.parse::<u32>() {
-                Ok(n) if n > 0 => n,
-                _ => return false,
-            };
-            if step > max {
-                return false;
-            }
-            (r, step)
-        }
-        None => (field, 1u32),
-    };
-    // After stripping the step, the range can be `*` (e.g. `*/6`).
-    if range_part == "*" {
-        return true;
-    }
-    // Otherwise each comma-separated piece must be a single value or range.
-    for piece in range_part.split(',') {
-        if !is_valid_cron_piece(piece, min, max, step) {
-            return false;
-        }
-    }
-    true
-}
-
-fn is_valid_cron_piece(piece: &str, min: u32, max: u32, step: u32) -> bool {
-    let (lo, hi) = match piece.split_once('-') {
-        Some((l, h)) => {
-            let lo = l.parse::<u32>().ok();
-            let hi = h.parse::<u32>().ok();
-            match (lo, hi) {
-                (Some(lo), Some(hi)) if lo >= min && hi <= max && lo <= hi => (lo, hi),
-                _ => return false,
-            }
-        }
-        None => {
-            let n = match piece.parse::<u32>() {
-                Ok(n) if n >= min && n <= max => n,
-                _ => return false,
-            };
-            (n, n)
-        }
-    };
-    // step must divide the range (lo..=hi) evenly enough; we accept
-    // any step here since invalid steps simply produce no matches at
-    // runtime.
-    let _ = step;
-    let _ = (lo, hi);
-    true
-}
-
-fn is_valid_timezone(tz: &str) -> bool {
-    if tz == "UTC" || tz == "GMT" {
-        return true;
-    }
-    // IANA timezones look like "Region/City" or "Region/Subregion/City".
-    // We accept the structural shape; full validation requires the
-    // `tz` crate or chrono::Tz, neither of which is currently a
-    // dependency. V1 syntactic check is good enough — runtime
-    // validation happens at the Flue level via `Intl.DateTimeFormat`.
-    if !tz.contains('/') {
-        return false;
-    }
-    let re = Regex::new(r"^[A-Z][A-Za-z]+(/[A-Z][A-Za-z]+)*$").expect("regex valid");
-    re.is_match(tz)
 }
 
 fn validate_user_ids(ids: &[String], field: &str) -> Result<()> {
@@ -443,6 +355,8 @@ mod tests {
         s.triggers = vec![TriggerSpec::Cron {
             schedule: "0 */6 *".into(), // only 3 fields
             timezone: "".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
         }];
         let err = s.validate().unwrap_err();
         assert!(format!("{err}").contains("5 space-separated fields"));
@@ -454,6 +368,8 @@ mod tests {
         s.triggers = vec![TriggerSpec::Cron {
             schedule: "0 */6 * * *".into(),
             timezone: "UTC".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
         }];
         s.validate().unwrap();
     }
@@ -464,6 +380,8 @@ mod tests {
         s.triggers = vec![TriggerSpec::Cron {
             schedule: "60 * * * *".into(), // minute 60 invalid
             timezone: "".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
         }];
         assert!(s.validate().is_err());
     }
@@ -507,6 +425,8 @@ mod tests {
         s.triggers = vec![TriggerSpec::Cron {
             schedule: "0 0 * * *".into(),
             timezone: "Europe/Berlin".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
         }];
         s.validate().unwrap();
     }
@@ -517,6 +437,8 @@ mod tests {
         s.triggers = vec![TriggerSpec::Cron {
             schedule: "0 0 * * *".into(),
             timezone: "Berlin".into(),
+            prompt: String::new(),
+            deliver_to: Vec::new(),
         }];
         assert!(s.validate().is_err());
     }

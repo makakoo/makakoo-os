@@ -1038,7 +1038,12 @@ pub fn init_spec(_ctx: &CliContext, path: &std::path::Path, minimal: bool) -> an
             } else {
                 tz.trim().to_string()
             };
-            triggers.push(TriggerSpec::Cron { schedule, timezone });
+            triggers.push(TriggerSpec::Cron {
+                schedule,
+                timezone,
+                prompt: String::new(),
+                deliver_to: Vec::new(),
+            });
         }
         "none" | "n" | "" => {}
         _ => {

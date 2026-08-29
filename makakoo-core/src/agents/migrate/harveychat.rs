@@ -158,6 +158,7 @@ pub fn migrate(makakoo_home: &Path) -> Result<MigrationOutcome> {
         transports: vec![transport],
         llm: None,
         runtime: None,
+        triggers: Vec::new(),
     };
     AgentRegistry::create(makakoo_home, &slot)?;
 

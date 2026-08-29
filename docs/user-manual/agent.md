@@ -235,12 +235,26 @@ bridge only ever replies to an inbound message.
 Stopping the slot stops the transports with it; an in-flight answer is
 abandoned rather than delaying shutdown.
 
+### Cron triggers
+
+A `cron` trigger wakes the agent with no human in the loop. The supervisor
+hosts it next to the transports and stops it with them.
+
+| Aspect | Behaviour |
+|---|---|
+| Schedule | Standard 5-field cron, **Sunday = 0** (as crontab), with a real IANA timezone. A bad expression or timezone fails `agent create`. |
+| Session | `cron:<trigger_id>` — the schedule keeps its own history, separate from every chat and preserved across restarts. |
+| Delivery | To the channel allowlist only. `deliver_to` narrows it; an unknown name fails the trigger instead of sending nowhere. |
+| No channels | Valid. The answer is logged; the agent's output is its side effects. |
+| Overrun | Ticks are skipped, never queued — no backlog that can never drain. |
+| Missed tick | A tick late by more than 5 minutes (a sleeping laptop) is reported and dropped, not replayed. |
+| Bad trigger | Skipped by name with a reason; the agent's other triggers and channels still start. |
+
 ### Everything else is still declaration-only
 
-Slack, Discord, email, voice, webhook, and cron declarations remain in
-AgentSpec and AgentSlot without a listener or scheduler. `agent start` names
-every transport it declines to start and why, so a slot never looks connected
-when it is not.
+Slack, Discord, email, voice, and webhook declarations remain in AgentSpec and
+AgentSlot without a listener. `agent start` names every transport and trigger
+it declines to start and why, so a slot never looks connected when it is not.
 
 ## Slot id rules
 

@@ -193,6 +193,7 @@ mod tests {
                 engine: AgentRuntimeEngine::DeepseekHarness,
                 project_dir,
             }),
+            triggers: Vec::new(),
         }
     }
 

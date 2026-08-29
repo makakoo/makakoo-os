@@ -169,6 +169,7 @@ mod tests {
             transports: vec![telegram_block("telegram-main")],
             llm: None,
             runtime: None,
+            triggers: Vec::new(),
         }
     }
 

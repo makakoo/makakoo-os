@@ -276,6 +276,7 @@ fn scope_test_slot() -> crate::agents::AgentSlot {
         transports: vec![],
         llm: None,
         runtime: None,
+        triggers: Vec::new(),
     }
 }
 

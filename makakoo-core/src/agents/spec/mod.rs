@@ -112,6 +112,20 @@ pub enum TriggerSpec {
         /// Empty string means `UTC`.
         #[serde(default)]
         timezone: String,
+        /// Optional. The message delivered to the agent on each tick.
+        /// Empty means [`DEFAULT_CRON_PROMPT`] — the agent's own
+        /// `instructions` are expected to describe what a wake means.
+        #[serde(default)]
+        prompt: String,
+        /// Optional. Transport **ids** that receive the tick's answer
+        /// (not channel kinds). Ids are generated from the channel list
+        /// as `telegram-0`, `telegram-1`, ... — check the slot TOML.
+        /// Empty means every enabled channel; an agent with no channels
+        /// runs headless and the answer stays in the session transcript.
+        /// An id that matches nothing is reported at start and the
+        /// trigger still runs, delivering to whatever resolved.
+        #[serde(default)]
+        deliver_to: Vec<String>,
     },
     Webhook {
         path: String,
@@ -130,6 +144,12 @@ pub struct ScopeSpec {
     #[serde(default)]
     pub forbidden_paths: Vec<String>,
 }
+
+/// Sent to the agent when a cron trigger fires and declares no `prompt`.
+/// The agent's `instructions` carry the actual behaviour; this only says
+/// that the wake was scheduled rather than typed by a human.
+pub const DEFAULT_CRON_PROMPT: &str =
+    "Scheduled trigger fired. Perform your scheduled task as described in your instructions.";
 
 /// Name regex: lowercase letter or digit, then up to 62 of [a-z0-9-].
 pub const NAME_REGEX: &str = r"^[a-z0-9][a-z0-9-]{0,62}$";

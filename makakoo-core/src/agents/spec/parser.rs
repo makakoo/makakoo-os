@@ -196,7 +196,9 @@ scope: {}
         let s = parse_str(raw, Some("yaml")).unwrap();
         assert_eq!(s.triggers.len(), 2);
         match &s.triggers[0] {
-            TriggerSpec::Cron { schedule, timezone } => {
+            TriggerSpec::Cron {
+                schedule, timezone, ..
+            } => {
                 assert_eq!(schedule, "0 */6 * * *");
                 assert_eq!(timezone, "UTC");
             }

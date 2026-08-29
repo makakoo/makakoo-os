@@ -110,6 +110,52 @@ pub struct AgentSlot {
     /// their existing HarveyChat gateway behavior.
     #[serde(default)]
     pub runtime: Option<AgentRuntime>,
+
+    /// Zero-or-more schedules that wake this agent with no human in the
+    /// loop. Hosted by the supervisor alongside the transports.
+    #[serde(default, rename = "trigger")]
+    pub triggers: Vec<TriggerEntry>,
+}
+
+/// A schedule that starts the agent without a user message.
+///
+/// Serialised as `[[trigger]]` blocks in the slot TOML, mirroring
+/// `[[transport]]`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TriggerEntry {
+    /// Slot-unique trigger identifier (e.g. `"cron-1"`). Used as the
+    /// runtime session id and in log lines, so it must be stable across
+    /// restarts for the agent to keep its conversation history.
+    pub id: String,
+
+    /// `"cron"` in v1. `"webhook"` remains declaration-only.
+    pub kind: String,
+
+    /// Whether the supervisor should schedule this trigger. Default `true`.
+    #[serde(default = "default_true_trigger")]
+    pub enabled: bool,
+
+    /// Standard 5-field cron expression (`min hour dom mon dow`).
+    #[serde(default)]
+    pub schedule: String,
+
+    /// IANA timezone. Empty means `UTC`.
+    #[serde(default)]
+    pub timezone: String,
+
+    /// Message delivered to the runtime on each tick.
+    #[serde(default)]
+    pub prompt: String,
+
+    /// Transport ids that receive the answer. Empty means every enabled
+    /// transport; an agent with none runs headless and the answer is
+    /// logged rather than delivered.
+    #[serde(default)]
+    pub deliver_to: Vec<String>,
+}
+
+fn default_true_trigger() -> bool {
+    true
 }
 
 /// Container that wraps the `[llm.inherit]` (docs-only) and
@@ -152,6 +198,7 @@ impl AgentSlot {
             )));
         }
         validate_transport_list(&self.transports)?;
+        validate_trigger_list(&self.slot_id, &self.triggers)?;
         if let Some(runtime) = &self.runtime {
             if !runtime.project_dir.is_absolute() {
                 return Err(MakakooError::InvalidInput(format!(
@@ -224,6 +271,44 @@ impl AgentSlot {
 }
 
 /// `slot_id` must be ASCII letters / digits / `-` / `_`, 1–64 chars.
+/// Validate `[[trigger]]` blocks.
+///
+/// The id becomes the durable runtime session id (`cron:<id>`), so a
+/// duplicate would point two independent schedules at one conversation
+/// and let them interleave turns into it. Slot TOML is hand-editable,
+/// so this cannot be left to the generator.
+pub fn validate_trigger_list(slot_id: &str, triggers: &[TriggerEntry]) -> Result<()> {
+    let mut seen: Vec<&str> = Vec::new();
+    for t in triggers {
+        if t.id.trim().is_empty() {
+            return Err(MakakooError::InvalidInput(format!(
+                "slot '{slot_id}': every [[trigger]] needs a non-empty id"
+            )));
+        }
+        // Must survive as a runtime session id: `cron:` + id.
+        if t.id.len() > 96
+            || !t
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            return Err(MakakooError::InvalidInput(format!(
+                "slot '{slot_id}': trigger id '{}' must be 1-96 chars of [A-Za-z0-9._-]",
+                t.id
+            )));
+        }
+        if seen.contains(&t.id.as_str()) {
+            return Err(MakakooError::InvalidInput(format!(
+                "slot '{slot_id}': duplicate trigger id '{}' — ids become session ids, \
+                 so two schedules would share one conversation",
+                t.id
+            )));
+        }
+        seen.push(&t.id);
+    }
+    Ok(())
+}
+
 pub fn validate_slot_id(slot_id: &str) -> Result<()> {
     if slot_id.is_empty() {
         return Err(MakakooError::InvalidInput(
@@ -299,6 +384,7 @@ mod tests {
             transports: vec![telegram_block("telegram-main")],
             llm: None,
             runtime: None,
+            triggers: Vec::new(),
         }
     }
 
@@ -447,5 +533,35 @@ support_thread = true
             slot_path(home, "../escape"),
             registry_dir(home).join(".invalid-slot-id")
         );
+    }
+
+    #[test]
+    fn duplicate_trigger_ids_are_refused_because_ids_become_session_ids() {
+        let t = |id: &str| TriggerEntry {
+            id: id.into(),
+            kind: "cron".into(),
+            enabled: true,
+            schedule: "0 9 * * *".into(),
+            timezone: "UTC".into(),
+            prompt: "x".into(),
+            deliver_to: vec![],
+        };
+        let err = validate_trigger_list("s", &[t("cron-1"), t("cron-1")]).unwrap_err();
+        assert!(err.to_string().contains("duplicate trigger id"), "{err}");
+        validate_trigger_list("s", &[t("cron-1"), t("cron-2")]).expect("distinct ids are fine");
+    }
+
+    #[test]
+    fn a_trigger_id_that_would_break_the_session_id_is_refused() {
+        let bad = TriggerEntry {
+            id: "cron:1 oops".into(),
+            kind: "cron".into(),
+            enabled: true,
+            schedule: "0 9 * * *".into(),
+            timezone: "UTC".into(),
+            prompt: "x".into(),
+            deliver_to: vec![],
+        };
+        assert!(validate_trigger_list("s", &[bad]).is_err());
     }
 }

@@ -14,8 +14,8 @@
 #   makakoo agent start scheduled-reporter
 #   makakoo agent prompt scheduled-reporter "Generate this week's report"
 #
-# DSH V1 validates and preserves the cron declaration but does not schedule it.
-# Connect an external scheduler to `makakoo agent prompt` before relying on it.
+# The supervisor schedules the cron trigger below: `agent start` is all that
+# is needed. No external scheduler, no crontab entry.
 #
 # See docs/agents/spec.md for the full schema.
 
@@ -38,12 +38,14 @@ tools:
   - brain_search
   - write_file
 
-# No channels. The cron policy below is declaration-only in DSH V1.
+# No channels: this agent is headless. The scheduled answer is logged and the
+# real output is the report written to disk.
 
 triggers:
   - kind: cron
-    schedule: "0 9 * * 1"     # 09:00 every Monday
+    schedule: "0 9 * * 1"     # 09:00 every Monday (dow 1 = Monday, as crontab)
     timezone: "UTC"
+    prompt: "Write this week's report covering the last 7 days."
 
 scope:
   allowed_paths:
