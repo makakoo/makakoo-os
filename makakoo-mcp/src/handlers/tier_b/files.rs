@@ -32,7 +32,7 @@ use makakoo_core::capability::{AuditEntry, AuditLog, AuditResult, UserGrants};
 use crate::dispatch::{ToolContext, ToolHandler};
 use crate::jsonrpc::RpcError;
 
-use super::perms::baseline_roots_for;
+use super::perms::{baseline_roots_for, glob_form};
 
 /// Which layer authorised a write. Carried into the audit line so a later
 /// review can tell a baseline write from a granted one.
@@ -109,7 +109,10 @@ impl WriteFileHandler {
                 // bound to some agent is that agent's, not the operator's.
                 None => grant.bound_to_agent.is_none(),
             })
-            .find(|grant| grant.matches_path(resolved))
+            // Compared in glob form: the stored scope is a glob with `/`
+            // separators, so a Windows path must be presented the same
+            // way or it can never match the grant made for it.
+            .find(|grant| grant.matches_path(&glob_form(resolved)))
             .map(|grant| grant.id.clone())
     }
 
@@ -210,7 +213,9 @@ fn suggest_grant_scope(requested: &str) -> String {
     let path = Path::new(requested);
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     match parent {
-        Some(dir) => format!("{}/", dir.display()),
+        // The suggestion is meant to be pasted straight into
+        // grant_write_access, which stores it as a glob.
+        Some(dir) => format!("{}/", glob_form(&dir.display().to_string())),
         None => requested.to_string(),
     }
 }

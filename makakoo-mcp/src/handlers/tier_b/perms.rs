@@ -115,7 +115,29 @@ fn parse_duration_str(s: &str) -> Result<Option<Duration>, RpcError> {
     Ok(Some(dur))
 }
 
+/// Render a path for glob comparison.
+///
+/// Grant scopes are globs and always use `/` as the separator — the `**`
+/// suffix below is appended with one. A real Windows path uses `\`,
+/// which a glob matcher reads as an escape rather than a separator, so a
+/// stored grant could never match the path it was granted for and write
+/// grants were simply dead on that platform.
+///
+/// Normalised on Windows only: `\` is a legal character in a unix file
+/// name, and rewriting it there would corrupt real paths.
+pub(crate) fn glob_form(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        path.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
+}
+
 fn build_stored_scope(abs_path: &str) -> String {
+    let abs_path = glob_form(abs_path);
     if abs_path.contains('*') {
         format!("fs/write:{abs_path}")
     } else if abs_path.ends_with('/') {
