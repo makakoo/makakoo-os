@@ -513,7 +513,7 @@ mod tests {
         let now = Utc::now();
         grants.add(UserGrant {
             id: new_grant_id(now),
-            scope: format!("fs/write:{}/**", canon.display()),
+            scope: format!("fs/write:{}/**", glob_form(&canon.display().to_string())),
             created_at: now,
             expires_at: Some(now + chrono::Duration::hours(1)),
             label: "t3.1".into(),
@@ -525,7 +525,7 @@ mod tests {
         });
         grants.save().unwrap();
 
-        let target = canon.join("sprints/foo/SPRINT.md");
+        let target = canon.join("sprints").join("foo").join("SPRINT.md");
         let out = handler(&home)
             .call(json!({ "path": target.to_string_lossy(), "content": "progress" }))
             .await
@@ -591,7 +591,7 @@ mod tests {
         std::fs::create_dir_all(work.join("secrets")).unwrap();
         let canon = work.canonicalize().unwrap();
         let toml = slot_toml("scribe", &tpath(&canon), &tpath(&canon.join("secrets")));
-        let target = canon.join("secrets/keys.md");
+        let target = canon.join("secrets").join("keys.md");
 
         let error = as_slot(&home, "scribe", &toml, || async {
             handler(&home)
@@ -623,7 +623,10 @@ mod tests {
         let mut grants = UserGrants::load(home.path());
         grants.add(UserGrant {
             id: new_grant_id(now),
-            scope: format!("fs/write:{}/**", extra_canon.display()),
+            scope: format!(
+                "fs/write:{}/**",
+                glob_form(&extra_canon.display().to_string())
+            ),
             created_at: now,
             expires_at: Some(now + chrono::Duration::hours(1)),
             label: "slot-bound".into(),
@@ -669,7 +672,10 @@ mod tests {
         let mut grants = UserGrants::load(home.path());
         grants.add(UserGrant {
             id: new_grant_id(now),
-            scope: format!("fs/write:{}/**", extra_canon.display()),
+            scope: format!(
+                "fs/write:{}/**",
+                glob_form(&extra_canon.display().to_string())
+            ),
             created_at: now,
             expires_at: Some(now + chrono::Duration::hours(1)),
             label: "machine-global".into(),
@@ -709,7 +715,7 @@ mod tests {
         let mut grants = UserGrants::load(home.path());
         grants.add(UserGrant {
             id: new_grant_id(now),
-            scope: format!("fs/write:{}/**", secrets.display()),
+            scope: format!("fs/write:{}/**", glob_form(&secrets.display().to_string())),
             created_at: now,
             expires_at: Some(now + chrono::Duration::hours(1)),
             label: "over-broad".into(),
