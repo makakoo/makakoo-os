@@ -85,11 +85,16 @@ pub fn write_atomic_nofollow(target: &Path, content: &[u8]) -> io::Result<()> {
     // authorised directory and the write succeeds. The scope check ran
     // against the unresolved string, so this is a sandbox escape on one
     // platform only. Refuse the components explicitly on every platform.
-    if target.components().any(|c| {
-        matches!(
-            c,
-            std::path::Component::ParentDir | std::path::Component::CurDir
-        )
+    // A verbatim Windows path (`\\?\C:\...`, which is what
+    // `canonicalize` returns) gives `..` no special meaning, so Rust
+    // yields it as `Component::Normal("..")` rather than `ParentDir`.
+    // Matching only the typed variants would let the literal through on
+    // exactly the platform whose path handling made this check
+    // necessary in the first place.
+    if target.components().any(|c| match c {
+        std::path::Component::ParentDir | std::path::Component::CurDir => true,
+        std::path::Component::Normal(part) => part == ".." || part == ".",
+        _ => false,
     }) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
