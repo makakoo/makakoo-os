@@ -419,6 +419,17 @@ mod tests {
         AGENT_ID.scope(Some(slot_id.to_string()), f()).await
     }
 
+    /// Render a path as a TOML **literal** string.
+    ///
+    /// A Windows path interpolated into a double-quoted TOML string turns
+    /// its backslashes into escape sequences (`C:\\Users` starts an
+    /// invalid `\U`), so the slot TOML fails to parse and every scope
+    /// decision surfaces as an internal error instead of a refusal.
+    /// Literal strings do not process escapes.
+    fn tpath(p: &std::path::Path) -> String {
+        format!("'{}'", p.display())
+    }
+
     fn slot_toml(slot_id: &str, allowed: &str, forbidden: &str) -> String {
         format!(
             "slot_id = \"{slot_id}\"\n\
@@ -530,7 +541,7 @@ mod tests {
         let work = home.path().join("work");
         std::fs::create_dir_all(&work).unwrap();
         let canon = work.canonicalize().unwrap();
-        let toml = slot_toml("scribe", &format!("\"{}\"", canon.display()), "");
+        let toml = slot_toml("scribe", &tpath(&canon), "");
         let target = canon.join("notes.md");
 
         let out = as_slot(&home, "scribe", &toml, || async {
@@ -553,11 +564,7 @@ mod tests {
         let home = home();
         let work = home.path().join("work");
         std::fs::create_dir_all(&work).unwrap();
-        let toml = slot_toml(
-            "scribe",
-            &format!("\"{}\"", work.canonicalize().unwrap().display()),
-            "",
-        );
+        let toml = slot_toml("scribe", &tpath(&work.canonicalize().unwrap()), "");
         let target = home.path().join("data/reports/escape.md");
 
         let error = as_slot(&home, "scribe", &toml, || async {
@@ -578,11 +585,7 @@ mod tests {
         let work = home.path().join("work");
         std::fs::create_dir_all(work.join("secrets")).unwrap();
         let canon = work.canonicalize().unwrap();
-        let toml = slot_toml(
-            "scribe",
-            &format!("\"{}\"", canon.display()),
-            &format!("\"{}\"", canon.join("secrets").display()),
-        );
+        let toml = slot_toml("scribe", &tpath(&canon), &tpath(&canon.join("secrets")));
         let target = canon.join("secrets/keys.md");
 
         let error = as_slot(&home, "scribe", &toml, || async {
@@ -627,11 +630,7 @@ mod tests {
         });
         grants.save().unwrap();
 
-        let toml = slot_toml(
-            "scribe",
-            &format!("\"{}\"", work.canonicalize().unwrap().display()),
-            "",
-        );
+        let toml = slot_toml("scribe", &tpath(&work.canonicalize().unwrap()), "");
         let target = extra_canon.join("granted.md");
         let out = as_slot(&home, "scribe", &toml, || async {
             handler(&home)
@@ -677,11 +676,7 @@ mod tests {
         });
         grants.save().unwrap();
 
-        let toml = slot_toml(
-            "scribe",
-            &format!("\"{}\"", work.canonicalize().unwrap().display()),
-            "",
-        );
+        let toml = slot_toml("scribe", &tpath(&work.canonicalize().unwrap()), "");
         let target = extra_canon.join("nope.md");
         let error = as_slot(&home, "scribe", &toml, || async {
             handler(&home)
@@ -721,11 +716,7 @@ mod tests {
         });
         grants.save().unwrap();
 
-        let toml = slot_toml(
-            "scribe",
-            &format!("\"{}\"", canon.display()),
-            &format!("\"{}\"", secrets.display()),
-        );
+        let toml = slot_toml("scribe", &tpath(&canon), &tpath(&secrets));
         let target = secrets.join("keys.md");
         let error = as_slot(&home, "scribe", &toml, || async {
             handler(&home)
