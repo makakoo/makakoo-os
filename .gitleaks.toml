@@ -62,6 +62,13 @@ regexes = [
     '''sk-test-1234567890abcdef''',
     '''ghp_abc123def456''',
 
+    # agent_probe.rs `upstream_text_cannot_inject_terminal_escapes_or_echo_the_key`
+    # (2026-08-29). Several providers echo the offending key back inside a
+    # 401 body, so the test feeds a key-shaped literal to `excerpt()` and
+    # asserts it comes back `***redacted***`. The fixture has to LOOK like a
+    # key for the test to mean anything; it has never been a live credential.
+    '''sk-secret-abcdef123456''',
+
     # ElevenLabs *voice IDs* are public identifiers, not secrets
     # (telephony.py default voice config).
     '''cjVigY5qzO86Huf0OWal''',
