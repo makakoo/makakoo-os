@@ -88,13 +88,86 @@ write_docker_native_mcp_shim() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-HEADROOM_IMAGE="${HEADROOM_DOCKER_IMAGE:-ghcr.io/chopratejas/headroom:latest}"
+# Ensure GUI-launched CLIs with a stripped PATH can still resolve docker.
+export PATH="${PATH:-/usr/bin:/bin}:/usr/local/bin:/opt/homebrew/bin"
+
+# Follow the locally installed Docker wrapper's pinned image without sourcing it.
+# Explicit HEADROOM_DOCKER_IMAGE remains the highest-priority override.
+image_default=ghcr.io/chopratejas/headroom:latest
+wrapper_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+if [[ -r "${wrapper_dir}/headroom" ]]; then
+  candidate="$(sed -n 's/^HEADROOM_IMAGE_DEFAULT=//p' "${wrapper_dir}/headroom" | head -n 1)"
+  candidate="${candidate#\"}"; candidate="${candidate%\"}"
+  candidate="${candidate#\'}"; candidate="${candidate%\'}"
+  # Only literal Docker image references, never shell expressions.
+  if [[ "$candidate" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$ ]]; then
+    image_default="$candidate"
+  fi
+fi
+HEADROOM_IMAGE="${HEADROOM_DOCKER_IMAGE:-$image_default}"
 HEADROOM_CONTAINER_HOME="${HEADROOM_CONTAINER_HOME:-/tmp/headroom-home}"
 HEADROOM_HOST_HOME="${HOME:?}"
-HEADROOM_PROXY_URL_VALUE="${HEADROOM_PROXY_URL:-http://127.0.0.1:8787}"
+HEADROOM_CONTAINER_NAME="${HEADROOM_CONTAINER_NAME:-headroom-default}"
+# Loopback in host MCP configuration refers to the host, not a sidecar container.
+container_proxy_url() {
+  local url="$1"
+  if [[ "$url" =~ ^(https?://)(localhost|127\.0\.0\.1|\[::1\])([:/?#].*|$) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}host.docker.internal${BASH_REMATCH[3]}"
+  else
+    printf '%s' "$url"
+  fi
+}
+# Inside the persistent proxy container itself, direct loopback avoids the host bridge hop.
+exec_proxy_url() {
+  local url="$1"
+  if [[ "$url" =~ ^(http://)(localhost|127\.0\.0\.1|\[::1\]|host\.docker\.internal):8787([/?#].*|$) ]]; then
+    printf '%s' "http://127.0.0.1:8787${BASH_REMATCH[3]}"
+  else
+    container_proxy_url "$url"
+  fi
+}
+raw_proxy_env="${HEADROOM_PROXY_URL:-http://127.0.0.1:8787}"
+HEADROOM_PROXY_URL_VALUE="$(container_proxy_url "${raw_proxy_env}")"
+HEADROOM_EXEC_PROXY_URL_VALUE="$(exec_proxy_url "${raw_proxy_env}")"
+# CLI options override the environment, so normalize both forms as well.
+mcp_args=()
+exec_mcp_args=()
+while (( $# )); do
+  case "$1" in
+    --proxy-url)
+      if (( $# < 2 )); then
+        printf '%s\n' 'headroom-mcp-stdio: --proxy-url requires a value' >&2
+        exit 2
+      fi
+      mcp_args+=("$1" "$(container_proxy_url "$2")")
+      exec_mcp_args+=("$1" "$(exec_proxy_url "$2")")
+      shift 2 ;;
+    --proxy-url=*)
+      val="${1#*=}"
+      mcp_args+=("--proxy-url=$(container_proxy_url "$val")")
+      exec_mcp_args+=("--proxy-url=$(exec_proxy_url "$val")")
+      shift ;;
+    *)
+      mcp_args+=("$1")
+      exec_mcp_args+=("$1")
+      shift ;;
+  esac
+done
+
+# Fast path: reuse the running persistent proxy container instead of spawning
+# a disposable container per CLI session. Skip when an explicit image is pinned
+# or the caller opts out via HEADROOM_MCP_NO_EXEC=1.
+if [[ -z "${HEADROOM_DOCKER_IMAGE:-}" && "${HEADROOM_MCP_NO_EXEC:-0}" != "1" ]]; then
+  if [[ "$(docker inspect -f '{{.State.Running}}' "${HEADROOM_CONTAINER_NAME}" 2>/dev/null || true)" == "true" ]]; then
+    exec docker exec -i \
+      -e "HEADROOM_PROXY_URL=${HEADROOM_EXEC_PROXY_URL_VALUE}" \
+      "${HEADROOM_CONTAINER_NAME}" \
+      headroom mcp serve ${exec_mcp_args[@]+"${exec_mcp_args[@]}"}
+  fi
+fi
 
 mkdir -p \
-  "${HEADROOM_HOST_HOME}/.headroom" \
+  "${HEADROOM_HOST_HOME}/.headroom/.cache" \
   "${HEADROOM_HOST_HOME}/.claude" \
   "${HEADROOM_HOST_HOME}/.codex" \
   "${HEADROOM_HOST_HOME}/.gemini"
@@ -104,11 +177,13 @@ if command -v id >/dev/null 2>&1; then
   user_args=(--user "$(id -u):$(id -g)")
 fi
 
-docker run --rm -i \
+exec docker run --rm --no-healthcheck -i \
   "${user_args[@]}" \
   -w /workspace \
   --env "HOME=${HEADROOM_CONTAINER_HOME}" \
   --env "PYTHONUNBUFFERED=1" \
+  --env "XDG_CACHE_HOME=${HEADROOM_CONTAINER_HOME}/.headroom/.cache" \
+  --env "HF_HOME=${HEADROOM_CONTAINER_HOME}/.headroom/.cache/huggingface" \
   --env "HEADROOM_WORKSPACE_DIR=${HEADROOM_CONTAINER_HOME}/.headroom" \
   --env "HEADROOM_CONFIG_DIR=${HEADROOM_CONTAINER_HOME}/.headroom/config" \
   --env "HEADROOM_PROXY_URL=${HEADROOM_PROXY_URL_VALUE}" \
@@ -119,7 +194,7 @@ docker run --rm -i \
   -v "${HEADROOM_HOST_HOME}/.gemini:${HEADROOM_CONTAINER_HOME}/.gemini" \
   --entrypoint headroom \
   "${HEADROOM_IMAGE}" \
-  mcp serve "$@"
+  mcp serve ${mcp_args[@]+"${mcp_args[@]}"}
 EOF
   chmod +x "$shim"
   printf '%s\n' "$shim"
