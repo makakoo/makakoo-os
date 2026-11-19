@@ -14,28 +14,28 @@
 class Makakoo < Formula
   desc "Autonomous cognitive extension for any AI CLI"
   homepage "https://makakoo.com"
-  version "0.4.0"
+  version "0.4.1"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-apple-darwin.tar.gz"
-      sha256 "a9fb6ca7e12ad087f6109233ad26b488b05fde91c5e6a4dba69cea61b0faa84b"
+      sha256 "65c1c32a3b430ff7e7aa6148454999389ce44947cf18ffba8d73c1ab1b085d37"
     end
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-apple-darwin.tar.gz"
-      sha256 "5b34fd21e1c67cadd2b6195a1ec698975fa8b2f5aad8d30b335fa526dab62964"
+      sha256 "b0f63d2938d890e13ac3b0702026f0cd28f3d40b8276138c4e340bf4a34aa488"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "222d481d9e25e8116fc17e78756c179bc63c991571faf54e656bf0634258ee05"
+      sha256 "7e02b3422b19ad212c51e992f07513ed2f5c1ab8c0b2c91fd4c7422aa8102e0b"
     end
     on_arm do
       url "https://github.com/makakoo/makakoo-os/releases/download/v#{version}/makakoo-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "2c821c9794d00518c4aa42fa145a13eb3018db64a4af79a9ef26ed0897b5be97"
+      sha256 "52baf839647269a0a1c5aa31f12a2c0d662741d177f419c7f9ac851540ec9a24"
     end
   end
 
