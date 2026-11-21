@@ -174,7 +174,10 @@ pub enum SkipReason {
 }
 
 impl SkipReason {
-    pub fn as_str(self) -> &'static str {
+    /// Canonical list of every skip reason in wire order (single source of truth).
+    pub const ALL: [Self; 3] = [Self::Password, Self::TooBig, Self::Unreadable];
+
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Password => "password",
             Self::TooBig => "too_big",
@@ -183,14 +186,10 @@ impl SkipReason {
     }
 
     pub fn parse(raw: &str) -> Result<Self> {
-        match raw {
-            "password" => Ok(Self::Password),
-            "too_big" => Ok(Self::TooBig),
-            "unreadable" => Ok(Self::Unreadable),
-            other => Err(MakakooError::invalid_input(format!(
-                "invalid skip reason: {other:?}"
-            ))),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.as_str() == raw)
+            .ok_or_else(|| MakakooError::invalid_input(format!("invalid skip reason: {raw:?}")))
     }
 }
 

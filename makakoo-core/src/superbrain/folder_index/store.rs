@@ -294,7 +294,7 @@ impl FolderIndex {
         upsert_file_state_tx(&conn, file_path, file_version, "indexed", None, None, None)
     }
 
-    /// Record a file as `skipped` (`password`, `too_big`, `unreadable`) and
+    /// Record a file as `skipped` with an explicit [`SkipReason`] and
     /// purge any stale chunks from prior versions.
     pub fn mark_file_skipped(
         &self,

@@ -281,17 +281,18 @@ impl ToolHandler for FolderIndexMarkSkippedHandler {
     }
 
     fn description(&self) -> &str {
-        "Mark a file in a folder index as skipped with an explicit reason (password, too_big, or unreadable) and purge any stale chunks."
+        "Mark a file in a folder index as skipped with an explicit SkipReason and purge any stale chunks."
     }
 
     fn input_schema(&self) -> Value {
+        let reasons = SkipReason::ALL.map(SkipReason::as_str);
         json!({
             "type": "object",
             "properties": {
                 "folder_id": { "type": "string" },
                 "file_path": { "type": "string" },
                 "file_version": { "type": "string" },
-                "reason": { "type": "string", "enum": ["password", "too_big", "unreadable"] },
+                "reason": { "type": "string", "enum": reasons },
                 "dim": { "type": "integer", "default": 512, "minimum": 1, "maximum": 512 },
                 "flush": { "type": "boolean", "default": true }
             },

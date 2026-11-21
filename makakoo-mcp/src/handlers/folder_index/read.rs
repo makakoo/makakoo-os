@@ -177,7 +177,7 @@ mod tests {
     use super::super::register_folder_index;
     use super::*;
     use crate::dispatch::ToolRegistry;
-    use makakoo_core::superbrain::folder_index::FolderIndexManager;
+    use makakoo_core::superbrain::folder_index::{FolderIndexManager, SkipReason};
     use sha2::{Digest, Sha256};
 
     fn setup() -> (tempfile::TempDir, ToolRegistry) {
@@ -256,14 +256,14 @@ mod tests {
                     "folder_id": "proj-1",
                     "file_path": "locked.pdf",
                     "file_version": "v1",
-                    "reason": "password",
+                    "reason": SkipReason::Password.as_str(),
                     "dim": 32
                 }),
             )
             .await
             .unwrap();
         assert_eq!(skip["state"], "skipped");
-        assert_eq!(skip["reason"], "password");
+        assert_eq!(skip["reason"], SkipReason::Password.as_str());
 
         let states = reg
             .call(
@@ -282,5 +282,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rem["removed"], true);
+    }
+
+    #[tokio::test]
+    async fn mark_skipped_schema_and_handler_derive_from_skip_reason() {
+        let (_tmp, reg) = setup();
+        let desc = reg
+            .list()
+            .into_iter()
+            .find(|t| t.name == "folder_index_mark_skipped")
+            .expect("folder_index_mark_skipped registered");
+        let schema_enum = desc.input_schema["properties"]["reason"]["enum"]
+            .as_array()
+            .expect("reason enum array");
+        let expected: Vec<Value> = SkipReason::ALL.iter().map(|r| json!(r.as_str())).collect();
+        assert_eq!(schema_enum, &expected);
+
+        for (idx, reason) in SkipReason::ALL.iter().enumerate() {
+            let res = reg
+                .call(
+                    "folder_index_mark_skipped",
+                    json!({
+                        "folder_id": "proj-skip",
+                        "file_path": format!("file-{idx}.pdf"),
+                        "file_version": "v1",
+                        "reason": reason.as_str(),
+                        "dim": 32
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res["state"], "skipped");
+            assert_eq!(res["reason"], reason.as_str());
+        }
+
+        let err = reg
+            .call(
+                "folder_index_mark_skipped",
+                json!({
+                    "folder_id": "proj-skip",
+                    "file_path": "bad.pdf",
+                    "file_version": "v1",
+                    "reason": "unsupported",
+                    "dim": 32
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, crate::jsonrpc::INVALID_PARAMS);
     }
 }

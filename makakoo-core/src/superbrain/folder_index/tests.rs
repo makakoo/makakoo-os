@@ -326,7 +326,7 @@ fn file_states_cover_indexing_indexed_skipped_and_remove() {
         .is_empty());
     let skipped_json = serde_json::to_value(idx.file_state("big.pdf").unwrap().unwrap()).unwrap();
     assert_eq!(skipped_json["state"], "skipped");
-    assert_eq!(skipped_json["reason"], "password");
+    assert_eq!(skipped_json["reason"], SkipReason::Password.as_str());
 
     idx.mark_file_skipped("huge.pdf", "v1", SkipReason::TooBig)
         .unwrap();
@@ -337,6 +337,32 @@ fn file_states_cover_indexing_indexed_skipped_and_remove() {
     assert!(idx.remove_file("big.pdf").unwrap());
     assert!(idx.file_state("big.pdf").unwrap().is_none());
     assert!(!idx.remove_file("nonexistent.pdf").unwrap());
+}
+
+#[test]
+fn skip_reason_wire_values_are_pinned_and_roundtrip() {
+    assert_eq!(SkipReason::ALL.len(), 3);
+    assert_eq!(SkipReason::ALL[0], SkipReason::Password);
+    assert_eq!(SkipReason::ALL[1], SkipReason::TooBig);
+    assert_eq!(SkipReason::ALL[2], SkipReason::Unreadable);
+
+    assert_eq!(SkipReason::Password.as_str(), "password");
+    assert_eq!(SkipReason::TooBig.as_str(), "too_big");
+    assert_eq!(SkipReason::Unreadable.as_str(), "unreadable");
+
+    for reason in SkipReason::ALL {
+        let wire = reason.as_str();
+        assert_eq!(SkipReason::parse(wire).unwrap(), reason);
+        let serialized = serde_json::to_value(reason).unwrap();
+        assert_eq!(serialized, serde_json::json!(wire));
+        assert_eq!(
+            serde_json::from_value::<SkipReason>(serialized).unwrap(),
+            reason
+        );
+    }
+
+    assert!(SkipReason::parse("other").is_err());
+    assert!(serde_json::from_value::<SkipReason>(serde_json::json!("other")).is_err());
 }
 
 #[test]
