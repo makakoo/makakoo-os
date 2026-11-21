@@ -1445,6 +1445,30 @@ pub enum DistroCmd {
         #[arg(long)]
         include_disabled: bool,
     },
+
+    /// Lint a distro file against the restricted headless capability policy.
+    /// Exits 0 if clean, 1 if any resolved plugin declares exec/shell,
+    /// secret reads, MCP registration, Brain delete, unlisted network grants,
+    /// or send tools.
+    Lint {
+        /// Path to the distro TOML file (e.g. `distros/minimal.toml`).
+        path: std::path::PathBuf,
+
+        /// Directory containing `<plugin-name>/plugin.toml` manifests.
+        /// Defaults to `plugins-core/` resolved from `$MAKAKOO_PLUGINS_CORE`
+        /// or the current checkout.
+        #[arg(long)]
+        plugins_root: Option<std::path::PathBuf>,
+
+        /// Allowed network scope globs (repeatable), e.g.
+        /// `--allow-net http://127.0.0.1:18080/*`.
+        #[arg(long = "allow-net")]
+        allow_net: Vec<String>,
+
+        /// Emit machine-readable JSON output to stdout.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// `makakoo secret <subcommand>`. Writes go through the OS keyring
@@ -2562,6 +2586,48 @@ mod tests {
                 cmd: crate::daemon::DaemonCmd::Restart,
             } => {}
             _ => panic!("expected Daemon::Restart"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_run_headless() {
+        let cli = Cli::try_parse_from(["makakoo", "daemon", "run", "--headless"]).unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                cmd: crate::daemon::DaemonCmd::Run { headless },
+            } => assert!(headless),
+            _ => panic!("expected Daemon::Run"),
+        }
+    }
+
+    #[test]
+    fn parse_distro_lint() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "distro",
+            "lint",
+            "distros/minimal.toml",
+            "--allow-net",
+            "http://127.0.0.1:18080/*",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Commands::Distro {
+                cmd:
+                    DistroCmd::Lint {
+                        path,
+                        plugins_root,
+                        allow_net,
+                        json,
+                    },
+            } => {
+                assert_eq!(path, std::path::PathBuf::from("distros/minimal.toml"));
+                assert!(plugins_root.is_none());
+                assert_eq!(allow_net, vec!["http://127.0.0.1:18080/*".to_string()]);
+                assert!(json);
+            }
+            _ => panic!("expected Distro::Lint"),
         }
     }
 
