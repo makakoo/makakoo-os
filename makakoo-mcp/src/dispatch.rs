@@ -72,6 +72,7 @@ use makakoo_core::event_bus::PersistentEventBus;
 use makakoo_core::llm::LlmClient;
 use makakoo_core::nursery::{BuddyTracker, MascotRegistry};
 use makakoo_core::outbound::OutboundQueue;
+use makakoo_core::superbrain::folder_index::FolderIndexManager;
 use makakoo_core::superbrain::graph::GraphStore;
 use makakoo_core::superbrain::memory_stack::MemoryStack;
 use makakoo_core::superbrain::promoter::MemoryPromoter;
@@ -128,6 +129,7 @@ pub struct ToolContext {
     pub agents: Option<Arc<AgentScaffold>>,
     pub swarm_state: Option<Arc<SwarmState>>,
     pub channel_ops: Option<Arc<ChannelOpsRegistry>>,
+    pub folder_index: Option<Arc<FolderIndexManager>>,
 }
 
 impl ToolContext {
@@ -153,6 +155,7 @@ impl ToolContext {
             agents: None,
             swarm_state: None,
             channel_ops: None,
+            folder_index: None,
         }
     }
 
@@ -236,6 +239,11 @@ impl ToolContext {
     #[allow(dead_code)]
     pub fn with_channel_ops(mut self, registry: Arc<ChannelOpsRegistry>) -> Self {
         self.channel_ops = Some(registry);
+        self
+    }
+    #[allow(dead_code)]
+    pub fn with_folder_index(mut self, manager: Arc<FolderIndexManager>) -> Self {
+        self.folder_index = Some(manager);
         self
     }
 }
@@ -331,6 +339,14 @@ impl ToolRegistry {
     #[allow(dead_code)]
     pub fn contains(&self, name: &str) -> bool {
         self.handlers.contains_key(name)
+    }
+
+    /// Retain only handlers whose tool name satisfies `keep`.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&str) -> bool,
+    {
+        self.handlers.retain(|name, _| keep(name));
     }
 }
 

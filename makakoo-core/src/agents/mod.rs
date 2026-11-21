@@ -63,7 +63,9 @@ pub use slot::{
     checked_slot_path, registry_dir, slot_path, validate_slot_id, AgentRuntime, AgentRuntimeEngine,
     AgentSlot,
 };
-pub use tool_catalog::{is_known_tool, unknown_tools, TOOL_CATALOG, WIZARD_TOOL_CHOICES};
+pub use tool_catalog::{
+    is_known_tool, unknown_tools, HEADLESS_TOOL_ALLOWLIST, TOOL_CATALOG, WIZARD_TOOL_CHOICES,
+};
 
 pub use lifecycle::{AgentLaunchSpec, AgentProcess, AgentSupervisor, HealthStatus};
 pub use scaffold::{AgentKind, AgentScaffold, AgentSpec};

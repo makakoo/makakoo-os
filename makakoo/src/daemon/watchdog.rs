@@ -48,11 +48,16 @@ struct HeartbeatRecord {
     tick_no: u64,
 }
 
-fn hostname() -> String {
+fn hostname_for_mode(headless: bool) -> String {
     std::env::var("HOSTNAME")
         .ok()
-        .or_else(|| std::env::var("HOST").ok())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("HOST").ok().filter(|s| !s.trim().is_empty()))
         .unwrap_or_else(|| {
+            if headless {
+                // Headless engine mode never spawns external binaries.
+                return "headless".to_string();
+            }
             // Fall back to POSIX gethostname via std::process::Command; if
             // that fails, "unknown" is fine for the heartbeat.
             std::process::Command::new("hostname")
@@ -156,6 +161,25 @@ pub fn spawn(
     interval_dur: Duration,
     shutdown: Arc<Notify>,
 ) -> tokio::task::JoinHandle<()> {
+    spawn_with_mode(home, interval_dur, shutdown, false)
+}
+
+/// Spawn the watchdog loop in subprocess-free headless mode (never invokes
+/// the `hostname` binary).
+pub fn spawn_headless(
+    home: PathBuf,
+    interval_dur: Duration,
+    shutdown: Arc<Notify>,
+) -> tokio::task::JoinHandle<()> {
+    spawn_with_mode(home, interval_dur, shutdown, true)
+}
+
+fn spawn_with_mode(
+    home: PathBuf,
+    interval_dur: Duration,
+    shutdown: Arc<Notify>,
+    headless: bool,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let path = heartbeat_path(&home);
         let start = Instant::now();
@@ -183,7 +207,7 @@ pub fn spawn(
                         ts: Utc::now().to_rfc3339(),
                         daemon_uptime_s: start.elapsed().as_secs(),
                         makakoo_home: home.display().to_string(),
-                        host: hostname(),
+                        host: hostname_for_mode(headless),
                         tick_no,
                     };
                     append_record(&path, &record);
@@ -259,5 +283,21 @@ mod tests {
         maybe_compact(&path);
         let after = std::fs::metadata(&path).unwrap().len();
         assert_eq!(before, after, "small file must be untouched by compactor");
+    }
+
+    #[test]
+    fn headless_hostname_falls_back_without_spawning_subprocess() {
+        let prev_hn = std::env::var("HOSTNAME").ok();
+        let prev_h = std::env::var("HOST").ok();
+        std::env::remove_var("HOSTNAME");
+        std::env::remove_var("HOST");
+        let got = hostname_for_mode(true);
+        if let Some(v) = prev_hn {
+            std::env::set_var("HOSTNAME", v);
+        }
+        if let Some(v) = prev_h {
+            std::env::set_var("HOST", v);
+        }
+        assert_eq!(got, "headless");
     }
 }
