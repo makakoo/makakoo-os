@@ -35,6 +35,12 @@ pub async fn run(ctx: &CliContext, cmd: DistroCmd) -> anyhow::Result<i32> {
             force,
             include_disabled,
         } => save(ctx, &name, out, force, include_disabled),
+        DistroCmd::Lint {
+            path,
+            plugins_root,
+            allow_net,
+            json,
+        } => crate::commands::distro_lint::run(path, plugins_root, allow_net, json),
     }
 }
 

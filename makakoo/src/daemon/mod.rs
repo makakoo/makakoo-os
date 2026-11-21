@@ -50,7 +50,27 @@ pub enum DaemonCmd {
     /// Run the daemon in the foreground. This is what the OS auto-start
     /// hook actually invokes — not meant for interactive use, though it
     /// works fine for debugging via Ctrl-C.
-    Run,
+    Run {
+        /// Headless engine mode (also enabled via `MAKAKOO_HEADLESS=1`):
+        /// runs Superbrain integrity check, folder-index directory readiness,
+        /// and subprocess-free heartbeat only. Disables the SANCHO clock,
+        /// plugin tasks, and agent supervisor, and refuses startup if any
+        /// enabled plugin declares `exec/*`.
+        #[arg(long, default_value_t = false)]
+        headless: bool,
+    },
+}
+
+fn is_headless_env() -> bool {
+    std::env::var("MAKAKOO_HEADLESS")
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 pub async fn dispatch(cmd: DaemonCmd) -> Result<()> {
@@ -60,7 +80,13 @@ pub async fn dispatch(cmd: DaemonCmd) -> Result<()> {
         DaemonCmd::Status => status::run().await,
         DaemonCmd::Restart => restart::run().await,
         DaemonCmd::Logs { lines } => status::tail_logs(lines).await,
-        DaemonCmd::Run => run_forever().await,
+        DaemonCmd::Run { headless } => {
+            if headless || is_headless_env() {
+                run_headless().await
+            } else {
+                run_forever().await
+            }
+        }
     }
 }
 
@@ -184,6 +210,102 @@ pub async fn run_forever() -> Result<()> {
     Ok(())
 }
 
+/// Fail closed if any enabled plugin declares an `exec/*` capability or shell
+/// runtime in headless mode.
+pub(crate) fn validate_headless_plugins(
+    plugins: &makakoo_core::plugin::PluginRegistry,
+) -> Result<()> {
+    use makakoo_core::capability::verb::normalize_grant;
+    use makakoo_core::plugin::manifest::PluginLanguage;
+
+    let mut offenders = Vec::new();
+    for p in plugins.plugins().iter().filter(|p| p.enabled) {
+        if p.manifest.plugin.language == PluginLanguage::Shell {
+            offenders.push(format!("{} (language=shell)", p.manifest.plugin.name));
+            continue;
+        }
+        for raw in &p.manifest.capabilities.grants {
+            if let Ok(parsed) = normalize_grant(raw) {
+                if parsed.verb.starts_with("exec/") {
+                    offenders.push(format!("{} ({})", p.manifest.plugin.name, parsed.verb));
+                    break;
+                }
+            }
+        }
+    }
+    if !offenders.is_empty() {
+        anyhow::bail!(
+            "headless daemon refused startup: enabled plugin(s) declare exec capability: {}",
+            offenders.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Headless startup preflight: validates no enabled plugin has `exec/*`,
+/// probes `superbrain.db` integrity, and ensures the folder-index root exists.
+/// Does not start SANCHO's clock, plugin tasks, or the agent supervisor.
+pub(crate) fn headless_preflight(home: &std::path::Path) -> Result<std::path::PathBuf> {
+    use makakoo_core::plugin::PluginRegistry;
+    use makakoo_core::superbrain::store::SuperbrainStore;
+
+    let plugins = PluginRegistry::load_default(home)?;
+    validate_headless_plugins(&plugins)?;
+
+    let db_path = home.join("data").join("superbrain.db");
+    let store = SuperbrainStore::open(&db_path)?;
+    {
+        let arc = store.conn_arc();
+        let conn = arc.lock().expect("integrity probe conn poisoned");
+        match conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)) {
+            Ok(status) if status == "ok" => {
+                info!("headless superbrain.db integrity check: ok");
+            }
+            Ok(status) => {
+                error!(first_issue = %status, "headless superbrain.db integrity check FAILED");
+            }
+            Err(e) => {
+                error!(error = %e, "headless superbrain.db integrity check could not run");
+            }
+        }
+    }
+
+    let folder_index_dir = std::env::var("MAKAKOO_FOLDER_INDEX_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join("data").join("folder-indexes"));
+    std::fs::create_dir_all(&folder_index_dir)?;
+    Ok(folder_index_dir)
+}
+
+/// Headless daemon main loop: Superbrain integrity probe, folder-index
+/// directory readiness, and subprocess-free heartbeat only. No SANCHO clock,
+/// no plugin task scheduling, no agent supervisor, and no OS keyring/launchd.
+pub async fn run_headless() -> Result<()> {
+    let home = makakoo_core::platform::makakoo_home();
+    let folder_index_dir = headless_preflight(&home)?;
+    info!(
+        makakoo_home = %home.display(),
+        folder_index_dir = %folder_index_dir.display(),
+        "makakoo daemon starting in headless mode (sancho clock off, agent supervisor off)"
+    );
+
+    let watchdog_shutdown = Arc::new(tokio::sync::Notify::new());
+    let watchdog_handle = watchdog::spawn_headless(
+        home,
+        watchdog::DEFAULT_WATCHDOG_INTERVAL,
+        Arc::clone(&watchdog_shutdown),
+    );
+
+    tokio::signal::ctrl_c().await?;
+    info!("shutdown signal received — stopping headless watchdog");
+    watchdog_shutdown.notify_waiters();
+    let _ = watchdog_handle.await;
+    info!("headless daemon exiting");
+    Ok(())
+}
+
 /// Tiny cancellation helper to avoid pulling in `tokio_util` as a
 /// dep. One-shot signal driven by an atomic flag + a Notify so the
 /// supervisor loop can wake on shutdown rather than waiting for the
@@ -234,5 +356,69 @@ mod tests {
     fn daemon_state_initial_is_reasonable() {
         // Just make sure current_state() resolves without panicking.
         let _ = status::current_state();
+    }
+
+    fn write_test_plugin(home: &std::path::Path, name: &str, grants: &str, extra: &str) {
+        let dir = home.join("plugins").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = format!(
+            r#"
+[plugin]
+name = "{name}"
+version = "0.1.0"
+kind = "skill"
+language = "python"
+
+[source]
+path = "plugins-core/{name}"
+
+[abi]
+skill = "^1.0"
+
+[entrypoint]
+run = "python3 run.py"
+
+[capabilities]
+grants = [{grants}]
+{extra}
+"#
+        );
+        std::fs::write(dir.join("plugin.toml"), body).unwrap();
+    }
+
+    #[test]
+    fn headless_rejects_enabled_plugin_with_exec_shell() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_plugin(
+            tmp.path(),
+            "shell-runner",
+            "\"exec/shell\"",
+            "[state]\ndir = \"$MAKAKOO_HOME/state/shell-runner\"\nretention = \"purge_on_uninstall\"\n",
+        );
+        let err = headless_preflight(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("exec/shell"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn headless_rejects_enabled_plugin_with_exec_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_plugin(tmp.path(), "bin-runner", "\"exec/binary:curl\"", "");
+        let err = headless_preflight(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("exec/binary"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn headless_preflight_allows_clean_plugins_and_initializes_folder_index_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_plugin(tmp.path(), "clean-reader", "\"brain/read\"", "");
+        let fi_dir = headless_preflight(tmp.path()).unwrap();
+        assert!(fi_dir.is_dir());
+        assert!(tmp.path().join("data").join("superbrain.db").is_file());
     }
 }

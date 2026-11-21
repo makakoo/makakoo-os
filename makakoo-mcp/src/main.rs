@@ -77,6 +77,65 @@ struct Args {
     /// first run if absent (pubkey printed to stderr; share with peers).
     #[arg(long, value_name = "PATH")]
     signing_key: Option<std::path::PathBuf>,
+
+    /// Run in headless engine mode (also enabled via `MAKAKOO_HEADLESS=1`).
+    /// Exposes only Brain and Folder Index tools (zero send, exec, browse,
+    /// pi, infect, agent, swarm, or nursery tools) and skips opening desktop
+    /// stores.
+    #[arg(long, default_value_t = false)]
+    headless: bool,
+
+    /// Base directory for per-folder compact vector indexes. Default
+    /// `$MAKAKOO_FOLDER_INDEX_DIR` or `$MAKAKOO_HOME/data/folder-indexes`.
+    #[arg(long, value_name = "DIR")]
+    folder_index_dir: Option<std::path::PathBuf>,
+}
+
+fn is_headless_env() -> bool {
+    std::env::var("MAKAKOO_HEADLESS")
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn resolve_folder_index_dir(
+    cli_override: Option<std::path::PathBuf>,
+    home: &std::path::Path,
+) -> std::path::PathBuf {
+    if let Some(dir) = cli_override {
+        return dir;
+    }
+    if let Ok(env_dir) = std::env::var("MAKAKOO_FOLDER_INDEX_DIR") {
+        if !env_dir.trim().is_empty() {
+            return std::path::PathBuf::from(env_dir);
+        }
+    }
+    home.join("data").join("folder-indexes")
+}
+
+/// Parse `--http` strictly into a bind address. Never defaults to `0.0.0.0`;
+/// bare `:PORT` binds only to `bind_ip` (default `127.0.0.1`).
+fn resolve_http_bind_addr(
+    http_arg: &str,
+    bind_ip: std::net::IpAddr,
+) -> Result<std::net::SocketAddr> {
+    let trimmed = http_arg.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("--http address must not be empty");
+    }
+    if let Ok(addr) = trimmed.parse::<std::net::SocketAddr>() {
+        return Ok(addr);
+    }
+    let port: u16 = trimmed
+        .trim_start_matches(':')
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--http must be ADDR:PORT or :PORT"))?;
+    Ok(std::net::SocketAddr::new(bind_ip, port))
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -87,16 +146,17 @@ async fn main() -> Result<()> {
     makakoo_core::telemetry::init_stderr("info");
 
     let args = Args::parse();
+    let headless = args.headless || is_headless_env();
 
-    // Build the tool context. At T12 this is best-effort: we wire the
-    // subsystems that open cleanly from env defaults and leave the rest
-    // as `None`. T13/T14/T15 handlers extend this as they add tools that
-    // need specific subsystems.
-    let ctx = Arc::new(build_context().await?);
+    let ctx = Arc::new(build_context_with_options(headless, args.folder_index_dir).await?);
 
     // Build the registry and let the handlers module wire every tool.
     let mut registry = ToolRegistry::new();
-    handlers::register_all(&mut registry, &ctx);
+    if headless {
+        handlers::register_headless(&mut registry, &ctx);
+    } else {
+        handlers::register_all(&mut registry, &ctx);
+    }
     let registry = Arc::new(registry);
 
     if args.health {
@@ -140,19 +200,7 @@ async fn run_http(
 ) -> Result<()> {
     use makakoo_core::adapter::peer;
 
-    // Parse the bind spec. Accept "host:port" or bare ":port" — bare
-    // port uses --bind as the host.
-    let bind_addr: std::net::SocketAddr = match http_arg.parse() {
-        Ok(addr) => addr,
-        Err(_) => {
-            // Try bare port.
-            let port: u16 = http_arg
-                .trim_start_matches(':')
-                .parse()
-                .map_err(|_| anyhow::anyhow!("--http must be ADDR:PORT or :PORT"))?;
-            std::net::SocketAddr::new(bind_ip, port)
-        }
-    };
+    let bind_addr = resolve_http_bind_addr(http_arg, bind_ip)?;
 
     let home = makakoo_core::platform::makakoo_home();
     let signing_key_path = signing_key_arg.unwrap_or_else(|| peer::default_signing_key_path(&home));
@@ -205,16 +253,28 @@ async fn run_http(
 /// Every subsystem construction is wrapped in a best-effort block —
 /// a failure logs a warning and leaves that slot `None` so `--list-tools`
 /// and `--health` stay usable even on a fresh clone with no Brain yet.
+#[allow(dead_code)]
 async fn build_context() -> Result<ToolContext> {
+    build_context_with_options(false, None).await
+}
+
+async fn build_context_with_options(
+    headless: bool,
+    folder_index_dir: Option<std::path::PathBuf>,
+) -> Result<ToolContext> {
     let home = makakoo_core::platform::makakoo_home();
     let data = home.join("data");
+    let fi_dir = resolve_folder_index_dir(folder_index_dir, &home);
 
     let llm = Arc::new(makakoo_core::llm::LlmClient::new());
     let emb = Arc::new(makakoo_core::embeddings::EmbeddingClient::new());
+    let folder_index =
+        Arc::new(makakoo_core::superbrain::folder_index::FolderIndexManager::new(fi_dir));
 
     let mut ctx = ToolContext::empty(home.clone())
         .with_llm(llm)
-        .with_embeddings(emb);
+        .with_embeddings(emb)
+        .with_folder_index(folder_index);
 
     // Superbrain store (+ graph, memory stack, cost tracker sharing its conn).
     match makakoo_core::superbrain::store::SuperbrainStore::open(&data.join("superbrain.db")) {
@@ -244,22 +304,26 @@ async fn build_context() -> Result<ToolContext> {
                 .with_costs(costs)
                 .with_recall(recall);
 
-            // Outbound queue shares the superbrain connection — the
-            // `outbound_drafts` table is part of the same migration set
-            // `SuperbrainStore::open` just ran. Tier-B `outbound_draft`
-            // depends on this being wired.
-            match makakoo_core::outbound::OutboundQueue::open(Arc::clone(&conn)) {
-                Ok(q) => {
-                    ctx = ctx.with_outbound(Arc::new(q));
-                }
-                Err(e) => {
-                    tracing::warn!(%e, "outbound queue unavailable; outbound_draft will error");
+            // Outbound queue shares the superbrain connection — skipped in
+            // headless mode where outbound/send tools are disabled.
+            if !headless {
+                match makakoo_core::outbound::OutboundQueue::open(Arc::clone(&conn)) {
+                    Ok(q) => {
+                        ctx = ctx.with_outbound(Arc::new(q));
+                    }
+                    Err(e) => {
+                        tracing::warn!(%e, "outbound queue unavailable; outbound_draft will error");
+                    }
                 }
             }
         }
         Err(e) => {
             tracing::warn!(%e, "superbrain store unavailable; brain_* tools will error");
         }
+    }
+
+    if headless {
+        return Ok(ctx);
     }
 
     // Chat store.
@@ -376,5 +440,47 @@ mod tests {
             ctx.recall.is_some(),
             "recall tracker must be wired whenever store is — sprint-010 phase-a"
         );
+    }
+
+    #[tokio::test]
+    async fn headless_context_wires_folder_index_and_skips_desktop_stores() {
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("MAKAKOO_HOME").ok();
+        std::env::set_var("MAKAKOO_HOME", dir.path());
+        let fi = dir.path().join("custom-indexes");
+        let ctx = build_context_with_options(true, Some(fi.clone()))
+            .await
+            .unwrap();
+        match prev {
+            Some(v) => std::env::set_var("MAKAKOO_HOME", v),
+            None => std::env::remove_var("MAKAKOO_HOME"),
+        }
+        assert!(ctx.store.is_some());
+        assert_eq!(ctx.folder_index.as_ref().unwrap().base_dir(), fi.as_path());
+        assert!(ctx.chat_store.is_none());
+        assert!(ctx.nursery.is_none());
+        assert!(ctx.buddy.is_none());
+        assert!(ctx.agents.is_none());
+        assert!(ctx.swarm_state.is_none());
+        assert!(ctx.outbound.is_none());
+    }
+
+    #[test]
+    fn http_bind_addr_never_defaults_to_all_interfaces() {
+        let args = Args::try_parse_from(["makakoo-mcp", "--headless"]).unwrap();
+        assert!(args.http.is_none(), "no --http means no TCP listener");
+        assert_eq!(
+            args.bind,
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        );
+        assert!(args.headless);
+
+        let exact = resolve_http_bind_addr("127.0.0.1:8765", args.bind).unwrap();
+        assert_eq!(exact.to_string(), "127.0.0.1:8765");
+
+        let port_only = resolve_http_bind_addr(":8765", args.bind).unwrap();
+        assert_eq!(port_only.to_string(), "127.0.0.1:8765");
+
+        assert!(resolve_http_bind_addr("", args.bind).is_err());
     }
 }

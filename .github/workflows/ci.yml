@@ -63,6 +63,9 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
+      - name: Distro lint (strict headless policy)
+        run: cargo run --bin makakoo --locked -- distro lint distros/minimal.toml --json
+
       - name: Ensure runner temp root exists (macOS + Windows)
         if: matrix.os != 'ubuntu-latest'
         shell: pwsh

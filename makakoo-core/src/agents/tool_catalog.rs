@@ -51,6 +51,11 @@ pub const TOOL_CATALOG: &[&str] = &[
     "chat_status",
     "costs_summary",
     "dream",
+    "folder_index_mark_skipped",
+    "folder_index_remove",
+    "folder_index_search",
+    "folder_index_states",
+    "folder_index_upsert",
     "grant_write_access",
     "harvey_brain_search",
     "harvey_brain_write",
@@ -103,6 +108,34 @@ const MCP_PREFIX: &str = "mcp__harvey__";
 /// registered: every agent created through the wizard's default answer got a
 /// tool that did not exist.
 pub const WIZARD_TOOL_CHOICES: &[&str] = &["brain_search", "brain_recent", "write_file"];
+
+/// Strict allowlist of MCP tools exposed when `makakoo-mcp` runs in
+/// `--headless` engine mode: Brain + Folder Index only. Zero send/channel/chat
+/// tools, zero exec/shell/browse/pi/infect tools, zero agent/swarm/nursery
+/// tools, and no SANCHO clock trigger.
+pub const HEADLESS_TOOL_ALLOWLIST: &[&str] = &[
+    "brain_context",
+    "brain_entities",
+    "brain_query",
+    "brain_recent",
+    "brain_search",
+    "brain_write_journal",
+    "costs_summary",
+    "dream",
+    "folder_index_mark_skipped",
+    "folder_index_remove",
+    "folder_index_search",
+    "folder_index_states",
+    "folder_index_upsert",
+    "harvey_brain_search",
+    "harvey_brain_write",
+    "harvey_journal_entry",
+    "harvey_superbrain_query",
+    "harvey_superbrain_vector_search",
+    "wiki_compile",
+    "wiki_lint",
+    "wiki_save",
+];
 
 /// Is `name` a tool an AgentSpec may legitimately reference?
 ///

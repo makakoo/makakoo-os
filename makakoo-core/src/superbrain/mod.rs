@@ -23,6 +23,7 @@ pub use store::{Document, SearchHit, StoreStats, SuperbrainStore, VectorHit};
 
 // T5 modules — graph, memory_stack, recall, scorer, promoter.
 pub mod diagnostics;
+pub mod folder_index;
 pub mod graph;
 pub mod ingest;
 pub mod memory_stack;

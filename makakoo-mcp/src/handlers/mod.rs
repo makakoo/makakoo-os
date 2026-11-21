@@ -17,6 +17,7 @@
 use crate::dispatch::{ToolContext, ToolRegistry};
 use std::sync::Arc;
 
+pub mod folder_index; // Per-folder compact vector index tools
 pub mod patterns; // SPRINT-PATTERN-SUBSTRATE-V1 Phase 5 — auto-expose
 pub mod tier_a; // T13 — 20 read tools
 pub mod tier_b; // T14 — 15 write + multimodal tools
@@ -42,11 +43,26 @@ pub fn register_all(registry: &mut ToolRegistry, ctx: &Arc<ToolContext>) {
     // T15 — Tier-C: 6 heavy / swarm / comm handlers.
     tier_c::register_tier_c(registry, Arc::clone(ctx));
 
+    // Per-folder compact vector index handlers.
+    folder_index::register_folder_index(registry, Arc::clone(ctx));
+
     // SPRINT-PATTERN-SUBSTRATE-V1 Phase 5 — pattern auto-expose.
     // Walks `<makakoo_home>/plugins/pattern-*/` and registers one
     // tool per discovered pattern. New patterns appear on next
     // restart with no per-CLI code changes.
     patterns::register_pattern_tools(registry, Arc::clone(ctx));
+}
+
+/// Register ONLY the restricted headless toolset (Brain + Folder Index).
+///
+/// Skips pattern auto-discovery, Tier-C (swarm/comm/send), desktop/agent/pi/
+/// browse/outbound/channel handlers, and enforces `HEADLESS_TOOL_ALLOWLIST`
+/// as an explicit second guard so no forbidden tool can ever leak in.
+pub fn register_headless(registry: &mut ToolRegistry, ctx: &Arc<ToolContext>) {
+    tier_a::register_tier_a(registry, Arc::clone(ctx));
+    tier_b::register_tier_b(registry, Arc::clone(ctx));
+    folder_index::register_folder_index(registry, Arc::clone(ctx));
+    registry.retain(|name| makakoo_core::agents::HEADLESS_TOOL_ALLOWLIST.contains(&name));
 }
 
 #[cfg(test)]
@@ -269,6 +285,64 @@ mod handler_contract_tests {
             "pi_steer",
         ] {
             assert!(names.contains(expected), "missing pi handler: {expected}");
+        }
+    }
+
+    #[test]
+    fn headless_registry_matches_allowlist_and_blocks_send_exec_and_agents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(ToolContext::empty(tmp.path().to_path_buf()));
+        let mut reg = ToolRegistry::new();
+        register_headless(&mut reg, &ctx);
+
+        let names: Vec<String> = reg.list().into_iter().map(|d| d.name).collect();
+        let allowlist: Vec<String> = makakoo_core::agents::HEADLESS_TOOL_ALLOWLIST
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(names, allowlist);
+
+        // Guard assertions: zero send, exec/shell, browse, pi, infect, agent, swarm, nursery, or sancho clock tools.
+        for forbidden in [
+            "chat_send",
+            "harvey_telegram_send",
+            "channel_messaging_send_dm",
+            "channel_messaging_send_channel",
+            "channel_messaging_broadcast",
+            "outbound_draft",
+            "harvey_browse",
+            "harvey_infect_local",
+            "pi_run",
+            "agent_create",
+            "agent_install",
+            "swarm",
+            "harvey_swarm_run",
+            "nursery_hatch",
+            "buddy_status",
+            "sancho_tick",
+            "write_file",
+            "grant_write_access",
+        ] {
+            assert!(
+                !names.iter().any(|n| n == forbidden),
+                "headless mode must not expose forbidden tool {forbidden}"
+            );
+        }
+
+        // All 5 folder index tools and Brain tools must be present.
+        for required in [
+            "folder_index_upsert",
+            "folder_index_mark_skipped",
+            "folder_index_remove",
+            "folder_index_search",
+            "folder_index_states",
+            "brain_search",
+            "brain_context",
+        ] {
+            assert!(
+                names.iter().any(|n| n == required),
+                "headless mode missing required tool {required}"
+            );
         }
     }
 }

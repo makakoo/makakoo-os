@@ -13,10 +13,15 @@
 //! `distro switch` are deferred to later phases.
 
 pub mod file;
+pub mod lint;
 pub mod resolver;
 
 pub use file::{
     DefaultsTable, DistroError, DistroFile, DistroTable, ExcludesTable, KernelTable, PluginPin,
     PluginPinFull, PostInstallTable,
+};
+pub use lint::{
+    lint_distro_file, lint_manifest, DistroLintError, DistroLintReport, DistroLintRule,
+    LintOptions, LintViolation,
 };
 pub use resolver::{resolve_distro, DistroResolverError, EffectivePlugin, ResolvedDistro};

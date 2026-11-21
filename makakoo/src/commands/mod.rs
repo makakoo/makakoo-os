@@ -27,6 +27,7 @@ pub mod buddy;
 pub mod cli_host;
 pub mod default_banner;
 pub mod distro;
+pub mod distro_lint;
 pub mod docs;
 pub mod docs_mcp;
 pub mod dream;
