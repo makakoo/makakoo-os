@@ -42,6 +42,7 @@ flate2.workspace = true
 tempfile.workspace = true
 pulldown-cmark.workspace = true
 unicode-normalization.workspace = true
+usearch.workspace = true
 
 # Backward-compat re-export — actual user_grants implementation lives
 # in the standalone garagetytus repo as of GARAGETYTUS-V0.1 Phase A.5

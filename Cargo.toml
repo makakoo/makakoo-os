@@ -51,6 +51,7 @@ flate2 = "1"
 tempfile = "3"
 pulldown-cmark = "0.13"
 unicode-normalization = "0.1"
+usearch = "2.26.6"
 
 [profile.release]
 lto = true
