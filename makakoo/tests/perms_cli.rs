@@ -12,12 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn makakoo_bin() -> PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // strip test binary name
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.join("makakoo")
+    // Cargo exposes the compiled package binary via CARGO_BIN_EXE_<name>,
+    // honoring CARGO_TARGET_DIR, profile, Windows .exe suffix, and Cargo's
+    // build-dir layout.
+    PathBuf::from(env!("CARGO_BIN_EXE_makakoo"))
 }
 
 fn run(args: &[&str], home: &Path) -> Output {

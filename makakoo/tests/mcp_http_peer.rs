@@ -12,7 +12,7 @@
 #![cfg(unix)]
 
 use std::net::{SocketAddr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -29,25 +29,59 @@ fn pick_free_port() -> u16 {
     port
 }
 
+/// Resolve a sibling workspace binary (e.g. `makakoo-mcp`) from either the
+/// compiled `makakoo` binary path or the running integration-test binary path.
+///
+/// Handles:
+/// - Direct sibling: `<target>/<profile>/makakoo` -> `<target>/<profile>/<exe>`
+/// - Legacy test dir (Cargo <= 1.98): `<target>/<profile>/deps/<test>`
+/// - New build-dir layout (Cargo >= 1.100):
+///   `<target>/<profile>/build/<pkg>/<hash>/out/<test>`
+fn find_sibling_bin_from(anchor: &Path, exe_name: &str) -> Option<PathBuf> {
+    if let Some(parent) = anchor.parent() {
+        let direct = parent.join(exe_name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+    }
+    for dir in anchor.ancestors().skip(1) {
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == "deps" || name == "build" {
+            if let Some(profile_dir) = dir.parent() {
+                let candidate = profile_dir.join(exe_name);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn makakoo_mcp_bin() -> PathBuf {
-    // Locate the makakoo-mcp binary built alongside this test. Deriving the
-    // directory from the test executable (current_exe) honors CARGO_TARGET_DIR
-    // and the active profile, instead of assuming <workspace>/target/debug.
-    // makakoo-mcp is a sibling crate, so CARGO_BIN_EXE_* is not set here.
+    // Locate the makakoo-mcp binary built alongside this test. makakoo-mcp is a
+    // sibling crate, so CARGO_BIN_EXE_makakoo-mcp is not set here; derive
+    // <target>/<profile> from CARGO_BIN_EXE_makakoo or current_exe() so custom
+    // CARGO_TARGET_DIR, profiles, and Cargo's build-dir layout all work.
     let exe_name = format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX);
-    // <target>/<profile>/deps/<test-exe> -> <target>/<profile>/makakoo-mcp
-    let beside_test = || -> Option<PathBuf> {
+    let locate = || -> Option<PathBuf> {
+        let makakoo = PathBuf::from(env!("CARGO_BIN_EXE_makakoo"));
+        if let Some(bin) = find_sibling_bin_from(&makakoo, &exe_name) {
+            return Some(bin);
+        }
         let test_exe = std::env::current_exe().ok()?;
-        let profile = test_exe.parent()?.parent()?;
-        let bin = profile.join(&exe_name);
-        bin.is_file().then_some(bin)
+        find_sibling_bin_from(&test_exe, &exe_name)
     };
-    if let Some(bin) = beside_test() {
+    if let Some(bin) = locate() {
         return bin;
     }
-    // Cold start: build makakoo-mcp (cargo honors CARGO_TARGET_DIR), re-check.
+    // Cold start: build makakoo-mcp with the active Cargo binary (honors
+    // CARGO_TARGET_DIR), then re-check.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let status = Command::new("cargo")
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let status = Command::new(cargo)
         .current_dir(manifest_dir.parent().unwrap())
         .args(["build", "--bin", "makakoo-mcp"])
         .stdout(Stdio::inherit())
@@ -55,7 +89,7 @@ fn makakoo_mcp_bin() -> PathBuf {
         .status()
         .expect("cargo build");
     assert!(status.success(), "cargo build makakoo-mcp failed");
-    beside_test().expect("makakoo-mcp binary present after cargo build")
+    locate().expect("makakoo-mcp binary present after cargo build")
 }
 
 struct Peer {
@@ -217,4 +251,45 @@ async fn unknown_peer_rejected_with_401() {
         .await
         .expect("POST");
     assert_eq!(resp.status().as_u16(), 401);
+}
+
+#[test]
+fn resolves_sibling_binary_across_legacy_and_cargo_1_100_layouts() {
+    let tmp = TempDir::new().unwrap();
+    let profile_dir = tmp.path().join("target/debug");
+    let deps_dir = profile_dir.join("deps");
+    let build_out_dir = profile_dir.join("build/makakoo/1e156117beb6db0d/out");
+    std::fs::create_dir_all(&deps_dir).unwrap();
+    std::fs::create_dir_all(&build_out_dir).unwrap();
+
+    let expected = profile_dir.join("makakoo-mcp");
+    // Missing binary returns None for every layout.
+    assert_eq!(
+        find_sibling_bin_from(
+            &build_out_dir.join("mcp_http_peer-1e156117beb6db0d"),
+            "makakoo-mcp"
+        ),
+        None
+    );
+
+    std::fs::write(&expected, b"stub").unwrap();
+
+    // Direct sibling (CARGO_BIN_EXE_makakoo).
+    assert_eq!(
+        find_sibling_bin_from(&profile_dir.join("makakoo"), "makakoo-mcp"),
+        Some(expected.clone())
+    );
+    // Legacy Cargo <= 1.98 layout (`target/debug/deps/<test>`).
+    assert_eq!(
+        find_sibling_bin_from(&deps_dir.join("mcp_http_peer-deadbeef"), "makakoo-mcp"),
+        Some(expected.clone())
+    );
+    // Cargo >= 1.100 build-dir layout (`target/debug/build/<pkg>/<hash>/out/<test>`).
+    assert_eq!(
+        find_sibling_bin_from(
+            &build_out_dir.join("mcp_http_peer-1e156117beb6db0d"),
+            "makakoo-mcp"
+        ),
+        Some(expected)
+    );
 }

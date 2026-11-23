@@ -8,13 +8,7 @@
 use std::process::Command;
 
 fn makakoo_bin() -> std::path::PathBuf {
-    // target/debug/makakoo lives next to the test binary.
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // remove test binary name
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.join("makakoo")
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_makakoo"))
 }
 
 fn seed_session(home: &std::path::Path) {

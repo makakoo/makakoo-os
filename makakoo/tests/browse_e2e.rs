@@ -37,21 +37,43 @@ const HANDSHAKE: &str = concat!(
     "\n",
 );
 
-fn locate_mcp_binary() -> Option<std::path::PathBuf> {
-    // Prefer the binary built alongside this test. Deriving the directory from
-    // the test executable (current_exe) honors CARGO_TARGET_DIR and the active
-    // profile instead of assuming <workspace>/target/debug; makakoo-mcp is a
-    // sibling crate, so CARGO_BIN_EXE_* is not available here. Fall back to
-    // `makakoo-mcp` on PATH so the test also works against an installed binary
-    // (what Sebastian actually dogfoods).
-    let exe_name = format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX);
-    if let Ok(test_exe) = std::env::current_exe() {
-        // <target>/<profile>/deps/<test-exe> -> <target>/<profile>/makakoo-mcp
-        if let Some(profile) = test_exe.parent().and_then(|deps| deps.parent()) {
-            let p = profile.join(&exe_name);
-            if p.is_file() {
-                return Some(p);
+fn find_sibling_bin_from(anchor: &std::path::Path, exe_name: &str) -> Option<std::path::PathBuf> {
+    if let Some(parent) = anchor.parent() {
+        let direct = parent.join(exe_name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+    }
+    for dir in anchor.ancestors().skip(1) {
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == "deps" || name == "build" {
+            if let Some(profile_dir) = dir.parent() {
+                let candidate = profile_dir.join(exe_name);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
             }
+        }
+    }
+    None
+}
+
+fn locate_mcp_binary() -> Option<std::path::PathBuf> {
+    // Prefer the binary built alongside this test. makakoo-mcp is a sibling
+    // crate, so CARGO_BIN_EXE_makakoo-mcp is not available here; derive
+    // <target>/<profile> from CARGO_BIN_EXE_makakoo or current_exe() across
+    // both legacy `deps/` and Cargo 1.100+ `build/<pkg>/<hash>/out/` layouts.
+    // Fall back to `makakoo-mcp` on PATH for installed-binary dogfood runs.
+    let exe_name = format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX);
+    let makakoo = std::path::PathBuf::from(env!("CARGO_BIN_EXE_makakoo"));
+    if let Some(bin) = find_sibling_bin_from(&makakoo, &exe_name) {
+        return Some(bin);
+    }
+    if let Ok(test_exe) = std::env::current_exe() {
+        if let Some(bin) = find_sibling_bin_from(&test_exe, &exe_name) {
+            return Some(bin);
         }
     }
     let path = std::env::var_os("PATH")?;
