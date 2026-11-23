@@ -164,6 +164,12 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
     {
         let idx = FolderIndex::open_with_config(tmp.path(), "inc-folder", cfg.clone()).unwrap();
         dir_path = idx.dir().to_path_buf();
+        // The index already knows its real model; an unnamed batch must inherit it,
+        // never record the alias as the model.
+        {
+            let conn = idx.lock_conn().unwrap();
+            model_meta::write_ready_model_meta(&conn, "qwen3-real", 16, "ail-embed", None).unwrap();
+        }
         idx.begin_file_indexing("doc.pdf", "v1", 1).unwrap();
         idx.put_file_chunks_batch(
             "doc.pdf",
@@ -190,7 +196,7 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
 
         let status = idx.model_status().unwrap();
         assert_eq!(status.index_state, IndexModelState::Ready);
-        assert_eq!(status.embed_model.as_deref(), Some("ail-embed"));
+        assert_eq!(status.embed_model.as_deref(), Some("qwen3-real"));
         assert_eq!(status.embed_dim, Some(16));
     }
 
@@ -199,7 +205,7 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
     let reopened = FolderIndex::open_with_config(tmp.path(), "inc-folder", cfg).unwrap();
     let sidecar_raw = std::fs::read_to_string(dir_path.join("vectors.gen")).unwrap();
     let sidecar: Value = serde_json::from_str(&sidecar_raw).unwrap();
-    assert_eq!(sidecar["embed_model"], "ail-embed");
+    assert_eq!(sidecar["embed_model"], "qwen3-real");
     assert_eq!(sidecar["embed_dim"], 16);
     assert_eq!(
         reopened
@@ -208,4 +214,52 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
             .len(),
         1
     );
+}
+
+fn unnamed_chunk(text: &str, slot: usize) -> ChunkInput {
+    ChunkInput {
+        anchor: Anchor {
+            kind: AnchorKind::Page,
+            value: "1".into(),
+        },
+        char_start: 0,
+        char_end: text.len(),
+        text: text.into(),
+        vector: basis(16, slot),
+    }
+}
+
+#[test]
+fn unnamed_rows_on_a_fresh_index_never_claim_the_alias_as_model() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("ail-embed".into()), None);
+    let idx = FolderIndex::open_with_config(tmp.path(), "fresh", cfg).unwrap();
+    for (file, slot) in [("a.pdf", 0), ("b.pdf", 1)] {
+        idx.begin_file_indexing(file, "v1", 1).unwrap();
+        idx.put_file_chunks_batch(
+            file,
+            "v1",
+            SourceKind::File,
+            TrustLevel::Trusted,
+            "alice",
+            &[unnamed_chunk("Unnamed rows.", slot)],
+            1,
+            1,
+        )
+        .unwrap();
+        idx.finish_file_indexing(file, "v1").unwrap();
+        let st = idx.model_status().unwrap();
+        // Model left unknown (a probe names it later); a second unnamed batch must
+        // not turn this into `mixed_model_upsert`, and vector search keeps working.
+        assert_eq!(st.embed_model, None, "{file}");
+        assert_eq!(st.embed_dim, Some(16));
+        assert_eq!(st.index_state, IndexModelState::Ready, "{file}");
+        assert_eq!(st.stale_reason, None, "{file}");
+        assert!(
+            !idx.search(&basis(16, slot), 5, &SearchFilter::default())
+                .unwrap()
+                .is_empty(),
+            "{file}: vector search must keep working"
+        );
+    }
 }

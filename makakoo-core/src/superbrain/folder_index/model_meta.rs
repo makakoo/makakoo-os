@@ -198,7 +198,9 @@ pub(crate) fn init_model_meta_on_open(
         return Ok(());
     }
 
-    if status.embed_model.is_none() || status.embed_dim.is_none() {
+    // No dimension = written before model metadata existed: rebuild once. A known
+    // dimension with no model id is an unnamed index (see apply_upsert_model_meta_tx).
+    if status.embed_dim.is_none() {
         write_model_state(
             conn,
             IndexModelState::Stale,
@@ -250,40 +252,54 @@ pub(crate) fn apply_upsert_model_meta_tx(
     let total_chunks = read_chunk_count(conn)?;
     let other_chunks_exist = total_chunks > chunks_len as u64;
 
-    let (eff_model, eff_dim, eff_alias, eff_short) = match model_meta {
-        Some(m) => (
-            m.model.clone(),
-            m.embed_dim,
-            m.bulk_alias.clone(),
-            m.short_alias.clone(),
-        ),
-        None => {
-            let alias = default_bulk_alias
-                .unwrap_or(crate::embeddings::DEFAULT_EMBED_MODEL)
-                .to_string();
-            (
-                alias.clone(),
-                first_vec_len,
-                alias,
-                default_short_alias.map(str::to_string),
-            )
+    let Some(m) = model_meta else {
+        // The caller sent vectors without naming their model. Never record an alias
+        // as a model id: a later query would see the real id, call it a switch and
+        // rebuild, and the next unnamed upsert would flip it back (endless re-embed).
+        if other_chunks_exist || status.embed_model.is_some() {
+            // Same index, same dimension: the rows come from the same bulk alias.
+            if status.embed_dim != Some(first_vec_len)
+                && status.index_state != IndexModelState::Rebuilding
+            {
+                write_model_state(conn, IndexModelState::Stale, Some("mixed_model_upsert"))?;
+            }
+            return Ok(());
         }
+        // First rows of a fresh index and no model: record what is known, leave the
+        // model unknown (searches compare the dimension only) and let the next bulk
+        // probe name it. Indexes without an embedder keep working.
+        write_meta_opt(conn, META_EMBED_MODEL, None)?;
+        write_meta_opt(conn, META_EMBED_DIM, Some(&first_vec_len.to_string()))?;
+        let alias = default_bulk_alias.unwrap_or(crate::embeddings::DEFAULT_EMBED_MODEL);
+        write_meta_opt(conn, META_EMBED_ALIAS, Some(alias))?;
+        if let Some(short) = default_short_alias {
+            write_meta_opt(conn, META_SHORT_EMBED_ALIAS, Some(short))?;
+        }
+        write_model_state(conn, IndexModelState::Ready, None)?;
+        return Ok(());
     };
 
     if !other_chunks_exist {
         if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
-            write_meta_opt(conn, META_EMBED_MODEL, Some(&eff_model))?;
-            write_meta_opt(conn, META_EMBED_DIM, Some(&eff_dim.to_string()))?;
-            write_meta_opt(conn, META_EMBED_ALIAS, Some(&eff_alias))?;
+            write_meta_opt(conn, META_EMBED_MODEL, Some(&m.model))?;
+            write_meta_opt(conn, META_EMBED_DIM, Some(&m.embed_dim.to_string()))?;
+            write_meta_opt(conn, META_EMBED_ALIAS, Some(&m.bulk_alias))?;
             return Ok(());
         }
-        write_ready_model_meta(conn, &eff_model, eff_dim, &eff_alias, eff_short.as_deref())?;
+        write_ready_model_meta(
+            conn,
+            &m.model,
+            m.embed_dim,
+            &m.bulk_alias,
+            m.short_alias.as_deref(),
+        )?;
         return Ok(());
     }
 
-    let model_matches = status.embed_model.as_deref() == Some(&eff_model);
-    let dim_matches = status.embed_dim == Some(eff_dim);
-    if !model_matches || !dim_matches {
+    let model_matches = status.embed_model.as_deref() == Some(m.model.as_str());
+    let dim_matches = status.embed_dim == Some(m.embed_dim);
+    // A running rebuild owns the state; its tail pass re-embeds rows written meanwhile.
+    if (!model_matches || !dim_matches) && status.index_state != IndexModelState::Rebuilding {
         write_model_state(conn, IndexModelState::Stale, Some("mixed_model_upsert"))?;
     }
     Ok(())

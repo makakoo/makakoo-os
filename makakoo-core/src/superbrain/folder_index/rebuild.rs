@@ -145,6 +145,25 @@ pub(crate) async fn probe_and_reconcile(
     let Ok(status) = idx.model_status() else {
         return;
     };
+    if status.embed_model.is_none() && status.embed_dim == Some(bulk_dim) {
+        // Rows were written without a model id by the bulk alias: name it now.
+        if let Ok(conn) = idx.lock_conn() {
+            let current = read_model_status(&conn);
+            if matches!(&current, Ok(c) if c.embed_model.is_none()
+                && c.index_state == IndexModelState::Ready)
+            {
+                let _ = write_ready_model_meta(
+                    &conn,
+                    &bulk_model,
+                    bulk_dim,
+                    bulk_emb.model(),
+                    short_emb.as_deref().map(EmbeddingClient::model),
+                );
+            }
+        }
+        idx.update_sidecar_if_ready();
+        return;
+    }
     let matches_stored =
         status.embed_model.as_deref() == Some(&bulk_model) && status.embed_dim == Some(bulk_dim);
 
@@ -410,9 +429,10 @@ pub(crate) async fn search_folder_checked(
         (None, req.query_model.clone(), req.query_dim)
     };
 
+    // An index written without a model id is matched on dimension only until a bulk
+    // probe names its model (probe_and_reconcile); calling it a switch would rebuild.
     let model_mismatch = match (q_model.as_deref(), status.embed_model.as_deref()) {
         (Some(qm), Some(im)) => qm != im,
-        (Some(_), None) => true,
         _ => false,
     };
     let dim_mismatch = match (q_dim, status.embed_dim) {
