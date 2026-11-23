@@ -27,6 +27,7 @@ pub struct SanchoContext {
     pub bus: Arc<PersistentEventBus>,
     pub llm: Arc<LlmClient>,
     pub emb: Arc<EmbeddingClient>,
+    pub bulk_emb: Arc<EmbeddingClient>,
     pub home: PathBuf,
 }
 
@@ -38,13 +39,20 @@ impl SanchoContext {
         emb: Arc<EmbeddingClient>,
         home: PathBuf,
     ) -> Self {
+        let bulk_emb = Arc::new(EmbeddingClient::new_bulk().with_endpoint(emb.base_url()));
         Self {
             store,
             bus,
             llm,
             emb,
+            bulk_emb,
             home,
         }
+    }
+
+    pub fn with_bulk_embeddings(mut self, bulk_emb: Arc<EmbeddingClient>) -> Self {
+        self.bulk_emb = bulk_emb;
+        self
     }
 }
 

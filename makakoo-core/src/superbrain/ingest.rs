@@ -338,23 +338,12 @@ impl IngestEngine {
         Ok(result)
     }
 
-    /// Embed up to `limit` documents that don't have vectors yet.
-    /// Returns the number of vectors written.
+    /// Embed up to `limit` pending or model-mismatched documents, recording the
+    /// endpoint-reported model id and dim. Returns the number of vectors written.
     pub async fn embed_pending(&self, embedder: &EmbeddingClient, limit: usize) -> Result<usize> {
-        let pending = self.store.docs_missing_vectors(limit)?;
-        let mut written = 0usize;
-        for (doc_id, content) in pending {
-            let truncated: String = content.chars().take(EMBED_TRUNCATE_CHARS).collect();
-            match embedder.embed(&truncated).await {
-                Ok(vec) if !vec.is_empty() => {
-                    if self.store.store_vector(&doc_id, &vec).is_ok() {
-                        written += 1;
-                    }
-                }
-                _ => continue,
-            }
-        }
-        Ok(written)
+        self.store
+            .sync_vectors_with_embedder(embedder, None, limit, EMBED_TRUNCATE_CHARS)
+            .await
     }
 
     // ───────── internal ─────────

@@ -683,35 +683,30 @@ impl SuperbrainStore {
     /// Store (or replace) the embedding for `doc_id`. The document must
     /// already exist — otherwise `NotFound` is returned.
     pub fn store_vector(&self, doc_id: &str, vec: &[f32]) -> Result<()> {
-        let conn = self.lock_conn()?;
-        let row_id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM brain_docs WHERE path = ?1",
-                params![doc_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        let id = row_id
-            .ok_or_else(|| MakakooError::NotFound(format!("brain_docs row for doc_id={doc_id}")))?;
-        let blob = pack_vector(vec);
-        let dim = vec.len() as i64;
-        conn.execute(
-            "INSERT INTO brain_vectors (doc_id, embedding, dim, model, created_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))
-             ON CONFLICT(doc_id) DO UPDATE SET
-                 embedding = excluded.embedding,
-                 dim = excluded.dim,
-                 model = excluded.model,
-                 created_at = excluded.created_at",
-            params![id, blob, dim, "unknown"],
-        )?;
-        Ok(())
+        self.store_vector_with_model(doc_id, vec, "unknown")
     }
 
     /// Brute-force cosine similarity search. Any hit below the 0.3
-    /// similarity floor is dropped.
+    /// similarity floor is dropped. Returns empty if vectors are stale or
+    /// rebuilding, and delegates to per-model filtering when an active model
+    /// is recorded.
     pub fn vector_search(&self, query_vec: &[f32], limit: usize) -> Result<Vec<VectorHit>> {
+        let status = self.vector_status()?;
+        if status.index_state != super::folder_index::IndexModelState::Ready {
+            return Ok(Vec::new());
+        }
+        if let Some(active_model) = status.embed_model.as_deref() {
+            return self.vector_search_for_model(query_vec, active_model, limit);
+        }
         let conn = self.lock_conn()?;
+        let distinct_models: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT COALESCE(model, 'unknown')) FROM brain_vectors",
+            [],
+            |r| r.get(0),
+        )?;
+        if distinct_models > 1 {
+            return Ok(Vec::new());
+        }
         let mut stmt = conn.prepare(
             "SELECT d.path, d.content, v.embedding
              FROM brain_vectors v
@@ -772,7 +767,7 @@ impl SuperbrainStore {
 
     // ───────── internal ─────────
 
-    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+    pub(crate) fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
         self.conn
             .lock()
             .map_err(|_| MakakooError::internal("superbrain store mutex poisoned"))

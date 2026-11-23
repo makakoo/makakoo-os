@@ -268,12 +268,16 @@ async fn build_context_with_options(
 
     let llm = Arc::new(makakoo_core::llm::LlmClient::new());
     let emb = Arc::new(makakoo_core::embeddings::EmbeddingClient::new());
-    let folder_index =
-        Arc::new(makakoo_core::superbrain::folder_index::FolderIndexManager::new(fi_dir));
+    let bulk_emb = Arc::new(makakoo_core::embeddings::EmbeddingClient::new_bulk());
+    let folder_index = Arc::new(
+        makakoo_core::superbrain::folder_index::FolderIndexManager::new(fi_dir)
+            .with_embedders(Arc::clone(&emb), Arc::clone(&bulk_emb)),
+    );
 
     let mut ctx = ToolContext::empty(home.clone())
         .with_llm(llm)
-        .with_embeddings(emb)
+        .with_embeddings(Arc::clone(&emb))
+        .with_bulk_embeddings(Arc::clone(&bulk_emb))
         .with_folder_index(folder_index);
 
     // Superbrain store (+ graph, memory stack, cost tracker sharing its conn).
@@ -281,6 +285,12 @@ async fn build_context_with_options(
         Ok(store) => {
             let conn = store.conn_arc();
             let store_arc = Arc::new(store);
+            makakoo_core::superbrain::vector_model::check_and_probe_brain_on_open(
+                Arc::clone(&store_arc),
+                Some(Arc::clone(&emb)),
+                Arc::clone(&bulk_emb),
+                Arc::clone(&ctx.brain_rebuild),
+            );
             let graph = Arc::new(makakoo_core::superbrain::graph::GraphStore::new(
                 Arc::clone(&conn),
             ));

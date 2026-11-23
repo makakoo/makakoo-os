@@ -15,6 +15,10 @@ use std::sync::Arc;
 use crate::dispatch::{ToolContext, ToolHandler};
 use crate::jsonrpc::RpcError;
 
+#[cfg(test)]
+#[path = "brain_model_tests.rs"]
+mod model_tests;
+
 /// Record a batch of FTS search hits into `recall_log`. Non-fatal —
 /// tracker absence or insert failure only warns in tracing.
 fn track_search_hits(ctx: &ToolContext, query: &str, hits: &[SearchHit], source: &str) {
@@ -464,11 +468,20 @@ impl ToolHandler for BrainContextHandler {
             .as_ref()
             .ok_or_else(|| RpcError::internal("subsystem not wired: memory"))?;
 
-        // Build semantic hits from vector_search if we have an embeddings
-        // client and a store; otherwise skip L2.
+        // Build semantic hits from model-checked vector_search if embeddings
+        // and store are wired; returns empty during rebuild so L1 FTS still serves.
         let semantic: Vec<SemanticHit> = match (self.ctx.emb.as_ref(), self.ctx.store.as_ref()) {
-            (Some(emb), Some(store)) => match emb.embed(&query).await {
-                Ok(qvec) => match store.vector_search(&qvec, 5) {
+            (Some(emb), Some(store)) => {
+                match makakoo_core::superbrain::vector_model::search_brain_vectors_checked(
+                    store,
+                    emb,
+                    self.ctx.bulk_emb.as_ref(),
+                    &self.ctx.brain_rebuild,
+                    &query,
+                    5,
+                )
+                .await
+                {
                     Ok(vhits) => vhits
                         .into_iter()
                         .map(|v| SemanticHit {
@@ -478,9 +491,8 @@ impl ToolHandler for BrainContextHandler {
                         })
                         .collect(),
                     Err(_) => Vec::new(),
-                },
-                Err(_) => Vec::new(),
-            },
+                }
+            }
             _ => Vec::new(),
         };
 
@@ -539,13 +551,16 @@ impl ToolHandler for HarveySuperbrainVectorSearchHandler {
             .emb
             .as_ref()
             .ok_or_else(|| RpcError::internal("subsystem not wired: embeddings"))?;
-        let qvec = emb
-            .embed(&query)
-            .await
-            .map_err(|e| RpcError::internal(format!("embed: {e}")))?;
-        let hits = store
-            .vector_search(&qvec, limit)
-            .map_err(|e| RpcError::internal(format!("vector_search: {e}")))?;
+        let hits = makakoo_core::superbrain::vector_model::search_brain_vectors_checked(
+            store,
+            emb,
+            self.ctx.bulk_emb.as_ref(),
+            &self.ctx.brain_rebuild,
+            &query,
+            limit,
+        )
+        .await
+        .map_err(|e| RpcError::internal(format!("vector_search: {e}")))?;
         track_vector_hits(
             &self.ctx,
             &query,

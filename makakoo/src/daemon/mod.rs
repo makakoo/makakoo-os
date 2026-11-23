@@ -141,7 +141,10 @@ pub async fn run_forever() -> Result<()> {
     let bus = ctx.event_bus()?;
     let llm = ctx.llm();
     let emb = ctx.embeddings();
-    let sancho_ctx = Arc::new(SanchoContext::new(store, bus, llm, emb, home.clone()));
+    let bulk_emb = ctx.bulk_embeddings();
+    let sancho_ctx = Arc::new(
+        SanchoContext::new(store, bus, llm, emb, home.clone()).with_bulk_embeddings(bulk_emb),
+    );
     let plugins = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
     let registry = default_registry(Arc::clone(&sancho_ctx), &plugins);
     let engine = SanchoEngine::new(registry, sancho_ctx, Duration::from_secs(60));

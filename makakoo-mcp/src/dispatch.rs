@@ -78,6 +78,7 @@ use makakoo_core::superbrain::memory_stack::MemoryStack;
 use makakoo_core::superbrain::promoter::MemoryPromoter;
 use makakoo_core::superbrain::recall::RecallTracker;
 use makakoo_core::superbrain::store::SuperbrainStore;
+use makakoo_core::superbrain::vector_model::BrainRebuildCoordinator;
 use makakoo_core::swarm::SwarmState;
 use makakoo_core::telemetry::CostTracker;
 
@@ -121,6 +122,7 @@ pub struct ToolContext {
     pub bus: Option<Arc<PersistentEventBus>>,
     pub llm: Option<Arc<LlmClient>>,
     pub emb: Option<Arc<EmbeddingClient>>,
+    pub bulk_emb: Option<Arc<EmbeddingClient>>,
     pub chat_store: Option<Arc<ChatStore>>,
     pub nursery: Option<Arc<MascotRegistry>>,
     pub buddy: Option<Arc<BuddyTracker>>,
@@ -130,6 +132,7 @@ pub struct ToolContext {
     pub swarm_state: Option<Arc<SwarmState>>,
     pub channel_ops: Option<Arc<ChannelOpsRegistry>>,
     pub folder_index: Option<Arc<FolderIndexManager>>,
+    pub brain_rebuild: Arc<BrainRebuildCoordinator>,
 }
 
 impl ToolContext {
@@ -147,6 +150,7 @@ impl ToolContext {
             bus: None,
             llm: None,
             emb: None,
+            bulk_emb: None,
             chat_store: None,
             nursery: None,
             buddy: None,
@@ -156,6 +160,7 @@ impl ToolContext {
             swarm_state: None,
             channel_ops: None,
             folder_index: None,
+            brain_rebuild: Arc::new(BrainRebuildCoordinator::new()),
         }
     }
 
@@ -199,6 +204,10 @@ impl ToolContext {
     }
     pub fn with_embeddings(mut self, emb: Arc<EmbeddingClient>) -> Self {
         self.emb = Some(emb);
+        self
+    }
+    pub fn with_bulk_embeddings(mut self, bulk_emb: Arc<EmbeddingClient>) -> Self {
+        self.bulk_emb = Some(bulk_emb);
         self
     }
     #[allow(dead_code)]
