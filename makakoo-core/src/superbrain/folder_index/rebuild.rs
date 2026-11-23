@@ -20,6 +20,8 @@ use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
 use super::FolderIndex;
 
 const REBUILD_BATCH_SIZE: usize = 32;
+/// Commit attempts before a rebuild that keeps racing writers gives up stale.
+const MAX_REBUILD_COMMIT_ATTEMPTS: usize = 8;
 
 /// Per-folder deduplication and completion notification registry for background
 /// re-embedding rebuilds.
@@ -277,64 +279,94 @@ async fn run_folder_rebuild(
         }
     }
 
-    let max_snap_id = snapshot.last().map(|(id, _)| *id).unwrap_or(0);
-    let (embedded, row_model, row_dim) = reembed_rows(&bulk_emb, idx.dim(), &snapshot).await?;
+    let mut max_id = snapshot.last().map(|(id, _)| *id).unwrap_or(0);
+    let (mut embedded, row_model, row_dim) = reembed_rows(&bulk_emb, idx.dim(), &snapshot).await?;
     if row_model != b_model || row_dim != b_dim {
         return Err(MakakooError::llm("bulk embedder model changed mid-rebuild"));
     }
 
-    let mut extra_embedded = Vec::new();
-    let cur_gen = {
-        let conn = idx.lock_conn()?;
-        read_generation(&conn)?
-    };
-    if cur_gen != start_gen {
+    // Upserts replace a file's chunks with new, higher ids and bump the
+    // generation. Commit only while the generation is the one whose rows were
+    // all re-embedded, checked under the commit's own lock; otherwise re-embed
+    // the rows that landed meanwhile and try again.
+    let mut seen_gen = start_gen;
+    for _ in 0..MAX_REBUILD_COMMIT_ATTEMPTS {
+        #[cfg(test)]
+        if let Some(hook) = idx
+            .before_rebuild_commit
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            hook(&idx);
+        }
         let tail = {
-            let conn = idx.lock_conn()?;
+            let mut conn = idx.lock_conn()?;
+            let gen_now = read_generation(&conn)?;
+            if gen_now == seen_gen {
+                commit_rebuild(
+                    &idx, &mut conn, &embedded, &b_model, b_dim, &bulk_emb, &short_emb,
+                )?;
+                drop(conn);
+                idx.checkpoint_wal()?;
+                return Ok(());
+            }
+            seen_gen = gen_now;
             let mut stmt =
                 conn.prepare("SELECT id, text FROM chunks WHERE id > ?1 ORDER BY id ASC")?;
             let rows = stmt
-                .query_map(params![max_snap_id], |r| {
+                .query_map(params![max_id], |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows
         };
-        if !tail.is_empty() {
+        if let Some((id, _)) = tail.last() {
+            max_id = *id;
             let (rows, tail_model, tail_dim) = reembed_rows(&bulk_emb, idx.dim(), &tail).await?;
             if tail_model != b_model || tail_dim != b_dim {
                 return Err(MakakooError::llm("bulk embedder model changed mid-rebuild"));
             }
-            extra_embedded = rows;
+            embedded.extend(rows);
         }
     }
+    Err(MakakooError::internal(
+        "rebuild kept racing writers; left stale for the next probe",
+    ))
+}
 
+fn commit_rebuild(
+    idx: &FolderIndex,
+    conn: &mut rusqlite::Connection,
+    embedded: &[(i64, Vec<i8>)],
+    b_model: &str,
+    b_dim: usize,
+    bulk_emb: &EmbeddingClient,
+    short_emb: &Option<Arc<EmbeddingClient>>,
+) -> Result<()> {
     {
-        let mut conn = idx.lock_conn()?;
         let tx = conn.transaction()?;
         {
             let mut upd = tx.prepare_cached("UPDATE chunks SET vector_i8 = ?1 WHERE id = ?2")?;
-            for (id, q) in embedded.iter().chain(extra_embedded.iter()) {
+            for (id, q) in embedded {
                 upd.execute(params![i8_slice_to_bytes(q), id])?;
             }
         }
         let new_gen = bump_generation_tx(&tx)?;
         tx.commit()?;
 
-        let count = read_chunk_count(&conn)?;
+        let count = read_chunk_count(conn)?;
         idx.vectors
-            .set_model_meta(Some(b_model.clone()), Some(b_dim));
-        idx.vectors.rebuild_from_sqlite(&conn, new_gen, count)?;
+            .set_model_meta(Some(b_model.to_string()), Some(b_dim));
+        idx.vectors.rebuild_from_sqlite(conn, new_gen, count)?;
         write_ready_model_meta(
-            &conn,
-            &b_model,
+            conn,
+            b_model,
             b_dim,
             bulk_emb.model(),
             short_emb.as_deref().map(EmbeddingClient::model),
         )?;
     }
-
-    idx.checkpoint_wal()?;
     Ok(())
 }
 

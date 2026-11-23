@@ -27,6 +27,10 @@ use super::{
 
 /// Compact per-folder index combining `chunks.sqlite` (source of truth) and
 /// `vectors.usearch` (memory-mapped `i8` HNSW vector index).
+/// Test hook type for `FolderIndex::before_rebuild_commit`.
+#[cfg(test)]
+pub(crate) type RebuildCommitHook = Box<dyn Fn(&FolderIndex) + Send + Sync>;
+
 pub struct FolderIndex {
     pub(crate) dir: PathBuf,
     pub(crate) db_path: PathBuf,
@@ -36,6 +40,9 @@ pub struct FolderIndex {
     pub(crate) default_short_alias: Option<String>,
     pub(crate) conn: Mutex<Connection>,
     pub(crate) vectors: VectorStore,
+    /// Test hook: runs before each rebuild commit attempt, lock not held.
+    #[cfg(test)]
+    pub(crate) before_rebuild_commit: Mutex<Option<RebuildCommitHook>>,
 }
 
 impl FolderIndex {
@@ -90,6 +97,8 @@ impl FolderIndex {
             default_short_alias: cfg.short_embed_alias,
             conn: Mutex::new(conn),
             vectors,
+            #[cfg(test)]
+            before_rebuild_commit: Mutex::new(None),
         })
     }
 

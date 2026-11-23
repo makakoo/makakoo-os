@@ -519,3 +519,104 @@ async fn rebuild_wait_returns_when_finish_lands_between_lookup_and_await() {
         .await
         .expect("wait() missed a finish between lookup and await");
 }
+
+fn one_chunk(file: &str, text: &str, vector: Vec<f32>) -> UpsertFileRequest {
+    UpsertFileRequest {
+        file_path: file.into(),
+        file_version: "v1".into(),
+        source_kind: SourceKind::File,
+        trust: TrustLevel::Trusted,
+        owner: "alice".into(),
+        chunks: vec![ChunkInput {
+            anchor: Anchor {
+                kind: AnchorKind::Heading,
+                value: "Intro".into(),
+            },
+            char_start: 0,
+            char_end: text.len(),
+            text: text.into(),
+            vector,
+        }],
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "old-model", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let mgr = Arc::new(
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb)),
+    );
+    let old_meta = UpsertModelMeta {
+        model: "old-model".into(),
+        embed_dim: 64,
+        bulk_alias: "ail-embed".into(),
+        short_alias: Some("ail-embed".into()),
+    };
+    mgr.upsert_folder_file(
+        "tail",
+        32,
+        &one_chunk("a.md", "Alpha text.", basis(64, 2)),
+        Some(&old_meta),
+    )
+    .unwrap();
+
+    // A writer with an old-model vector lands after every tail read, once,
+    // right before the first commit attempt.
+    let idx = mgr.get_or_open("tail", 32).unwrap();
+    let fired = Arc::new(AtomicBool::new(false));
+    let (f2, meta2) = (Arc::clone(&fired), old_meta.clone());
+    *idx.before_rebuild_commit.lock().unwrap() = Some(Box::new(move |i: &FolderIndex| {
+        if !f2.swap(true, Ordering::SeqCst) {
+            i.upsert_file_with_model(&one_chunk("b.md", "Beta text.", basis(64, 2)), Some(&meta2))
+                .unwrap();
+        }
+    }));
+
+    responder.set_both_model("new-model", 64, 5);
+    let res = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "tail".into(),
+                dim: 32,
+                k: 5,
+                query: Some("Alpha".into()),
+                query_vector: None,
+                query_model: None,
+                query_dim: None,
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(res.stale);
+    mgr.wait_for_rebuild("tail").await;
+    assert!(fired.load(Ordering::SeqCst), "hook never ran");
+
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("new-model"));
+    let conn = idx.lock_conn().unwrap();
+    let vec_of = |f: &str| -> Vec<u8> {
+        conn.query_row(
+            "SELECT vector_i8 FROM chunks WHERE file_path = ?1",
+            [f],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        vec_of("b.md"),
+        vec_of("a.md"),
+        "b.md kept its old-model vector under Ready"
+    );
+}
