@@ -112,7 +112,8 @@ pub const WIZARD_TOOL_CHOICES: &[&str] = &["brain_search", "brain_recent", "writ
 /// Strict allowlist of MCP tools exposed when `makakoo-mcp` runs in
 /// `--headless` engine mode: Brain + Folder Index only. Zero send/channel/chat
 /// tools, zero exec/shell/browse/pi/infect tools, zero agent/swarm/nursery
-/// tools, and no SANCHO clock trigger.
+/// tools, no SANCHO clock trigger, and no `costs_summary` (spend is tracked
+/// centrally outside the headless engine).
 pub const HEADLESS_TOOL_ALLOWLIST: &[&str] = &[
     "brain_context",
     "brain_entities",
@@ -120,7 +121,6 @@ pub const HEADLESS_TOOL_ALLOWLIST: &[&str] = &[
     "brain_recent",
     "brain_search",
     "brain_write_journal",
-    "costs_summary",
     "dream",
     "folder_index_mark_skipped",
     "folder_index_remove",
@@ -217,5 +217,32 @@ mod tests {
         for choice in WIZARD_TOOL_CHOICES {
             assert!(is_known_tool(choice), "wizard offers unknown tool {choice}");
         }
+    }
+
+    #[test]
+    fn headless_allowlist_is_sorted_subset_and_excludes_costs_summary() {
+        let mut sorted = HEADLESS_TOOL_ALLOWLIST.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            HEADLESS_TOOL_ALLOWLIST,
+            sorted.as_slice(),
+            "HEADLESS_TOOL_ALLOWLIST must be sorted"
+        );
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            HEADLESS_TOOL_ALLOWLIST.len(),
+            "duplicate entry in HEADLESS_TOOL_ALLOWLIST"
+        );
+        for tool in HEADLESS_TOOL_ALLOWLIST {
+            assert!(
+                TOOL_CATALOG.contains(tool),
+                "HEADLESS_TOOL_ALLOWLIST entry {tool} missing from TOOL_CATALOG"
+            );
+        }
+        assert!(
+            !HEADLESS_TOOL_ALLOWLIST.contains(&"costs_summary"),
+            "costs_summary must remain excluded from HEADLESS_TOOL_ALLOWLIST"
+        );
     }
 }

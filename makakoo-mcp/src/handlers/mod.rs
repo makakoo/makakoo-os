@@ -302,9 +302,10 @@ mod handler_contract_tests {
             .collect();
         assert_eq!(names, allowlist);
 
-        // Guard assertions: zero send, exec/shell, browse, pi, infect, agent, swarm, nursery, or sancho clock tools.
+        // Guard assertions: zero send, exec/shell, browse, pi, infect, agent, swarm, nursery, sancho clock, or cost-summary tools.
         for forbidden in [
             "chat_send",
+            "costs_summary",
             "harvey_telegram_send",
             "channel_messaging_send_dm",
             "channel_messaging_send_channel",
