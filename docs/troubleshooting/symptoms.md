@@ -22,6 +22,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ## A
 
+- **`--http address must not be empty`** — You passed `--http ""` (or whitespace only) to `makakoo-mcp`. Pass a listen spec such as `:8765` (binds loopback `--bind`, default `127.0.0.1`) or `127.0.0.1:8765`, or omit `--http` to run over stdio.
 - **`--http must be ADDR:PORT or :PORT`** — [Plugin install failed → invalid daemon flag](./tree.md#plugin-install-failed). Or: you passed `--http` without a valid listen spec to the MCP server; pass `:8765` or `0.0.0.0:8765`.
 - **`ambiguous path — <N> grants match <path>`** — You called `makakoo perms revoke --path <p>` and multiple grants' scopes cover the same path. Pick an id: `makakoo perms list` → `makakoo perms revoke <g_id>`.
 - **`SKILL.md declares entry: '<path>' but file does not exist in <dir>`** — Plugin `SKILL.md` frontmatter names an `entry:` file that isn't present. Either add the file or remove the declaration. Ziggy (mascot) surfaces this class of issue — see [ziggy.md](../mascots/ziggy.md).
@@ -41,6 +42,8 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ## D
 
+- **`distro lint failed: <error>`** — `makakoo distro lint` could not read, parse, or resolve the distro file or one of its `include` entries. Check the file path, TOML syntax, and included files, then re-run `makakoo distro lint <path>`.
+- **`distro <name> FAILED strict headless lint (<N> violation(s) across <M> plugin(s)):`** — One or more plugins in the resolved distro (including transitive `[depends].plugins`) violated strict headless policy (`exec/shell`, `exec/binary`, `language = "shell"`, `[install]` scripts, `secrets/*`, MCP registration, `brain/delete`, unlisted `net/*`, missing/invalid manifests, or send/messaging tools). Inspect the printed `[rule] plugin: detail` lines (or re-run with `--json`), remove or replace the offending plugins, or allowlist a specific endpoint with `--allow-net <scope>`.
 - **`duration <value> exceeds 365 days — shorten or split into multiple grants`** — `makakoo perms grant --for <duration>` accepts up to 365 days. Split into multiple grants if you truly need longer, or use `--for permanent` (requires `--yes-really` outside `$MAKAKOO_HOME`).
 
 ## E
@@ -67,6 +70,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ## H
 
+- **`headless daemon refused startup: enabled plugin(s) declare exec capability: <plugins>`** — `makakoo daemon run --headless` (or `MAKAKOO_HEADLESS=1`) fails closed when any enabled plugin under `$MAKAKOO_HOME/plugins/` uses `language = "shell"` or declares an `exec/*` capability grant. Disable or uninstall the listed plugins (or switch to a headless-clean distro verified by `makakoo distro lint`), then restart the daemon.
 - **`http <status>: <response text>`** — Generic LLM or HTTP gateway error. Common: `400: unknown provider for model <alias>` → [I ran a command and got an error → `error: llm error`](./tree.md#error-llm-error-http-400-unknown-provider-for-model-alias).
 
 ## I
