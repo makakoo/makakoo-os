@@ -339,3 +339,86 @@ async fn brain_short_vs_bulk_mismatch_blocks_vectors_and_unreachable_probe_keeps
     .is_empty());
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
 }
+
+fn rebuilding_store() -> (TempDir, SuperbrainStore) {
+    let dir = TempDir::new().unwrap();
+    let store = SuperbrainStore::open(&dir.path().join("brain.db")).unwrap();
+    store
+        .set_vectors_ready("qwen3-real", 3, "ail-embed", None)
+        .unwrap();
+    store.mark_vectors_rebuilding("rebuilding").unwrap();
+    (dir, store)
+}
+
+#[test]
+fn brain_stale_mark_never_hides_a_running_rebuild() {
+    let (_dir, store) = rebuilding_store();
+    assert!(!store
+        .mark_vectors_stale_unless_rebuilding("model_changed_on_probe")
+        .unwrap());
+    assert_eq!(
+        store.vector_status().unwrap().index_state,
+        IndexModelState::Rebuilding
+    );
+    store.mark_vectors_stale("rebuild_failed: x").unwrap();
+    assert!(store
+        .mark_vectors_stale_unless_rebuilding("model_changed_on_probe")
+        .unwrap());
+    let status = store.vector_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(
+        status.stale_reason.as_deref(),
+        Some("model_changed_on_probe")
+    );
+}
+
+#[test]
+fn brain_alias_only_ready_never_clears_a_running_rebuild_or_another_reason() {
+    let (_dir, store) = rebuilding_store();
+    let reasons = ["embed_alias_changed"];
+    assert!(!store
+        .set_vectors_ready_if_stale_for(&reasons, "qwen3-real", 3, "ail-embed", None)
+        .unwrap());
+    assert_eq!(
+        store.vector_status().unwrap().index_state,
+        IndexModelState::Rebuilding
+    );
+    // The state decides, not only the reason: a rebuild carrying an alias
+    // reason is still a rebuild.
+    store
+        .mark_vectors_rebuilding("embed_alias_changed")
+        .unwrap();
+    assert!(!store
+        .set_vectors_ready_if_stale_for(&reasons, "qwen3-real", 3, "ail-embed", None)
+        .unwrap());
+    store.mark_vectors_stale("model_mismatch: x").unwrap();
+    assert!(!store
+        .set_vectors_ready_if_stale_for(&reasons, "qwen3-real", 3, "ail-embed", None)
+        .unwrap());
+    assert_eq!(
+        store.vector_status().unwrap().index_state,
+        IndexModelState::Stale
+    );
+    store.mark_vectors_stale("embed_alias_changed").unwrap();
+    assert!(store
+        .set_vectors_ready_if_stale_for(&reasons, "qwen3-real", 3, "ail-embed", None)
+        .unwrap());
+    assert_eq!(
+        store.vector_status().unwrap().index_state,
+        IndexModelState::Ready
+    );
+}
+
+#[tokio::test]
+async fn brain_rebuild_wait_returns_when_finish_lands_between_lookup_and_await() {
+    let coord = Arc::new(BrainRebuildCoordinator::new());
+    let key = std::path::PathBuf::from("/brain/test.db");
+    assert!(coord.try_acquire(&key));
+    assert!(!coord.try_acquire(&key));
+    let (c2, k2) = (Arc::clone(&coord), key.clone());
+    // The rebuild finishes exactly after wait() looked the path up.
+    *coord.after_lookup.lock().unwrap() = Some(Box::new(move || c2.finish(&k2)));
+    tokio::time::timeout(std::time::Duration::from_secs(5), coord.wait(&key))
+        .await
+        .expect("wait() missed a finish between lookup and await");
+}

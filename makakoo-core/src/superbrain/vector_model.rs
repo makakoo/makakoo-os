@@ -67,13 +67,17 @@ fn write_state(conn: &Connection, state: IndexModelState, reason: Option<&str>) 
     Ok(())
 }
 
+fn read_index_state(conn: &Connection) -> Result<IndexModelState> {
+    match read_meta_opt(conn, META_INDEX_STATE)? {
+        Some(raw) => IndexModelState::parse(&raw),
+        None => Ok(IndexModelState::Ready),
+    }
+}
+
 impl SuperbrainStore {
     pub fn vector_status(&self) -> Result<BrainVectorStatus> {
         let conn = self.lock_conn()?;
-        let index_state = match read_meta_opt(&conn, META_INDEX_STATE)? {
-            Some(raw) => IndexModelState::parse(&raw)?,
-            None => IndexModelState::Ready,
-        };
+        let index_state = read_index_state(&conn)?;
         let embed_model = read_meta_opt(&conn, META_EMBED_MODEL)?;
         let embed_dim = match read_meta_opt(&conn, META_EMBED_DIM)? {
             Some(raw) => Some(
@@ -102,6 +106,47 @@ impl SuperbrainStore {
     pub fn mark_vectors_stale(&self, reason: &str) -> Result<()> {
         let conn = self.lock_conn()?;
         write_state(&conn, IndexModelState::Stale, Some(reason))
+    }
+
+    /// Probe/query-time stale mark: never overwrites `rebuilding`. Read and
+    /// write happen under one connection lock, the same lock a rebuild takes to
+    /// set `rebuilding`, so a probe racing a rebuild start cannot hide it.
+    pub fn mark_vectors_stale_unless_rebuilding(&self, reason: &str) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        if read_index_state(&conn)? == IndexModelState::Rebuilding {
+            return Ok(false);
+        }
+        write_state(&conn, IndexModelState::Stale, Some(reason))?;
+        Ok(true)
+    }
+
+    /// Clear an alias-only stale mark: writes `ready` only while the index is
+    /// still `stale` for one of `reasons`, under one lock. A rebuild that
+    /// started in between keeps its `rebuilding` state.
+    pub fn set_vectors_ready_if_stale_for(
+        &self,
+        reasons: &[&str],
+        model: &str,
+        dim: usize,
+        bulk_alias: &str,
+        short_alias: Option<&str>,
+    ) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        if read_index_state(&conn)? != IndexModelState::Stale {
+            return Ok(false);
+        }
+        let reason = read_meta_opt(&conn, META_STALE_REASON)?;
+        if !reason.as_deref().is_some_and(|r| reasons.contains(&r)) {
+            return Ok(false);
+        }
+        write_meta_opt(&conn, META_EMBED_MODEL, Some(model))?;
+        write_meta_opt(&conn, META_EMBED_DIM, Some(&dim.to_string()))?;
+        write_meta_opt(&conn, META_EMBED_ALIAS, Some(bulk_alias))?;
+        if let Some(short) = short_alias {
+            write_meta_opt(&conn, META_SHORT_EMBED_ALIAS, Some(short))?;
+        }
+        write_state(&conn, IndexModelState::Ready, None)?;
+        Ok(true)
     }
 
     pub fn mark_vectors_rebuilding(&self, reason: &str) -> Result<()> {

@@ -20,6 +20,8 @@ const REBUILD_BATCH_SIZE: usize = 32;
 #[derive(Default)]
 pub struct BrainRebuildCoordinator {
     active: Mutex<HashMap<PathBuf, Arc<Notify>>>,
+    #[cfg(test)]
+    pub(crate) after_lookup: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl BrainRebuildCoordinator {
@@ -34,14 +36,36 @@ impl BrainRebuildCoordinator {
 
     pub async fn wait(&self, db_path: &Path) {
         loop {
-            let waiter = {
+            let notify = {
                 let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-                guard.get(db_path).cloned()
+                match guard.get(db_path) {
+                    Some(n) => Arc::clone(n),
+                    None => return,
+                }
             };
-            match waiter {
-                Some(n) => n.notified().await,
-                None => return,
+            #[cfg(test)]
+            if let Some(hook) = self
+                .after_lookup
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
+                hook();
             }
+            // The rebuild task removes the entry before notifying, so re-check
+            // after the waiter is registered: a finish between lookup and await
+            // is not lost (`notify_waiters` stores no permit).
+            let notified = notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let still_same = {
+                let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+                guard.get(db_path).is_some_and(|n| Arc::ptr_eq(n, &notify))
+            };
+            if !still_same {
+                continue;
+            }
+            notified.await;
         }
     }
 
@@ -53,12 +77,8 @@ impl BrainRebuildCoordinator {
         observed_short: Option<(String, usize)>,
     ) {
         let key = store.path().to_path_buf();
-        {
-            let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.contains_key(&key) {
-                return;
-            }
-            guard.insert(key.clone(), Arc::new(Notify::new()));
+        if !self.try_acquire(&key) {
+            return;
         }
 
         let _ = store.mark_vectors_rebuilding("rebuilding");
@@ -69,14 +89,29 @@ impl BrainRebuildCoordinator {
             {
                 let _ = store.mark_vectors_stale(&format!("rebuild_failed: {err}"));
             }
-            let notify = {
-                let mut guard = coord.active.lock().unwrap_or_else(|e| e.into_inner());
-                guard.remove(&key)
-            };
-            if let Some(n) = notify {
-                n.notify_waiters();
-            }
+            coord.finish(&key);
         });
+    }
+
+    /// Claim the rebuild slot for `key`; false when one is already running.
+    pub(crate) fn try_acquire(&self, key: &Path) -> bool {
+        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.contains_key(key) {
+            return false;
+        }
+        guard.insert(key.to_path_buf(), Arc::new(Notify::new()));
+        true
+    }
+
+    /// Release the slot, then wake every waiter (removal first: see `wait`).
+    pub(crate) fn finish(&self, key: &Path) {
+        let notify = {
+            let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+            guard.remove(key)
+        };
+        if let Some(n) = notify {
+            n.notify_waiters();
+        }
     }
 }
 
@@ -179,7 +214,7 @@ pub async fn probe_and_reconcile_brain(
     let Ok(stats) = store.stats() else {
         return;
     };
-    if stats.vector_count == 0 {
+    if stats.vector_count == 0 || coordinator.is_active(store.path()) {
         return;
     }
     let Ok((bulk_model, bulk_dim)) = bulk_emb.probe_model().await else {
@@ -196,7 +231,7 @@ pub async fn probe_and_reconcile_brain(
 
     if let Some((ref short_model, short_dim)) = short_result {
         if short_model != &bulk_model || short_dim != bulk_dim {
-            let _ = store.mark_vectors_stale(SHORT_BULK_MISMATCH_REASON);
+            let _ = store.mark_vectors_stale_unless_rebuilding(SHORT_BULK_MISMATCH_REASON);
             return;
         }
     }
@@ -218,7 +253,12 @@ pub async fn probe_and_reconcile_brain(
                 )
             )
         {
-            let _ = store.set_vectors_ready(
+            let _ = store.set_vectors_ready_if_stale_for(
+                &[
+                    "embed_alias_changed",
+                    "short_embed_alias_changed",
+                    SHORT_BULK_MISMATCH_REASON,
+                ],
                 &bulk_model,
                 bulk_dim,
                 bulk_emb.model(),
@@ -232,7 +272,13 @@ pub async fn probe_and_reconcile_brain(
         return;
     }
 
-    let _ = store.mark_vectors_stale("model_changed_on_probe");
+    // A rebuild that started after the is_active check owns the state.
+    if !matches!(
+        store.mark_vectors_stale_unless_rebuilding("model_changed_on_probe"),
+        Ok(true)
+    ) {
+        return;
+    }
     coordinator.spawn_rebuild(store, bulk_emb, short_emb, short_result);
 }
 
@@ -273,7 +319,10 @@ pub async fn search_brain_vectors_checked(
                 status.embed_dim, res.dim
             )
         };
-        store.mark_vectors_stale(&reason)?;
+        // A running rebuild owns the state: answer from FTS until it lands.
+        if !store.mark_vectors_stale_unless_rebuilding(&reason)? {
+            return Ok(Vec::new());
+        }
         let fresh_status = store.vector_status()?;
         maybe_trigger_brain_rebuild(
             store,
