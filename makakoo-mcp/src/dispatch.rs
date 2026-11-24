@@ -210,6 +210,10 @@ impl ToolContext {
         self.bulk_emb = Some(bulk_emb);
         self
     }
+    pub fn with_brain_rebuild(mut self, brain_rebuild: Arc<BrainRebuildCoordinator>) -> Self {
+        self.brain_rebuild = brain_rebuild;
+        self
+    }
     #[allow(dead_code)]
     pub fn with_chat(mut self, chat_store: Arc<ChatStore>) -> Self {
         self.chat_store = Some(chat_store);

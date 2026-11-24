@@ -239,20 +239,10 @@ async fn run_http(
     http_server::serve(bind_addr, state).await
 }
 
-/// Build a best-effort [`ToolContext`]. T13 extends this from the T12
-/// minimal skeleton to wire every subsystem the Tier-A handlers touch:
-///
-///   - [`LlmClient`] / [`EmbeddingClient`]: always constructed (env-driven).
-///   - [`SuperbrainStore`]: opens `$MAKAKOO_HOME/data/superbrain.db`.
-///   - [`GraphStore`] + [`MemoryStack`]: share the store's connection.
-///   - [`ChatStore`]: opens `$MAKAKOO_HOME/data/chat.db`.
-///   - [`CostTracker`]: shares the superbrain connection (costs table).
-///   - [`MascotRegistry`] + [`BuddyTracker`]: JSON files under `data/`.
-///   - [`AgentScaffold`]: rooted at `$MAKAKOO_HOME/agents`.
-///
-/// Every subsystem construction is wrapped in a best-effort block —
-/// a failure logs a warning and leaves that slot `None` so `--list-tools`
-/// and `--health` stay usable even on a fresh clone with no Brain yet.
+/// Build a best-effort [`ToolContext`] wiring LLM, embeddings, Superbrain
+/// store (+ open probe on the shared coordinator), graph, memory stack, recall,
+/// costs, chat, nursery, buddy, agents, and swarm. Failures log a warning and
+/// leave that slot `None` so `--list-tools` and `--health` stay usable.
 #[allow(dead_code)]
 async fn build_context() -> Result<ToolContext> {
     build_context_with_options(false, None).await
@@ -274,11 +264,15 @@ async fn build_context_with_options(
             .with_embedders(Arc::clone(&emb), Arc::clone(&bulk_emb)),
     );
 
+    let brain_rebuild =
+        Arc::new(makakoo_core::superbrain::vector_model::BrainRebuildCoordinator::new());
+
     let mut ctx = ToolContext::empty(home.clone())
         .with_llm(llm)
         .with_embeddings(Arc::clone(&emb))
         .with_bulk_embeddings(Arc::clone(&bulk_emb))
-        .with_folder_index(folder_index);
+        .with_folder_index(folder_index)
+        .with_brain_rebuild(Arc::clone(&brain_rebuild));
 
     // Superbrain store (+ graph, memory stack, cost tracker sharing its conn).
     match makakoo_core::superbrain::store::SuperbrainStore::open(&data.join("superbrain.db")) {
@@ -289,7 +283,7 @@ async fn build_context_with_options(
                 Arc::clone(&store_arc),
                 Some(Arc::clone(&emb)),
                 Arc::clone(&bulk_emb),
-                Arc::clone(&ctx.brain_rebuild),
+                Arc::clone(&brain_rebuild),
             );
             let graph = Arc::new(makakoo_core::superbrain::graph::GraphStore::new(
                 Arc::clone(&conn),

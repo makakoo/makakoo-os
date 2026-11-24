@@ -7,18 +7,14 @@
 use std::sync::Arc;
 
 use makakoo_core::sancho::handlers::{DreamHandler, LlmCall};
-use makakoo_core::sancho::registry::{SanchoContext, SanchoHandler};
+use makakoo_core::sancho::registry::SanchoHandler;
 
 use crate::context::CliContext;
 use crate::output;
 
 pub async fn run(ctx: &CliContext) -> anyhow::Result<i32> {
-    let store = ctx.store()?;
-    let bus = ctx.event_bus()?;
-    let llm = ctx.llm();
-    let emb = ctx.embeddings();
-    let sancho_ctx = SanchoContext::new(store, bus, Arc::clone(&llm), emb, ctx.home().clone());
-    let llm_for_dream: Arc<dyn LlmCall> = Arc::clone(&llm) as Arc<dyn LlmCall>;
+    let sancho_ctx = ctx.build_sancho_context()?;
+    let llm_for_dream: Arc<dyn LlmCall> = Arc::clone(&sancho_ctx.llm) as Arc<dyn LlmCall>;
     let handler = DreamHandler::new(llm_for_dream);
     output::print_info("dream: consolidating recent Brain docs...");
     let report = handler.run(&sancho_ctx).await?;

@@ -12,6 +12,7 @@
 //! main.rs covers that intentional API surface.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -23,10 +24,14 @@ use makakoo_core::event_bus::PersistentEventBus;
 use makakoo_core::llm::LlmClient;
 use makakoo_core::nursery::{BuddyTracker, MascotRegistry};
 use makakoo_core::platform::makakoo_home;
+use makakoo_core::sancho::SanchoContext;
 use makakoo_core::superbrain::graph::GraphStore;
 use makakoo_core::superbrain::memory_stack::MemoryStack;
 use makakoo_core::superbrain::promoter::MemoryPromoter;
 use makakoo_core::superbrain::store::SuperbrainStore;
+use makakoo_core::superbrain::vector_model::{
+    check_and_probe_brain_on_open, BrainRebuildCoordinator,
+};
 
 /// Bundle of lazily-opened subsystems the CLI commands share.
 pub struct CliContext {
@@ -49,6 +54,8 @@ pub struct CliContext {
     llm: OnceCell<Arc<LlmClient>>,
     emb: OnceCell<Arc<EmbeddingClient>>,
     bulk_emb: OnceCell<Arc<EmbeddingClient>>,
+    brain_rebuild: Arc<BrainRebuildCoordinator>,
+    brain_probed: AtomicBool,
 }
 
 impl CliContext {
@@ -76,6 +83,8 @@ impl CliContext {
             llm: OnceCell::new(),
             emb: OnceCell::new(),
             bulk_emb: OnceCell::new(),
+            brain_rebuild: Arc::new(BrainRebuildCoordinator::new()),
+            brain_probed: AtomicBool::new(false),
         })
     }
 
@@ -109,6 +118,8 @@ impl CliContext {
             llm: OnceCell::new(),
             emb: OnceCell::new(),
             bulk_emb: OnceCell::new(),
+            brain_rebuild: Arc::new(BrainRebuildCoordinator::new()),
+            brain_probed: AtomicBool::new(false),
         }
     }
 
@@ -239,6 +250,42 @@ impl CliContext {
         self.bulk_emb
             .get_or_init(|| Arc::new(EmbeddingClient::new_bulk()))
             .clone()
+    }
+
+    /// The single process-wide Brain vector rebuild coordinator shared by the
+    /// store-open probe and SANCHO contexts in this process.
+    pub fn brain_rebuild(&self) -> Arc<BrainRebuildCoordinator> {
+        Arc::clone(&self.brain_rebuild)
+    }
+
+    /// Open the Superbrain store and run the non-blocking alias/endpoint probe
+    /// once per process against this context's shared [`BrainRebuildCoordinator`].
+    pub fn probe_brain_on_open(&self) -> anyhow::Result<Arc<SuperbrainStore>> {
+        let store = self.store()?;
+        if !self.brain_probed.swap(true, Ordering::SeqCst) {
+            check_and_probe_brain_on_open(
+                Arc::clone(&store),
+                Some(self.embeddings()),
+                self.bulk_embeddings(),
+                self.brain_rebuild(),
+            );
+        }
+        Ok(store)
+    }
+
+    /// Construct a [`SanchoContext`] wired to this process's shared
+    /// [`BrainRebuildCoordinator`] and embedding clients.
+    pub fn build_sancho_context(&self) -> anyhow::Result<Arc<SanchoContext>> {
+        let store = self.store()?;
+        let bus = self.event_bus()?;
+        let llm = self.llm();
+        let emb = self.embeddings();
+        let bulk_emb = self.bulk_embeddings();
+        Ok(Arc::new(
+            SanchoContext::new(store, bus, llm, emb, self.home.clone())
+                .with_bulk_embeddings(bulk_emb)
+                .with_brain_rebuild(self.brain_rebuild()),
+        ))
     }
 }
 
