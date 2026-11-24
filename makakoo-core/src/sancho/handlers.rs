@@ -524,6 +524,8 @@ pub struct SuperbrainSyncEmbedHandler {
 }
 
 impl SuperbrainSyncEmbedHandler {
+    /// Per-tick top-up budget (`max_docs` documents; HTTP requests are split
+    /// into chunks obeying `EmbeddingClient::request_limits()`).
     pub fn new() -> Self {
         Self { max_docs: 32 }
     }
@@ -559,7 +561,6 @@ impl SanchoHandler for SuperbrainSyncEmbedHandler {
                 Arc::clone(&ctx.bulk_emb),
                 Some(Arc::clone(&ctx.emb)),
                 self.max_docs,
-                crate::superbrain::vector_model::DEFAULT_EMBED_TRUNCATE_CHARS,
             )
             .await;
         let msg = match outcome {

@@ -14,7 +14,7 @@ use crate::superbrain::folder_index::IndexModelState;
 use crate::superbrain::store::SuperbrainStore;
 use crate::superbrain::vector_model::{
     probe_and_reconcile_brain, rebuild_brain_vectors, search_brain_vectors_checked,
-    BrainRebuildCoordinator, DEFAULT_EMBED_TRUNCATE_CHARS,
+    BrainRebuildCoordinator,
 };
 
 #[derive(Clone)]
@@ -186,7 +186,7 @@ async fn brain_model_switch_rebuilds_in_background_and_returns_empty_vectors_unt
     // A fresh Brain is filled by the coordinated rebuild, never by the top-up path.
     assert_eq!(
         store
-            .sync_vectors_with_embedder(&bulk_emb, 10, DEFAULT_EMBED_TRUNCATE_CHARS)
+            .sync_vectors_with_embedder(&bulk_emb, 10)
             .await
             .unwrap(),
         0

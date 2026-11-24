@@ -397,14 +397,11 @@ impl BrainRebuildCoordinator {
         bulk: Arc<EmbeddingClient>,
         short: Option<Arc<EmbeddingClient>>,
         limit: usize,
-        truncate_chars: usize,
     ) -> Result<BrainSyncOutcome> {
         let status = store.vector_status()?;
         let has_model = status.embed_model.is_some() && status.embed_dim.is_some();
         if status.index_state == IndexModelState::Ready && has_model {
-            let n = store
-                .sync_vectors_with_embedder(&bulk, limit, truncate_chars)
-                .await?;
+            let n = store.sync_vectors_with_embedder(&bulk, limit).await?;
             return Ok(BrainSyncOutcome::ToppedUp(n));
         }
         if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {

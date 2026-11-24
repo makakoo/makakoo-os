@@ -22,7 +22,7 @@ use crate::superbrain::folder_index::model_meta::SHORT_BULK_MISMATCH_REASON;
 use crate::superbrain::folder_index::IndexModelState;
 use crate::superbrain::store::SuperbrainStore;
 use crate::superbrain::vector_model::{
-    rebuild_brain_vectors, BrainRebuildCoordinator, BrainSyncOutcome, DEFAULT_EMBED_TRUNCATE_CHARS,
+    rebuild_brain_vectors, BrainRebuildCoordinator, BrainSyncOutcome,
 };
 
 #[derive(Clone)]
@@ -293,7 +293,6 @@ async fn sancho_tick_skips_when_live_rebuild_lease_held_by_other_owner() {
             Arc::clone(&ctx.bulk_emb),
             Some(Arc::clone(&ctx.emb)),
             32,
-            DEFAULT_EMBED_TRUNCATE_CHARS,
         )
         .await
         .unwrap();

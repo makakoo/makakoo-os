@@ -4,7 +4,6 @@
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::folder_index::model_meta::{
@@ -48,7 +47,10 @@ mod timeout_tests;
 #[path = "vector_cancel_race_tests.rs"]
 mod cancel_race_tests;
 
-pub const DEFAULT_EMBED_TRUNCATE_CHARS: usize = 2000;
+#[cfg(test)]
+#[path = "vector_limits_tests.rs"]
+mod limits_tests;
+
 /// Stale reason when a top-up finds the endpoint answering with another model.
 pub const EMBED_MODEL_CHANGED_REASON: &str = "embed_model_changed";
 
@@ -435,53 +437,5 @@ impl SuperbrainStore {
             }
         }
         self.vector_status()
-    }
-
-    /// Top up documents that have no vector yet, under the active model only.
-    ///
-    /// This is the incremental path (SANCHO tick, `makakoo sync --embed` on a
-    /// ready index). It never rebuilds and never sets `ready`: when the index
-    /// is not ready, or the endpoint now answers with another model or size,
-    /// the coordinated rebuild (`rebuild_brain_vectors`) owns the change. A
-    /// model change is handed over by a stale mark the next probe or query
-    /// acts on; each write re-checks `ready` + `(model, dim)` and upserts
-    /// inside one `BEGIN IMMEDIATE` transaction, so a rebuild that started
-    /// meanwhile (in-process or cross-process) is never mixed into.
-    pub async fn sync_vectors_with_embedder(
-        &self,
-        embedder: &EmbeddingClient,
-        limit: usize,
-        truncate_chars: usize,
-    ) -> Result<usize> {
-        if limit == 0 {
-            return Ok(0);
-        }
-        let status = self.vector_status()?;
-        let (IndexModelState::Ready, Some(model), Some(dim)) =
-            (status.index_state, status.embed_model, status.embed_dim)
-        else {
-            return Ok(0);
-        };
-        let mut written = 0usize;
-        for (doc_id, content) in self.docs_missing_vectors(limit)? {
-            let truncated: String = content.chars().take(truncate_chars).collect();
-            let Ok(res) = embedder.embed_with_meta(&truncated).await else {
-                continue;
-            };
-            if res.vector.is_empty() {
-                continue;
-            }
-            if res.model != model || res.dim != dim {
-                self.mark_stale_if_ready_for(&model, dim, EMBED_MODEL_CHANGED_REASON)?;
-                break;
-            }
-            match self.store_vector_if_ready_for(&doc_id, &res.vector, &model, dim) {
-                Ok(true) => written += 1,
-                Ok(false) => break,
-                Err(MakakooError::NotFound(_)) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(written)
     }
 }

@@ -10,9 +10,7 @@ use crate::error::{MakakooError, Result};
 use super::folder_index::model_meta::{IndexModelState, SHORT_BULK_MISMATCH_REASON};
 use super::store::SuperbrainStore;
 use super::vector_claim::{mark_stale_for_owner_with_retry, HeartbeatGuard};
-use super::vector_model::DEFAULT_EMBED_TRUNCATE_CHARS;
-
-const REBUILD_BATCH_SIZE: usize = 32;
+use super::vector_model::EMBED_MODEL_CHANGED_REASON;
 
 /// Optional per-call timeout override (ms) for embed and probe requests inside
 /// a Brain vector rebuild.
@@ -232,18 +230,20 @@ async fn rebuild_brain_vectors_body(
     }
 
     let embed_timeout = resolve_rebuild_call_timeout(&bulk_emb, false);
+    let limits = bulk_emb.request_limits();
+    let batch_size = limits.max_batch.max(1);
     let mut written = 0usize;
     loop {
         // `docs_needing_vectors` skips docs that already carry a `(b_model, b_dim)`
         // vector, making interrupted or cancelled rebuilds resumable.
-        let batch = store.docs_needing_vectors(&b_model, b_dim, REBUILD_BATCH_SIZE)?;
+        let batch = store.docs_needing_vectors(&b_model, b_dim, batch_size)?;
         if batch.is_empty() {
             break;
         }
         store.touch_rebuild_heartbeat(owner)?;
         let texts: Vec<String> = batch
             .iter()
-            .map(|(_, content)| content.chars().take(DEFAULT_EMBED_TRUNCATE_CHARS).collect())
+            .map(|(_, content)| limits.truncate_input(content).to_string())
             .collect();
         let res = embed_batch_with_timeout(&bulk_emb, &texts, embed_timeout).await?;
         if res.vectors.len() != batch.len() {
@@ -311,6 +311,72 @@ pub async fn rebuild_brain_vectors(
     result
 }
 
+impl SuperbrainStore {
+    /// Top up documents that have no vector yet, under the active model only.
+    ///
+    /// This is the incremental path (SANCHO tick, `makakoo sync --embed` on a
+    /// ready index). It never rebuilds and never sets `ready`: when the index
+    /// is not ready, or the endpoint now answers with another model or size,
+    /// the coordinated rebuild (`rebuild_brain_vectors`) owns the change.
+    /// Requests obey `embedder.request_limits()` (at most `max_batch` inputs
+    /// per HTTP request and `max_input_bytes` UTF-8 bytes per input), and each
+    /// write re-checks `ready` + `(model, dim)` inside one `BEGIN IMMEDIATE`
+    /// transaction so a concurrent rebuild is never mixed into.
+    pub async fn sync_vectors_with_embedder(
+        &self,
+        embedder: &EmbeddingClient,
+        limit: usize,
+    ) -> Result<usize> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let status = self.vector_status()?;
+        let (IndexModelState::Ready, Some(model), Some(dim)) =
+            (status.index_state, status.embed_model, status.embed_dim)
+        else {
+            return Ok(0);
+        };
+        let limits = embedder.request_limits();
+        let missing = self.docs_missing_vectors(limit)?;
+        let mut written = 0usize;
+        for chunk in missing.chunks(limits.max_batch.max(1)) {
+            let texts: Vec<String> = chunk
+                .iter()
+                .map(|(_, content)| limits.truncate_input(content).to_string())
+                .collect();
+            let Ok(res) = embedder.embed_batch_with_meta(&texts).await else {
+                continue;
+            };
+            if res.vectors.len() != chunk.len() {
+                continue;
+            }
+            if res.model != model || res.dim != dim {
+                self.mark_stale_if_ready_for(&model, dim, EMBED_MODEL_CHANGED_REASON)?;
+                break;
+            }
+            let mut stopped = false;
+            for ((doc_id, _), vec) in chunk.iter().zip(res.vectors) {
+                if vec.is_empty() {
+                    continue;
+                }
+                match self.store_vector_if_ready_for(doc_id, &vec, &model, dim) {
+                    Ok(true) => written += 1,
+                    Ok(false) => {
+                        stopped = true;
+                        break;
+                    }
+                    Err(MakakooError::NotFound(_)) => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+            if stopped {
+                break;
+            }
+        }
+        Ok(written)
+    }
+}
+
 /// Inline embedding entry point for the CLI (`makakoo sync --embed`). On a
 /// ready index with a recorded model, tops up at most `limit` missing docs.
 /// Otherwise claims an owner-fenced rebuild and runs it inline.
@@ -319,14 +385,11 @@ pub async fn embed_pending_brain(
     bulk: Arc<EmbeddingClient>,
     short: Option<Arc<EmbeddingClient>>,
     limit: usize,
-    truncate_chars: usize,
 ) -> Result<usize> {
     let status = store.vector_status()?;
     let has_model = status.embed_model.is_some() && status.embed_dim.is_some();
     if status.index_state == IndexModelState::Ready && has_model {
-        return store
-            .sync_vectors_with_embedder(&bulk, limit, truncate_chars)
-            .await;
+        return store.sync_vectors_with_embedder(&bulk, limit).await;
     }
     if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
         return Ok(0);

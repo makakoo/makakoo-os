@@ -26,7 +26,6 @@ use crate::superbrain::store::{SourceMetadata, SuperbrainStore};
 use crate::superbrain::vector_model::embed_pending_brain;
 
 const MIN_CONTENT_CHARS: usize = 20;
-const EMBED_TRUNCATE_CHARS: usize = 2000;
 const EDGE_ENTITY_PREFIX: &str = "__makakoo_edge__|";
 
 /// What happened to a single file during sync.
@@ -348,14 +347,7 @@ impl IngestEngine {
         short: Option<Arc<EmbeddingClient>>,
         limit: usize,
     ) -> Result<usize> {
-        embed_pending_brain(
-            Arc::clone(&self.store),
-            bulk,
-            short,
-            limit,
-            EMBED_TRUNCATE_CHARS,
-        )
-        .await
+        embed_pending_brain(Arc::clone(&self.store), bulk, short, limit).await
     }
 
     // ───────── internal ─────────

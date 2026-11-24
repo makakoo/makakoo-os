@@ -365,7 +365,7 @@ impl Respond for BackdatingBatchResponder {
 async fn rebuild_refreshes_heartbeat_per_batch_and_before_finish() {
     let dir = TempDir::new().unwrap();
     let store = Arc::new(SuperbrainStore::open(&dir.path().join("sb.db")).unwrap());
-    // 35 docs > REBUILD_BATCH_SIZE (32) forces 2 batches (32 + 3).
+    // 35 docs > DEFAULT_EMBED_MAX_BATCH (16) forces 3 batches (16 + 16 + 3).
     for i in 0..35 {
         store
             .write_document(
@@ -441,7 +441,7 @@ async fn rebuild_refreshes_heartbeat_per_batch_and_before_finish() {
 
     let hbs = observed_batch_hbs.lock().unwrap().clone();
     let backs = backdated_to.lock().unwrap().clone();
-    assert_eq!(hbs.len(), 2, "expected 2 batch requests for 35 docs");
+    assert_eq!(hbs.len(), 3, "expected 3 batch requests for 35 docs");
     assert!(
         hbs[0] > initial_backdated,
         "heartbeat must advance before batch 1"
@@ -449,6 +449,10 @@ async fn rebuild_refreshes_heartbeat_per_batch_and_before_finish() {
     assert!(
         hbs[1] > backs[0],
         "heartbeat must advance between batch 1 and batch 2"
+    );
+    assert!(
+        hbs[2] > backs[1],
+        "heartbeat must advance between batch 2 and batch 3"
     );
 
     let audit_counts: Vec<i64> = {
@@ -463,8 +467,12 @@ async fn rebuild_refreshes_heartbeat_per_batch_and_before_finish() {
             .collect()
     };
     assert!(
+        audit_counts.contains(&16),
+        "expected heartbeat touch after batch 1 (vec_count=16); audit={audit_counts:?}"
+    );
+    assert!(
         audit_counts.contains(&32),
-        "expected heartbeat touch after batch 1 (vec_count=32); audit={audit_counts:?}"
+        "expected heartbeat touch after batch 2 (vec_count=32); audit={audit_counts:?}"
     );
     assert!(
         audit_counts.contains(&35),

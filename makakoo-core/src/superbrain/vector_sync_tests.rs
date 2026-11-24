@@ -16,8 +16,7 @@ use crate::superbrain::graph::GraphStore;
 use crate::superbrain::ingest::IngestEngine;
 use crate::superbrain::store::SuperbrainStore;
 use crate::superbrain::vector_model::{
-    embed_pending_brain, rebuild_brain_vectors, BrainRebuildCoordinator,
-    DEFAULT_EMBED_TRUNCATE_CHARS, EMBED_MODEL_CHANGED_REASON,
+    embed_pending_brain, rebuild_brain_vectors, BrainRebuildCoordinator, EMBED_MODEL_CHANGED_REASON,
 };
 
 /// One endpoint for every alias: answers with `model` at `dim`, counts calls.
@@ -98,7 +97,7 @@ fn vector_models(store: &SuperbrainStore) -> Vec<Option<String>> {
 
 async fn top_up(r: &Rig) -> usize {
     r.store
-        .sync_vectors_with_embedder(&r.bulk, 10, DEFAULT_EMBED_TRUNCATE_CHARS)
+        .sync_vectors_with_embedder(&r.bulk, 10)
         .await
         .unwrap()
 }
@@ -290,15 +289,9 @@ async fn a_dead_rebuild_claim_is_taken_over_after_its_lease() {
             [],
         )
         .unwrap();
-    let written = embed_pending_brain(
-        Arc::clone(&r.store),
-        Arc::clone(&r.bulk),
-        None,
-        10,
-        DEFAULT_EMBED_TRUNCATE_CHARS,
-    )
-    .await
-    .unwrap();
+    let written = embed_pending_brain(Arc::clone(&r.store), Arc::clone(&r.bulk), None, 10)
+        .await
+        .unwrap();
     assert_eq!(written, 1);
     assert_eq!(
         r.store.vector_status().unwrap().index_state,

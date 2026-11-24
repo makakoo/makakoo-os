@@ -393,8 +393,8 @@ fn one_shot_sancho_tick_timeout_cancels_claim_and_next_tick_resumes_skipping_don
     let db_path = dir.path().join("data/superbrain.db");
     {
         let seed = SuperbrainStore::open(&db_path).unwrap();
-        // 35 docs > REBUILD_BATCH_SIZE (32): tick 1 embeds 32 docs, hangs on
-        // the remaining 3, and hits the wait bound.
+        // 35 docs > DEFAULT_EMBED_MAX_BATCH (16): tick 1 embeds 16 docs, hangs on
+        // batch 2, and hits the wait bound.
         for i in 0..35 {
             seed.write_document(
                 &format!("pages/doc-{i:02}.md"),
@@ -425,7 +425,7 @@ fn one_shot_sancho_tick_timeout_cancels_claim_and_next_tick_resumes_skipping_don
     ]);
 
     rt.block_on(async move {
-        // Tick 1: completes batch 1 (32 docs), hangs on batch 2, hits 350ms bound.
+        // Tick 1: completes batch 1 (16 docs), hangs on batch 2, hits 350ms bound.
         let ctx1 = CliContext::for_home(dir.path().to_path_buf());
         let out1 = tokio::time::timeout(Duration::from_secs(5), run_tick_detailed(&ctx1))
             .await
@@ -444,7 +444,7 @@ fn one_shot_sancho_tick_timeout_cancels_claim_and_next_tick_resumes_skipping_don
         );
         assert!(read_meta(&verify1, "rebuild_owner").is_none());
         assert!(read_meta(&verify1, "rebuild_heartbeat_ms").is_none());
-        assert_eq!(verify1.stats().unwrap().vector_count, 32);
+        assert_eq!(verify1.stats().unwrap().vector_count, 16);
 
         // Unblock mock server and reset recorded batch inputs.
         mock.hang_second_batch.store(false, Ordering::SeqCst);
@@ -452,7 +452,7 @@ fn one_shot_sancho_tick_timeout_cancels_claim_and_next_tick_resumes_skipping_don
         mock.batch_inputs.lock().unwrap().clear();
 
         // Tick 2 (fresh process/CliContext, no 120s wait): claims immediately
-        // and embeds ONLY the remaining 3 docs (skips the 32 already-embedded).
+        // and embeds ONLY the remaining 19 docs in batches of <=16 (skips 16 done).
         std::env::set_var("MAKAKOO_SANCHO_REBUILD_WAIT_MS", "5000");
         let ctx2 = CliContext::for_home(dir.path().to_path_buf());
         let out2 = tokio::time::timeout(Duration::from_secs(10), run_tick_detailed(&ctx2))
@@ -469,8 +469,8 @@ fn one_shot_sancho_tick_timeout_cancels_claim_and_next_tick_resumes_skipping_don
         assert_eq!(verify2.stats().unwrap().vector_count, 35);
         assert_eq!(
             mock.batch_inputs.lock().unwrap().as_slice(),
-            &[3],
-            "resumed tick must embed only the 3 remaining docs, not re-embed the 32 done docs"
+            &[16, 3],
+            "resumed tick must embed only the 19 remaining docs, not re-embed the 16 done docs"
         );
     });
 }

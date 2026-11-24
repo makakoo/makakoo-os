@@ -315,8 +315,8 @@ async fn hung_probe_times_out_releases_claim_and_second_claimant_succeeds() {
 async fn multi_batch_rebuild_has_no_whole_rebuild_ceiling() {
     let dir = TempDir::new().unwrap();
     let store = Arc::new(SuperbrainStore::open(&dir.path().join("sb.db")).unwrap());
-    // 65 docs -> 3 batches (32 + 32 + 1). Each batch sleeps 90 ms (< 220 ms
-    // per-call timeout), so total rebuild time (~270 ms) exceeds 1x call timeout.
+    // 65 docs -> 5 batches (16 + 16 + 16 + 16 + 1). Each batch sleeps 90 ms
+    // (< 220 ms per-call timeout), so total rebuild time (~450 ms) exceeds 1x call timeout.
     for i in 0..65 {
         store
             .write_document(
@@ -341,7 +341,10 @@ async fn multi_batch_rebuild_has_no_whole_rebuild_ceiling() {
         store.vector_status().unwrap().index_state,
         IndexModelState::Ready
     );
-    assert_eq!(slow.batch_inputs.lock().unwrap().as_slice(), &[32, 32, 1]);
+    assert_eq!(
+        slow.batch_inputs.lock().unwrap().as_slice(),
+        &[16, 16, 16, 16, 1]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -375,7 +378,7 @@ async fn cancelled_rebuild_releases_claim_and_resume_skips_already_embedded_docs
     })
     .await
     .expect("rebuild never reached second (gated) batch");
-    assert_eq!(store.stats().unwrap().vector_count, 32);
+    assert_eq!(store.stats().unwrap().vector_count, 16);
 
     // Cancel active rebuild: must write owner-checked `rebuild_cancelled` and free claim.
     coord.cancel_active_rebuilds().await;
@@ -386,7 +389,7 @@ async fn cancelled_rebuild_releases_claim_and_resume_skips_already_embedded_docs
     assert!(read_meta(&store, META_REBUILD_HEARTBEAT).is_none());
     assert!(!coord.is_active(store.path()));
 
-    // Resume immediately without waiting 120 s lease; only remaining 3 docs get embedded.
+    // Resume immediately without waiting 120 s lease; only remaining 19 docs get embedded.
     srv.hang_enabled.store(false, Ordering::SeqCst);
     srv.gate_release.notify_waiters();
     srv.batch_inputs.lock().unwrap().clear();
@@ -407,7 +410,7 @@ async fn cancelled_rebuild_releases_claim_and_resume_skips_already_embedded_docs
     assert_eq!(store.stats().unwrap().vector_count, 35);
     assert_eq!(
         srv.batch_inputs.lock().unwrap().as_slice(),
-        &[3],
-        "resumed rebuild must skip the 32 docs already embedded with (model-v2, 4)"
+        &[16, 3],
+        "resumed rebuild must skip the 16 docs already embedded with (model-v2, 4)"
     );
 }

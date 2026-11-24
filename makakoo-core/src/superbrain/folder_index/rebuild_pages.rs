@@ -17,8 +17,6 @@ use super::FolderIndex;
 
 /// Chunks read per page.
 pub(crate) const REBUILD_PAGE_ROWS: usize = 256;
-/// Texts per embedding request.
-const EMBED_BATCH: usize = 32;
 
 /// Create (or empty) the parking table for this connection's rebuild.
 pub(crate) fn reset_parked(conn: &Connection) -> Result<()> {
@@ -54,9 +52,13 @@ pub(crate) async fn reembed_pages(
         if page.is_empty() {
             continue;
         }
+        let limits = bulk.request_limits();
         let mut vectors: Vec<(i64, String, Vec<i8>)> = Vec::with_capacity(page.len());
-        for batch in page.chunks(EMBED_BATCH) {
-            let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
+        for batch in page.chunks(limits.max_batch.max(1)) {
+            let texts: Vec<String> = batch
+                .iter()
+                .map(|(_, t)| limits.truncate_input(t).to_string())
+                .collect();
             let res = bulk.embed_batch_with_meta(&texts).await?;
             if res.vectors.len() != batch.len() {
                 return Err(MakakooError::llm(format!(
