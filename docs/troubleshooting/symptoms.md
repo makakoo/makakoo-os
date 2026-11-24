@@ -30,6 +30,9 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 ## B
 
 - **`blake3 mismatch`** — [Plugin install failed → blake3 mismatch](./tree.md#plugin-install-failed).
+- **`brain vector rebuild claim lost to another owner`** — A Brain vector index rebuild stalled longer than its heartbeat lease (`120s`) and another process or coordinator took over the rebuild claim. The stalled worker stopped without touching the new owner's vectors or state; no action is needed unless rebuilds repeatedly time out against a slow embedding endpoint.
+- **`brain vector rebuild scheduled in background`** — `superbrain_sync_embed` saw a non-ready or uninitialized Brain vector index and handed the rebuild to the background coordinator instead of blocking the SANCHO tick. FTS search stays available while vectors rebuild.
+- **`brain vector rebuild skipped (already running or model mismatch)`** — `superbrain_sync_embed` did not start a rebuild because one is already active, the Brain has no documents yet, or short and bulk embedding endpoints reported different models (`short_bulk_model_mismatch`).
 - **``bundled adapter `switchailocal` not found``** — The release-bundled adapter catalog could not be located. Re-run `makakoo update --method curl-pipe` or reinstall from `https://makakoo.com/install.sh`; if running from a source checkout, run commands from the repo root or set `MAKAKOO_BUNDLED_ADAPTERS=<repo>/plugins-core/adapters`.
 
 ## C
@@ -130,6 +133,7 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 - **`slot archived but destroy no longer owns <run-dir>; refusing to unlink its runtime lock`** — The destroy transaction lost its exclusive shutdown guard after archiving. Leave the lock file in place, verify no slot supervisor is running, and restore from the printed archive before retrying.
 - **`<slot>: supervisor owns runtime lock after shutdown grace: <error>`** — The supervisor did not release its singleton lock after graceful and identity-checked forced shutdown. Inspect the same-user supervisor PID and service-manager logs; do not destroy until the lock is released.
 - **`<slot>: supervisor process(es) [...] survived forced shutdown`** / **`survived shutdown; refusing cleanup`** — A same-user process still matches `agent _supervisor --slot <slot>` after the stop grace. Verify the PID/command, terminate it, and retry; Makakoo intentionally refuses to remove run state while it survives.
+- **`sancho: brain vector rebuild finished`** — Informational line printed by one-shot `makakoo sancho tick` after waiting for a background Brain vector rebuild spawned during that tick to finish before exiting.
 - **`session <id> has no entries — cannot label`** — Session-tree label was requested on an empty session. Either add at least one entry first or pick an existing session id.
 - **`session <id> not found at <path>`** — Session id doesn't exist in the tree store.
 - **`setup: unexpected end of input`** — `makakoo setup` got EOF before the section finished (non-TTY stdin, truncated pipe). Rerun interactively or with `--non-interactive`.

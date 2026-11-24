@@ -164,3 +164,41 @@ pub(crate) fn parked_count(conn: &Connection) -> Result<i64> {
         })?,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::reset_parked;
+    use crate::superbrain::folder_index::FolderIndex;
+
+    #[test]
+    fn folder_index_temp_store_is_file_after_reset_parked() {
+        let dir = TempDir::new().unwrap();
+        let idx = FolderIndex::open(dir.path(), "temp-store-guard", 8).unwrap();
+        let conn = idx.lock_conn().unwrap();
+
+        let initial: i64 = conn
+            .query_row("PRAGMA temp_store", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            initial, 1,
+            "FolderIndex must open with temp_store = FILE (1)"
+        );
+
+        conn.execute_batch("PRAGMA temp_store = MEMORY;").unwrap();
+        let flipped: i64 = conn
+            .query_row("PRAGMA temp_store", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(flipped, 2, "sanity check: switched to MEMORY (2)");
+
+        reset_parked(&conn).unwrap();
+        let after_reset: i64 = conn
+            .query_row("PRAGMA temp_store", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            after_reset, 1,
+            "reset_parked must enforce PRAGMA temp_store = FILE (1)"
+        );
+    }
+}
