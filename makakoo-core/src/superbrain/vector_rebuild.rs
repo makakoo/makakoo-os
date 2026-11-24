@@ -281,7 +281,7 @@ impl BrainRebuildCoordinator {
         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
 
         tokio::spawn(async move {
-            let _slot = guard;
+            let slot = guard;
             let store_claim = Arc::clone(&store);
             #[cfg(test)]
             let after_claim = coord
@@ -303,16 +303,21 @@ impl BrainRebuildCoordinator {
             {
                 Ok(Ok(Some(owner))) => owner,
                 Ok(Ok(None)) => {
+                    // Release the in-process slot before reporting the refusal, so the caller never
+                    // sees this store as still active after `spawn_rebuild` returned false.
+                    drop(slot);
                     let _ = tx.send(false);
                     return;
                 }
                 Ok(Err(err)) => {
                     tracing::warn!(error = %err, "brain vector rebuild claim failed");
+                    drop(slot);
                     let _ = tx.send(false);
                     return;
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, "brain vector rebuild claim task failed");
+                    drop(slot);
                     let _ = tx.send(false);
                     return;
                 }
@@ -369,7 +374,7 @@ impl BrainRebuildCoordinator {
             }
 
             // Caller cancellation ignores the oneshot; detached task keeps
-            // watching the worker and holding `_slot` until completion.
+            // watching the worker and holding `slot` until completion.
             let _ = tx.send(true);
 
             match worker.await {
