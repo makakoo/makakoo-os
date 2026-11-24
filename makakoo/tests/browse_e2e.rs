@@ -18,18 +18,23 @@
 //!   3. The daemon started with `BU_CDP_WS` pointing at the CDP WebSocket
 //!      (derivable from `http://localhost:9222/json/version`'s
 //!      `webSocketDebuggerUrl` field).
-//!   4. The `makakoo-mcp` binary built (`cargo install --path makakoo-mcp`
-//!      or the workspace target `target/debug/makakoo-mcp`).
+//!   4. The `makakoo-mcp` workspace binary built alongside `makakoo`
+//!      (`cargo build --workspace`). To test an installed `makakoo-mcp` on
+//!      `PATH` outside CI, opt in explicitly with `MAKAKOO_E2E_USE_PATH=1`.
 //!
 //! If any prereq is missing the test returns the clear upstream error —
 //! it never silently passes.
 
 #![cfg(unix)]
 
+mod common;
+
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 const ENV_GATE: &str = "MAKAKOO_CHROME_E2E";
+const ENV_USE_PATH: &str = "MAKAKOO_E2E_USE_PATH";
 const HANDSHAKE: &str = concat!(
     r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"browse_e2e","version":"0"}}}"#,
     "\n",
@@ -37,53 +42,39 @@ const HANDSHAKE: &str = concat!(
     "\n",
 );
 
-fn find_sibling_bin_from(anchor: &std::path::Path, exe_name: &str) -> Option<std::path::PathBuf> {
-    if let Some(parent) = anchor.parent() {
-        let direct = parent.join(exe_name);
-        if direct.is_file() {
-            return Some(direct);
-        }
+fn locate_mcp_binary() -> Result<PathBuf, String> {
+    // Resolve `makakoo-mcp` directly from `CARGO_BIN_EXE_makakoo`'s parent
+    // directory. Never fall back to PATH unless `MAKAKOO_E2E_USE_PATH=1` is set
+    // outside CI, so an installed binary cannot silently shadow the workspace
+    // build under test.
+    let makakoo = PathBuf::from(env!("CARGO_BIN_EXE_makakoo"));
+    let use_path = std::env::var(ENV_USE_PATH).ok().as_deref() == Some("1");
+    let is_ci = common::is_ci_env();
+    let path_env = std::env::var_os("PATH");
+    let (bin, used_path) = common::resolve_sibling_bin_with_policy(
+        &makakoo,
+        "makakoo-mcp",
+        use_path,
+        is_ci,
+        path_env.as_deref(),
+    )?;
+    if used_path {
+        eprintln!(
+            "browse_e2e: {ENV_USE_PATH}=1 enabled; using makakoo-mcp from PATH: {}",
+            bin.display()
+        );
     }
-    for dir in anchor.ancestors().skip(1) {
-        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if name == "deps" || name == "build" {
-            if let Some(profile_dir) = dir.parent() {
-                let candidate = profile_dir.join(exe_name);
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn locate_mcp_binary() -> Option<std::path::PathBuf> {
-    // Prefer the binary built alongside this test. makakoo-mcp is a sibling
-    // crate, so CARGO_BIN_EXE_makakoo-mcp is not available here; derive
-    // <target>/<profile> from CARGO_BIN_EXE_makakoo or current_exe() across
-    // both legacy `deps/` and Cargo 1.100+ `build/<pkg>/<hash>/out/` layouts.
-    // Fall back to `makakoo-mcp` on PATH for installed-binary dogfood runs.
-    let exe_name = format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX);
-    let makakoo = std::path::PathBuf::from(env!("CARGO_BIN_EXE_makakoo"));
-    if let Some(bin) = find_sibling_bin_from(&makakoo, &exe_name) {
-        return Some(bin);
-    }
-    if let Ok(test_exe) = std::env::current_exe() {
-        if let Some(bin) = find_sibling_bin_from(&test_exe, &exe_name) {
-            return Some(bin);
-        }
-    }
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|p| p.join(&exe_name))
-        .find(|p| p.is_file())
+    Ok(bin)
 }
 
 #[test]
 fn harvey_browse_round_trips_against_real_chrome() {
+    if common::is_ci_env() {
+        // In CI, panic immediately if the sibling workspace binary is missing
+        // instead of letting the Chrome gate mask a broken binary lookup.
+        locate_mcp_binary().unwrap_or_else(|err| panic!("{err}"));
+    }
+
     if std::env::var(ENV_GATE).ok().as_deref() != Some("1") {
         eprintln!(
             "browse_e2e skipped — set {ENV_GATE}=1 + start Chrome CDP 9222 + \
@@ -92,8 +83,7 @@ fn harvey_browse_round_trips_against_real_chrome() {
         return;
     }
 
-    let binary = locate_mcp_binary()
-        .expect("makakoo-mcp binary not found — build the workspace or put it on PATH");
+    let binary = locate_mcp_binary().unwrap_or_else(|err| panic!("{err}"));
     let mut child = Command::new(&binary)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
