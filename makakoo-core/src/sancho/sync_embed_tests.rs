@@ -16,33 +16,14 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 use crate::embeddings::EmbeddingClient;
 use crate::event_bus::PersistentEventBus;
 use crate::llm::LlmClient;
-use crate::sancho::handlers::BG_EMBED_ENV_LOCK;
+use crate::sancho::handlers::{BgEmbedEnvGuard, BG_EMBED_ENV_LOCK};
 use crate::sancho::{SanchoContext, SanchoHandler, SuperbrainSyncEmbedHandler};
 use crate::superbrain::folder_index::model_meta::SHORT_BULK_MISMATCH_REASON;
 use crate::superbrain::folder_index::IndexModelState;
 use crate::superbrain::store::SuperbrainStore;
-use crate::superbrain::vector_model::{rebuild_brain_vectors, BrainRebuildCoordinator};
-
-struct BgEmbedEnvGuard {
-    prev: Option<String>,
-}
-
-impl BgEmbedEnvGuard {
-    fn enable() -> Self {
-        let prev = std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").ok();
-        std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", "1");
-        Self { prev }
-    }
-}
-
-impl Drop for BgEmbedEnvGuard {
-    fn drop(&mut self) {
-        match &self.prev {
-            Some(v) => std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", v),
-            None => std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC"),
-        }
-    }
-}
+use crate::superbrain::vector_model::{
+    rebuild_brain_vectors, BrainRebuildCoordinator, BrainSyncOutcome, DEFAULT_EMBED_TRUNCATE_CHARS,
+};
 
 #[derive(Clone)]
 struct SyncEmbedResponder {
@@ -274,4 +255,158 @@ async fn sancho_tick_skips_when_short_bulk_mismatched() {
     assert_eq!(responder.calls.load(Ordering::SeqCst), 0);
     assert!(!coord.is_active(store.path()));
     assert_eq!(coord.spawned_count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sancho_tick_skips_when_live_rebuild_lease_held_by_other_owner() {
+    let _lock = BG_EMBED_ENV_LOCK.lock().await;
+    let _env = BgEmbedEnvGuard::enable();
+
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(SuperbrainStore::open(&dir.path().join("sb.db")).unwrap());
+    store
+        .write_document("pages/a.md", "alpha body", "page", json!([]))
+        .unwrap();
+    store
+        .write_document("pages/b.md", "beta body", "page", json!([]))
+        .unwrap();
+    // Another process holds a live rebuild lease on this DB.
+    let _other = store
+        .try_mark_vectors_rebuilding("other_process")
+        .unwrap()
+        .unwrap();
+
+    let responder = SyncEmbedResponder::new("model-v1", 4, false);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+
+    let coord = Arc::new(BrainRebuildCoordinator::new());
+    let ctx = build_ctx(&dir, Arc::clone(&store), &server.uri(), Arc::clone(&coord));
+
+    let outcome = coord
+        .sync_or_spawn_rebuild(
+            Arc::clone(&ctx.store),
+            Arc::clone(&ctx.bulk_emb),
+            Some(Arc::clone(&ctx.emb)),
+            32,
+            DEFAULT_EMBED_TRUNCATE_CHARS,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, BrainSyncOutcome::RebuildSkipped);
+
+    let report = SuperbrainSyncEmbedHandler::new().run(&ctx).await.unwrap();
+    assert!(report.ok);
+    assert!(
+        report.message.contains("skipped"),
+        "unexpected report message: {}",
+        report.message
+    );
+    assert_eq!(responder.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(store.stats().unwrap().vector_count, 0);
+    assert!(!coord.is_active(store.path()));
+    assert_eq!(coord.spawned_count(), 0);
+    let status = store.vector_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Rebuilding);
+    assert_eq!(status.stale_reason.as_deref(), Some("other_process"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sancho_tick_top_up_races_with_rebuild_claim_writes_nothing() {
+    let _lock = BG_EMBED_ENV_LOCK.lock().await;
+    let _env = BgEmbedEnvGuard::enable();
+
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(SuperbrainStore::open(&dir.path().join("sb.db")).unwrap());
+    store
+        .write_document("pages/seed.md", "seed doc", "page", json!([]))
+        .unwrap();
+
+    let responder = SyncEmbedResponder::new("model-v1", 4, false);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+
+    let coord = Arc::new(BrainRebuildCoordinator::new());
+    let ctx = Arc::new(build_ctx(
+        &dir,
+        Arc::clone(&store),
+        &server.uri(),
+        Arc::clone(&coord),
+    ));
+
+    // Bring index to Ready(model-v1, dim 4) with pages/seed.md embedded.
+    rebuild_brain_vectors(Arc::clone(&store), Arc::clone(&ctx.bulk_emb), None, None)
+        .await
+        .unwrap();
+    assert_eq!(store.stats().unwrap().vector_count, 1);
+
+    // Add a missing doc and gate the top-up embed request so a rebuild claim
+    // lands strictly between `vector_status()` (Ready) and the top-up write.
+    store
+        .write_document(
+            "pages/race.md",
+            "doc racing a rebuild claim",
+            "page",
+            json!([]),
+        )
+        .unwrap();
+    responder.gate_batches.store(true, Ordering::SeqCst);
+
+    let ctx_task = Arc::clone(&ctx);
+    let tick_task =
+        tokio::spawn(async move { SuperbrainSyncEmbedHandler::new().run(&ctx_task).await });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("top-up embed request never reached the gate");
+
+    // Competing rebuild claims ownership before the top-up write runs.
+    let _owner = store
+        .try_mark_vectors_rebuilding("concurrent_rebuild")
+        .unwrap()
+        .unwrap();
+
+    responder.gate_batches.store(false, Ordering::SeqCst);
+    responder.gate_release.store(true, Ordering::SeqCst);
+    let report = tokio::time::timeout(Duration::from_secs(5), tick_task)
+        .await
+        .expect("top-up tick did not finish after gate release")
+        .unwrap()
+        .unwrap();
+    assert!(report.ok);
+    assert!(
+        report.message.contains("0 vectors embedded"),
+        "top-up racing a rebuild claim must write 0 vectors, got: {}",
+        report.message
+    );
+    assert_eq!(
+        store.stats().unwrap().vector_count,
+        1,
+        "racing top-up must not write a vector into a rebuilding index"
+    );
+    assert_eq!(coord.spawned_count(), 0);
+    let status = store.vector_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Rebuilding);
+    assert_eq!(status.stale_reason.as_deref(), Some("concurrent_rebuild"));
+}
+
+#[test]
+fn sancho_context_with_brain_rebuild_shares_coordinator_arc() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(SuperbrainStore::open(&dir.path().join("sb.db")).unwrap());
+    let coord = Arc::new(BrainRebuildCoordinator::new());
+    let ctx = build_ctx(&dir, store, "http://127.0.0.1:9", Arc::clone(&coord));
+    assert!(Arc::ptr_eq(&coord, &ctx.brain_rebuild));
 }

@@ -1046,6 +1046,51 @@ impl SanchoHandler for PermsPurgeHandler {
 pub(crate) static BG_EMBED_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
+pub(crate) struct BgEmbedEnvGuard {
+    prev_makakoo: Option<String>,
+    prev_harvey: Option<String>,
+}
+
+#[cfg(test)]
+impl BgEmbedEnvGuard {
+    pub(crate) fn enable() -> Self {
+        let prev_makakoo = std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        let prev_harvey = std::env::var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", "1");
+        std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC");
+        Self {
+            prev_makakoo,
+            prev_harvey,
+        }
+    }
+
+    pub(crate) fn disable() -> Self {
+        let prev_makakoo = std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        let prev_harvey = std::env::var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC");
+        std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC");
+        Self {
+            prev_makakoo,
+            prev_harvey,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for BgEmbedEnvGuard {
+    fn drop(&mut self) {
+        match &self.prev_makakoo {
+            Some(v) => std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", v),
+            None => std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC"),
+        }
+        match &self.prev_harvey {
+            Some(v) => std::env::set_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC", v),
+            None => std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC"),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::embeddings::EmbeddingClient;
@@ -1127,11 +1172,8 @@ mod tests {
 
     #[tokio::test]
     async fn superbrain_sync_embed_is_opt_in() {
-        let _env_guard = BG_EMBED_ENV_LOCK.lock().await;
-        let prev_makakoo = std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").ok();
-        let prev_harvey = std::env::var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC").ok();
-        std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC");
-        std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC");
+        let _env_lock = BG_EMBED_ENV_LOCK.lock().await;
+        let _env = BgEmbedEnvGuard::disable();
 
         let dir = TempDir::new().unwrap();
         let ctx = ctx_with_store(&dir);
@@ -1147,19 +1189,26 @@ mod tests {
         let h = SuperbrainSyncEmbedHandler::new();
         let report = h.run(&ctx).await.unwrap();
 
-        match prev_makakoo {
-            Some(v) => std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", v),
-            None => std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC"),
-        }
-        match prev_harvey {
-            Some(v) => std::env::set_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC", v),
-            None => std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC"),
-        }
-
         assert!(report.ok);
         assert_eq!(report.handler, "superbrain_sync_embed");
         assert!(report.message.contains("background embed sync disabled"));
         assert_eq!(ctx.store.stats().unwrap().vector_count, 0);
+    }
+
+    #[tokio::test]
+    async fn bg_embed_env_guard_restores_env_on_panic() {
+        let _env_lock = BG_EMBED_ENV_LOCK.lock().await;
+        let _outer = BgEmbedEnvGuard::enable();
+        let panicked = std::panic::catch_unwind(|| {
+            let _inner = BgEmbedEnvGuard::disable();
+            assert!(std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").is_err());
+            panic!("simulated panic inside env-guarded test");
+        });
+        assert!(panicked.is_err());
+        assert_eq!(
+            std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").as_deref(),
+            Ok("1")
+        );
     }
 
     #[tokio::test]
