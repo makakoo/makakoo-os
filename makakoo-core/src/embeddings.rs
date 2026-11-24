@@ -1,7 +1,9 @@
-//! Embeddings client for switchAILocal.
+//! Embeddings client for OpenAI-compatible `/embeddings` endpoints.
 //!
 //! Default model: `qwen3-embedding:0.6b` — matches the canonical Brain
 //! sync model used by the reference install.
+
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -9,6 +11,49 @@ use crate::error::{MakakooError, Result};
 use crate::llm::DEFAULT_BASE_URL;
 
 pub const DEFAULT_EMBED_MODEL: &str = "qwen3-embedding:0.6b";
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Single text embedding paired with the model id and dim reported by the endpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedResult {
+    pub vector: Vec<f32>,
+    pub model: String,
+    pub dim: usize,
+}
+
+/// Batch text embeddings paired with the model id and dim reported by the endpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedBatchResult {
+    pub vectors: Vec<Vec<f32>>,
+    pub model: String,
+    pub dim: usize,
+}
+
+/// Resolve the short-call embedding model from `MAKAKOO_EMBED_MODEL`, falling
+/// back to [`DEFAULT_EMBED_MODEL`].
+pub fn resolve_short_model() -> String {
+    resolve_short_model_with(|k| std::env::var(k).ok())
+}
+
+/// Resolve the bulk-indexing embedding model from `MAKAKOO_BULK_EMBED_MODEL`,
+/// falling back to `MAKAKOO_EMBED_MODEL`, then [`DEFAULT_EMBED_MODEL`].
+pub fn resolve_bulk_model() -> String {
+    resolve_bulk_model_with(|k| std::env::var(k).ok())
+}
+
+pub(crate) fn resolve_short_model_with(get_env: impl Fn(&str) -> Option<String>) -> String {
+    get_env("MAKAKOO_EMBED_MODEL")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_EMBED_MODEL.to_string())
+}
+
+pub(crate) fn resolve_bulk_model_with(get_env: impl Fn(&str) -> Option<String>) -> String {
+    get_env("MAKAKOO_BULK_EMBED_MODEL")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| resolve_short_model_with(get_env))
+}
 
 #[derive(Debug, Clone)]
 pub struct EmbeddingClient {
@@ -25,18 +70,25 @@ impl Default for EmbeddingClient {
 }
 
 impl EmbeddingClient {
+    /// Construct a client for short/interactive embedding calls (`MAKAKOO_EMBED_MODEL`).
     pub fn new() -> Self {
+        Self::from_model(resolve_short_model())
+    }
+
+    /// Construct a client for bulk indexing (`MAKAKOO_BULK_EMBED_MODEL`, falling
+    /// back to `MAKAKOO_EMBED_MODEL`).
+    pub fn new_bulk() -> Self {
+        Self::from_model(resolve_bulk_model())
+    }
+
+    fn from_model(model: String) -> Self {
         let base_url = std::env::var("AIL_BASE_URL")
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
         let api_key = std::env::var("AIL_API_KEY").ok().filter(|s| !s.is_empty());
-        let model = std::env::var("MAKAKOO_EMBED_MODEL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_EMBED_MODEL.to_string());
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(Duration::from_secs(60))
             .build()
             .expect("reqwest client build");
         Self {
@@ -53,30 +105,90 @@ impl EmbeddingClient {
         c
     }
 
+    pub fn with_endpoint(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
+
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     pub fn model(&self) -> &str {
         &self.model
     }
 
-    /// Embed a single text, returning the vector.
+    /// Embed a single text, returning only the vector.
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let mut vecs = self.embed_batch(&[text.to_string()]).await?;
-        vecs.pop()
-            .ok_or_else(|| MakakooError::llm("embeddings response was empty"))
+        Ok(self.embed_with_meta(text).await?.vector)
     }
 
-    /// Embed a batch of texts.
+    /// Embed a single text, returning the vector plus endpoint-reported model id and dim.
+    pub async fn embed_with_meta(&self, text: &str) -> Result<EmbedResult> {
+        let mut batch = self.embed_batch_with_meta(&[text.to_string()]).await?;
+        let vector = batch
+            .vectors
+            .pop()
+            .ok_or_else(|| MakakooError::llm("embeddings response was empty"))?;
+        Ok(EmbedResult {
+            dim: vector.len(),
+            vector,
+            model: batch.model,
+        })
+    }
+
+    /// Embed a batch of texts, returning only the vectors.
     pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        Ok(self.embed_batch_with_meta(texts).await?.vectors)
+    }
+
+    /// Embed a batch of texts, returning vectors plus the model id and dim
+    /// reported by the endpoint (falling back to the configured model name if
+    /// the endpoint omits `"model"`).
+    pub async fn embed_batch_with_meta(&self, texts: &[String]) -> Result<EmbedBatchResult> {
+        self.request_embeddings(texts, None).await
+    }
+
+    /// Non-blocking-friendly probe (short timeout) to learn the endpoint's
+    /// reported `(model, dim)` without changing any local state on error.
+    pub async fn probe_model(&self) -> Result<(String, usize)> {
+        let res = self
+            .request_embeddings(&["probe".to_string()], Some(PROBE_TIMEOUT))
+            .await?;
+        if res.dim == 0 {
+            return Err(MakakooError::llm(
+                "embeddings probe returned zero-dim vector",
+            ));
+        }
+        Ok((res.model, res.dim))
+    }
+
+    async fn request_embeddings(
+        &self,
+        texts: &[String],
+        timeout: Option<Duration>,
+    ) -> Result<EmbedBatchResult> {
+        if texts.is_empty() {
+            return Ok(EmbedBatchResult {
+                vectors: Vec::new(),
+                model: self.model.clone(),
+                dim: 0,
+            });
+        }
         let url = format!("{}/embeddings", self.base_url);
         let body = json!({
             "model": self.model,
             "input": texts,
         });
         let mut req = self.client.post(&url).json(&body);
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
         if let Some(k) = &self.api_key {
             req = req.header("Authorization", format!("Bearer {k}"));
         }
@@ -87,6 +199,13 @@ impl EmbeddingClient {
             return Err(MakakooError::llm(format!("http {status}: {text}")));
         }
         let v: Value = resp.json().await?;
+        let reported_model = v
+            .get("model")
+            .and_then(|m| m.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.model.clone());
         let data = v
             .get("data")
             .and_then(|d| d.as_array())
@@ -103,22 +222,56 @@ impl EmbeddingClient {
                 .collect();
             out.push(vec);
         }
-        Ok(out)
+        let dim = out.first().map(|vec| vec.len()).unwrap_or(0);
+        if out.iter().any(|vec| vec.len() != dim) {
+            return Err(MakakooError::llm(
+                "inconsistent embedding dimensions in batch response",
+            ));
+        }
+        Ok(EmbedBatchResult {
+            vectors: out,
+            model: reported_model,
+            dim,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn default_model_is_qwen3() {
-        // Ensure test isolation from inherited env.
-        std::env::remove_var("MAKAKOO_EMBED_MODEL");
-        let c = EmbeddingClient::new();
-        assert_eq!(c.model(), DEFAULT_EMBED_MODEL);
+        let empty: HashMap<&str, &str> = HashMap::new();
+        assert_eq!(
+            resolve_short_model_with(|k| empty.get(k).map(|v| (*v).to_string())),
+            DEFAULT_EMBED_MODEL
+        );
+        assert_eq!(
+            resolve_bulk_model_with(|k| empty.get(k).map(|v| (*v).to_string())),
+            DEFAULT_EMBED_MODEL
+        );
+    }
+
+    #[test]
+    fn bulk_and_short_env_selection_precedence() {
+        let mut env = HashMap::new();
+        env.insert("MAKAKOO_EMBED_MODEL", "short-alias");
+        let get = |k: &str| env.get(k).map(|v| (*v).to_string());
+        assert_eq!(resolve_short_model_with(get), "short-alias");
+        assert_eq!(resolve_bulk_model_with(get), "short-alias");
+
+        env.insert("MAKAKOO_BULK_EMBED_MODEL", "  ");
+        let get = |k: &str| env.get(k).map(|v| (*v).to_string());
+        assert_eq!(resolve_bulk_model_with(get), "short-alias");
+
+        env.insert("MAKAKOO_BULK_EMBED_MODEL", "bulk-alias");
+        let get = |k: &str| env.get(k).map(|v| (*v).to_string());
+        assert_eq!(resolve_short_model_with(get), "short-alias");
+        assert_eq!(resolve_bulk_model_with(get), "bulk-alias");
     }
 
     #[test]
@@ -128,11 +281,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embed_single_text() {
+    async fn embed_single_text_captures_reported_model_and_dim() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/embeddings"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model": "Qwen3-Embedding-0.6B",
                 "data": [
                     { "embedding": [0.1, 0.2, 0.3] }
                 ]
@@ -140,18 +294,21 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = EmbeddingClient::with_base_url(server.uri());
-        let v = client.embed("hello world").await.unwrap();
-        assert_eq!(v.len(), 3);
-        assert!((v[0] - 0.1).abs() < 1e-5);
+        let client = EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed");
+        let res = client.embed_with_meta("hello world").await.unwrap();
+        assert_eq!(res.model, "Qwen3-Embedding-0.6B");
+        assert_eq!(res.dim, 3);
+        assert_eq!(res.vector.len(), 3);
+        assert!((res.vector[0] - 0.1).abs() < 1e-5);
     }
 
     #[tokio::test]
-    async fn embed_batch_roundtrip() {
+    async fn embed_falls_back_to_configured_model_when_response_omits_or_empties_model() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/embeddings"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model": "   ",
                 "data": [
                     { "embedding": [1.0, 2.0] },
                     { "embedding": [3.0, 4.0] }
@@ -160,13 +317,15 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = EmbeddingClient::with_base_url(server.uri());
-        let vs = client
-            .embed_batch(&["a".to_string(), "b".to_string()])
+        let client = EmbeddingClient::with_base_url(server.uri()).with_model("configured-fallback");
+        let res = client
+            .embed_batch_with_meta(&["a".to_string(), "b".to_string()])
             .await
             .unwrap();
-        assert_eq!(vs.len(), 2);
-        assert_eq!(vs[0], vec![1.0, 2.0]);
-        assert_eq!(vs[1], vec![3.0, 4.0]);
+        assert_eq!(res.model, "configured-fallback");
+        assert_eq!(res.dim, 2);
+        assert_eq!(res.vectors.len(), 2);
+        assert_eq!(res.vectors[0], vec![1.0, 2.0]);
+        assert_eq!(res.vectors[1], vec![3.0, 4.0]);
     }
 }

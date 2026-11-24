@@ -48,6 +48,7 @@ pub struct CliContext {
     buddy: OnceCell<Arc<BuddyTracker>>,
     llm: OnceCell<Arc<LlmClient>>,
     emb: OnceCell<Arc<EmbeddingClient>>,
+    bulk_emb: OnceCell<Arc<EmbeddingClient>>,
 }
 
 impl CliContext {
@@ -74,6 +75,7 @@ impl CliContext {
             buddy: OnceCell::new(),
             llm: OnceCell::new(),
             emb: OnceCell::new(),
+            bulk_emb: OnceCell::new(),
         })
     }
 
@@ -106,6 +108,7 @@ impl CliContext {
             buddy: OnceCell::new(),
             llm: OnceCell::new(),
             emb: OnceCell::new(),
+            bulk_emb: OnceCell::new(),
         }
     }
 
@@ -223,10 +226,18 @@ impl CliContext {
         self.llm.get_or_init(|| Arc::new(LlmClient::new())).clone()
     }
 
-    /// Embedding client (env-driven base URL + API key).
+    /// Embedding client (short calls; env-driven base URL + API key).
     pub fn embeddings(&self) -> Arc<EmbeddingClient> {
         self.emb
             .get_or_init(|| Arc::new(EmbeddingClient::new()))
+            .clone()
+    }
+
+    /// Bulk embedding client (`MAKAKOO_BULK_EMBED_MODEL` with fallback to
+    /// `MAKAKOO_EMBED_MODEL`).
+    pub fn bulk_embeddings(&self) -> Arc<EmbeddingClient> {
+        self.bulk_emb
+            .get_or_init(|| Arc::new(EmbeddingClient::new_bulk()))
             .clone()
     }
 }

@@ -9,6 +9,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
 use crate::error::{MakakooError, Result};
 
+use super::fts::{delete_file_fts_tx, ensure_chunks_fts_backfilled, insert_chunk_fts_tx};
 use super::quantize::i8_slice_to_bytes;
 use super::{
     Anchor, AnchorKind, ChunkInput, FileStateRecord, FileStatus, SearchFilter, SkipReason,
@@ -113,6 +114,7 @@ pub(crate) fn open_folder_db(path: &Path) -> Result<Connection> {
         while rows.next()?.is_some() {}
     }
     conn.execute_batch(FOLDER_SCHEMA_SQL)?;
+    ensure_chunks_fts_backfilled(&conn)?;
     Ok(conn)
 }
 
@@ -197,6 +199,14 @@ pub(crate) fn collect_file_chunk_ids(conn: &Connection, file_path: &str) -> Resu
     Ok(ids)
 }
 
+pub(crate) fn delete_file_chunks_tx(conn: &Connection, file_path: &str) -> Result<usize> {
+    delete_file_fts_tx(conn, file_path)?;
+    Ok(conn.execute(
+        "DELETE FROM chunks WHERE file_path = ?1",
+        params![file_path],
+    )?)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_chunks_tx(
     conn: &Connection,
@@ -229,7 +239,9 @@ pub(crate) fn insert_chunks_tx(
             owner,
             i8_slice_to_bytes(&vec_i8),
         ])?;
-        additions.push((conn.last_insert_rowid() as u64, vec_i8));
+        let rowid = conn.last_insert_rowid();
+        insert_chunk_fts_tx(conn, rowid, file_path, &chunk.anchor.value, &chunk.text)?;
+        additions.push((rowid as u64, vec_i8));
     }
     Ok(additions)
 }
@@ -446,4 +458,36 @@ pub(crate) fn sqlite_files_bytes(db_path: &Path) -> u64 {
         total = total.saturating_add(std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0));
     }
     total
+}
+
+pub(crate) fn clear_file_chunks_and_upsert_state(
+    mut conn: std::sync::MutexGuard<'_, Connection>,
+    file_path: &str,
+    file_version: &str,
+    state: &str,
+    done: Option<u64>,
+    total: Option<u64>,
+    skip_reason: Option<&str>,
+) -> Result<(Vec<u64>, Option<u64>)> {
+    let tx = conn.transaction()?;
+    let old_ids = collect_file_chunk_ids(&tx, file_path)?;
+    if !old_ids.is_empty() {
+        delete_file_chunks_tx(&tx, file_path)?;
+    }
+    upsert_file_state_tx(
+        &tx,
+        file_path,
+        file_version,
+        state,
+        done,
+        total,
+        skip_reason,
+    )?;
+    let new_gen = if !old_ids.is_empty() {
+        Some(bump_generation_tx(&tx)?)
+    } else {
+        None
+    };
+    tx.commit()?;
+    Ok((old_ids, new_gen))
 }

@@ -3,7 +3,7 @@
 
 use crate::error::{MakakooError, Result};
 
-use super::validate_dim;
+use super::{validate_dim, ChunkInput};
 
 /// Truncate an embedder float vector to `target_dim` (<= 512) and quantize
 /// symmetrically to `i8` in `[-127, 127]`.
@@ -41,6 +41,20 @@ pub fn truncate_and_quantize_i8(input: &[f32], target_dim: usize) -> Result<Vec<
         .iter()
         .map(|&v| (v * scale).round().clamp(-127.0, 127.0) as i8)
         .collect();
+    Ok(out)
+}
+
+pub(crate) fn quantize_chunks(chunks: &[ChunkInput], dim: usize) -> Result<Vec<Vec<i8>>> {
+    let mut out = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        if chunk.char_end < chunk.char_start {
+            return Err(MakakooError::invalid_input(format!(
+                "chunk char_end ({}) < char_start ({})",
+                chunk.char_end, chunk.char_start
+            )));
+        }
+        out.push(truncate_and_quantize_i8(&chunk.vector, dim)?);
+    }
     Ok(out)
 }
 

@@ -28,6 +28,10 @@ struct VectorSidecar {
     generation: u64,
     dim: usize,
     count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embed_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embed_dim: Option<usize>,
 }
 
 struct WriterState {
@@ -38,6 +42,8 @@ struct WriterState {
     pending_generation: u64,
     last_flush: Instant,
     in_batch_run: bool,
+    embed_model: Option<String>,
+    embed_dim: Option<usize>,
 }
 
 pub(crate) struct VectorStore {
@@ -56,6 +62,7 @@ impl VectorStore {
         conn: &Connection,
         sqlite_gen: u64,
         sqlite_count: u64,
+        initial_meta: (Option<String>, Option<usize>),
     ) -> Result<Self> {
         let store = Self {
             dir: dir.to_path_buf(),
@@ -71,6 +78,8 @@ impl VectorStore {
                 pending_generation: sqlite_gen,
                 last_flush: Instant::now(),
                 in_batch_run: false,
+                embed_model: initial_meta.0,
+                embed_dim: initial_meta.1,
             }),
         };
 
@@ -92,6 +101,13 @@ impl VectorStore {
     #[cfg(test)]
     pub(crate) fn disk_generation(&self) -> Option<u64> {
         self.read_sidecar().map(|s| s.generation)
+    }
+
+    pub(crate) fn set_model_meta(&self, model: Option<String>, embed_dim: Option<usize>) {
+        if let Ok(mut w) = self.lock_writer() {
+            w.embed_model = model;
+            w.embed_dim = embed_dim;
+        }
     }
 
     pub(crate) fn begin_batch_run(&self) -> Result<()> {
@@ -266,7 +282,7 @@ impl VectorStore {
                 .map_err(usearch_err)?;
         }
 
-        self.atomic_save_index(&idx, sqlite_gen)?;
+        self.atomic_save_index(&idx, sqlite_gen, w.embed_model.clone(), w.embed_dim)?;
         drop(idx);
 
         w.mutable = None;
@@ -332,7 +348,9 @@ impl VectorStore {
     fn persist_locked(&self, w: &mut WriterState) -> Result<()> {
         let gen = w.pending_generation;
         match w.mutable.as_ref() {
-            Some(idx) if idx.size() > 0 => self.atomic_save_index(idx, gen)?,
+            Some(idx) if idx.size() > 0 => {
+                self.atomic_save_index(idx, gen, w.embed_model.clone(), w.embed_dim)?
+            }
             _ => self.write_empty_disk_state(gen)?,
         }
         w.dirty_files = 0;
@@ -341,7 +359,13 @@ impl VectorStore {
         Ok(())
     }
 
-    fn atomic_save_index(&self, idx: &Index, generation: u64) -> Result<()> {
+    fn atomic_save_index(
+        &self,
+        idx: &Index,
+        generation: u64,
+        embed_model: Option<String>,
+        embed_dim: Option<usize>,
+    ) -> Result<()> {
         let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
         let tmp_index = self.dir.join(format!("{INDEX_FILE_NAME}.tmp.{pid}.{seq}"));
@@ -366,6 +390,8 @@ impl VectorStore {
             generation,
             dim: self.cfg.dim,
             count: idx.size() as u64,
+            embed_model,
+            embed_dim,
         })?;
 
         let viewed = Index::restore_view(path_to_str(&self.index_path)?).map_err(usearch_err)?;
@@ -387,6 +413,8 @@ impl VectorStore {
             generation,
             dim: self.cfg.dim,
             count: 0,
+            embed_model: None,
+            embed_dim: None,
         })
     }
 

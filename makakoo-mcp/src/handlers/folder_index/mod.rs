@@ -3,6 +3,8 @@
 //! Write handlers live here (`folder_index_upsert`, `folder_index_mark_skipped`,
 //! `folder_index_remove`); read/search handlers live in [`read`].
 
+#[cfg(test)]
+mod model_tests;
 mod read;
 
 use std::sync::Arc;
@@ -10,7 +12,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use makakoo_core::superbrain::folder_index::{
     chunk_file_engine_output, Anchor, ChunkInput, ChunkOptions, FileEngineOutput,
-    FolderIndexManager, SkipReason, SourceKind, TrustLevel, UpsertFileRequest, DEFAULT_VECTOR_DIM,
+    FolderIndexManager, SkipReason, SourceKind, TrustLevel, UpsertFileRequest, UpsertModelMeta,
+    DEFAULT_VECTOR_DIM,
 };
 use makakoo_core::MakakooError;
 use serde::Deserialize;
@@ -135,6 +138,8 @@ impl ToolHandler for FolderIndexUpsertHandler {
                 },
                 "file_engine_output": { "type": "object", "description": "Raw file-engine v1/v2 extraction JSON (alternative to chunks)" },
                 "vectors": { "type": "array", "items": { "type": "array", "items": { "type": "number" } } },
+                "embed_model": { "type": "string", "description": "Optional reported embedding model id for precomputed vectors" },
+                "embed_dim": { "type": "integer", "minimum": 1, "description": "Optional pre-truncation embedding dim for precomputed vectors" },
                 "chunk_options": { "type": "object" }
             },
             "required": ["folder_id", "file_path", "file_version"]
@@ -163,22 +168,23 @@ impl ToolHandler for FolderIndexUpsertHandler {
             .unwrap_or("")
             .to_string();
 
-        let chunks = self.resolve_chunks(&params).await?;
-        let index = mgr.get_or_open(folder_id, dim).map_err(map_core_err)?;
-        let outcome = index
-            .upsert_file(&UpsertFileRequest {
-                file_path: file_path.to_string(),
-                file_version: file_version.to_string(),
-                source_kind,
-                trust,
-                owner,
-                chunks,
-            })
+        let (chunks, model_meta) = self.resolve_chunks(&params).await?;
+        let (outcome, sizes) = mgr
+            .upsert_folder_file_and_flush(
+                folder_id,
+                dim,
+                &UpsertFileRequest {
+                    file_path: file_path.to_string(),
+                    file_version: file_version.to_string(),
+                    source_kind,
+                    trust,
+                    owner,
+                    chunks,
+                },
+                model_meta.as_ref(),
+                flush,
+            )
             .map_err(map_core_err)?;
-        if flush && !outcome.skipped_unchanged {
-            index.flush().map_err(map_core_err)?;
-        }
-        let sizes = index.size_report().map_err(map_core_err)?;
 
         Ok(json!({
             "folder_id": folder_id,
@@ -195,11 +201,56 @@ impl ToolHandler for FolderIndexUpsertHandler {
 }
 
 impl FolderIndexUpsertHandler {
-    async fn resolve_chunks(&self, params: &Value) -> Result<Vec<ChunkInput>, RpcError> {
+    fn parse_explicit_model_meta(
+        &self,
+        params: &Value,
+        chunks: &[ChunkInput],
+    ) -> Result<Option<UpsertModelMeta>, RpcError> {
+        let explicit_model = params
+            .get("embed_model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let explicit_dim = match params.get("embed_dim") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|&n| n > 0)
+                    .ok_or_else(|| RpcError::invalid_params("'embed_dim' must be positive"))?,
+            ),
+        };
+        let Some(model) = explicit_model else {
+            return Ok(None);
+        };
+        let embed_dim = explicit_dim
+            .or_else(|| chunks.first().map(|c| c.vector.len()))
+            .filter(|&d| d > 0)
+            .ok_or_else(|| RpcError::invalid_params("'embed_dim' required when chunks empty"))?;
+        let bulk_alias = self
+            .ctx
+            .bulk_emb
+            .as_ref()
+            .or(self.ctx.emb.as_ref())
+            .map(|e| e.model().to_string())
+            .unwrap_or_else(|| model.to_string());
+        let short_alias = self.ctx.emb.as_ref().map(|e| e.model().to_string());
+        Ok(Some(UpsertModelMeta {
+            model: model.to_string(),
+            embed_dim,
+            bulk_alias,
+            short_alias,
+        }))
+    }
+
+    async fn resolve_chunks(
+        &self,
+        params: &Value,
+    ) -> Result<(Vec<ChunkInput>, Option<UpsertModelMeta>), RpcError> {
         if let Some(raw_chunks) = params.get("chunks") {
             let parsed: Vec<WireChunkInput> = serde_json::from_value(raw_chunks.clone())
                 .map_err(|e| RpcError::invalid_params(format!("invalid 'chunks': {e}")))?;
-            return Ok(parsed
+            let chunks: Vec<ChunkInput> = parsed
                 .into_iter()
                 .map(|c| ChunkInput {
                     anchor: c.anchor,
@@ -208,7 +259,9 @@ impl FolderIndexUpsertHandler {
                     text: c.text,
                     vector: c.vector,
                 })
-                .collect());
+                .collect();
+            let meta = self.parse_explicit_model_meta(params, &chunks)?;
+            return Ok((chunks, meta));
         }
         let Some(fe_val) = params.get("file_engine_output") else {
             return Err(RpcError::invalid_params(
@@ -223,6 +276,7 @@ impl FolderIndexUpsertHandler {
             _ => ChunkOptions::default(),
         };
         let text_chunks = chunk_file_engine_output(&fe, &opts).map_err(map_core_err)?;
+        let mut meta: Option<UpsertModelMeta> = None;
         let vectors: Vec<Vec<f32>> = if let Some(raw_vecs) = params.get("vectors") {
             serde_json::from_value(raw_vecs.clone())
                 .map_err(|e| RpcError::invalid_params(format!("invalid 'vectors': {e}")))?
@@ -231,13 +285,22 @@ impl FolderIndexUpsertHandler {
         } else {
             let emb = self
                 .ctx
-                .emb
+                .bulk_emb
                 .as_ref()
+                .or(self.ctx.emb.as_ref())
                 .ok_or_else(|| RpcError::internal("subsystem not wired: embeddings"))?;
             let texts: Vec<String> = text_chunks.iter().map(|c| c.text.clone()).collect();
-            emb.embed_batch(&texts)
+            let res = emb
+                .embed_batch_with_meta(&texts)
                 .await
-                .map_err(|e| RpcError::internal(format!("embedding batch failed: {e}")))?
+                .map_err(|e| RpcError::internal(format!("embedding batch failed: {e}")))?;
+            meta = Some(UpsertModelMeta {
+                model: res.model,
+                embed_dim: res.dim,
+                bulk_alias: emb.model().to_string(),
+                short_alias: self.ctx.emb.as_ref().map(|e| e.model().to_string()),
+            });
+            res.vectors
         };
         if vectors.len() != text_chunks.len() {
             return Err(RpcError::invalid_params(format!(
@@ -246,7 +309,7 @@ impl FolderIndexUpsertHandler {
                 text_chunks.len()
             )));
         }
-        Ok(text_chunks
+        let chunks: Vec<ChunkInput> = text_chunks
             .into_iter()
             .zip(vectors)
             .map(|(c, vector)| ChunkInput {
@@ -256,7 +319,11 @@ impl FolderIndexUpsertHandler {
                 text: c.text,
                 vector,
             })
-            .collect())
+            .collect();
+        if meta.is_none() {
+            meta = self.parse_explicit_model_meta(params, &chunks)?;
+        }
+        Ok((chunks, meta))
     }
 }
 

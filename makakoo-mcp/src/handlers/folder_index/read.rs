@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use makakoo_core::superbrain::folder_index::{SearchFilter, SourceKind, TrustLevel};
+use makakoo_core::superbrain::folder_index::{
+    FolderSearchRequest, SearchFilter, SourceKind, TrustLevel,
+};
 use serde_json::{json, Value};
 
 use crate::dispatch::{ToolContext, ToolHandler};
@@ -33,7 +35,7 @@ impl ToolHandler for FolderIndexSearchHandler {
     }
 
     fn description(&self) -> &str {
-        "Search a folder index by embedding vector with optional provenance filters (source_kind, trust, owner), returning ranked passages with exact places."
+        "Search a folder index by embedding vector or text query with optional provenance filters (source_kind, trust, owner), returning ranked passages with exact places and index freshness metadata."
     }
 
     fn input_schema(&self) -> Value {
@@ -42,6 +44,9 @@ impl ToolHandler for FolderIndexSearchHandler {
             "properties": {
                 "folder_id": { "type": "string" },
                 "query_vector": { "type": "array", "items": { "type": "number" } },
+                "query": { "type": "string", "description": "Query text (used for FTS fallback when stale/rebuilding, or embedded if query_vector omitted)" },
+                "query_model": { "type": "string", "description": "Optional reported embedding model id for query_vector" },
+                "query_dim": { "type": "integer", "minimum": 1, "description": "Optional pre-truncation embedding dim for query_vector" },
                 "k": { "type": "integer", "default": 10, "minimum": 1, "maximum": 200 },
                 "dim": { "type": "integer", "default": 512, "minimum": 1, "maximum": 512 },
                 "filters": {
@@ -53,7 +58,7 @@ impl ToolHandler for FolderIndexSearchHandler {
                     }
                 }
             },
-            "required": ["folder_id", "query_vector"]
+            "required": ["folder_id"]
         })
     }
 
@@ -67,20 +72,61 @@ impl ToolHandler for FolderIndexSearchHandler {
             .map(|n| n as usize)
             .unwrap_or(10);
 
-        let raw_q = params
-            .get("query_vector")
-            .ok_or_else(|| RpcError::invalid_params("missing 'query_vector'"))?;
-        let query_vec: Vec<f32> = serde_json::from_value(raw_q.clone())
-            .map_err(|e| RpcError::invalid_params(format!("invalid 'query_vector': {e}")))?;
+        let query = params
+            .get("query")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let query_vector: Option<Vec<f32>> =
+            match params.get("query_vector") {
+                None | Some(Value::Null) => None,
+                Some(raw_q) => Some(serde_json::from_value(raw_q.clone()).map_err(|e| {
+                    RpcError::invalid_params(format!("invalid 'query_vector': {e}"))
+                })?),
+            };
+        if query.is_none() && query_vector.is_none() {
+            return Err(RpcError::invalid_params(
+                "either 'query' or 'query_vector' is required",
+            ));
+        }
+
+        let query_model = params
+            .get("query_model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let query_dim = match params.get("query_dim") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|&n| n > 0)
+                    .ok_or_else(|| RpcError::invalid_params("'query_dim' must be positive"))?,
+            ),
+        };
 
         let filter = parse_search_filter(&params)?;
-        let index = mgr.get_or_open(folder_id, dim).map_err(map_core_err)?;
-        let passages = index.search(&query_vec, k, &filter).map_err(map_core_err)?;
+        let response = mgr
+            .search_folder(
+                FolderSearchRequest {
+                    folder_id: folder_id.to_string(),
+                    dim,
+                    k,
+                    query,
+                    query_vector,
+                    query_model,
+                    query_dim,
+                    filter,
+                },
+                self.ctx.emb.as_ref(),
+                self.ctx.bulk_emb.as_ref(),
+            )
+            .await
+            .map_err(map_core_err)?;
 
-        Ok(json!({
-            "folder_id": folder_id,
-            "passages": passages,
-        }))
+        serde_json::to_value(response).map_err(|e| RpcError::internal(e.to_string()))
     }
 }
 
@@ -161,14 +207,25 @@ impl ToolHandler for FolderIndexStatesHandler {
             _ => index.file_states().map_err(map_core_err)?,
         };
         let sizes = index.size_report().map_err(map_core_err)?;
+        let status = index.model_status().map_err(map_core_err)?;
 
-        Ok(json!({
+        let mut out = json!({
             "folder_id": folder_id,
             "files": files,
             "vector_index_bytes": sizes.vector_index_bytes,
             "sqlite_bytes": sizes.sqlite_bytes,
             "chunk_count": sizes.chunk_count,
-        }))
+            "index_state": status.index_state,
+        });
+        if let Some(obj) = out.as_object_mut() {
+            if let Some(m) = status.embed_model {
+                obj.insert("embed_model".to_string(), json!(m));
+            }
+            if let Some(d) = status.embed_dim {
+                obj.insert("embed_dim".to_string(), json!(d));
+            }
+        }
+        Ok(out)
     }
 }
 

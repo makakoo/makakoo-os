@@ -30,3 +30,5 @@ pub mod memory_stack;
 pub mod promoter;
 pub mod recall;
 pub mod scorer;
+pub mod vector_model;
+mod vector_rebuild;

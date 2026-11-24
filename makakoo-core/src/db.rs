@@ -108,6 +108,11 @@ fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
         "TEXT DEFAULT 'canonical'",
     )?;
     ensure_column(conn, "brain_docs", "relative_path", "TEXT")?;
+    ensure_column(conn, "brain_vectors", "model", "TEXT DEFAULT 'unknown'")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_brain_vectors_model ON brain_vectors(model, dim)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -196,6 +201,11 @@ CREATE TABLE IF NOT EXISTS brain_vectors (
     dim INTEGER NOT NULL,
     model TEXT DEFAULT 'unknown',
     created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS brain_vector_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS brain_anchors_fts USING fts5(
@@ -542,6 +552,7 @@ mod tests {
             "brain_docs",
             "brain_fts",
             "brain_vectors",
+            "brain_vector_meta",
             "brain_anchors_fts",
             "brain_anchor_vectors",
             "entity_graph",

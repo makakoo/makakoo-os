@@ -17,7 +17,12 @@
 //! Existing [`super::store::SuperbrainStore`] behaviour is untouched.
 
 pub mod chunker;
+pub mod fts;
+pub mod manager;
+pub mod model_meta;
 pub mod quantize;
+pub mod rebuild;
+mod rebuild_pages;
 mod sqlite_repo;
 pub mod store;
 mod vector_store;
@@ -25,20 +30,27 @@ mod vector_store;
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
+mod model_open_tests;
+#[cfg(test)]
+mod model_tests;
+#[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::embeddings::{resolve_bulk_model, resolve_short_model};
 use crate::error::{MakakooError, Result};
 
 pub use chunker::{
     anchor_from_segment, chunk_file_engine_output, chunk_segment, ChunkOptions,
     FileEngineExtractor, FileEngineOutput, FileEngineSegment, TextChunk,
+};
+pub use manager::FolderIndexManager;
+pub use model_meta::{
+    FolderModelStatus, FolderSearchRequest, FolderSearchResponse, IndexModelState, SearchMode,
+    UpsertModelMeta,
 };
 pub use quantize::{
     bytes_to_i8_vec, cosine_similarity_i8, distance_to_cosine_score, i8_slice_to_bytes,
@@ -294,6 +306,8 @@ pub struct FolderIndexConfig {
     pub connectivity: usize,
     pub expansion_add: usize,
     pub expansion_search: usize,
+    pub embed_alias: Option<String>,
+    pub short_embed_alias: Option<String>,
 }
 
 impl Default for FolderIndexConfig {
@@ -311,7 +325,19 @@ impl FolderIndexConfig {
             connectivity: DEFAULT_HNSW_CONNECTIVITY,
             expansion_add: DEFAULT_HNSW_EXPANSION_ADD,
             expansion_search: DEFAULT_HNSW_EXPANSION_SEARCH,
+            embed_alias: Some(resolve_bulk_model()),
+            short_embed_alias: Some(resolve_short_model()),
         }
+    }
+
+    pub fn with_embed_aliases(
+        mut self,
+        bulk_alias: Option<String>,
+        short_alias: Option<String>,
+    ) -> Self {
+        self.embed_alias = bulk_alias;
+        self.short_embed_alias = short_alias;
+        self
     }
 }
 
@@ -356,62 +382,4 @@ pub fn validate_dim(dim: usize) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-/// Multi-folder cache so long-lived callers (like `makakoo-mcp`) reuse open
-/// `FolderIndex` instances across calls without re-opening or rewriting on
-/// every file.
-pub struct FolderIndexManager {
-    base_dir: PathBuf,
-    open: Mutex<HashMap<String, Arc<FolderIndex>>>,
-}
-
-impl FolderIndexManager {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            base_dir: base_dir.into(),
-            open: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn base_dir(&self) -> &Path {
-        &self.base_dir
-    }
-
-    /// Open (or reuse) the folder index for `folder_id`.
-    pub fn get_or_open(&self, folder_id: &str, dim: usize) -> Result<Arc<FolderIndex>> {
-        validate_folder_id(folder_id)?;
-        validate_dim(dim)?;
-        let mut guard = self
-            .open
-            .lock()
-            .map_err(|_| MakakooError::internal("folder index manager lock poisoned"))?;
-        if let Some(existing) = guard.get(folder_id) {
-            if existing.dim() != dim {
-                return Err(MakakooError::invalid_input(format!(
-                    "folder {folder_id:?} is already open with dim {}, requested {dim}",
-                    existing.dim()
-                )));
-            }
-            return Ok(Arc::clone(existing));
-        }
-        let idx = Arc::new(FolderIndex::open(&self.base_dir, folder_id, dim)?);
-        guard.insert(folder_id.to_string(), Arc::clone(&idx));
-        Ok(idx)
-    }
-
-    /// Flush all currently open folder indexes to disk.
-    pub fn flush_all(&self) -> Result<()> {
-        let indexes: Vec<Arc<FolderIndex>> = {
-            let guard = self
-                .open
-                .lock()
-                .map_err(|_| MakakooError::internal("folder index manager lock poisoned"))?;
-            guard.values().cloned().collect()
-        };
-        for idx in indexes {
-            idx.flush()?;
-        }
-        Ok(())
-    }
 }

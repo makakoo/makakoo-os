@@ -8,12 +8,15 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::{MakakooError, Result};
 
-use super::quantize::{distance_to_cosine_score, truncate_and_quantize_i8};
+use super::model_meta::{
+    init_model_meta_on_open, read_model_status, IndexModelState, UpsertModelMeta,
+};
+use super::quantize::{distance_to_cosine_score, quantize_chunks, truncate_and_quantize_i8};
 use super::sqlite_repo::{
-    bump_generation_tx, collect_file_chunk_ids, fetch_chunk_row, get_file_state,
-    init_and_verify_meta, insert_chunks_tx, list_file_states, open_folder_db,
-    query_filtered_chunk_ids, read_chunk_count, read_generation, sqlite_files_bytes,
-    upsert_file_state_tx, ChunkIdFilter, DB_FILE_NAME,
+    bump_generation_tx, clear_file_chunks_and_upsert_state, collect_file_chunk_ids,
+    delete_file_chunks_tx, fetch_chunk_row, get_file_state, init_and_verify_meta, insert_chunks_tx,
+    list_file_states, open_folder_db, query_filtered_chunk_ids, read_chunk_count, read_generation,
+    sqlite_files_bytes, upsert_file_state_tx, ChunkIdFilter, DB_FILE_NAME,
 };
 use super::vector_store::VectorStore;
 use super::{
@@ -24,13 +27,22 @@ use super::{
 
 /// Compact per-folder index combining `chunks.sqlite` (source of truth) and
 /// `vectors.usearch` (memory-mapped `i8` HNSW vector index).
+/// Test hook type for `FolderIndex::before_rebuild_commit`.
+#[cfg(test)]
+pub(crate) type RebuildCommitHook = Box<dyn Fn(&FolderIndex) + Send + Sync>;
+
 pub struct FolderIndex {
-    dir: PathBuf,
-    db_path: PathBuf,
-    folder_id: String,
-    dim: usize,
-    conn: Mutex<Connection>,
-    vectors: VectorStore,
+    pub(crate) dir: PathBuf,
+    pub(crate) db_path: PathBuf,
+    pub(crate) folder_id: String,
+    pub(crate) dim: usize,
+    pub(crate) default_bulk_alias: Option<String>,
+    pub(crate) default_short_alias: Option<String>,
+    pub(crate) conn: Mutex<Connection>,
+    pub(crate) vectors: VectorStore,
+    /// Test hook: runs before each rebuild commit attempt, lock not held.
+    #[cfg(test)]
+    pub(crate) before_rebuild_commit: Mutex<Option<RebuildCommitHook>>,
 }
 
 impl FolderIndex {
@@ -55,16 +67,38 @@ impl FolderIndex {
         let conn = open_folder_db(&db_path)?;
 
         let (sqlite_gen, sqlite_count) = init_and_verify_meta(&conn, folder_id, cfg.dim)?;
-        let vectors =
-            VectorStore::open_or_rebuild(&dir, cfg.clone(), &conn, sqlite_gen, sqlite_count)?;
+        init_model_meta_on_open(
+            &conn,
+            sqlite_count,
+            cfg.embed_alias.as_deref(),
+            cfg.short_embed_alias.as_deref(),
+        )?;
+        let status = read_model_status(&conn)?;
+        let initial_meta = if status.index_state == IndexModelState::Ready {
+            (status.embed_model, status.embed_dim)
+        } else {
+            (None, None)
+        };
+        let vectors = VectorStore::open_or_rebuild(
+            &dir,
+            cfg.clone(),
+            &conn,
+            sqlite_gen,
+            sqlite_count,
+            initial_meta,
+        )?;
 
         Ok(Self {
             dir,
             db_path,
             folder_id: folder_id.to_string(),
             dim: cfg.dim,
+            default_bulk_alias: cfg.embed_alias,
+            default_short_alias: cfg.short_embed_alias,
             conn: Mutex::new(conn),
             vectors,
+            #[cfg(test)]
+            before_rebuild_commit: Mutex::new(None),
         })
     }
 
@@ -118,6 +152,14 @@ impl FolderIndex {
     /// Add or replace all chunks for a file. Idempotent when the file is
     /// already `indexed` with the same `file_version`.
     pub fn upsert_file(&self, req: &UpsertFileRequest) -> Result<UpsertOutcome> {
+        self.upsert_file_inner(req, None)
+    }
+
+    pub(crate) fn upsert_file_inner(
+        &self,
+        req: &UpsertFileRequest,
+        model_meta: Option<&UpsertModelMeta>,
+    ) -> Result<UpsertOutcome> {
         validate_file_path(&req.file_path)?;
         if req.file_version.trim().is_empty() {
             return Err(MakakooError::invalid_input(
@@ -125,6 +167,7 @@ impl FolderIndex {
             ));
         }
         let quantized = quantize_chunks(&req.chunks, self.dim)?;
+        let first_vec_len = req.chunks.first().map(|c| c.vector.len()).unwrap_or(0);
 
         let (replaced, old_ids, additions, new_gen) = {
             let mut conn = self.lock_conn()?;
@@ -150,10 +193,7 @@ impl FolderIndex {
             let old_ids = collect_file_chunk_ids(&tx, &req.file_path)?;
             let had_old = !old_ids.is_empty() || existing.is_some();
             if !old_ids.is_empty() {
-                tx.execute(
-                    "DELETE FROM chunks WHERE file_path = ?1",
-                    params![&req.file_path],
-                )?;
+                delete_file_chunks_tx(&tx, &req.file_path)?;
             }
             let additions = insert_chunks_tx(
                 &tx,
@@ -174,11 +214,13 @@ impl FolderIndex {
                 None,
                 None,
             )?;
+            self.record_upsert_model_meta_tx(&tx, req.chunks.len(), first_vec_len, model_meta)?;
             let new_gen = bump_generation_tx(&tx)?;
             tx.commit()?;
             (had_old, old_ids, additions, new_gen)
         };
 
+        self.update_sidecar_if_ready();
         let chunks_written = additions.len();
         self.vectors
             .apply_delta(&old_ids, &additions, new_gen, true)?;
@@ -205,34 +247,15 @@ impl FolderIndex {
             ));
         }
 
-        let (old_ids, new_gen) = {
-            let mut conn = self.lock_conn()?;
-            let tx = conn.transaction()?;
-            let old_ids = collect_file_chunk_ids(&tx, file_path)?;
-            if !old_ids.is_empty() {
-                tx.execute(
-                    "DELETE FROM chunks WHERE file_path = ?1",
-                    params![file_path],
-                )?;
-            }
-            upsert_file_state_tx(
-                &tx,
-                file_path,
-                file_version,
-                "indexing",
-                Some(0),
-                Some(total),
-                None,
-            )?;
-            let new_gen = if !old_ids.is_empty() {
-                Some(bump_generation_tx(&tx)?)
-            } else {
-                None
-            };
-            tx.commit()?;
-            (old_ids, new_gen)
-        };
-
+        let (old_ids, new_gen) = clear_file_chunks_and_upsert_state(
+            self.lock_conn()?,
+            file_path,
+            file_version,
+            "indexing",
+            Some(0),
+            Some(total),
+            None,
+        )?;
         if let Some(gen) = new_gen {
             self.vectors.apply_delta(&old_ids, &[], gen, false)?;
         }
@@ -254,6 +277,7 @@ impl FolderIndex {
     ) -> Result<usize> {
         validate_file_path(file_path)?;
         let quantized = quantize_chunks(chunks, self.dim)?;
+        let first_vec_len = chunks.first().map(|c| c.vector.len()).unwrap_or(0);
 
         let (additions, new_gen) = {
             let mut conn = self.lock_conn()?;
@@ -277,11 +301,13 @@ impl FolderIndex {
                 Some(total),
                 None,
             )?;
+            self.record_upsert_model_meta_tx(&tx, chunks.len(), first_vec_len, None)?;
             let new_gen = bump_generation_tx(&tx)?;
             tx.commit()?;
             (additions, new_gen)
         };
 
+        self.update_sidecar_if_ready();
         let written = additions.len();
         self.vectors.apply_delta(&[], &additions, new_gen, false)?;
         Ok(written)
@@ -303,34 +329,15 @@ impl FolderIndex {
         reason: SkipReason,
     ) -> Result<()> {
         validate_file_path(file_path)?;
-        let (old_ids, new_gen) = {
-            let mut conn = self.lock_conn()?;
-            let tx = conn.transaction()?;
-            let old_ids = collect_file_chunk_ids(&tx, file_path)?;
-            if !old_ids.is_empty() {
-                tx.execute(
-                    "DELETE FROM chunks WHERE file_path = ?1",
-                    params![file_path],
-                )?;
-            }
-            upsert_file_state_tx(
-                &tx,
-                file_path,
-                file_version,
-                "skipped",
-                None,
-                None,
-                Some(reason.as_str()),
-            )?;
-            let new_gen = if !old_ids.is_empty() {
-                Some(bump_generation_tx(&tx)?)
-            } else {
-                None
-            };
-            tx.commit()?;
-            (old_ids, new_gen)
-        };
-
+        let (old_ids, new_gen) = clear_file_chunks_and_upsert_state(
+            self.lock_conn()?,
+            file_path,
+            file_version,
+            "skipped",
+            None,
+            None,
+            Some(reason.as_str()),
+        )?;
         if let Some(gen) = new_gen {
             self.vectors.apply_delta(&old_ids, &[], gen, true)?;
         }
@@ -344,10 +351,11 @@ impl FolderIndex {
             let mut conn = self.lock_conn()?;
             let tx = conn.transaction()?;
             let old_ids = collect_file_chunk_ids(&tx, file_path)?;
-            let deleted_chunks = tx.execute(
-                "DELETE FROM chunks WHERE file_path = ?1",
-                params![file_path],
-            )?;
+            let deleted_chunks = if old_ids.is_empty() {
+                0
+            } else {
+                delete_file_chunks_tx(&tx, file_path)?
+            };
             let deleted_state = tx.execute(
                 "DELETE FROM file_states WHERE file_path = ?1",
                 params![file_path],
@@ -370,6 +378,8 @@ impl FolderIndex {
 
     /// Nearest-neighbour search returning passages with exact places and
     /// higher-is-better cosine similarity scores, filtered by provenance.
+    /// Returns empty when the index is stale or rebuilding so vectors from
+    /// different models are never compared.
     pub fn search(
         &self,
         query_vec: &[f32],
@@ -381,15 +391,20 @@ impl FolderIndex {
             return Ok(Vec::new());
         }
 
-        let id_filter = if filter.is_empty() {
-            None
-        } else {
+        let id_filter = {
             let conn = self.lock_conn()?;
-            let ids = query_filtered_chunk_ids(&conn, filter)?;
-            if ids.is_empty() {
+            if read_model_status(&conn)?.index_state != IndexModelState::Ready {
                 return Ok(Vec::new());
             }
-            Some(ChunkIdFilter::from_ids(&ids))
+            if filter.is_empty() {
+                None
+            } else {
+                let ids = query_filtered_chunk_ids(&conn, filter)?;
+                if ids.is_empty() {
+                    return Ok(Vec::new());
+                }
+                Some(ChunkIdFilter::from_ids(&ids))
+            }
         };
 
         let raw_hits = self.vectors.search(&query_i8, k, id_filter.as_ref())?;
@@ -461,7 +476,7 @@ impl FolderIndex {
         self.vectors.disk_generation()
     }
 
-    fn checkpoint_wal(&self) -> Result<()> {
+    pub(crate) fn checkpoint_wal(&self) -> Result<()> {
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare("PRAGMA wal_checkpoint(PASSIVE)")?;
         let mut rows = stmt.query([])?;
@@ -469,7 +484,7 @@ impl FolderIndex {
         Ok(())
     }
 
-    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+    pub(crate) fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
         self.conn
             .lock()
             .map_err(|_| MakakooError::internal("folder index sqlite lock poisoned"))
@@ -480,18 +495,4 @@ impl Drop for FolderIndex {
     fn drop(&mut self) {
         let _ = self.vectors.flush();
     }
-}
-
-fn quantize_chunks(chunks: &[ChunkInput], dim: usize) -> Result<Vec<Vec<i8>>> {
-    let mut out = Vec::with_capacity(chunks.len());
-    for chunk in chunks {
-        if chunk.char_end < chunk.char_start {
-            return Err(MakakooError::invalid_input(format!(
-                "chunk char_end ({}) < char_start ({})",
-                chunk.char_end, chunk.char_start
-            )));
-        }
-        out.push(truncate_and_quantize_i8(&chunk.vector, dim)?);
-    }
-    Ok(out)
 }
