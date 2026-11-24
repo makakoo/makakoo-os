@@ -51,6 +51,10 @@ mod cancel_race_tests;
 #[path = "vector_limits_tests.rs"]
 mod limits_tests;
 
+#[cfg(test)]
+#[path = "vector_topup_tests.rs"]
+mod topup_tests;
+
 /// Stale reason when a top-up finds the endpoint answering with another model.
 pub const EMBED_MODEL_CHANGED_REASON: &str = "embed_model_changed";
 

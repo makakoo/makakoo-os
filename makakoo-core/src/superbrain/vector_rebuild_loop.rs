@@ -1,6 +1,7 @@
 //! Owner-fenced Brain vector rebuild execution loop with per-call timeouts
 //! and cancel-safe inline entry points.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -312,6 +313,35 @@ pub async fn rebuild_brain_vectors(
 }
 
 impl SuperbrainStore {
+    /// Store vectors for one top-up chunk under the active `(model, dim)`.
+    /// Returns `(written, stopped)` where `stopped` is true when top-up must
+    /// stop (endpoint model/dim changed or the index left `Ready` concurrently).
+    fn store_top_up_vectors(
+        &self,
+        chunk: &[(String, String)],
+        res: EmbedBatchResult,
+        model: &str,
+        dim: usize,
+    ) -> Result<(usize, bool)> {
+        if res.model != model || res.dim != dim {
+            self.mark_stale_if_ready_for(model, dim, EMBED_MODEL_CHANGED_REASON)?;
+            return Ok((0, true));
+        }
+        let mut written = 0usize;
+        for ((doc_id, _), vec) in chunk.iter().zip(res.vectors) {
+            if vec.is_empty() {
+                continue;
+            }
+            match self.store_vector_if_ready_for(doc_id, &vec, model, dim) {
+                Ok(true) => written += 1,
+                Ok(false) => return Ok((written, true)),
+                Err(MakakooError::NotFound(_)) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok((written, false))
+    }
+
     /// Top up documents that have no vector yet, under the active model only.
     ///
     /// This is the incremental path (SANCHO tick, `makakoo sync --embed` on a
@@ -322,6 +352,10 @@ impl SuperbrainStore {
     /// per HTTP request and `max_input_bytes` UTF-8 bytes per input), and each
     /// write re-checks `ready` + `(model, dim)` inside one `BEGIN IMMEDIATE`
     /// transaction so a concurrent rebuild is never mixed into.
+    ///
+    /// When a multi-document chunk request fails, that chunk is retried one
+    /// document at a time so one bad document never blocks its neighbours; the
+    /// failing document alone is skipped and logged once per tick.
     pub async fn sync_vectors_with_embedder(
         &self,
         embedder: &EmbeddingClient,
@@ -339,41 +373,73 @@ impl SuperbrainStore {
         let limits = embedder.request_limits();
         let missing = self.docs_missing_vectors(limit)?;
         let mut written = 0usize;
+        let mut logged_failures: HashSet<&str> = HashSet::new();
         for chunk in missing.chunks(limits.max_batch.max(1)) {
             let texts: Vec<String> = chunk
                 .iter()
                 .map(|(_, content)| limits.truncate_input(content).to_string())
                 .collect();
-            let Ok(res) = embedder.embed_batch_with_meta(&texts).await else {
-                continue;
-            };
-            if res.vectors.len() != chunk.len() {
-                continue;
-            }
-            if res.model != model || res.dim != dim {
-                self.mark_stale_if_ready_for(&model, dim, EMBED_MODEL_CHANGED_REASON)?;
-                break;
-            }
-            let mut stopped = false;
-            for ((doc_id, _), vec) in chunk.iter().zip(res.vectors) {
-                if vec.is_empty() {
-                    continue;
-                }
-                match self.store_vector_if_ready_for(doc_id, &vec, &model, dim) {
-                    Ok(true) => written += 1,
-                    Ok(false) => {
-                        stopped = true;
+            match embedder.embed_batch_with_meta(&texts).await {
+                Ok(res) if res.vectors.len() == chunk.len() => {
+                    let (n, stopped) = self.store_top_up_vectors(chunk, res, &model, dim)?;
+                    written += n;
+                    if stopped {
                         break;
                     }
-                    Err(MakakooError::NotFound(_)) => continue,
-                    Err(e) => return Err(e),
                 }
-            }
-            if stopped {
-                break;
+                batch_outcome if chunk.len() == 1 => {
+                    let doc_id = chunk[0].0.as_str();
+                    if logged_failures.insert(doc_id) {
+                        log_top_up_skip(doc_id, batch_outcome.err().as_ref());
+                    }
+                }
+                _ => {
+                    let mut stopped = false;
+                    for (doc, text) in chunk.iter().zip(texts.iter()) {
+                        let single = std::slice::from_ref(text);
+                        match embedder.embed_batch_with_meta(single).await {
+                            Ok(res) if res.vectors.len() == 1 => {
+                                let (n, stop) = self.store_top_up_vectors(
+                                    std::slice::from_ref(doc),
+                                    res,
+                                    &model,
+                                    dim,
+                                )?;
+                                written += n;
+                                if stop {
+                                    stopped = true;
+                                    break;
+                                }
+                            }
+                            single_outcome => {
+                                let doc_id = doc.0.as_str();
+                                if logged_failures.insert(doc_id) {
+                                    log_top_up_skip(doc_id, single_outcome.err().as_ref());
+                                }
+                            }
+                        }
+                    }
+                    if stopped {
+                        break;
+                    }
+                }
             }
         }
         Ok(written)
+    }
+}
+
+fn log_top_up_skip(doc_id: &str, err: Option<&MakakooError>) {
+    match err {
+        Some(e) => tracing::warn!(
+            doc_id = %doc_id,
+            error = %e,
+            "brain vector top-up skipped document after embed failure"
+        ),
+        None => tracing::warn!(
+            doc_id = %doc_id,
+            "brain vector top-up skipped document after unexpected vector count"
+        ),
     }
 }
 
