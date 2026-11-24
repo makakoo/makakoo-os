@@ -52,6 +52,8 @@ Search this page (`Ctrl+F` / `⌘+F`) for the exact wording you saw. If your sym
 
 ## E
 
+- **`embeddings batch expected <n> vectors, got <m>`** — The embedding endpoint returned a different number of vectors than the number of inputs in a request chunk (at most `MAKAKOO_EMBED_MAX_BATCH`, default `16`). Check the embedding proxy or model server health and retry.
+- **`embeddings model changed mid-batch: <before> -> <after>`** — When a larger embedding request was split across chunks of `MAKAKOO_EMBED_MAX_BATCH` inputs, a later chunk reported a different model id than an earlier chunk. Confirm the embedding alias routes to one stable model and rerun indexing.
 - **`empty command`** — An adapter manifest declared a blank `[entrypoint]` command. Edit the plugin's `plugin.toml` or reinstall the plugin from source.
 - **`empty duration; use one of: 30m, 1h, 24h, 7d, permanent`** — `makakoo perms grant --for ""`. Pass one of the listed values.
 - **`empty scope — grant a specific directory`** — [I ran a command and got an error → `error: too broad`](./tree.md#error-too-broad----or-~-home---).
