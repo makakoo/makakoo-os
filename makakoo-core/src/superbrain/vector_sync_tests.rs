@@ -16,8 +16,8 @@ use crate::superbrain::graph::GraphStore;
 use crate::superbrain::ingest::IngestEngine;
 use crate::superbrain::store::SuperbrainStore;
 use crate::superbrain::vector_model::{
-    rebuild_brain_vectors, BrainRebuildCoordinator, DEFAULT_EMBED_TRUNCATE_CHARS,
-    EMBED_MODEL_CHANGED_REASON,
+    embed_pending_brain, rebuild_brain_vectors, BrainRebuildCoordinator,
+    DEFAULT_EMBED_TRUNCATE_CHARS, EMBED_MODEL_CHANGED_REASON,
 };
 
 /// One endpoint for every alias: answers with `model` at `dim`, counts calls.
@@ -238,6 +238,58 @@ async fn deleting_mismatched_vectors_also_drops_rows_without_a_model() {
             [],
         )
         .unwrap();
-    r.store.delete_vectors_not_matching("model-1", 8).unwrap();
+    r.store
+        .finish_rebuild("model-1", 8, "ail-embed-bulk", None)
+        .unwrap();
     assert_eq!(vector_models(&r.store), vec![Some("model-1".to_string())]);
+}
+
+/// Review r2 CRITICAL: a rebuild that dies (crash, kill, power loss) must not
+/// leave the index "rebuilding" for good. Once its heartbeat is stale, a new
+/// rebuild takes the claim over and finishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dead_rebuild_claim_is_taken_over_after_its_lease() {
+    let r = rig("model-1", &["alpha"]).await;
+    assert!(r.store.try_mark_vectors_rebuilding("crashed").unwrap());
+    assert!(
+        !r.store.try_mark_vectors_rebuilding("other").unwrap(),
+        "a live claim must not be taken"
+    );
+    // The owner died: its heartbeat stops and goes stale.
+    r.store
+        .conn_arc()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE brain_vector_meta SET value = '0' WHERE key = 'rebuild_heartbeat_ms'",
+            [],
+        )
+        .unwrap();
+    let written = embed_pending_brain(
+        Arc::clone(&r.store),
+        Arc::clone(&r.bulk),
+        None,
+        10,
+        DEFAULT_EMBED_TRUNCATE_CHARS,
+    )
+    .await
+    .unwrap();
+    assert_eq!(written, 1);
+    assert_eq!(
+        r.store.vector_status().unwrap().index_state,
+        IndexModelState::Ready
+    );
+}
+
+/// A rebuild that is running (fresh heartbeat) is not overwritten by the open check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn open_check_leaves_a_live_rebuild_alone() {
+    let r = rig("model-1", &["alpha"]).await;
+    assert!(r.store.try_mark_vectors_rebuilding("live").unwrap());
+    let status = r
+        .store
+        .check_brain_alias_on_open("a-different-bulk-alias", None)
+        .unwrap();
+    assert_eq!(status.index_state, IndexModelState::Rebuilding);
+    assert_eq!(status.stale_reason.as_deref(), Some("live"));
 }

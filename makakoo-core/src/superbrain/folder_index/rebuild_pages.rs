@@ -22,9 +22,12 @@ const EMBED_BATCH: usize = 32;
 
 /// Create (or empty) the parking table for this connection's rebuild.
 pub(crate) fn reset_parked(conn: &Connection) -> Result<()> {
+    // The parked vectors are the whole folder's worth: keep them on disk.
     conn.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS rebuild_vectors (
+        "PRAGMA temp_store = FILE;
+         CREATE TEMP TABLE IF NOT EXISTS rebuild_vectors (
              id INTEGER PRIMARY KEY,
+             text TEXT NOT NULL,
              vector_i8 BLOB NOT NULL
          );
          DELETE FROM temp.rebuild_vectors;",
@@ -32,24 +35,26 @@ pub(crate) fn reset_parked(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Re-embed every chunk with an id above `after_id`, page by page, with the
-/// bulk model `(b_model, b_dim)`. Returns the last id it parked (or `after_id`
-/// when there was nothing) and the number of rows parked. Fails if the
-/// endpoint answers with another model or size mid-way.
+/// Re-embed every chunk that is not already parked with its current text,
+/// page by page from the first id, with the bulk model `(b_model, b_dim)`.
+/// Fails if the endpoint answers with another model or size mid-way.
 pub(crate) async fn reembed_pages(
     idx: &FolderIndex,
     bulk: &EmbeddingClient,
     b_model: &str,
     b_dim: usize,
-    mut after_id: i64,
-) -> Result<(i64, usize)> {
-    let mut parked = 0usize;
+) -> Result<()> {
+    let mut after_id = 0i64;
     loop {
-        let page = read_page(idx, after_id)?;
-        let Some(&(last_id, _)) = page.last() else {
-            return Ok((after_id, parked));
+        let (last_id, page) = read_page(idx, after_id)?;
+        let Some(last_id) = last_id else {
+            return Ok(());
         };
-        let mut vectors: Vec<(i64, Vec<i8>)> = Vec::with_capacity(page.len());
+        after_id = last_id;
+        if page.is_empty() {
+            continue;
+        }
+        let mut vectors: Vec<(i64, String, Vec<i8>)> = Vec::with_capacity(page.len());
         for batch in page.chunks(EMBED_BATCH) {
             let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
             let res = bulk.embed_batch_with_meta(&texts).await?;
@@ -63,37 +68,58 @@ pub(crate) async fn reembed_pages(
             if res.model != b_model || res.dim != b_dim {
                 return Err(MakakooError::llm("bulk embedder model changed mid-rebuild"));
             }
-            for ((id, _), vec) in batch.iter().zip(res.vectors) {
-                vectors.push((*id, truncate_and_quantize_i8(&vec, idx.dim())?));
+            for ((id, text), vec) in batch.iter().zip(res.vectors) {
+                vectors.push((
+                    *id,
+                    text.clone(),
+                    truncate_and_quantize_i8(&vec, idx.dim())?,
+                ));
             }
         }
         park(idx, &vectors)?;
-        parked += vectors.len();
-        after_id = last_id;
     }
 }
 
-fn read_page(idx: &FolderIndex, after_id: i64) -> Result<Vec<(i64, String)>> {
+/// One page of chunks above `after_id`: the last id scanned (None at the end)
+/// and the rows in it that still need a vector for their current text.
+/// A chunk row: its id and text.
+type Chunk = (i64, String);
+
+fn read_page(idx: &FolderIndex, after_id: i64) -> Result<(Option<i64>, Vec<Chunk>)> {
     let conn = idx.lock_conn()?;
-    let mut stmt =
-        conn.prepare_cached("SELECT id, text FROM chunks WHERE id > ?1 ORDER BY id ASC LIMIT ?2")?;
-    let rows = stmt
-        .query_map(params![after_id, REBUILD_PAGE_ROWS as i64], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(rows)
+    let rows = {
+        let mut stmt = conn
+            .prepare_cached("SELECT id, text FROM chunks WHERE id > ?1 ORDER BY id ASC LIMIT ?2")?;
+        let collected = stmt
+            .query_map(params![after_id, REBUILD_PAGE_ROWS as i64], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        collected
+    };
+    let last = rows.last().map(|(id, _)| *id);
+    let mut needs = Vec::new();
+    {
+        let mut parked =
+            conn.prepare_cached("SELECT 1 FROM temp.rebuild_vectors WHERE id = ?1 AND text = ?2")?;
+        for (id, text) in rows {
+            if !parked.exists(params![id, text])? {
+                needs.push((id, text));
+            }
+        }
+    }
+    Ok((last, needs))
 }
 
-fn park(idx: &FolderIndex, vectors: &[(i64, Vec<i8>)]) -> Result<()> {
+fn park(idx: &FolderIndex, vectors: &[(i64, String, Vec<i8>)]) -> Result<()> {
     let mut conn = idx.lock_conn()?;
     let tx = conn.transaction()?;
     {
         let mut ins = tx.prepare_cached(
-            "INSERT OR REPLACE INTO temp.rebuild_vectors (id, vector_i8) VALUES (?1, ?2)",
+            "INSERT OR REPLACE INTO temp.rebuild_vectors (id, text, vector_i8) VALUES (?1, ?2, ?3)",
         )?;
-        for (id, q) in vectors {
-            ins.execute(params![id, i8_slice_to_bytes(q)])?;
+        for (id, text, q) in vectors {
+            ins.execute(params![id, text, i8_slice_to_bytes(q)])?;
         }
     }
     tx.commit()?;
@@ -103,10 +129,14 @@ fn park(idx: &FolderIndex, vectors: &[(i64, Vec<i8>)]) -> Result<()> {
 /// Inside the commit transaction: put every parked vector on its chunk (rows
 /// deleted since are skipped) and empty the parking table.
 pub(crate) fn swap_in_parked(tx: &Transaction<'_>) -> Result<usize> {
+    // Matched on id AND text: an id reused by a new chunk never takes the old
+    // chunk's vector.
     let moved = tx.execute(
         "UPDATE chunks
-            SET vector_i8 = (SELECT r.vector_i8 FROM temp.rebuild_vectors r WHERE r.id = chunks.id)
-          WHERE id IN (SELECT id FROM temp.rebuild_vectors)",
+            SET vector_i8 = (SELECT r.vector_i8 FROM temp.rebuild_vectors r
+                              WHERE r.id = chunks.id AND r.text = chunks.text)
+          WHERE EXISTS (SELECT 1 FROM temp.rebuild_vectors r
+                         WHERE r.id = chunks.id AND r.text = chunks.text)",
         [],
     )?;
     tx.execute("DELETE FROM temp.rebuild_vectors", [])?;

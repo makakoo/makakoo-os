@@ -683,18 +683,123 @@ async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
         .unwrap();
-    let with_new: i64 = conn
+    assert_eq!(total, files as i64);
+    // Every row must hold the NEW model's vector (basis slot 5), not the old one.
+    let new_q =
+        crate::superbrain::folder_index::quantize::truncate_and_quantize_i8(&basis(64, 5), 32)
+            .unwrap();
+    let new_vec = crate::superbrain::folder_index::quantize::i8_slice_to_bytes(&new_q);
+    let stale_rows: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM chunks WHERE vector_i8 IS NOT NULL",
-            [],
+            "SELECT COUNT(*) FROM chunks WHERE vector_i8 IS NOT ?1",
+            [&new_vec],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(total, files as i64);
-    assert_eq!(with_new, total, "every chunk was re-embedded before Ready");
+    assert_eq!(
+        stale_rows, 0,
+        "rows still hold a vector that is not the new model's"
+    );
     assert_eq!(
         super::rebuild_pages::parked_count(&conn).unwrap(),
         0,
         "parked vectors left behind after commit"
     );
+}
+
+/// S078 C11 review r2 HIGH: chunk ids are reused once the top rows are deleted.
+/// A writer that replaces the last file while the rebuild is in flight must not
+/// leave its new text holding the old text's vector.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reused_chunk_id_never_takes_the_old_chunks_vector() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "old-model", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let mgr = Arc::new(
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb)),
+    );
+    let old_meta = UpsertModelMeta {
+        model: "old-model".into(),
+        embed_dim: 64,
+        bulk_alias: "ail-embed".into(),
+        short_alias: Some("ail-embed".into()),
+    };
+    mgr.upsert_folder_file(
+        "reuse",
+        32,
+        &one_chunk("a.md", "Head text.", basis(64, 2)),
+        Some(&old_meta),
+    )
+    .unwrap();
+    mgr.upsert_folder_file(
+        "reuse",
+        32,
+        &one_chunk("last.md", "Old tail.", basis(64, 2)),
+        Some(&old_meta),
+    )
+    .unwrap();
+
+    let idx = mgr.get_or_open("reuse", 32).unwrap();
+    let fired = Arc::new(AtomicBool::new(false));
+    let (f2, meta2) = (Arc::clone(&fired), old_meta.clone());
+    *idx.before_rebuild_commit.lock().unwrap() = Some(Box::new(move |i: &FolderIndex| {
+        if !f2.swap(true, Ordering::SeqCst) {
+            // Delete the top file's chunks, then add a new file: SQLite reuses the
+            // freed top ids for the new chunk (an upsert alone inserts first, so
+            // it would not reuse them).
+            {
+                let conn = i.lock_conn().unwrap();
+                conn.execute("DELETE FROM chunks WHERE file_path = 'last.md'", [])
+                    .unwrap();
+            }
+            i.upsert_file_with_model(
+                &one_chunk("new.md", "New tail.", basis(64, 2)),
+                Some(&meta2),
+            )
+            .unwrap();
+        }
+    }));
+
+    responder.set_both_model("new-model", 64, 5);
+    let _ = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "reuse".into(),
+                dim: 32,
+                k: 5,
+                query: Some("tail".into()),
+                query_vector: None,
+                query_model: None,
+                query_dim: None,
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("reuse").await;
+    assert!(fired.load(Ordering::SeqCst), "hook never ran");
+
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    let new_q =
+        crate::superbrain::folder_index::quantize::truncate_and_quantize_i8(&basis(64, 5), 32)
+            .unwrap();
+    let new_vec = crate::superbrain::folder_index::quantize::i8_slice_to_bytes(&new_q);
+    let conn = idx.lock_conn().unwrap();
+    let not_new: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM chunks WHERE vector_i8 IS NOT ?1",
+            [&new_vec],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(not_new, 0, "a row kept an old-model vector under Ready");
 }

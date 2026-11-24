@@ -9,7 +9,7 @@ use makakoo_core::superbrain::folder_index::IndexModelState;
 use makakoo_core::superbrain::graph::GraphStore;
 use makakoo_core::superbrain::memory_stack::MemoryStack;
 use makakoo_core::superbrain::store::SuperbrainStore;
-use makakoo_core::superbrain::vector_model::DEFAULT_EMBED_TRUNCATE_CHARS;
+use makakoo_core::superbrain::vector_model::rebuild_brain_vectors;
 use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -104,15 +104,14 @@ async fn mcp_brain_vector_search_returns_empty_during_rebuild_while_fts_works() 
 
     let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-a"));
     let bulk_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-a"));
-    store
-        .sync_vectors_with_embedder(
-            &bulk_emb,
-            Some(short_emb.model()),
-            10,
-            DEFAULT_EMBED_TRUNCATE_CHARS,
-        )
-        .await
-        .unwrap();
+    rebuild_brain_vectors(
+        Arc::clone(&store),
+        Arc::clone(&bulk_emb),
+        Some(Arc::clone(&short_emb)),
+        None,
+    )
+    .await
+    .unwrap();
 
     let ctx = Arc::new(
         ToolContext::empty(dir.path().to_path_buf())

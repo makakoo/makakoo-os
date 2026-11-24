@@ -1,7 +1,7 @@
 //! Model/dimension tracking and strict per-model vector isolation for
 //! `SuperbrainStore` (`brain_vectors`).
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use crate::embeddings::EmbeddingClient;
@@ -73,6 +73,33 @@ fn write_state(conn: &Connection, state: IndexModelState, reason: Option<&str>) 
     Ok(())
 }
 
+/// A rebuild that has not refreshed its heartbeat for this long is dead (crash,
+/// kill, power loss) and its claim may be taken over.
+pub(crate) const REBUILD_LEASE_MS: i64 = 120_000;
+const META_REBUILD_HEARTBEAT: &str = "rebuild_heartbeat_ms";
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn touch_heartbeat(conn: &Connection) -> Result<()> {
+    write_meta_opt(conn, META_REBUILD_HEARTBEAT, Some(&now_ms().to_string()))
+}
+
+/// True while a rebuild claim is held and its heartbeat is recent.
+fn lease_fresh(conn: &Connection) -> Result<bool> {
+    if read_index_state(conn)? != IndexModelState::Rebuilding {
+        return Ok(false);
+    }
+    let beat = read_meta_opt(conn, META_REBUILD_HEARTBEAT)?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    Ok(now_ms() - beat < REBUILD_LEASE_MS)
+}
+
 fn read_index_state(conn: &Connection) -> Result<IndexModelState> {
     match read_meta_opt(conn, META_INDEX_STATE)? {
         Some(raw) => IndexModelState::parse(&raw),
@@ -117,6 +144,25 @@ impl SuperbrainStore {
     /// Probe/query-time stale mark: never overwrites `rebuilding`. Read and
     /// write happen under one connection lock, the same lock a rebuild takes to
     /// set `rebuilding`, so a probe racing a rebuild start cannot hide it.
+    /// Mark stale only while the index is still `ready` for exactly `(model, dim)`.
+    pub(crate) fn mark_stale_if_ready_for(
+        &self,
+        model: &str,
+        dim: usize,
+        reason: &str,
+    ) -> Result<bool> {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ready_for = read_index_state(&tx)? == IndexModelState::Ready
+            && read_meta_opt(&tx, META_EMBED_MODEL)?.as_deref() == Some(model)
+            && read_meta_opt(&tx, META_EMBED_DIM)?.as_deref() == Some(&dim.to_string());
+        if ready_for {
+            write_state(&tx, IndexModelState::Stale, Some(reason))?;
+        }
+        tx.commit()?;
+        Ok(ready_for)
+    }
+
     pub fn mark_vectors_stale_unless_rebuilding(&self, reason: &str) -> Result<bool> {
         let conn = self.lock_conn()?;
         if read_index_state(&conn)? == IndexModelState::Rebuilding {
@@ -165,12 +211,53 @@ impl SuperbrainStore {
     /// lives in the database, so this also keeps a second process (the CLI,
     /// the daemon) from rebuilding at the same time as the Brain service.
     pub fn try_mark_vectors_rebuilding(&self, reason: &str) -> Result<bool> {
-        let conn = self.lock_conn()?;
-        if read_index_state(&conn)? == IndexModelState::Rebuilding {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if lease_fresh(&tx)? {
             return Ok(false);
         }
-        write_state(&conn, IndexModelState::Rebuilding, Some(reason))?;
+        write_state(&tx, IndexModelState::Rebuilding, Some(reason))?;
+        touch_heartbeat(&tx)?;
+        tx.commit()?;
         Ok(true)
+    }
+
+    /// Refresh the rebuild's heartbeat; called per batch by the rebuild loop.
+    pub fn touch_rebuild_heartbeat(&self) -> Result<()> {
+        let conn = self.lock_conn()?;
+        touch_heartbeat(&conn)
+    }
+
+    /// True while another rebuild (any process) holds a live claim.
+    pub fn rebuild_lease_fresh(&self) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        lease_fresh(&conn)
+    }
+
+    /// Finish a rebuild: drop vectors of other models and mark the index
+    /// ready, in one transaction, so no reader sees one without the other.
+    pub fn finish_rebuild(
+        &self,
+        model: &str,
+        dim: usize,
+        bulk_alias: &str,
+        short_alias: Option<&str>,
+    ) -> Result<()> {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM brain_vectors WHERE model IS NOT ?1 OR dim IS NOT ?2",
+            params![model, dim as i64],
+        )?;
+        write_meta_opt(&tx, META_EMBED_MODEL, Some(model))?;
+        write_meta_opt(&tx, META_EMBED_DIM, Some(&dim.to_string()))?;
+        write_meta_opt(&tx, META_EMBED_ALIAS, Some(bulk_alias))?;
+        if let Some(short) = short_alias {
+            write_meta_opt(&tx, META_SHORT_EMBED_ALIAS, Some(short))?;
+        }
+        write_state(&tx, IndexModelState::Ready, None)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn set_vectors_ready(
@@ -200,14 +287,19 @@ impl SuperbrainStore {
         model: &str,
         dim: usize,
     ) -> Result<bool> {
-        let conn = self.lock_conn()?;
-        let ready = read_index_state(&conn)? == IndexModelState::Ready
-            && read_meta_opt(&conn, META_EMBED_MODEL)?.as_deref() == Some(model)
-            && read_meta_opt(&conn, META_EMBED_DIM)?.as_deref() == Some(&dim.to_string());
-        if !ready || vec.len() != dim {
+        if vec.len() != dim {
             return Ok(false);
         }
-        write_vector_row(&conn, doc_id, vec, model)?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ready = read_index_state(&tx)? == IndexModelState::Ready
+            && read_meta_opt(&tx, META_EMBED_MODEL)?.as_deref() == Some(model)
+            && read_meta_opt(&tx, META_EMBED_DIM)?.as_deref() == Some(&dim.to_string());
+        if !ready {
+            return Ok(false);
+        }
+        write_vector_row(&tx, doc_id, vec, model)?;
+        tx.commit()?;
         Ok(true)
     }
 
@@ -339,6 +431,10 @@ impl SuperbrainStore {
     ) -> Result<BrainVectorStatus> {
         let vector_count = self.stats()?.vector_count;
         let status = self.vector_status()?;
+        // A rebuild another process (or this one) is running owns the state.
+        if self.rebuild_lease_fresh()? {
+            return Ok(status);
+        }
         if vector_count == 0 {
             if status.index_state != IndexModelState::Ready || status.stale_reason.is_some() {
                 let conn = self.lock_conn()?;
@@ -410,7 +506,7 @@ impl SuperbrainStore {
                 continue;
             }
             if res.model != model || res.dim != dim {
-                self.mark_vectors_stale_unless_rebuilding(EMBED_MODEL_CHANGED_REASON)?;
+                self.mark_stale_if_ready_for(&model, dim, EMBED_MODEL_CHANGED_REASON)?;
                 break;
             }
             match self.store_vector_if_ready_for(&doc_id, &res.vector, &model, dim) {
@@ -421,14 +517,5 @@ impl SuperbrainStore {
             }
         }
         Ok(written)
-    }
-
-    pub(crate) fn delete_vectors_not_matching(&self, model: &str, dim: usize) -> Result<()> {
-        let conn = self.lock_conn()?;
-        conn.execute(
-            "DELETE FROM brain_vectors WHERE model IS NOT ?1 OR dim IS NOT ?2",
-            params![model, dim as i64],
-        )?;
-        Ok(())
     }
 }

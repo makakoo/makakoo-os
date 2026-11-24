@@ -155,6 +155,7 @@ pub async fn rebuild_brain_vectors(
         if batch.is_empty() {
             break;
         }
+        store.touch_rebuild_heartbeat()?;
         let texts: Vec<String> = batch
             .iter()
             .map(|(_, content)| content.chars().take(DEFAULT_EMBED_TRUNCATE_CHARS).collect())
@@ -182,8 +183,7 @@ pub async fn rebuild_brain_vectors(
         }
     }
 
-    store.delete_vectors_not_matching(&b_model, b_dim)?;
-    store.set_vectors_ready(
+    store.finish_rebuild(
         &b_model,
         b_dim,
         bulk_emb.model(),

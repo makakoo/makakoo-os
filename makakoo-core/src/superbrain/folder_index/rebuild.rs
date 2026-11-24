@@ -273,7 +273,7 @@ async fn run_folder_rebuild(
         }
     }
 
-    let (mut max_id, _) = reembed_pages(&idx, &bulk_emb, &b_model, b_dim, 0).await?;
+    reembed_pages(&idx, &bulk_emb, &b_model, b_dim).await?;
 
     // Upserts replace a file's chunks with new, higher ids and bump the
     // generation. Commit only while the generation is the one whose rows were
@@ -301,8 +301,10 @@ async fn run_folder_rebuild(
             }
             seen_gen = gen_now;
         }
-        let (last_id, _) = reembed_pages(&idx, &bulk_emb, &b_model, b_dim, max_id).await?;
-        max_id = last_id;
+        // Ids are reused once the top rows are deleted, so the tail is not
+        // "ids above the last one": rescan every chunk, skipping those parked
+        // with the same text.
+        reembed_pages(&idx, &bulk_emb, &b_model, b_dim).await?;
     }
     Err(MakakooError::internal(
         "rebuild kept racing writers; left stale for the next probe",
@@ -317,24 +319,26 @@ fn commit_rebuild(
     bulk_emb: &EmbeddingClient,
     short_emb: &Option<Arc<EmbeddingClient>>,
 ) -> Result<()> {
-    {
+    // Vectors, generation and the ready model record commit together: a crash
+    // leaves the old state, never new vectors under the old model's record.
+    let new_gen = {
         let tx = conn.transaction()?;
         swap_in_parked(&tx)?;
         let new_gen = bump_generation_tx(&tx)?;
-        tx.commit()?;
-
-        let count = read_chunk_count(conn)?;
-        idx.vectors
-            .set_model_meta(Some(b_model.to_string()), Some(b_dim));
-        idx.vectors.rebuild_from_sqlite(conn, new_gen, count)?;
         write_ready_model_meta(
-            conn,
+            &tx,
             b_model,
             b_dim,
             bulk_emb.model(),
             short_emb.as_deref().map(EmbeddingClient::model),
         )?;
-    }
+        tx.commit()?;
+        new_gen
+    };
+    let count = read_chunk_count(conn)?;
+    idx.vectors
+        .set_model_meta(Some(b_model.to_string()), Some(b_dim));
+    idx.vectors.rebuild_from_sqlite(conn, new_gen, count)?;
     Ok(())
 }
 
