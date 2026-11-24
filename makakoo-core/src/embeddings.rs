@@ -11,7 +11,10 @@ use crate::error::{MakakooError, Result};
 use crate::llm::DEFAULT_BASE_URL;
 
 pub const DEFAULT_EMBED_MODEL: &str = "qwen3-embedding:0.6b";
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Existing default per-request timeout for embedding HTTP calls.
+pub const DEFAULT_EMBED_TIMEOUT: Duration = Duration::from_secs(60);
+/// Existing default per-request timeout for non-blocking model probes.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Single text embedding paired with the model id and dim reported by the endpoint.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +63,7 @@ pub struct EmbeddingClient {
     base_url: String,
     api_key: Option<String>,
     model: String,
+    timeout: Option<Duration>,
     client: reqwest::Client,
 }
 
@@ -88,13 +92,14 @@ impl EmbeddingClient {
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
         let api_key = std::env::var("AIL_API_KEY").ok().filter(|s| !s.is_empty());
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
+            .timeout(DEFAULT_EMBED_TIMEOUT)
             .build()
             .expect("reqwest client build");
         Self {
             base_url,
             api_key,
             model,
+            timeout: None,
             client,
         }
     }
@@ -113,6 +118,15 @@ impl EmbeddingClient {
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn timeout(&self) -> Option<Duration> {
+        self.timeout
     }
 
     pub fn base_url(&self) -> &str {
@@ -151,14 +165,31 @@ impl EmbeddingClient {
     /// reported by the endpoint (falling back to the configured model name if
     /// the endpoint omits `"model"`).
     pub async fn embed_batch_with_meta(&self, texts: &[String]) -> Result<EmbedBatchResult> {
-        self.request_embeddings(texts, None).await
+        self.request_embeddings(texts, self.timeout).await
+    }
+
+    /// Embed a batch of texts with an explicit per-request timeout (overrides
+    /// the client's default HTTP timeout for this call).
+    pub async fn embed_batch_with_meta_timeout(
+        &self,
+        texts: &[String],
+        timeout: Duration,
+    ) -> Result<EmbedBatchResult> {
+        self.request_embeddings(texts, Some(timeout)).await
     }
 
     /// Non-blocking-friendly probe (short timeout) to learn the endpoint's
     /// reported `(model, dim)` without changing any local state on error.
     pub async fn probe_model(&self) -> Result<(String, usize)> {
+        self.probe_model_with_timeout(self.timeout.unwrap_or(PROBE_TIMEOUT))
+            .await
+    }
+
+    /// Probe the endpoint's reported `(model, dim)` with an explicit per-call
+    /// timeout.
+    pub async fn probe_model_with_timeout(&self, timeout: Duration) -> Result<(String, usize)> {
         let res = self
-            .request_embeddings(&["probe".to_string()], Some(PROBE_TIMEOUT))
+            .request_embeddings(&["probe".to_string()], Some(timeout))
             .await?;
         if res.dim == 0 {
             return Err(MakakooError::llm(

@@ -19,8 +19,9 @@ pub use super::vector_probe::{
     check_and_probe_brain_on_open, probe_and_reconcile_brain, search_brain_vectors_checked,
 };
 pub use super::vector_rebuild::{
-    embed_pending_brain, rebuild_brain_vectors, BrainRebuildCoordinator, BrainSyncOutcome,
-    DEFAULT_REBUILD_WAIT_TIMEOUT,
+    embed_pending_brain, rebuild_brain_vectors, resolve_rebuild_call_timeout,
+    BrainRebuildCoordinator, BrainSyncOutcome, DEFAULT_REBUILD_WAIT_TIMEOUT,
+    REBUILD_CALL_TIMEOUT_MS_ENV, REBUILD_CALL_TIMEOUT_SECS_ENV,
 };
 
 #[cfg(test)]
@@ -38,6 +39,14 @@ mod fence_tests;
 #[cfg(test)]
 #[path = "vector_heartbeat_tests.rs"]
 mod heartbeat_tests;
+
+#[cfg(test)]
+#[path = "vector_timeout_tests.rs"]
+mod timeout_tests;
+
+#[cfg(test)]
+#[path = "vector_cancel_race_tests.rs"]
+mod cancel_race_tests;
 
 pub const DEFAULT_EMBED_TRUNCATE_CHARS: usize = 2000;
 /// Stale reason when a top-up finds the endpoint answering with another model.
@@ -221,9 +230,11 @@ impl SuperbrainStore {
         Ok(())
     }
 
-    /// Top-up write: stores the vector only while the index is still `ready`
-    /// for exactly `(model, dim)`, checked under the same lock as the write.
-    /// A rebuild that started in between owns the rows; false means skipped.
+    /// Top-up write: checks `ready` + exact `(model, dim)` and upserts the
+    /// vector inside one `BEGIN IMMEDIATE` transaction so a competing
+    /// cross-process rebuild claim cannot commit between check and write.
+    /// Returns `Ok(false)` (no write) if the index is no longer ready for
+    /// `(model, dim)`.
     pub(crate) fn store_vector_if_ready_for(
         &self,
         doc_id: &str,
@@ -433,8 +444,9 @@ impl SuperbrainStore {
     /// is not ready, or the endpoint now answers with another model or size,
     /// the coordinated rebuild (`rebuild_brain_vectors`) owns the change. A
     /// model change is handed over by a stale mark the next probe or query
-    /// acts on; each write re-checks `ready` under the same lock, so a rebuild
-    /// that started meanwhile is never mixed into.
+    /// acts on; each write re-checks `ready` + `(model, dim)` and upserts
+    /// inside one `BEGIN IMMEDIATE` transaction, so a rebuild that started
+    /// meanwhile (in-process or cross-process) is never mixed into.
     pub async fn sync_vectors_with_embedder(
         &self,
         embedder: &EmbeddingClient,

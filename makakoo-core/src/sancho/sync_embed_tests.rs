@@ -372,8 +372,10 @@ async fn sancho_tick_top_up_races_with_rebuild_claim_writes_nothing() {
     .await
     .expect("top-up embed request never reached the gate");
 
-    // Competing rebuild claims ownership before the top-up write runs.
-    let _owner = store
+    // Competing rebuild claims ownership via a second independent DB connection
+    // (simulating another process) before the top-up write runs.
+    let other_conn = SuperbrainStore::open(store.path()).unwrap();
+    let _owner = other_conn
         .try_mark_vectors_rebuilding("concurrent_rebuild")
         .unwrap()
         .unwrap();

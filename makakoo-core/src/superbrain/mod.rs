@@ -34,3 +34,4 @@ mod vector_claim;
 pub mod vector_model;
 mod vector_probe;
 mod vector_rebuild;
+mod vector_rebuild_loop;
