@@ -23,6 +23,10 @@ use crate::output;
 #[path = "sancho_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "sancho_fix2_tests.rs"]
+mod fix2_tests;
+
 pub async fn run(ctx: &CliContext, cmd: SanchoCmd) -> anyhow::Result<i32> {
     match cmd {
         SanchoCmd::Tick => tick(ctx).await,
@@ -64,11 +68,32 @@ async fn build_engine(ctx: &CliContext) -> anyhow::Result<SanchoEngine> {
     ))
 }
 
-async fn tick(ctx: &CliContext) -> anyhow::Result<i32> {
-    Ok(run_tick(ctx).await?.0)
+#[derive(Debug, Clone)]
+pub(crate) struct TickOutcome {
+    pub(crate) exit_code: i32,
+    pub(crate) rebuild_ran: bool,
+    pub(crate) status_note: Option<String>,
 }
 
+fn format_wait_duration(d: Duration) -> String {
+    if d.as_secs() == 0 || d.subsec_millis() != 0 {
+        format!("{}ms", d.as_millis())
+    } else {
+        format!("{}s", d.as_secs())
+    }
+}
+
+async fn tick(ctx: &CliContext) -> anyhow::Result<i32> {
+    Ok(run_tick_detailed(ctx).await?.exit_code)
+}
+
+#[cfg(test)]
 async fn run_tick(ctx: &CliContext) -> anyhow::Result<(i32, bool)> {
+    let out = run_tick_detailed(ctx).await?;
+    Ok((out.exit_code, out.rebuild_ran))
+}
+
+async fn run_tick_detailed(ctx: &CliContext) -> anyhow::Result<TickOutcome> {
     let engine = build_engine(ctx).await?;
     // Run the store-open probe on the same process-wide coordinator so SANCHO
     // and the open probe deduplicate in-process and wait_all covers both.
@@ -81,37 +106,79 @@ async fn run_tick(ctx: &CliContext) -> anyhow::Result<(i32, bool)> {
     output::print_handler_reports(&reports);
 
     let coord = &engine.context().brain_rebuild;
+    let wait_timeout = resolve_rebuild_wait_timeout();
     let waited = coord.spawned_count() > 0 || coord.has_active_work();
+    let completed = if waited {
+        coord.wait_all_timeout(wait_timeout).await
+    } else {
+        true
+    };
+
+    let rebuild_ran = coord.spawned_count() > 0;
     let mut rebuild_ok = true;
-    if waited {
-        let wait_timeout = resolve_rebuild_wait_timeout();
-        let completed = coord.wait_all_timeout(wait_timeout).await;
-        let status = engine.context().store.vector_status()?;
+    let mut status_note = None;
+
+    if rebuild_ran {
         if !completed {
-            let reason = status.stale_reason.as_deref().unwrap_or("wait_timeout");
+            // Release this tick's active rebuild claim (owner-checked) before
+            // exiting so the next tick can claim and resume immediately.
+            coord.cancel_active_rebuilds().await;
+            let status = engine.context().store.vector_status()?;
+            let reason = status
+                .stale_reason
+                .as_deref()
+                .unwrap_or("rebuild_cancelled");
+            let wait_label = format_wait_duration(wait_timeout);
             output::print_warn(format!(
-                "sancho: brain vector rebuild timed out after {}s (state={}, stale_reason={reason})",
-                wait_timeout.as_secs(),
+                "sancho: brain vector rebuild timed out after {wait_label} (state={}, stale_reason={reason})",
+                status.index_state.as_str(),
+            ));
+            status_note = Some(format!(
+                "sancho: brain vector rebuild timed out after {wait_label} (state={}, stale_reason={reason})",
                 status.index_state.as_str(),
             ));
             rebuild_ok = false;
-        } else if status.index_state == IndexModelState::Ready {
-            if coord.spawned_count() > 0 {
-                output::print_info("sancho: brain vector rebuild finished");
-            }
         } else {
+            let status = engine.context().store.vector_status()?;
+            if status.index_state == IndexModelState::Ready {
+                let msg = "sancho: brain vector rebuild finished".to_string();
+                output::print_info(&msg);
+                status_note = Some(msg);
+            } else {
+                let reason = status.stale_reason.as_deref().unwrap_or("unknown");
+                output::print_warn(format!(
+                    "sancho: brain vector rebuild did not reach ready (state={}, stale_reason={reason})",
+                    status.index_state.as_str(),
+                ));
+                status_note = Some(format!(
+                    "sancho: brain vector rebuild did not reach ready (state={}, stale_reason={reason})",
+                    status.index_state.as_str(),
+                ));
+                rebuild_ok = false;
+            }
+        }
+    } else {
+        // Exit 2 applies only when this tick scheduled a rebuild that did not
+        // reach Ready. A pre-existing stale state or probe outcome alone logs
+        // one info line and exits 0.
+        let status = engine.context().store.vector_status()?;
+        if status.index_state != IndexModelState::Ready {
             let reason = status.stale_reason.as_deref().unwrap_or("unknown");
-            output::print_warn(format!(
-                "sancho: brain vector rebuild did not reach ready (state={}, stale_reason={reason})",
+            let msg = format!(
+                "sancho: brain vector index not ready (state={}, stale_reason={reason}); no rebuild scheduled this tick",
                 status.index_state.as_str(),
-            ));
-            rebuild_ok = false;
+            );
+            output::print_info(&msg);
+            status_note = Some(msg);
         }
     }
 
-    let rebuild_ran = coord.spawned_count() > 0;
     let failed = reports.iter().any(|r| !r.ok) || !rebuild_ok;
-    Ok((if failed { 2 } else { 0 }, rebuild_ran))
+    Ok(TickOutcome {
+        exit_code: if failed { 2 } else { 0 },
+        rebuild_ran,
+        status_note,
+    })
 }
 
 async fn status(ctx: &CliContext) -> anyhow::Result<i32> {

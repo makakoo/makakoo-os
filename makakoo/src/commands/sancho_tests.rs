@@ -384,12 +384,12 @@ fn one_shot_sancho_tick_exits_2_when_hung_embedder_hits_wait_bound() {
             "hung embedder hitting wait bound must make one-shot sancho tick exit 2"
         );
         assert!(gate_entered.load(Ordering::SeqCst));
+        let status = store.vector_status().unwrap();
+        assert_eq!(status.index_state, IndexModelState::Stale);
+        assert_eq!(status.stale_reason.as_deref(), Some("rebuild_cancelled"));
+        assert!(!ctx.brain_rebuild().is_active(store.path()));
         // Release the gated server task cleanly before runtime teardown.
         gate_release.notify_waiters();
-        let _ = ctx
-            .brain_rebuild()
-            .wait_all_timeout(Duration::from_secs(5))
-            .await;
     });
 }
 
