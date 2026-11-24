@@ -82,6 +82,11 @@ impl SanchoEngine {
         self.registry.len()
     }
 
+    /// Shared handle to the handler dependency context.
+    pub fn context(&self) -> &Arc<SanchoContext> {
+        &self.ctx
+    }
+
     /// Run every eligible task exactly once.
     pub async fn tick_once(&self) -> Result<Vec<HandlerReport>> {
         let now = Local::now();

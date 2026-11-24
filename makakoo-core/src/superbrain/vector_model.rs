@@ -4,7 +4,6 @@
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::folder_index::model_meta::{
@@ -12,10 +11,16 @@ use super::folder_index::model_meta::{
     META_SHORT_EMBED_ALIAS, META_STALE_REASON,
 };
 use super::store::{cosine_similarity, pack_vector, unpack_vector, SuperbrainStore, VectorHit};
+use super::vector_claim::{clear_claim_meta, lease_fresh};
 
+pub use super::vector_claim::REBUILD_LEASE_MS;
+pub use super::vector_probe::{
+    check_and_probe_brain_on_open, probe_and_reconcile_brain, search_brain_vectors_checked,
+};
 pub use super::vector_rebuild::{
-    check_and_probe_brain_on_open, embed_pending_brain, probe_and_reconcile_brain,
-    rebuild_brain_vectors, search_brain_vectors_checked, BrainRebuildCoordinator,
+    embed_pending_brain, rebuild_brain_vectors, resolve_rebuild_call_timeout,
+    BrainRebuildCoordinator, BrainSyncOutcome, DEFAULT_REBUILD_WAIT_TIMEOUT,
+    REBUILD_CALL_TIMEOUT_MS_ENV, REBUILD_CALL_TIMEOUT_SECS_ENV,
 };
 
 #[cfg(test)]
@@ -26,7 +31,30 @@ mod tests;
 #[path = "vector_sync_tests.rs"]
 mod sync_tests;
 
-pub const DEFAULT_EMBED_TRUNCATE_CHARS: usize = 2000;
+#[cfg(test)]
+#[path = "vector_fence_tests.rs"]
+mod fence_tests;
+
+#[cfg(test)]
+#[path = "vector_heartbeat_tests.rs"]
+mod heartbeat_tests;
+
+#[cfg(test)]
+#[path = "vector_timeout_tests.rs"]
+mod timeout_tests;
+
+#[cfg(test)]
+#[path = "vector_cancel_race_tests.rs"]
+mod cancel_race_tests;
+
+#[cfg(test)]
+#[path = "vector_limits_tests.rs"]
+mod limits_tests;
+
+#[cfg(test)]
+#[path = "vector_topup_tests.rs"]
+mod topup_tests;
+
 /// Stale reason when a top-up finds the endpoint answering with another model.
 pub const EMBED_MODEL_CHANGED_REASON: &str = "embed_model_changed";
 
@@ -41,7 +69,7 @@ pub struct BrainVectorStatus {
     pub stale_reason: Option<String>,
 }
 
-fn read_meta_opt(conn: &Connection, key: &str) -> Result<Option<String>> {
+pub(crate) fn read_meta_opt(conn: &Connection, key: &str) -> Result<Option<String>> {
     let val: Option<String> = conn
         .query_row(
             "SELECT value FROM brain_vector_meta WHERE key = ?1",
@@ -52,7 +80,7 @@ fn read_meta_opt(conn: &Connection, key: &str) -> Result<Option<String>> {
     Ok(val.filter(|s| !s.is_empty()))
 }
 
-fn write_meta_opt(conn: &Connection, key: &str, value: Option<&str>) -> Result<()> {
+pub(crate) fn write_meta_opt(conn: &Connection, key: &str, value: Option<&str>) -> Result<()> {
     match value.filter(|s| !s.is_empty()) {
         Some(v) => {
             conn.execute(
@@ -67,42 +95,20 @@ fn write_meta_opt(conn: &Connection, key: &str, value: Option<&str>) -> Result<(
     Ok(())
 }
 
-fn write_state(conn: &Connection, state: IndexModelState, reason: Option<&str>) -> Result<()> {
+pub(crate) fn write_state(
+    conn: &Connection,
+    state: IndexModelState,
+    reason: Option<&str>,
+) -> Result<()> {
     write_meta_opt(conn, META_INDEX_STATE, Some(state.as_str()))?;
     write_meta_opt(conn, META_STALE_REASON, reason)?;
+    if state != IndexModelState::Rebuilding {
+        clear_claim_meta(conn)?;
+    }
     Ok(())
 }
 
-/// A rebuild that has not refreshed its heartbeat for this long is dead (crash,
-/// kill, power loss) and its claim may be taken over.
-pub(crate) const REBUILD_LEASE_MS: i64 = 120_000;
-const META_REBUILD_HEARTBEAT: &str = "rebuild_heartbeat_ms";
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-fn touch_heartbeat(conn: &Connection) -> Result<()> {
-    write_meta_opt(conn, META_REBUILD_HEARTBEAT, Some(&now_ms().to_string()))
-}
-
-/// True while a rebuild claim is held and its heartbeat is recent.
-fn lease_fresh(conn: &Connection) -> Result<bool> {
-    if read_index_state(conn)? != IndexModelState::Rebuilding {
-        return Ok(false);
-    }
-    let beat = read_meta_opt(conn, META_REBUILD_HEARTBEAT)?
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-    // A heartbeat in the future (clock stepped back) is not a live owner.
-    let age = now_ms() - beat;
-    Ok((0..REBUILD_LEASE_MS).contains(&age))
-}
-
-fn read_index_state(conn: &Connection) -> Result<IndexModelState> {
+pub(crate) fn read_index_state(conn: &Connection) -> Result<IndexModelState> {
     match read_meta_opt(conn, META_INDEX_STATE)? {
         Some(raw) => IndexModelState::parse(&raw),
         None => Ok(IndexModelState::Ready),
@@ -139,8 +145,11 @@ impl SuperbrainStore {
     }
 
     pub fn mark_vectors_stale(&self, reason: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        write_state(&conn, IndexModelState::Stale, Some(reason))
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        write_state(&tx, IndexModelState::Stale, Some(reason))?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Probe/query-time stale mark: never overwrites `rebuilding`. Read and
@@ -177,8 +186,8 @@ impl SuperbrainStore {
     }
 
     /// Clear an alias-only stale mark: writes `ready` only while the index is
-    /// still `stale` for one of `reasons`, under one lock. A rebuild that
-    /// started in between keeps its `rebuilding` state.
+    /// still `stale` for one of `reasons`, under one transaction. A rebuild
+    /// that started in between keeps its `rebuilding` state.
     pub fn set_vectors_ready_if_stale_for(
         &self,
         reasons: &[&str],
@@ -187,60 +196,27 @@ impl SuperbrainStore {
         bulk_alias: &str,
         short_alias: Option<&str>,
     ) -> Result<bool> {
-        let conn = self.lock_conn()?;
-        if read_index_state(&conn)? != IndexModelState::Stale {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if read_index_state(&tx)? != IndexModelState::Stale {
             return Ok(false);
         }
-        let reason = read_meta_opt(&conn, META_STALE_REASON)?;
+        let reason = read_meta_opt(&tx, META_STALE_REASON)?;
         if !reason.as_deref().is_some_and(|r| reasons.contains(&r)) {
             return Ok(false);
         }
-        write_meta_opt(&conn, META_EMBED_MODEL, Some(model))?;
-        write_meta_opt(&conn, META_EMBED_DIM, Some(&dim.to_string()))?;
-        write_meta_opt(&conn, META_EMBED_ALIAS, Some(bulk_alias))?;
+        write_meta_opt(&tx, META_EMBED_MODEL, Some(model))?;
+        write_meta_opt(&tx, META_EMBED_DIM, Some(&dim.to_string()))?;
+        write_meta_opt(&tx, META_EMBED_ALIAS, Some(bulk_alias))?;
         if let Some(short) = short_alias {
-            write_meta_opt(&conn, META_SHORT_EMBED_ALIAS, Some(short))?;
+            write_meta_opt(&tx, META_SHORT_EMBED_ALIAS, Some(short))?;
         }
-        write_state(&conn, IndexModelState::Ready, None)?;
-        Ok(true)
-    }
-
-    pub fn mark_vectors_rebuilding(&self, reason: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        write_state(&conn, IndexModelState::Rebuilding, Some(reason))
-    }
-
-    /// Claim the rebuild for this database: writes `rebuilding` only when no
-    /// rebuild holds it, read and write under one connection lock. The state
-    /// lives in the database, so this also keeps a second process (the CLI,
-    /// the daemon) from rebuilding at the same time as the Brain service.
-    pub fn try_mark_vectors_rebuilding(&self, reason: &str) -> Result<bool> {
-        let mut conn = self.lock_conn()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if lease_fresh(&tx)? {
-            return Ok(false);
-        }
-        write_state(&tx, IndexModelState::Rebuilding, Some(reason))?;
-        touch_heartbeat(&tx)?;
+        write_state(&tx, IndexModelState::Ready, None)?;
         tx.commit()?;
         Ok(true)
     }
 
-    /// Refresh the rebuild's heartbeat; called per batch by the rebuild loop.
-    pub fn touch_rebuild_heartbeat(&self) -> Result<()> {
-        let conn = self.lock_conn()?;
-        touch_heartbeat(&conn)
-    }
-
-    /// True while another rebuild (any process) holds a live claim.
-    pub fn rebuild_lease_fresh(&self) -> Result<bool> {
-        let conn = self.lock_conn()?;
-        lease_fresh(&conn)
-    }
-
-    /// Finish a rebuild: drop vectors of other models and mark the index
-    /// ready, in one transaction, so no reader sees one without the other.
-    pub fn finish_rebuild(
+    pub fn set_vectors_ready(
         &self,
         model: &str,
         dim: usize,
@@ -249,10 +225,6 @@ impl SuperbrainStore {
     ) -> Result<()> {
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "DELETE FROM brain_vectors WHERE model IS NOT ?1 OR dim IS NOT ?2",
-            params![model, dim as i64],
-        )?;
         write_meta_opt(&tx, META_EMBED_MODEL, Some(model))?;
         write_meta_opt(&tx, META_EMBED_DIM, Some(&dim.to_string()))?;
         write_meta_opt(&tx, META_EMBED_ALIAS, Some(bulk_alias))?;
@@ -264,26 +236,11 @@ impl SuperbrainStore {
         Ok(())
     }
 
-    pub fn set_vectors_ready(
-        &self,
-        model: &str,
-        dim: usize,
-        bulk_alias: &str,
-        short_alias: Option<&str>,
-    ) -> Result<()> {
-        let conn = self.lock_conn()?;
-        write_meta_opt(&conn, META_EMBED_MODEL, Some(model))?;
-        write_meta_opt(&conn, META_EMBED_DIM, Some(&dim.to_string()))?;
-        write_meta_opt(&conn, META_EMBED_ALIAS, Some(bulk_alias))?;
-        if let Some(short) = short_alias {
-            write_meta_opt(&conn, META_SHORT_EMBED_ALIAS, Some(short))?;
-        }
-        write_state(&conn, IndexModelState::Ready, None)
-    }
-
-    /// Top-up write: stores the vector only while the index is still `ready`
-    /// for exactly `(model, dim)`, checked under the same lock as the write.
-    /// A rebuild that started in between owns the rows; false means skipped.
+    /// Top-up write: checks `ready` + exact `(model, dim)` and upserts the
+    /// vector inside one `BEGIN IMMEDIATE` transaction so a competing
+    /// cross-process rebuild claim cannot commit between check and write.
+    /// Returns `Ok(false)` (no write) if the index is no longer ready for
+    /// `(model, dim)`.
     pub(crate) fn store_vector_if_ready_for(
         &self,
         doc_id: &str,
@@ -314,7 +271,12 @@ impl SuperbrainStore {
     }
 }
 
-fn write_vector_row(conn: &Connection, doc_id: &str, vec: &[f32], model: &str) -> Result<()> {
+pub(crate) fn write_vector_row(
+    conn: &Connection,
+    doc_id: &str,
+    vec: &[f32],
+    model: &str,
+) -> Result<()> {
     let row_id: Option<i64> = conn
         .query_row(
             "SELECT id FROM brain_docs WHERE path = ?1",
@@ -441,8 +403,13 @@ impl SuperbrainStore {
         }
         if vector_count == 0 {
             if status.index_state != IndexModelState::Ready || status.stale_reason.is_some() {
-                let conn = self.lock_conn()?;
-                write_state(&conn, IndexModelState::Ready, None)?;
+                let lease_ms = self.rebuild_lease_ms();
+                let mut conn = self.lock_conn()?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if !lease_fresh(&tx, lease_ms)? {
+                    write_state(&tx, IndexModelState::Ready, None)?;
+                    tx.commit()?;
+                }
             }
             return self.vector_status();
         }
@@ -474,52 +441,5 @@ impl SuperbrainStore {
             }
         }
         self.vector_status()
-    }
-
-    /// Top up documents that have no vector yet, under the active model only.
-    ///
-    /// This is the incremental path (SANCHO tick, `makakoo sync --embed` on a
-    /// ready index). It never rebuilds and never sets `ready`: when the index
-    /// is not ready, or the endpoint now answers with another model or size,
-    /// the coordinated rebuild (`rebuild_brain_vectors`) owns the change. A
-    /// model change is handed over by a stale mark the next probe or query
-    /// acts on; each write re-checks `ready` under the same lock, so a rebuild
-    /// that started meanwhile is never mixed into.
-    pub async fn sync_vectors_with_embedder(
-        &self,
-        embedder: &EmbeddingClient,
-        limit: usize,
-        truncate_chars: usize,
-    ) -> Result<usize> {
-        if limit == 0 {
-            return Ok(0);
-        }
-        let status = self.vector_status()?;
-        let (IndexModelState::Ready, Some(model), Some(dim)) =
-            (status.index_state, status.embed_model, status.embed_dim)
-        else {
-            return Ok(0);
-        };
-        let mut written = 0usize;
-        for (doc_id, content) in self.docs_missing_vectors(limit)? {
-            let truncated: String = content.chars().take(truncate_chars).collect();
-            let Ok(res) = embedder.embed_with_meta(&truncated).await else {
-                continue;
-            };
-            if res.vector.is_empty() {
-                continue;
-            }
-            if res.model != model || res.dim != dim {
-                self.mark_stale_if_ready_for(&model, dim, EMBED_MODEL_CHANGED_REASON)?;
-                break;
-            }
-            match self.store_vector_if_ready_for(&doc_id, &res.vector, &model, dim) {
-                Ok(true) => written += 1,
-                Ok(false) => break,
-                Err(MakakooError::NotFound(_)) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(written)
     }
 }

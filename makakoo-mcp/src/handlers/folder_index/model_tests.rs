@@ -262,3 +262,152 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     assert_eq!(after["embed_dim"], 48);
     assert_eq!(after["passages"].as_array().unwrap().len(), 1);
 }
+
+#[derive(Clone)]
+struct StrictUpsertResponder {
+    batch_sizes: Arc<std::sync::Mutex<Vec<usize>>>,
+    received_bytes: Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+impl Respond for StrictUpsertResponder {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or_default();
+        let arr = body
+            .get("input")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if arr.len() > 16 {
+            return ResponseTemplate::new(400).set_body_json(json!({
+                "error": format!("batch size {} > 16", arr.len())
+            }));
+        }
+        let mut data = Vec::with_capacity(arr.len());
+        for (i, item) in arr.iter().enumerate() {
+            let text = item.as_str().unwrap_or("");
+            if text.len() > 2_000 {
+                return ResponseTemplate::new(400).set_body_json(json!({
+                    "error": format!("input bytes {} > 2000", text.len())
+                }));
+            }
+            self.received_bytes.lock().unwrap().push(text.len());
+            let page_idx = text
+                .split(':')
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut vec = vec![0.0_f32; 32];
+            vec[page_idx % 32] = 1.0;
+            data.push(json!({ "index": i, "embedding": vec }));
+        }
+        self.batch_sizes.lock().unwrap().push(arr.len());
+        ResponseTemplate::new(200).set_body_json(json!({
+            "model": "qwen3-strict",
+            "data": data,
+        }))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_folder_index_upsert_splits_over_16_chunks_and_truncates_utf8_bytes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let responder = StrictUpsertResponder {
+        batch_sizes: Arc::new(std::sync::Mutex::new(Vec::new())),
+        received_bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+
+    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let bulk_emb =
+        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed-bulk"));
+    let mgr = Arc::new(
+        FolderIndexManager::new(tmp.path().join("indexes"))
+            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
+    );
+    let ctx = Arc::new(
+        ToolContext::empty(tmp.path().to_path_buf())
+            .with_embeddings(short_emb)
+            .with_bulk_embeddings(bulk_emb)
+            .with_folder_index(Arc::clone(&mgr)),
+    );
+    let mut reg = ToolRegistry::new();
+    register_folder_index(&mut reg, ctx);
+
+    // 20 single-chunk pages: exceeds 16 inputs per request, and each page's
+    // 1,100 Polish/German characters exceed 2,000 UTF-8 bytes when >2 bytes/char
+    // or with custom chunk_options max_chars=2000.
+    let mut pages = Vec::new();
+    for p in 1..=20usize {
+        let prefix = format!("{p}:");
+        let body: String = "Zażółć gęślą jaźń — Prüfung größere Maßstäbe. "
+            .chars()
+            .cycle()
+            .take(1_800 - prefix.chars().count())
+            .collect();
+        let md = format!("{prefix}{body}");
+        assert!(md.len() > 2_000, "page {p} must exceed 2,000 UTF-8 bytes");
+        let sha = hex::encode(Sha256::digest(md.as_bytes()));
+        pages.push(json!({
+            "page_number": p,
+            "unit": "page",
+            "title": null,
+            "markdown": md,
+            "markdown_sha256": sha
+        }));
+    }
+
+    let up = reg
+        .call(
+            "folder_index_upsert",
+            json!({
+                "folder_id": "multipage",
+                "file_path": "report.pdf",
+                "file_version": "v1",
+                "dim": 32,
+                "chunk_options": {
+                    "min_chars": 1600,
+                    "target_chars": 1800,
+                    "max_chars": 2000,
+                    "overlap_chars": 100
+                },
+                "file_engine_output": {
+                    "contract": "v1",
+                    "format": "pdf",
+                    "pages": pages,
+                    "warnings": []
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(up["chunks_written"], 20);
+    assert_eq!(responder.batch_sizes.lock().unwrap().as_slice(), &[16, 4]);
+    for &b in responder.received_bytes.lock().unwrap().iter() {
+        assert!(b <= 2_000);
+    }
+
+    // Query for page 19's exact basis vector to prove vector ordering across the
+    // 16 + 4 batch split landed on the right page.
+    let mut qv = vec![0.0_f32; 32];
+    qv[19] = 1.0;
+    let hit = reg
+        .call(
+            "folder_index_search",
+            json!({
+                "folder_id": "multipage",
+                "query_vector": qv,
+                "k": 1,
+                "dim": 32
+            }),
+        )
+        .await
+        .unwrap();
+    let passages = hit["passages"].as_array().unwrap();
+    assert_eq!(passages.len(), 1);
+    assert_eq!(passages[0]["anchor"]["value"], "19");
+}

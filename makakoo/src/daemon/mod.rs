@@ -90,13 +90,30 @@ pub async fn dispatch(cmd: DaemonCmd) -> Result<()> {
     }
 }
 
+/// Build the daemon's SANCHO engine and trigger the store-open Brain probe on
+/// the same process-wide [`makakoo_core::superbrain::vector_model::BrainRebuildCoordinator`].
+pub(crate) fn build_daemon_sancho_engine(
+    ctx: &crate::context::CliContext,
+) -> Result<(
+    Arc<makakoo_core::superbrain::store::SuperbrainStore>,
+    makakoo_core::sancho::SanchoEngine,
+)> {
+    use makakoo_core::plugin::PluginRegistry;
+    use makakoo_core::sancho::{default_registry, SanchoEngine};
+
+    let store = ctx.probe_brain_on_open()?;
+    let sancho_ctx = ctx.build_sancho_context()?;
+    let plugins = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
+    let registry = default_registry(Arc::clone(&sancho_ctx), &plugins);
+    let engine = SanchoEngine::new(registry, sancho_ctx, Duration::from_secs(60));
+    Ok((store, engine))
+}
+
 /// The actual daemon main loop. Spawns SANCHO as a background tokio
 /// task, runs the agent supervisor on a polling tick, and blocks on
 /// Ctrl-C.
 pub async fn run_forever() -> Result<()> {
     use makakoo_core::agents::AgentSupervisor;
-    use makakoo_core::plugin::PluginRegistry;
-    use makakoo_core::sancho::{default_registry, SanchoContext, SanchoEngine};
 
     let ctx = crate::context::CliContext::new()?;
     let home = ctx.home().clone();
@@ -108,8 +125,9 @@ pub async fn run_forever() -> Result<()> {
         "makakoo daemon starting"
     );
 
-    // Build the SANCHO engine with the same setup as `makakoo sancho tick`.
-    let store = ctx.store()?;
+    // Build the SANCHO engine with the same setup as `makakoo sancho tick`
+    // and wire the store-open probe onto the same process-wide coordinator.
+    let (store, engine) = build_daemon_sancho_engine(&ctx)?;
 
     // Post-crash integrity probe. `PRAGMA integrity_check` is O(DB) but
     // runs once at boot and is dominated by the first WAL checkpoint
@@ -138,16 +156,6 @@ pub async fn run_forever() -> Result<()> {
             }
         }
     }
-    let bus = ctx.event_bus()?;
-    let llm = ctx.llm();
-    let emb = ctx.embeddings();
-    let bulk_emb = ctx.bulk_embeddings();
-    let sancho_ctx = Arc::new(
-        SanchoContext::new(store, bus, llm, emb, home.clone()).with_bulk_embeddings(bulk_emb),
-    );
-    let plugins = PluginRegistry::load_default(ctx.home()).unwrap_or_default();
-    let registry = default_registry(Arc::clone(&sancho_ctx), &plugins);
-    let engine = SanchoEngine::new(registry, sancho_ctx, Duration::from_secs(60));
 
     info!(tasks = engine.task_count(), "sancho engine started");
 
@@ -423,5 +431,17 @@ grants = [{grants}]
         let fi_dir = headless_preflight(tmp.path()).unwrap();
         assert!(fi_dir.is_dir());
         assert!(tmp.path().join("data").join("superbrain.db").is_file());
+    }
+
+    #[test]
+    fn daemon_sancho_engine_shares_process_brain_rebuild_coordinator() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("data/Brain/journals")).unwrap();
+        let ctx = crate::context::CliContext::for_home(tmp.path().to_path_buf());
+        let (_store, engine) = build_daemon_sancho_engine(&ctx).unwrap();
+        assert!(
+            Arc::ptr_eq(&ctx.brain_rebuild(), &engine.context().brain_rebuild),
+            "daemon SANCHO engine must share the same BrainRebuildCoordinator Arc as the open probe"
+        );
     }
 }

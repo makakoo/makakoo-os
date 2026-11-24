@@ -1,9 +1,14 @@
-//! Deduplicated background rebuild coordinator, non-blocking startup probe,
-//! and model-checked vector search for `SuperbrainStore`.
+//! Deduplicated background rebuild coordinator for `SuperbrainStore`.
+//!
+//! Claims, rebuild execution, and panic/cancel cleanup run inside one detached
+//! task per active DB path so dropping a caller's `spawn_rebuild` future can
+//! never orphan a committed DB claim or its heartbeat.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::sync::Notify;
 
@@ -11,17 +16,93 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::folder_index::model_meta::{IndexModelState, SHORT_BULK_MISMATCH_REASON};
-use super::store::{SuperbrainStore, VectorHit};
-use super::vector_model::{BrainVectorStatus, DEFAULT_EMBED_TRUNCATE_CHARS};
+use super::store::SuperbrainStore;
+use super::vector_claim::{mark_stale_for_owner_with_retry, REBUILD_LEASE_MS};
+use super::vector_rebuild_loop::rebuild_failure_reason;
 
-const REBUILD_BATCH_SIZE: usize = 32;
+pub(crate) use super::vector_rebuild_loop::rebuild_brain_vectors_with_owner;
+pub use super::vector_rebuild_loop::{
+    embed_pending_brain, rebuild_brain_vectors, resolve_rebuild_call_timeout,
+    REBUILD_CALL_TIMEOUT_MS_ENV, REBUILD_CALL_TIMEOUT_SECS_ENV,
+};
+
+/// Default upper bound for bounded `wait_all` calls (`4 × LEASE` = 480 s).
+pub const DEFAULT_REBUILD_WAIT_TIMEOUT: Duration =
+    Duration::from_millis((REBUILD_LEASE_MS as u64) * 4);
+
+const CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Outcome of a non-blocking Brain vector sync pass (SANCHO tick).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrainSyncOutcome {
+    /// Index was `Ready` with a recorded model; topped up at most `limit` docs.
+    ToppedUp(usize),
+    /// Index was not ready; a background rebuild was spawned on the coordinator.
+    RebuildScheduled,
+    /// No rebuild spawned (already running, short/bulk mismatch, or empty store).
+    RebuildSkipped,
+}
+
+/// Active coordinator slot for a single Brain SQLite path.
+struct ActiveRebuild {
+    notify: Arc<Notify>,
+    store: Option<Arc<SuperbrainStore>>,
+    owner: Mutex<Option<String>>,
+    worker_abort: Mutex<Option<tokio::task::AbortHandle>>,
+    cancelled: AtomicBool,
+}
+
+impl ActiveRebuild {
+    fn new(store: Option<Arc<SuperbrainStore>>) -> Self {
+        Self {
+            notify: Arc::new(Notify::new()),
+            store,
+            owner: Mutex::new(None),
+            worker_abort: Mutex::new(None),
+            cancelled: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Releases a coordinator's active slot when the background rebuild task exits.
+struct ActiveSlotGuard {
+    coord: Arc<BrainRebuildCoordinator>,
+    key: PathBuf,
+}
+
+impl Drop for ActiveSlotGuard {
+    fn drop(&mut self) {
+        self.coord.finish(&self.key);
+    }
+}
+
+/// Tracks an in-flight store-open probe on a coordinator so `wait_all` waits
+/// until any probe-triggered rebuild has been scheduled and finished.
+pub(crate) struct ProbeSlotGuard {
+    coord: Arc<BrainRebuildCoordinator>,
+}
+
+impl Drop for ProbeSlotGuard {
+    fn drop(&mut self) {
+        if self.coord.active_probes.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.coord.probe_notify.notify_waiters();
+        }
+    }
+}
 
 /// Coordinates deduplicated background rebuilds per Brain SQLite path.
 #[derive(Default)]
 pub struct BrainRebuildCoordinator {
-    active: Mutex<HashMap<PathBuf, Arc<Notify>>>,
+    active: Mutex<HashMap<PathBuf, Arc<ActiveRebuild>>>,
+    spawned: AtomicUsize,
+    active_probes: AtomicUsize,
+    probe_notify: Notify,
     #[cfg(test)]
     pub(crate) after_lookup: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    #[cfg(test)]
+    pub(crate) before_rebuild: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    #[cfg(test)]
+    pub(crate) after_claim: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl BrainRebuildCoordinator {
@@ -34,12 +115,49 @@ impl BrainRebuildCoordinator {
         guard.contains_key(db_path)
     }
 
+    /// True while any open-probe or background rebuild is still running on this
+    /// coordinator.
+    pub fn has_active_work(&self) -> bool {
+        if self.active_probes.load(Ordering::SeqCst) > 0 {
+            return true;
+        }
+        let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        !guard.is_empty()
+    }
+
+    /// Number of background rebuilds spawned through this coordinator.
+    pub fn spawned_count(&self) -> usize {
+        self.spawned.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn enter_probe(self: &Arc<Self>) -> ProbeSlotGuard {
+        self.active_probes.fetch_add(1, Ordering::SeqCst);
+        ProbeSlotGuard {
+            coord: Arc::clone(self),
+        }
+    }
+
+    async fn wait_probes(&self) {
+        loop {
+            if self.active_probes.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            let notified = self.probe_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.active_probes.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+
     pub async fn wait(&self, db_path: &Path) {
         loop {
             let notify = {
                 let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
                 match guard.get(db_path) {
-                    Some(n) => Arc::clone(n),
+                    Some(entry) => Arc::clone(&entry.notify),
                     None => return,
                 }
             };
@@ -60,7 +178,9 @@ impl BrainRebuildCoordinator {
             notified.as_mut().enable();
             let still_same = {
                 let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-                guard.get(db_path).is_some_and(|n| Arc::ptr_eq(n, &notify))
+                guard
+                    .get(db_path)
+                    .is_some_and(|e| Arc::ptr_eq(&e.notify, &notify))
             };
             if !still_same {
                 continue;
@@ -69,345 +189,267 @@ impl BrainRebuildCoordinator {
         }
     }
 
-    pub fn spawn_rebuild(
+    /// Wait until every in-flight open-probe and background rebuild spawned on
+    /// this coordinator finishes.
+    pub async fn wait_all(&self) {
+        loop {
+            self.wait_probes().await;
+            let next = {
+                let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+                guard.keys().next().cloned()
+            };
+            match next {
+                Some(path) => self.wait(&path).await,
+                None if self.active_probes.load(Ordering::SeqCst) == 0 => return,
+                None => {}
+            }
+        }
+    }
+
+    /// Bounded variant of [`Self::wait_all`]. Returns `true` if all probes and
+    /// rebuilds finished within `timeout`, or `false` if the bound elapsed.
+    pub async fn wait_all_timeout(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, self.wait_all()).await.is_ok()
+    }
+
+    /// Cancel every active rebuild tracked by this coordinator, aborting its
+    /// worker and ensuring an owner-checked `rebuild_cancelled` stale mark is
+    /// written so the next tick or claimant can claim immediately.
+    pub async fn cancel_active_rebuilds(&self) {
+        let snapshot: Vec<(PathBuf, Arc<ActiveRebuild>)> = {
+            let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+            guard
+                .iter()
+                .map(|(k, v)| (k.clone(), Arc::clone(v)))
+                .collect()
+        };
+        if snapshot.is_empty() {
+            return;
+        }
+        for (_, entry) in &snapshot {
+            entry.cancelled.store(true, Ordering::SeqCst);
+            if let Some(abort) = entry
+                .worker_abort
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
+                abort.abort();
+            }
+        }
+        let _ = tokio::time::timeout(CANCEL_DRAIN_TIMEOUT, async {
+            for (path, _) in &snapshot {
+                self.wait(path).await;
+            }
+        })
+        .await;
+        // Belt-and-suspenders: if any watcher did not drain within the grace
+        // window, still release its claim via the owner-checked stale mark.
+        for (_, entry) in &snapshot {
+            let owner = entry
+                .owner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let (Some(store), Some(owner)) = (entry.store.as_ref(), owner) {
+                mark_stale_for_owner_with_retry(store, &owner, "rebuild_cancelled").await;
+            }
+        }
+    }
+
+    /// Claim and spawn a background rebuild for `store`.
+    ///
+    /// Claim, worker launch, and watcher ownership all live inside one detached
+    /// `tokio::spawn` task: dropping the caller's future while waiting for the
+    /// claim cannot orphan a committed DB claim or its heartbeat.
+    pub async fn spawn_rebuild(
         self: &Arc<Self>,
         store: Arc<SuperbrainStore>,
         bulk_emb: Arc<EmbeddingClient>,
         short_emb: Option<Arc<EmbeddingClient>>,
         observed_short: Option<(String, usize)>,
-    ) {
+    ) -> bool {
         let key = store.path().to_path_buf();
-        if !self.try_acquire(&key) {
-            return;
-        }
-
-        // The database claim keeps another process (the CLI) from rebuilding
-        // at the same time; this process's slot is released if it is taken.
-        if !store
-            .try_mark_vectors_rebuilding("rebuilding")
-            .unwrap_or(false)
-        {
-            self.finish(&key);
-            return;
-        }
+        let Some(entry) = self.try_acquire_entry(&key, Some(Arc::clone(&store))) else {
+            return false;
+        };
+        let guard = ActiveSlotGuard {
+            coord: Arc::clone(self),
+            key,
+        };
         let coord = Arc::clone(self);
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+
         tokio::spawn(async move {
-            if let Err(err) =
-                rebuild_brain_vectors(Arc::clone(&store), bulk_emb, short_emb, observed_short).await
+            let slot = guard;
+            let store_claim = Arc::clone(&store);
+            #[cfg(test)]
+            let after_claim = coord
+                .after_claim
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(Arc::clone);
+
+            let owner = match tokio::task::spawn_blocking(move || {
+                let res = store_claim.try_mark_vectors_rebuilding("rebuilding");
+                #[cfg(test)]
+                if let Some(hook) = after_claim {
+                    hook();
+                }
+                res
+            })
+            .await
             {
-                let _ = store.mark_vectors_stale(&format!("rebuild_failed: {err}"));
+                Ok(Ok(Some(owner))) => owner,
+                Ok(Ok(None)) => {
+                    // Release the in-process slot before reporting the refusal, so the caller never
+                    // sees this store as still active after `spawn_rebuild` returned false.
+                    drop(slot);
+                    let _ = tx.send(false);
+                    return;
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!(error = %err, "brain vector rebuild claim failed");
+                    drop(slot);
+                    let _ = tx.send(false);
+                    return;
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "brain vector rebuild claim task failed");
+                    drop(slot);
+                    let _ = tx.send(false);
+                    return;
+                }
+            };
+
+            {
+                let mut slot_owner = entry.owner.lock().unwrap_or_else(|e| e.into_inner());
+                *slot_owner = Some(owner.clone());
             }
-            coord.finish(&key);
+            if entry.cancelled.load(Ordering::SeqCst) {
+                mark_stale_for_owner_with_retry(&store, &owner, "rebuild_cancelled").await;
+                let _ = tx.send(false);
+                return;
+            }
+
+            coord.spawned.fetch_add(1, Ordering::SeqCst);
+            let owner_worker = owner.clone();
+            let store_worker = Arc::clone(&store);
+            #[cfg(test)]
+            let coord_for_hook = Arc::clone(&coord);
+            let worker = tokio::spawn(async move {
+                #[cfg(test)]
+                if let Some(hook) = coord_for_hook
+                    .before_rebuild
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                {
+                    hook();
+                }
+                if let Err(err) = rebuild_brain_vectors_with_owner(
+                    Arc::clone(&store_worker),
+                    &owner_worker,
+                    bulk_emb,
+                    short_emb,
+                    observed_short,
+                )
+                .await
+                {
+                    if !matches!(err, MakakooError::RebuildClaimLost) {
+                        let reason = rebuild_failure_reason(&err);
+                        mark_stale_for_owner_with_retry(&store_worker, &owner_worker, &reason)
+                            .await;
+                    }
+                }
+            });
+
+            {
+                let mut abort_slot = entry.worker_abort.lock().unwrap_or_else(|e| e.into_inner());
+                *abort_slot = Some(worker.abort_handle());
+            }
+            if entry.cancelled.load(Ordering::SeqCst) {
+                worker.abort();
+            }
+
+            // Caller cancellation ignores the oneshot; detached task keeps
+            // watching the worker and holding `slot` until completion.
+            let _ = tx.send(true);
+
+            match worker.await {
+                Ok(()) => {}
+                Err(join_err) if join_err.is_panic() => {
+                    tracing::warn!(error = %join_err, "brain vector rebuild task panicked");
+                    mark_stale_for_owner_with_retry(&store, &owner, "rebuild_panicked").await;
+                }
+                Err(join_err) => {
+                    tracing::warn!(error = %join_err, "brain vector rebuild task cancelled");
+                    mark_stale_for_owner_with_retry(&store, &owner, "rebuild_cancelled").await;
+                }
+            }
         });
+
+        rx.await.unwrap_or(false)
+    }
+
+    /// Non-blocking Brain sync for SANCHO ticks: tops up at most `limit` docs
+    /// when the index is `Ready` with a recorded model; otherwise asks this
+    /// coordinator to rebuild in the background and returns immediately.
+    pub async fn sync_or_spawn_rebuild(
+        self: &Arc<Self>,
+        store: Arc<SuperbrainStore>,
+        bulk: Arc<EmbeddingClient>,
+        short: Option<Arc<EmbeddingClient>>,
+        limit: usize,
+    ) -> Result<BrainSyncOutcome> {
+        let status = store.vector_status()?;
+        let has_model = status.embed_model.is_some() && status.embed_dim.is_some();
+        if status.index_state == IndexModelState::Ready && has_model {
+            let n = store.sync_vectors_with_embedder(&bulk, limit).await?;
+            return Ok(BrainSyncOutcome::ToppedUp(n));
+        }
+        if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
+            return Ok(BrainSyncOutcome::RebuildSkipped);
+        }
+        if status.index_state == IndexModelState::Ready && !has_model && store.count()? == 0 {
+            return Ok(BrainSyncOutcome::RebuildSkipped);
+        }
+        if self.spawn_rebuild(store, bulk, short, None).await {
+            Ok(BrainSyncOutcome::RebuildScheduled)
+        } else {
+            Ok(BrainSyncOutcome::RebuildSkipped)
+        }
+    }
+
+    fn try_acquire_entry(
+        &self,
+        key: &Path,
+        store: Option<Arc<SuperbrainStore>>,
+    ) -> Option<Arc<ActiveRebuild>> {
+        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.contains_key(key) {
+            return None;
+        }
+        let entry = Arc::new(ActiveRebuild::new(store));
+        guard.insert(key.to_path_buf(), Arc::clone(&entry));
+        Some(entry)
     }
 
     /// Claim the rebuild slot for `key`; false when one is already running.
+    #[cfg(test)]
     pub(crate) fn try_acquire(&self, key: &Path) -> bool {
-        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.contains_key(key) {
-            return false;
-        }
-        guard.insert(key.to_path_buf(), Arc::new(Notify::new()));
-        true
+        self.try_acquire_entry(key, None).is_some()
     }
 
     /// Release the slot, then wake every waiter (removal first: see `wait`).
     pub(crate) fn finish(&self, key: &Path) {
         let notify = {
             let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-            guard.remove(key)
+            guard.remove(key).map(|e| Arc::clone(&e.notify))
         };
         if let Some(n) = notify {
             n.notify_waiters();
         }
     }
-}
-
-/// Re-embed all `brain_docs` with `bulk_emb` and update `brain_vector_meta`.
-pub async fn rebuild_brain_vectors(
-    store: Arc<SuperbrainStore>,
-    bulk_emb: Arc<EmbeddingClient>,
-    short_emb: Option<Arc<EmbeddingClient>>,
-    mut observed_short: Option<(String, usize)>,
-) -> Result<usize> {
-    let (b_model, b_dim) = bulk_emb.probe_model().await?;
-
-    if observed_short.is_none() {
-        if let Some(ref s) = short_emb {
-            if s.model() != bulk_emb.model() || s.base_url() != bulk_emb.base_url() {
-                if let Ok(pair) = s.probe_model().await {
-                    observed_short = Some(pair);
-                }
-            }
-        }
-    }
-
-    if let Some((ref s_model, s_dim)) = observed_short {
-        if s_model != &b_model || s_dim != b_dim {
-            store.mark_vectors_stale(SHORT_BULK_MISMATCH_REASON)?;
-            return Ok(0);
-        }
-    }
-
-    let mut written = 0usize;
-    loop {
-        let batch = store.docs_needing_vectors(&b_model, b_dim, REBUILD_BATCH_SIZE)?;
-        if batch.is_empty() {
-            break;
-        }
-        store.touch_rebuild_heartbeat()?;
-        let texts: Vec<String> = batch
-            .iter()
-            .map(|(_, content)| content.chars().take(DEFAULT_EMBED_TRUNCATE_CHARS).collect())
-            .collect();
-        let res = bulk_emb.embed_batch_with_meta(&texts).await?;
-        if res.vectors.len() != batch.len() {
-            return Err(MakakooError::llm(format!(
-                "brain rebuild expected {} vectors, got {}",
-                batch.len(),
-                res.vectors.len()
-            )));
-        }
-        if res.model != b_model || res.dim != b_dim {
-            return Err(MakakooError::llm("bulk embedder model changed mid-rebuild"));
-        }
-        for ((doc_id, _), vec) in batch.iter().zip(res.vectors) {
-            if vec.is_empty() {
-                continue;
-            }
-            match store.store_vector_with_model(doc_id, &vec, &res.model) {
-                Ok(()) => written += 1,
-                Err(MakakooError::NotFound(_)) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    store.finish_rebuild(
-        &b_model,
-        b_dim,
-        bulk_emb.model(),
-        short_emb.as_deref().map(EmbeddingClient::model),
-    )?;
-    Ok(written)
-}
-
-/// The one entry point for background and CLI embedding. On a ready index with
-/// a recorded model, tops up documents that have no vector (at most `limit`).
-/// Otherwise runs the coordinated rebuild, after claiming it in the database so
-/// no other process rebuilds at the same time. Returns vectors written.
-pub async fn embed_pending_brain(
-    store: Arc<SuperbrainStore>,
-    bulk: Arc<EmbeddingClient>,
-    short: Option<Arc<EmbeddingClient>>,
-    limit: usize,
-    truncate_chars: usize,
-) -> Result<usize> {
-    let status = store.vector_status()?;
-    let has_model = status.embed_model.is_some() && status.embed_dim.is_some();
-    if status.index_state == IndexModelState::Ready && has_model {
-        return store
-            .sync_vectors_with_embedder(&bulk, limit, truncate_chars)
-            .await;
-    }
-    if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
-        return Ok(0);
-    }
-    if !store.try_mark_vectors_rebuilding("embed_pending")? {
-        return Ok(0);
-    }
-    let result = rebuild_brain_vectors(Arc::clone(&store), bulk, short, None).await;
-    if let Err(e) = &result {
-        let _ = store.mark_vectors_stale(&format!("rebuild_failed: {e}"));
-    }
-    result
-}
-
-/// Check stored Brain aliases on open and spawn a non-blocking endpoint probe
-/// when existing vectors are present inside a Tokio runtime.
-pub fn check_and_probe_brain_on_open(
-    store: Arc<SuperbrainStore>,
-    short_emb: Option<Arc<EmbeddingClient>>,
-    bulk_emb: Arc<EmbeddingClient>,
-    coordinator: Arc<BrainRebuildCoordinator>,
-) {
-    let short_alias = short_emb.as_deref().map(EmbeddingClient::model);
-    let _ = store.check_brain_alias_on_open(bulk_emb.model(), short_alias);
-    if tokio::runtime::Handle::try_current().is_ok()
-        && store.stats().map(|s| s.vector_count > 0).unwrap_or(false)
-    {
-        tokio::spawn(async move {
-            probe_and_reconcile_brain(store, short_emb, bulk_emb, coordinator).await;
-        });
-    }
-}
-
-/// Non-blocking startup probe for `brain_vectors`. Unreachable endpoints leave
-/// the current state untouched.
-pub async fn probe_and_reconcile_brain(
-    store: Arc<SuperbrainStore>,
-    short_emb: Option<Arc<EmbeddingClient>>,
-    bulk_emb: Arc<EmbeddingClient>,
-    coordinator: Arc<BrainRebuildCoordinator>,
-) {
-    let Ok(stats) = store.stats() else {
-        return;
-    };
-    if stats.vector_count == 0 || coordinator.is_active(store.path()) {
-        return;
-    }
-    let Ok((bulk_model, bulk_dim)) = bulk_emb.probe_model().await else {
-        return;
-    };
-
-    let short_result = match short_emb.as_ref() {
-        Some(s) if s.model() != bulk_emb.model() || s.base_url() != bulk_emb.base_url() => {
-            s.probe_model().await.ok()
-        }
-        Some(_) => Some((bulk_model.clone(), bulk_dim)),
-        None => None,
-    };
-
-    if let Some((ref short_model, short_dim)) = short_result {
-        if short_model != &bulk_model || short_dim != bulk_dim {
-            let _ = store.mark_vectors_stale_unless_rebuilding(SHORT_BULK_MISMATCH_REASON);
-            return;
-        }
-    }
-
-    let Ok(status) = store.vector_status() else {
-        return;
-    };
-    let matches_stored =
-        status.embed_model.as_deref() == Some(&bulk_model) && status.embed_dim == Some(bulk_dim);
-
-    if matches_stored {
-        if status.index_state == IndexModelState::Stale
-            && matches!(
-                status.stale_reason.as_deref(),
-                Some(
-                    "embed_alias_changed"
-                        | "short_embed_alias_changed"
-                        | SHORT_BULK_MISMATCH_REASON
-                )
-            )
-        {
-            let _ = store.set_vectors_ready_if_stale_for(
-                &[
-                    "embed_alias_changed",
-                    "short_embed_alias_changed",
-                    SHORT_BULK_MISMATCH_REASON,
-                ],
-                &bulk_model,
-                bulk_dim,
-                bulk_emb.model(),
-                short_emb.as_deref().map(EmbeddingClient::model),
-            );
-            return;
-        }
-        if status.index_state == IndexModelState::Stale {
-            coordinator.spawn_rebuild(store, bulk_emb, short_emb, short_result);
-        }
-        return;
-    }
-
-    // A rebuild that started after the is_active check owns the state.
-    if !matches!(
-        store.mark_vectors_stale_unless_rebuilding("model_changed_on_probe"),
-        Ok(true)
-    ) {
-        return;
-    }
-    coordinator.spawn_rebuild(store, bulk_emb, short_emb, short_result);
-}
-
-/// Model-checked vector search over `SuperbrainStore`. Returns empty vector
-/// hits while stale or rebuilding (and triggers background rebuild).
-pub async fn search_brain_vectors_checked(
-    store: &Arc<SuperbrainStore>,
-    short_emb: &Arc<EmbeddingClient>,
-    bulk_emb: Option<&Arc<EmbeddingClient>>,
-    coordinator: &Arc<BrainRebuildCoordinator>,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<VectorHit>> {
-    let status = store.vector_status()?;
-    let vector_count = store.stats()?.vector_count;
-    if vector_count == 0 {
-        return Ok(Vec::new());
-    }
-
-    if status.index_state != IndexModelState::Ready {
-        maybe_trigger_brain_rebuild(store, &status, Some(short_emb), bulk_emb, coordinator, None)
-            .await;
-        return Ok(Vec::new());
-    }
-
-    let res = short_emb.embed_with_meta(query).await?;
-    let model_mismatch = status.embed_model.as_deref() != Some(res.model.as_str());
-    let dim_mismatch = status.embed_dim != Some(res.dim);
-    if model_mismatch || dim_mismatch {
-        let reason = if model_mismatch {
-            format!(
-                "model_mismatch: index={:?} query={}",
-                status.embed_model, res.model
-            )
-        } else {
-            format!(
-                "dim_mismatch: index={:?} query={}",
-                status.embed_dim, res.dim
-            )
-        };
-        // A running rebuild owns the state: answer from FTS until it lands.
-        if !store.mark_vectors_stale_unless_rebuilding(&reason)? {
-            return Ok(Vec::new());
-        }
-        let fresh_status = store.vector_status()?;
-        maybe_trigger_brain_rebuild(
-            store,
-            &fresh_status,
-            Some(short_emb),
-            bulk_emb,
-            coordinator,
-            Some((res.model, res.dim)),
-        )
-        .await;
-        return Ok(Vec::new());
-    }
-
-    store.vector_search_for_model(&res.vector, &res.model, limit)
-}
-
-async fn maybe_trigger_brain_rebuild(
-    store: &Arc<SuperbrainStore>,
-    status: &BrainVectorStatus,
-    short_emb: Option<&Arc<EmbeddingClient>>,
-    bulk_emb: Option<&Arc<EmbeddingClient>>,
-    coordinator: &Arc<BrainRebuildCoordinator>,
-    observed_short: Option<(String, usize)>,
-) {
-    let Some(b_emb) = bulk_emb.or(short_emb) else {
-        return;
-    };
-    if coordinator.is_active(store.path()) {
-        return;
-    }
-    if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
-        let Ok(b_pair) = b_emb.probe_model().await else {
-            return;
-        };
-        match short_emb {
-            Some(s_emb) => match s_emb.probe_model().await {
-                Ok(s_pair) if s_pair == b_pair => {}
-                _ => return,
-            },
-            None => return,
-        }
-    }
-    coordinator.spawn_rebuild(
-        Arc::clone(store),
-        Arc::clone(b_emb),
-        short_emb.cloned(),
-        observed_short,
-    );
 }

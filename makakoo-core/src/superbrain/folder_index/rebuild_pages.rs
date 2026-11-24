@@ -17,8 +17,6 @@ use super::FolderIndex;
 
 /// Chunks read per page.
 pub(crate) const REBUILD_PAGE_ROWS: usize = 256;
-/// Texts per embedding request.
-const EMBED_BATCH: usize = 32;
 
 /// Create (or empty) the parking table for this connection's rebuild.
 pub(crate) fn reset_parked(conn: &Connection) -> Result<()> {
@@ -54,9 +52,13 @@ pub(crate) async fn reembed_pages(
         if page.is_empty() {
             continue;
         }
+        let limits = bulk.request_limits();
         let mut vectors: Vec<(i64, String, Vec<i8>)> = Vec::with_capacity(page.len());
-        for batch in page.chunks(EMBED_BATCH) {
-            let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
+        for batch in page.chunks(limits.max_batch.max(1)) {
+            let texts: Vec<String> = batch
+                .iter()
+                .map(|(_, t)| limits.truncate_input(t).to_string())
+                .collect();
             let res = bulk.embed_batch_with_meta(&texts).await?;
             if res.vectors.len() != batch.len() {
                 return Err(MakakooError::llm(format!(
@@ -163,4 +165,42 @@ pub(crate) fn parked_count(conn: &Connection) -> Result<i64> {
             r.get(0)
         })?,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::reset_parked;
+    use crate::superbrain::folder_index::FolderIndex;
+
+    #[test]
+    fn folder_index_temp_store_is_file_after_reset_parked() {
+        let dir = TempDir::new().unwrap();
+        let idx = FolderIndex::open(dir.path(), "temp-store-guard", 8).unwrap();
+        let conn = idx.lock_conn().unwrap();
+
+        let initial: i64 = conn
+            .query_row("PRAGMA temp_store", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            initial, 1,
+            "FolderIndex must open with temp_store = FILE (1)"
+        );
+
+        conn.execute_batch("PRAGMA temp_store = MEMORY;").unwrap();
+        let flipped: i64 = conn
+            .query_row("PRAGMA temp_store", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(flipped, 2, "sanity check: switched to MEMORY (2)");
+
+        reset_parked(&conn).unwrap();
+        let after_reset: i64 = conn
+            .query_row("PRAGMA temp_store", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            after_reset, 1,
+            "reset_parked must enforce PRAGMA temp_store = FILE (1)"
+        );
+    }
 }

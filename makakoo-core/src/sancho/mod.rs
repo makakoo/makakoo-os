@@ -18,6 +18,9 @@ pub mod gates;
 pub mod handlers;
 pub mod registry;
 
+#[cfg(test)]
+mod sync_embed_tests;
+
 pub use engine::SanchoEngine;
 pub use gates::{ActiveHoursGate, Gate, GateState, LockGate, SessionGate, TimeGate, WeekdayGate};
 pub use handlers::{

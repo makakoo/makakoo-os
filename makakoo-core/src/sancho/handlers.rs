@@ -524,6 +524,8 @@ pub struct SuperbrainSyncEmbedHandler {
 }
 
 impl SuperbrainSyncEmbedHandler {
+    /// Per-tick top-up budget (`max_docs` documents; HTTP requests are split
+    /// into chunks obeying `EmbeddingClient::request_limits()`).
     pub fn new() -> Self {
         Self { max_docs: 32 }
     }
@@ -552,16 +554,25 @@ impl SanchoHandler for SuperbrainSyncEmbedHandler {
             publish_report(ctx, &report);
             return Ok(report);
         }
-        let embedded = crate::superbrain::vector_model::embed_pending_brain(
-            Arc::clone(&ctx.store),
-            Arc::clone(&ctx.bulk_emb),
-            Some(Arc::clone(&ctx.emb)),
-            self.max_docs,
-            crate::superbrain::vector_model::DEFAULT_EMBED_TRUNCATE_CHARS,
-        )
-        .await;
-        let msg = match embedded {
-            Ok(n) => format!("{n} vectors embedded"),
+        let outcome = ctx
+            .brain_rebuild
+            .sync_or_spawn_rebuild(
+                Arc::clone(&ctx.store),
+                Arc::clone(&ctx.bulk_emb),
+                Some(Arc::clone(&ctx.emb)),
+                self.max_docs,
+            )
+            .await;
+        let msg = match outcome {
+            Ok(crate::superbrain::vector_model::BrainSyncOutcome::ToppedUp(n)) => {
+                format!("{n} vectors embedded")
+            }
+            Ok(crate::superbrain::vector_model::BrainSyncOutcome::RebuildScheduled) => {
+                "brain vector rebuild scheduled in background".to_string()
+            }
+            Ok(crate::superbrain::vector_model::BrainSyncOutcome::RebuildSkipped) => {
+                "brain vector rebuild skipped (already running or model mismatch)".to_string()
+            }
             Err(e) => format!("0 vectors embedded (error: {e})"),
         };
         append_journal_line(
@@ -1033,6 +1044,54 @@ impl SanchoHandler for PermsPurgeHandler {
 // ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+pub(crate) static BG_EMBED_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
+pub(crate) struct BgEmbedEnvGuard {
+    prev_makakoo: Option<String>,
+    prev_harvey: Option<String>,
+}
+
+#[cfg(test)]
+impl BgEmbedEnvGuard {
+    pub(crate) fn enable() -> Self {
+        let prev_makakoo = std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        let prev_harvey = std::env::var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", "1");
+        std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC");
+        Self {
+            prev_makakoo,
+            prev_harvey,
+        }
+    }
+
+    pub(crate) fn disable() -> Self {
+        let prev_makakoo = std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        let prev_harvey = std::env::var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC").ok();
+        std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC");
+        std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC");
+        Self {
+            prev_makakoo,
+            prev_harvey,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for BgEmbedEnvGuard {
+    fn drop(&mut self) {
+        match &self.prev_makakoo {
+            Some(v) => std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", v),
+            None => std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC"),
+        }
+        match &self.prev_harvey {
+            Some(v) => std::env::set_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC", v),
+            None => std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC"),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::embeddings::EmbeddingClient;
@@ -1114,8 +1173,8 @@ mod tests {
 
     #[tokio::test]
     async fn superbrain_sync_embed_is_opt_in() {
-        std::env::remove_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC");
-        std::env::remove_var("HARVEY_ENABLE_BACKGROUND_EMBED_SYNC");
+        let _env_lock = BG_EMBED_ENV_LOCK.lock().await;
+        let _env = BgEmbedEnvGuard::disable();
 
         let dir = TempDir::new().unwrap();
         let ctx = ctx_with_store(&dir);
@@ -1135,6 +1194,22 @@ mod tests {
         assert_eq!(report.handler, "superbrain_sync_embed");
         assert!(report.message.contains("background embed sync disabled"));
         assert_eq!(ctx.store.stats().unwrap().vector_count, 0);
+    }
+
+    #[tokio::test]
+    async fn bg_embed_env_guard_restores_env_on_panic() {
+        let _env_lock = BG_EMBED_ENV_LOCK.lock().await;
+        let _outer = BgEmbedEnvGuard::enable();
+        let panicked = std::panic::catch_unwind(|| {
+            let _inner = BgEmbedEnvGuard::disable();
+            assert!(std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").is_err());
+            panic!("simulated panic inside env-guarded test");
+        });
+        assert!(panicked.is_err());
+        assert_eq!(
+            std::env::var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC").as_deref(),
+            Ok("1")
+        );
     }
 
     #[tokio::test]

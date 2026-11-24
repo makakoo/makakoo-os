@@ -344,6 +344,8 @@ fn apply_recency_boost(
 pub struct SuperbrainStore {
     conn: Arc<Mutex<Connection>>,
     path: PathBuf,
+    #[cfg(test)]
+    rebuild_lease_ms: std::sync::atomic::AtomicI64,
 }
 
 impl SuperbrainStore {
@@ -354,7 +356,29 @@ impl SuperbrainStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             path: path.to_path_buf(),
+            #[cfg(test)]
+            rebuild_lease_ms: std::sync::atomic::AtomicI64::new(
+                super::vector_claim::REBUILD_LEASE_MS,
+            ),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_rebuild_lease_ms_for_test(&self, lease_ms: i64) {
+        self.rebuild_lease_ms
+            .store(lease_ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn rebuild_lease_ms(&self) -> i64 {
+        #[cfg(test)]
+        {
+            self.rebuild_lease_ms
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }
+        #[cfg(not(test))]
+        {
+            super::vector_claim::REBUILD_LEASE_MS
+        }
     }
 
     /// Return the path the store was opened from.

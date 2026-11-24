@@ -176,3 +176,17 @@ async fn mcp_brain_vector_search_returns_empty_during_rebuild_while_fts_works() 
         .unwrap();
     assert_eq!(v_after.as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn mcp_tool_context_shares_single_brain_rebuild_coordinator_arc() {
+    let dir = tempfile::tempdir().unwrap();
+    let coord = Arc::new(makakoo_core::superbrain::vector_model::BrainRebuildCoordinator::new());
+    let ctx = Arc::new(
+        ToolContext::empty(dir.path().to_path_buf()).with_brain_rebuild(Arc::clone(&coord)),
+    );
+    let vec_h = HarveySuperbrainVectorSearchHandler::new(Arc::clone(&ctx));
+    let ctx_h = BrainContextHandler::new(Arc::clone(&ctx));
+    assert!(Arc::ptr_eq(&coord, &ctx.brain_rebuild));
+    assert!(Arc::ptr_eq(&coord, &vec_h.ctx.brain_rebuild));
+    assert!(Arc::ptr_eq(&coord, &ctx_h.ctx.brain_rebuild));
+}

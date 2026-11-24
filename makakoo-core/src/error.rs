@@ -36,6 +36,12 @@ pub enum MakakooError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("brain vector rebuild claim lost to another owner")]
+    RebuildClaimLost,
+
+    #[error("brain vector rebuild call timed out")]
+    RebuildCallTimeout,
+
     #[error("internal error: {0}")]
     Internal(String),
 }
