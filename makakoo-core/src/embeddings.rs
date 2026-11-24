@@ -15,9 +15,16 @@ use serde_json::{json, Value};
 use crate::error::{MakakooError, Result};
 use crate::llm::DEFAULT_BASE_URL;
 
+#[path = "embeddings_response.rs"]
+mod response;
+
 #[cfg(test)]
 #[path = "embeddings_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "embeddings_index_tests.rs"]
+mod index_tests;
 
 pub const DEFAULT_EMBED_MODEL: &str = "qwen3-embedding:0.6b";
 /// Existing default per-request timeout for embedding HTTP calls.
@@ -430,23 +437,7 @@ impl EmbeddingClient {
             .get("data")
             .and_then(|d| d.as_array())
             .ok_or_else(|| MakakooError::llm("no data array in embeddings response"))?;
-        let mut indexed: Vec<(Option<u64>, Vec<f32>)> = Vec::with_capacity(data.len());
-        for item in data {
-            let emb = item
-                .get("embedding")
-                .and_then(|e| e.as_array())
-                .ok_or_else(|| MakakooError::llm("missing embedding array"))?;
-            let vec: Vec<f32> = emb
-                .iter()
-                .filter_map(|n| n.as_f64().map(|f| f as f32))
-                .collect();
-            let idx = item.get("index").and_then(Value::as_u64);
-            indexed.push((idx, vec));
-        }
-        if indexed.iter().all(|(idx, _)| idx.is_some()) {
-            indexed.sort_by_key(|(idx, _)| idx.unwrap_or(u64::MAX));
-        }
-        let out: Vec<Vec<f32>> = indexed.into_iter().map(|(_, v)| v).collect();
+        let out = response::order_embedding_items(data)?;
         let dim = out.first().map(|vec| vec.len()).unwrap_or(0);
         if out.iter().any(|vec| vec.len() != dim) {
             return Err(MakakooError::llm(
