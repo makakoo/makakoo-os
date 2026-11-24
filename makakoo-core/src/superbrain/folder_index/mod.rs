@@ -22,6 +22,7 @@ pub mod manager;
 pub mod model_meta;
 pub mod quantize;
 pub mod rebuild;
+mod rebuild_pages;
 mod sqlite_repo;
 pub mod store;
 mod vector_store;

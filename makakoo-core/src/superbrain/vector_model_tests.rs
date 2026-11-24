@@ -13,8 +13,8 @@ use crate::embeddings::EmbeddingClient;
 use crate::superbrain::folder_index::IndexModelState;
 use crate::superbrain::store::SuperbrainStore;
 use crate::superbrain::vector_model::{
-    probe_and_reconcile_brain, search_brain_vectors_checked, BrainRebuildCoordinator,
-    DEFAULT_EMBED_TRUNCATE_CHARS,
+    probe_and_reconcile_brain, rebuild_brain_vectors, search_brain_vectors_checked,
+    BrainRebuildCoordinator, DEFAULT_EMBED_TRUNCATE_CHARS,
 };
 
 #[derive(Clone)]
@@ -183,15 +183,22 @@ async fn brain_model_switch_rebuilds_in_background_and_returns_empty_vectors_unt
         Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed-bulk"));
     let coord = Arc::new(BrainRebuildCoordinator::new());
 
-    let count = store
-        .sync_vectors_with_embedder(
-            &bulk_emb,
-            Some(short_emb.model()),
-            10,
-            DEFAULT_EMBED_TRUNCATE_CHARS,
-        )
-        .await
-        .unwrap();
+    // A fresh Brain is filled by the coordinated rebuild, never by the top-up path.
+    assert_eq!(
+        store
+            .sync_vectors_with_embedder(&bulk_emb, 10, DEFAULT_EMBED_TRUNCATE_CHARS)
+            .await
+            .unwrap(),
+        0
+    );
+    let count = rebuild_brain_vectors(
+        Arc::clone(&store),
+        Arc::clone(&bulk_emb),
+        Some(Arc::clone(&short_emb)),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(count, 1);
 
     // Baseline vector search succeeds under model-v1.

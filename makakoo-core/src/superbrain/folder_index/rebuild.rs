@@ -4,7 +4,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::params;
 use tokio::sync::Notify;
 
 use crate::embeddings::EmbeddingClient;
@@ -15,11 +14,10 @@ use super::model_meta::{
     FolderSearchRequest, FolderSearchResponse, IndexModelState, SearchMode,
     SHORT_BULK_MISMATCH_REASON,
 };
-use super::quantize::{i8_slice_to_bytes, truncate_and_quantize_i8};
+use super::rebuild_pages::{reembed_pages, reset_parked, swap_in_parked};
 use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
 use super::FolderIndex;
 
-const REBUILD_BATCH_SIZE: usize = 32;
 /// Commit attempts before a rebuild that keeps racing writers gives up stale.
 const MAX_REBUILD_COMMIT_ATTEMPTS: usize = 8;
 
@@ -245,17 +243,13 @@ async fn run_folder_rebuild(
     bulk_emb: Arc<EmbeddingClient>,
     mut observed_short: Option<(String, usize)>,
 ) -> Result<()> {
-    let (start_gen, snapshot) = {
+    let (start_gen, chunk_count) = {
         let conn = idx.lock_conn()?;
-        let gen = read_generation(&conn)?;
-        let mut stmt = conn.prepare("SELECT id, text FROM chunks ORDER BY id ASC")?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        (gen, rows)
+        reset_parked(&conn)?;
+        (read_generation(&conn)?, read_chunk_count(&conn)?)
     };
 
-    if snapshot.is_empty() {
+    if chunk_count == 0 {
         let conn = idx.lock_conn()?;
         write_model_state(&conn, IndexModelState::Ready, None)?;
         return Ok(());
@@ -279,11 +273,7 @@ async fn run_folder_rebuild(
         }
     }
 
-    let mut max_id = snapshot.last().map(|(id, _)| *id).unwrap_or(0);
-    let (mut embedded, row_model, row_dim) = reembed_rows(&bulk_emb, idx.dim(), &snapshot).await?;
-    if row_model != b_model || row_dim != b_dim {
-        return Err(MakakooError::llm("bulk embedder model changed mid-rebuild"));
-    }
+    let (mut max_id, _) = reembed_pages(&idx, &bulk_emb, &b_model, b_dim, 0).await?;
 
     // Upserts replace a file's chunks with new, higher ids and bump the
     // generation. Commit only while the generation is the one whose rows were
@@ -300,35 +290,19 @@ async fn run_folder_rebuild(
         {
             hook(&idx);
         }
-        let tail = {
+        {
             let mut conn = idx.lock_conn()?;
             let gen_now = read_generation(&conn)?;
             if gen_now == seen_gen {
-                commit_rebuild(
-                    &idx, &mut conn, &embedded, &b_model, b_dim, &bulk_emb, &short_emb,
-                )?;
+                commit_rebuild(&idx, &mut conn, &b_model, b_dim, &bulk_emb, &short_emb)?;
                 drop(conn);
                 idx.checkpoint_wal()?;
                 return Ok(());
             }
             seen_gen = gen_now;
-            let mut stmt =
-                conn.prepare("SELECT id, text FROM chunks WHERE id > ?1 ORDER BY id ASC")?;
-            let rows = stmt
-                .query_map(params![max_id], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
-        };
-        if let Some((id, _)) = tail.last() {
-            max_id = *id;
-            let (rows, tail_model, tail_dim) = reembed_rows(&bulk_emb, idx.dim(), &tail).await?;
-            if tail_model != b_model || tail_dim != b_dim {
-                return Err(MakakooError::llm("bulk embedder model changed mid-rebuild"));
-            }
-            embedded.extend(rows);
         }
+        let (last_id, _) = reembed_pages(&idx, &bulk_emb, &b_model, b_dim, max_id).await?;
+        max_id = last_id;
     }
     Err(MakakooError::internal(
         "rebuild kept racing writers; left stale for the next probe",
@@ -338,7 +312,6 @@ async fn run_folder_rebuild(
 fn commit_rebuild(
     idx: &FolderIndex,
     conn: &mut rusqlite::Connection,
-    embedded: &[(i64, Vec<i8>)],
     b_model: &str,
     b_dim: usize,
     bulk_emb: &EmbeddingClient,
@@ -346,12 +319,7 @@ fn commit_rebuild(
 ) -> Result<()> {
     {
         let tx = conn.transaction()?;
-        {
-            let mut upd = tx.prepare_cached("UPDATE chunks SET vector_i8 = ?1 WHERE id = ?2")?;
-            for (id, q) in embedded {
-                upd.execute(params![i8_slice_to_bytes(q), id])?;
-            }
-        }
+        swap_in_parked(&tx)?;
         let new_gen = bump_generation_tx(&tx)?;
         tx.commit()?;
 
@@ -368,45 +336,6 @@ fn commit_rebuild(
         )?;
     }
     Ok(())
-}
-
-async fn reembed_rows(
-    bulk_emb: &EmbeddingClient,
-    target_dim: usize,
-    rows: &[(i64, String)],
-) -> Result<(Vec<(i64, Vec<i8>)>, String, usize)> {
-    let mut embedded = Vec::with_capacity(rows.len());
-    let mut model: Option<String> = None;
-    let mut dim: Option<usize> = None;
-
-    for batch in rows.chunks(REBUILD_BATCH_SIZE) {
-        let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
-        let res = bulk_emb.embed_batch_with_meta(&texts).await?;
-        if res.vectors.len() != batch.len() {
-            return Err(MakakooError::llm(format!(
-                "bulk rebuild expected {} vectors, got {}",
-                batch.len(),
-                res.vectors.len()
-            )));
-        }
-        match (&model, dim) {
-            (Some(m), Some(d)) if m != &res.model || d != res.dim => {
-                return Err(MakakooError::llm("bulk embedder model changed mid-rebuild"));
-            }
-            _ => {
-                model = Some(res.model);
-                dim = Some(res.dim);
-            }
-        }
-        for ((id, _), vec) in batch.iter().zip(res.vectors) {
-            embedded.push((*id, truncate_and_quantize_i8(&vec, target_dim)?));
-        }
-    }
-
-    match (model, dim) {
-        (Some(m), Some(d)) => Ok((embedded, m, d)),
-        _ => Err(MakakooError::llm("no vectors produced during rebuild")),
-    }
 }
 
 /// Execute a model-aware search against `idx`, triggering background rebuild and

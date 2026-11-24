@@ -690,7 +690,11 @@ impl SuperbrainStore {
     /// similarity floor is dropped. Returns empty if vectors are stale or
     /// rebuilding, and delegates to per-model filtering when an active model
     /// is recorded.
-    pub fn vector_search(&self, query_vec: &[f32], limit: usize) -> Result<Vec<VectorHit>> {
+    /// Test-only since S078 C11: it passed the active model as the query model,
+    /// so its model check could never fail. Production callers use
+    /// `vector_search_for_model` with the model their query vector came from.
+    #[cfg(test)]
+    pub(crate) fn vector_search(&self, query_vec: &[f32], limit: usize) -> Result<Vec<VectorHit>> {
         let status = self.vector_status()?;
         if status.index_state != super::folder_index::IndexModelState::Ready {
             return Ok(Vec::new());

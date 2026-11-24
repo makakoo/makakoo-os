@@ -552,17 +552,18 @@ impl SanchoHandler for SuperbrainSyncEmbedHandler {
             publish_report(ctx, &report);
             return Ok(report);
         }
-        let embedded = ctx
-            .store
-            .sync_vectors_with_embedder(
-                &ctx.bulk_emb,
-                Some(ctx.emb.model()),
-                self.max_docs,
-                crate::superbrain::vector_model::DEFAULT_EMBED_TRUNCATE_CHARS,
-            )
-            .await
-            .unwrap_or(0);
-        let msg = format!("{embedded} vectors embedded");
+        let embedded = crate::superbrain::vector_model::embed_pending_brain(
+            Arc::clone(&ctx.store),
+            Arc::clone(&ctx.bulk_emb),
+            Some(Arc::clone(&ctx.emb)),
+            self.max_docs,
+            crate::superbrain::vector_model::DEFAULT_EMBED_TRUNCATE_CHARS,
+        )
+        .await;
+        let msg = match embedded {
+            Ok(n) => format!("{n} vectors embedded"),
+            Err(e) => format!("0 vectors embedded (error: {e})"),
+        };
         append_journal_line(
             &ctx.home,
             &format!("- [[SANCHO]] superbrain_sync_embed: {msg}"),

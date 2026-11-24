@@ -14,15 +14,21 @@ use super::folder_index::model_meta::{
 use super::store::{cosine_similarity, pack_vector, unpack_vector, SuperbrainStore, VectorHit};
 
 pub use super::vector_rebuild::{
-    check_and_probe_brain_on_open, probe_and_reconcile_brain, rebuild_brain_vectors,
-    search_brain_vectors_checked, BrainRebuildCoordinator,
+    check_and_probe_brain_on_open, embed_pending_brain, probe_and_reconcile_brain,
+    rebuild_brain_vectors, search_brain_vectors_checked, BrainRebuildCoordinator,
 };
 
 #[cfg(test)]
 #[path = "vector_model_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "vector_sync_tests.rs"]
+mod sync_tests;
+
 pub const DEFAULT_EMBED_TRUNCATE_CHARS: usize = 2000;
+/// Stale reason when a top-up finds the endpoint answering with another model.
+pub const EMBED_MODEL_CHANGED_REASON: &str = "embed_model_changed";
 
 /// Snapshot of `brain_vector_meta` state for `SuperbrainStore`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +160,19 @@ impl SuperbrainStore {
         write_state(&conn, IndexModelState::Rebuilding, Some(reason))
     }
 
+    /// Claim the rebuild for this database: writes `rebuilding` only when no
+    /// rebuild holds it, read and write under one connection lock. The state
+    /// lives in the database, so this also keeps a second process (the CLI,
+    /// the daemon) from rebuilding at the same time as the Brain service.
+    pub fn try_mark_vectors_rebuilding(&self, reason: &str) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        if read_index_state(&conn)? == IndexModelState::Rebuilding {
+            return Ok(false);
+        }
+        write_state(&conn, IndexModelState::Rebuilding, Some(reason))?;
+        Ok(true)
+    }
+
     pub fn set_vectors_ready(
         &self,
         model: &str,
@@ -171,33 +190,60 @@ impl SuperbrainStore {
         write_state(&conn, IndexModelState::Ready, None)
     }
 
+    /// Top-up write: stores the vector only while the index is still `ready`
+    /// for exactly `(model, dim)`, checked under the same lock as the write.
+    /// A rebuild that started in between owns the rows; false means skipped.
+    pub(crate) fn store_vector_if_ready_for(
+        &self,
+        doc_id: &str,
+        vec: &[f32],
+        model: &str,
+        dim: usize,
+    ) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        let ready = read_index_state(&conn)? == IndexModelState::Ready
+            && read_meta_opt(&conn, META_EMBED_MODEL)?.as_deref() == Some(model)
+            && read_meta_opt(&conn, META_EMBED_DIM)?.as_deref() == Some(&dim.to_string());
+        if !ready || vec.len() != dim {
+            return Ok(false);
+        }
+        write_vector_row(&conn, doc_id, vec, model)?;
+        Ok(true)
+    }
+
     /// Store (or replace) the embedding for `doc_id` with explicit model id.
     pub fn store_vector_with_model(&self, doc_id: &str, vec: &[f32], model: &str) -> Result<()> {
         let conn = self.lock_conn()?;
-        let row_id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM brain_docs WHERE path = ?1",
-                params![doc_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        let id = row_id
-            .ok_or_else(|| MakakooError::NotFound(format!("brain_docs row for doc_id={doc_id}")))?;
-        let blob = pack_vector(vec);
-        let dim = vec.len() as i64;
-        conn.execute(
-            "INSERT INTO brain_vectors (doc_id, embedding, dim, model, created_at)
+        write_vector_row(&conn, doc_id, vec, model)
+    }
+}
+
+fn write_vector_row(conn: &Connection, doc_id: &str, vec: &[f32], model: &str) -> Result<()> {
+    let row_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM brain_docs WHERE path = ?1",
+            params![doc_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let id = row_id
+        .ok_or_else(|| MakakooError::NotFound(format!("brain_docs row for doc_id={doc_id}")))?;
+    let blob = pack_vector(vec);
+    let dim = vec.len() as i64;
+    conn.execute(
+        "INSERT INTO brain_vectors (doc_id, embedding, dim, model, created_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))
              ON CONFLICT(doc_id) DO UPDATE SET
                  embedding = excluded.embedding,
                  dim = excluded.dim,
                  model = excluded.model,
                  created_at = excluded.created_at",
-            params![id, blob, dim, model],
-        )?;
-        Ok(())
-    }
+        params![id, blob, dim, model],
+    )?;
+    Ok(())
+}
 
+impl SuperbrainStore {
     /// Brute-force cosine similarity search restricted strictly to `(model, query_vec.len())`.
     /// Returns empty whenever `index_state != Ready` or the active model mismatches.
     pub fn vector_search_for_model(
@@ -270,7 +316,7 @@ impl SuperbrainStore {
             "SELECT d.path, d.content
              FROM brain_docs d
              LEFT JOIN brain_vectors v ON v.doc_id = d.id
-             WHERE v.doc_id IS NULL OR v.model != ?1 OR v.dim != ?2
+             WHERE v.doc_id IS NULL OR v.model IS NOT ?1 OR v.dim IS NOT ?2
              ORDER BY d.updated_at DESC
              LIMIT ?3",
         )?;
@@ -330,81 +376,49 @@ impl SuperbrainStore {
         self.vector_status()
     }
 
-    /// Embed up to `limit` pending/mismatched documents, recording the endpoint's
-    /// reported `model` and `dim` and updating `brain_vector_meta`.
+    /// Top up documents that have no vector yet, under the active model only.
+    ///
+    /// This is the incremental path (SANCHO tick, `makakoo sync --embed` on a
+    /// ready index). It never rebuilds and never sets `ready`: when the index
+    /// is not ready, or the endpoint now answers with another model or size,
+    /// the coordinated rebuild (`rebuild_brain_vectors`) owns the change. A
+    /// model change is handed over by a stale mark the next probe or query
+    /// acts on; each write re-checks `ready` under the same lock, so a rebuild
+    /// that started meanwhile is never mixed into.
     pub async fn sync_vectors_with_embedder(
         &self,
         embedder: &EmbeddingClient,
-        short_alias: Option<&str>,
         limit: usize,
         truncate_chars: usize,
     ) -> Result<usize> {
         if limit == 0 {
             return Ok(0);
         }
-        let missing = self.docs_missing_vectors(limit)?;
-        let mut written = 0usize;
-        let mut target_model: Option<String> = None;
-        let mut target_dim: Option<usize> = None;
-
-        for (doc_id, content) in missing {
-            let truncated: String = content.chars().take(truncate_chars).collect();
-            match embedder.embed_with_meta(&truncated).await {
-                Ok(res) if !res.vector.is_empty() => {
-                    target_model = Some(res.model.clone());
-                    target_dim = Some(res.dim);
-                    if self
-                        .store_vector_with_model(&doc_id, &res.vector, &res.model)
-                        .is_ok()
-                    {
-                        written += 1;
-                    }
-                }
-                _ => continue,
-            }
-        }
-
-        if target_model.is_none() {
-            if self.count()? == 0 {
-                return Ok(0);
-            }
-            let (m, d) = embedder.probe_model().await?;
-            target_model = Some(m);
-            target_dim = Some(d);
-        }
-
-        let (Some(model), Some(dim)) = (target_model, target_dim) else {
-            return Ok(written);
+        let status = self.vector_status()?;
+        let (IndexModelState::Ready, Some(model), Some(dim)) =
+            (status.index_state, status.embed_model, status.embed_dim)
+        else {
+            return Ok(0);
         };
-
-        let remaining_budget = limit.saturating_sub(written);
-        if remaining_budget > 0 {
-            let stale_docs = self.docs_needing_vectors(&model, dim, remaining_budget)?;
-            if !stale_docs.is_empty() {
-                let status = self.vector_status()?;
-                if status.embed_model.as_deref() != Some(&model) || status.embed_dim != Some(dim) {
-                    let _ = self.mark_vectors_stale("model_rebuild_in_progress");
-                }
-                for (doc_id, content) in stale_docs {
-                    let truncated: String = content.chars().take(truncate_chars).collect();
-                    match embedder.embed_with_meta(&truncated).await {
-                        Ok(res) if !res.vector.is_empty() => {
-                            if self
-                                .store_vector_with_model(&doc_id, &res.vector, &res.model)
-                                .is_ok()
-                            {
-                                written += 1;
-                            }
-                        }
-                        _ => continue,
-                    }
-                }
+        let mut written = 0usize;
+        for (doc_id, content) in self.docs_missing_vectors(limit)? {
+            let truncated: String = content.chars().take(truncate_chars).collect();
+            let Ok(res) = embedder.embed_with_meta(&truncated).await else {
+                continue;
+            };
+            if res.vector.is_empty() {
+                continue;
             }
-        }
-
-        if self.docs_needing_vectors(&model, dim, 1)?.is_empty() {
-            self.delete_vectors_not_matching(&model, dim)?;
-            self.set_vectors_ready(&model, dim, embedder.model(), short_alias)?;
+            if res.model != model || res.dim != dim {
+                self.mark_vectors_stale_unless_rebuilding(EMBED_MODEL_CHANGED_REASON)?;
+                break;
+            }
+            match self.store_vector_if_ready_for(&doc_id, &res.vector, &model, dim) {
+                Ok(true) => written += 1,
+                Ok(false) => break,
+                Err(MakakooError::NotFound(_)) => continue,
+                Err(e) => return Err(e),
+            }
         }
         Ok(written)
     }
@@ -412,7 +426,7 @@ impl SuperbrainStore {
     pub(crate) fn delete_vectors_not_matching(&self, model: &str, dim: usize) -> Result<()> {
         let conn = self.lock_conn()?;
         conn.execute(
-            "DELETE FROM brain_vectors WHERE model != ?1 OR dim != ?2",
+            "DELETE FROM brain_vectors WHERE model IS NOT ?1 OR dim IS NOT ?2",
             params![model, dim as i64],
         )?;
         Ok(())

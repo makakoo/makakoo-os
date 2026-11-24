@@ -81,7 +81,15 @@ impl BrainRebuildCoordinator {
             return;
         }
 
-        let _ = store.mark_vectors_rebuilding("rebuilding");
+        // The database claim keeps another process (the CLI) from rebuilding
+        // at the same time; this process's slot is released if it is taken.
+        if !store
+            .try_mark_vectors_rebuilding("rebuilding")
+            .unwrap_or(false)
+        {
+            self.finish(&key);
+            return;
+        }
         let coord = Arc::clone(self);
         tokio::spawn(async move {
             if let Err(err) =
@@ -182,6 +190,37 @@ pub async fn rebuild_brain_vectors(
         short_emb.as_deref().map(EmbeddingClient::model),
     )?;
     Ok(written)
+}
+
+/// The one entry point for background and CLI embedding. On a ready index with
+/// a recorded model, tops up documents that have no vector (at most `limit`).
+/// Otherwise runs the coordinated rebuild, after claiming it in the database so
+/// no other process rebuilds at the same time. Returns vectors written.
+pub async fn embed_pending_brain(
+    store: Arc<SuperbrainStore>,
+    bulk: Arc<EmbeddingClient>,
+    short: Option<Arc<EmbeddingClient>>,
+    limit: usize,
+    truncate_chars: usize,
+) -> Result<usize> {
+    let status = store.vector_status()?;
+    let has_model = status.embed_model.is_some() && status.embed_dim.is_some();
+    if status.index_state == IndexModelState::Ready && has_model {
+        return store
+            .sync_vectors_with_embedder(&bulk, limit, truncate_chars)
+            .await;
+    }
+    if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
+        return Ok(0);
+    }
+    if !store.try_mark_vectors_rebuilding("embed_pending")? {
+        return Ok(0);
+    }
+    let result = rebuild_brain_vectors(Arc::clone(&store), bulk, short, None).await;
+    if let Err(e) = &result {
+        let _ = store.mark_vectors_stale(&format!("rebuild_failed: {e}"));
+    }
+    result
 }
 
 /// Check stored Brain aliases on open and spawn a non-blocking endpoint probe

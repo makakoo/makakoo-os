@@ -620,3 +620,81 @@ async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
         "b.md kept its old-model vector under Ready"
     );
 }
+
+/// S078 C11 (review r1 HIGH): the rebuild pages through the folder, parks each
+/// page's vectors on disk and swaps them in at commit. A folder larger than one
+/// page must come out fully re-embedded, with nothing left parked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "old-model", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let mgr = Arc::new(
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb)),
+    );
+    let old_meta = UpsertModelMeta {
+        model: "old-model".into(),
+        embed_dim: 64,
+        bulk_alias: "ail-embed".into(),
+        short_alias: Some("ail-embed".into()),
+    };
+    let files = super::rebuild_pages::REBUILD_PAGE_ROWS + 40;
+    for i in 0..files {
+        mgr.upsert_folder_file(
+            "paged",
+            32,
+            &one_chunk(&format!("f{i}.md"), &format!("Doc {i}."), basis(64, 2)),
+            Some(&old_meta),
+        )
+        .unwrap();
+    }
+
+    responder.set_both_model("new-model", 64, 5);
+    let _ = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "paged".into(),
+                dim: 32,
+                k: 5,
+                query: Some("Doc".into()),
+                query_vector: None,
+                query_model: None,
+                query_dim: None,
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("paged").await;
+
+    let idx = mgr.get_or_open("paged", 32).unwrap();
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("new-model"));
+    let conn = idx.lock_conn().unwrap();
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+        .unwrap();
+    let with_new: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM chunks WHERE vector_i8 IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, files as i64);
+    assert_eq!(with_new, total, "every chunk was re-embedded before Ready");
+    assert_eq!(
+        super::rebuild_pages::parked_count(&conn).unwrap(),
+        0,
+        "parked vectors left behind after commit"
+    );
+}

@@ -20,8 +20,10 @@ use serde_yaml_ng::Value as YamlValue;
 use crate::brain_sources_registry::BrainSourcesRegistry;
 use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
+
 use crate::superbrain::graph::GraphStore;
 use crate::superbrain::store::{SourceMetadata, SuperbrainStore};
+use crate::superbrain::vector_model::embed_pending_brain;
 
 const MIN_CONTENT_CHARS: usize = 20;
 const EMBED_TRUNCATE_CHARS: usize = 2000;
@@ -338,12 +340,22 @@ impl IngestEngine {
         Ok(result)
     }
 
-    /// Embed up to `limit` pending or model-mismatched documents, recording the
-    /// endpoint-reported model id and dim. Returns the number of vectors written.
-    pub async fn embed_pending(&self, embedder: &EmbeddingClient, limit: usize) -> Result<usize> {
-        self.store
-            .sync_vectors_with_embedder(embedder, None, limit, EMBED_TRUNCATE_CHARS)
-            .await
+    /// Embed pending documents: top-up on a ready index, coordinated rebuild
+    /// otherwise. See [`embed_pending_brain`].
+    pub async fn embed_pending(
+        &self,
+        bulk: Arc<EmbeddingClient>,
+        short: Option<Arc<EmbeddingClient>>,
+        limit: usize,
+    ) -> Result<usize> {
+        embed_pending_brain(
+            Arc::clone(&self.store),
+            bulk,
+            short,
+            limit,
+            EMBED_TRUNCATE_CHARS,
+        )
+        .await
     }
 
     // ───────── internal ─────────

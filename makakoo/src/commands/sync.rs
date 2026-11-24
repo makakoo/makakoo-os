@@ -35,7 +35,11 @@ pub async fn run(
 
     if embed {
         let embedder = ctx.bulk_embeddings();
-        match engine.embed_pending(&embedder, embed_limit).await {
+        let short = ctx.embeddings();
+        match engine
+            .embed_pending(embedder, Some(short), embed_limit)
+            .await
+        {
             Ok(n) => report.vectors = n,
             Err(e) => output::print_warn(format!("embedding pass failed (continuing): {e}")),
         }
