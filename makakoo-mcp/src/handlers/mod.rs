@@ -300,11 +300,41 @@ mod handler_contract_tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
+        let expected_literal: Vec<String> = [
+            "brain_context",
+            "brain_entities",
+            "brain_query",
+            "brain_recent",
+            "brain_search",
+            "brain_write_journal",
+            "dream",
+            "folder_index_mark_skipped",
+            "folder_index_remove",
+            "folder_index_search",
+            "folder_index_states",
+            "folder_index_upsert",
+            "harvey_brain_search",
+            "harvey_brain_write",
+            "harvey_journal_entry",
+            "harvey_superbrain_query",
+            "harvey_superbrain_vector_search",
+            "wiki_compile",
+            "wiki_lint",
+            "wiki_save",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         assert_eq!(names, allowlist);
+        assert_eq!(
+            names, expected_literal,
+            "headless registry drifted from expected literal tool list"
+        );
 
-        // Guard assertions: zero send, exec/shell, browse, pi, infect, agent, swarm, nursery, or sancho clock tools.
+        // Guard assertions: zero send, exec/shell, browse, pi, infect, agent, swarm, nursery, sancho clock, or cost-summary tools.
         for forbidden in [
             "chat_send",
+            "costs_summary",
             "harvey_telegram_send",
             "channel_messaging_send_dm",
             "channel_messaging_send_channel",
@@ -344,5 +374,46 @@ mod handler_contract_tests {
                 "headless mode missing required tool {required}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn headless_tools_call_refuses_costs_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = makakoo_core::superbrain::store::SuperbrainStore::open(
+            &tmp.path().join("superbrain.db"),
+        )
+        .unwrap();
+        let costs = Arc::new(makakoo_core::telemetry::CostTracker::new(store.conn_arc()));
+        let ctx = Arc::new(
+            ToolContext::empty(tmp.path().to_path_buf())
+                .with_store(Arc::new(store))
+                .with_costs(costs),
+        );
+        let mut reg = ToolRegistry::new();
+        register_headless(&mut reg, &ctx);
+        let server = crate::server::McpServer::new(Arc::new(reg), ctx);
+
+        let req: crate::jsonrpc::Request = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"costs_summary","arguments":{}}}"#,
+        )
+        .unwrap();
+        let resp = server.handle(req).await.expect("tools/call response");
+        assert!(
+            resp.error.is_none(),
+            "tool refusal should use MCP isError envelope, got {:?}",
+            resp.error
+        );
+        let result = resp.result.expect("result envelope");
+        assert_eq!(
+            result["isError"], true,
+            "headless tools/call costs_summary must be refused: {result:?}"
+        );
+        let text = result["content"][0]["text"]
+            .as_str()
+            .expect("error text content");
+        assert!(
+            text.contains("unknown tool: costs_summary"),
+            "expected unknown-tool refusal for costs_summary, got: {text}"
+        );
     }
 }

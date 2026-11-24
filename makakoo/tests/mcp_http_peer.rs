@@ -5,11 +5,15 @@
 //! B trusts A, then sends a signed `tools/list` request from A → B and
 //! asserts a valid MCP response comes back.
 //!
-//! Runs unconditionally — no external service required. If your dev
-//! environment doesn't have `cargo build --bin makakoo-mcp`'ed output
-//! available, the test builds it up front.
+//! Runs unconditionally — no external service required. Run
+//! `cargo test --workspace` (or `cargo build --bin makakoo-mcp` before
+//! `cargo test -p makakoo --test mcp_http_peer`) after editing `makakoo-mcp`
+//! so the sibling binary is fresh; on a cold checkout where `makakoo-mcp` is
+//! absent, the helper builds it once with the active Cargo profile.
 
 #![cfg(unix)]
+
+mod common;
 
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
@@ -30,32 +34,7 @@ fn pick_free_port() -> u16 {
 }
 
 fn makakoo_mcp_bin() -> PathBuf {
-    // Locate the makakoo-mcp binary built alongside this test. Deriving the
-    // directory from the test executable (current_exe) honors CARGO_TARGET_DIR
-    // and the active profile, instead of assuming <workspace>/target/debug.
-    // makakoo-mcp is a sibling crate, so CARGO_BIN_EXE_* is not set here.
-    let exe_name = format!("makakoo-mcp{}", std::env::consts::EXE_SUFFIX);
-    // <target>/<profile>/deps/<test-exe> -> <target>/<profile>/makakoo-mcp
-    let beside_test = || -> Option<PathBuf> {
-        let test_exe = std::env::current_exe().ok()?;
-        let profile = test_exe.parent()?.parent()?;
-        let bin = profile.join(&exe_name);
-        bin.is_file().then_some(bin)
-    };
-    if let Some(bin) = beside_test() {
-        return bin;
-    }
-    // Cold start: build makakoo-mcp (cargo honors CARGO_TARGET_DIR), re-check.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let status = Command::new("cargo")
-        .current_dir(manifest_dir.parent().unwrap())
-        .args(["build", "--bin", "makakoo-mcp"])
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .expect("cargo build");
-    assert!(status.success(), "cargo build makakoo-mcp failed");
-    beside_test().expect("makakoo-mcp binary present after cargo build")
+    common::ensure_makakoo_mcp_bin()
 }
 
 struct Peer {

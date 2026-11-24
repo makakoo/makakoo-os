@@ -16,12 +16,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn makakoo_bin() -> PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.join("makakoo")
+    PathBuf::from(env!("CARGO_BIN_EXE_makakoo"))
 }
 
 fn workspace_root() -> PathBuf {
