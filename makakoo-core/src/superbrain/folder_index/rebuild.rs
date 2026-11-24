@@ -14,7 +14,7 @@ use super::model_meta::{
     FolderSearchRequest, FolderSearchResponse, IndexModelState, SearchMode,
     SHORT_BULK_MISMATCH_REASON,
 };
-use super::rebuild_pages::{reembed_pages, reset_parked, swap_in_parked};
+use super::rebuild_pages::{all_chunks_parked, reembed_pages, reset_parked, swap_in_parked};
 use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
 use super::FolderIndex;
 
@@ -293,13 +293,16 @@ async fn run_folder_rebuild(
         {
             let mut conn = idx.lock_conn()?;
             let gen_now = read_generation(&conn)?;
-            if gen_now == seen_gen {
-                commit_rebuild(&idx, &mut conn, &b_model, b_dim, &bulk_emb, &short_emb)?;
+            if gen_now == seen_gen
+                && commit_rebuild(
+                    &idx, &mut conn, seen_gen, &b_model, b_dim, &bulk_emb, &short_emb,
+                )?
+            {
                 drop(conn);
                 idx.checkpoint_wal()?;
                 return Ok(());
             }
-            seen_gen = gen_now;
+            seen_gen = read_generation(&conn)?;
         }
         // Ids are reused once the top rows are deleted, so the tail is not
         // "ids above the last one": rescan every chunk, skipping those parked
@@ -311,18 +314,26 @@ async fn run_folder_rebuild(
     ))
 }
 
+/// Commit the parked vectors if the index is still at `seen_gen` and every
+/// chunk holds a parked vector for its current text. Returns false when the
+/// caller must rescan (a writer got in, or a row is not covered).
 fn commit_rebuild(
     idx: &FolderIndex,
     conn: &mut rusqlite::Connection,
+    seen_gen: u64,
     b_model: &str,
     b_dim: usize,
     bulk_emb: &EmbeddingClient,
     short_emb: &Option<Arc<EmbeddingClient>>,
-) -> Result<()> {
+) -> Result<bool> {
     // Vectors, generation and the ready model record commit together: a crash
     // leaves the old state, never new vectors under the old model's record.
     let new_gen = {
-        let tx = conn.transaction()?;
+        // Immediate: no other process can write between the checks and the swap.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if read_generation(&tx)? != seen_gen || !all_chunks_parked(&tx)? {
+            return Ok(false);
+        }
         swap_in_parked(&tx)?;
         let new_gen = bump_generation_tx(&tx)?;
         write_ready_model_meta(
@@ -339,7 +350,7 @@ fn commit_rebuild(
     idx.vectors
         .set_model_meta(Some(b_model.to_string()), Some(b_dim));
     idx.vectors.rebuild_from_sqlite(conn, new_gen, count)?;
-    Ok(())
+    Ok(true)
 }
 
 /// Execute a model-aware search against `idx`, triggering background rebuild and

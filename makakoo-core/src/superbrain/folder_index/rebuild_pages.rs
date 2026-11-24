@@ -128,6 +128,18 @@ fn park(idx: &FolderIndex, vectors: &[(i64, String, Vec<i8>)]) -> Result<()> {
 
 /// Inside the commit transaction: put every parked vector on its chunk (rows
 /// deleted since are skipped) and empty the parking table.
+/// True when every chunk has a parked vector for its current text.
+pub(crate) fn all_chunks_parked(tx: &Transaction<'_>) -> Result<bool> {
+    let missing: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM chunks c
+          WHERE NOT EXISTS (SELECT 1 FROM temp.rebuild_vectors r
+                             WHERE r.id = c.id AND r.text = c.text)",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(missing == 0)
+}
+
 pub(crate) fn swap_in_parked(tx: &Transaction<'_>) -> Result<usize> {
     // Matched on id AND text: an id reused by a new chunk never takes the old
     // chunk's vector.

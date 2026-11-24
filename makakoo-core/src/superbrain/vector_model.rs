@@ -97,7 +97,9 @@ fn lease_fresh(conn: &Connection) -> Result<bool> {
     let beat = read_meta_opt(conn, META_REBUILD_HEARTBEAT)?
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
-    Ok(now_ms() - beat < REBUILD_LEASE_MS)
+    // A heartbeat in the future (clock stepped back) is not a live owner.
+    let age = now_ms() - beat;
+    Ok((0..REBUILD_LEASE_MS).contains(&age))
 }
 
 fn read_index_state(conn: &Connection) -> Result<IndexModelState> {
@@ -164,11 +166,13 @@ impl SuperbrainStore {
     }
 
     pub fn mark_vectors_stale_unless_rebuilding(&self, reason: &str) -> Result<bool> {
-        let conn = self.lock_conn()?;
-        if read_index_state(&conn)? == IndexModelState::Rebuilding {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if read_index_state(&tx)? == IndexModelState::Rebuilding {
             return Ok(false);
         }
-        write_state(&conn, IndexModelState::Stale, Some(reason))?;
+        write_state(&tx, IndexModelState::Stale, Some(reason))?;
+        tx.commit()?;
         Ok(true)
     }
 
