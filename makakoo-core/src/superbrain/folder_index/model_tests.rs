@@ -707,11 +707,12 @@ async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
     );
 }
 
-/// S078 C11 review r2 HIGH: chunk ids are reused once the top rows are deleted.
-/// A writer that replaces the last file while the rebuild is in flight must not
-/// leave its new text holding the old text's vector.
+/// S078 C11 review r3 HIGH: a writer that changes a chunk's text WITHOUT bumping
+/// the generation (an untracked in-place UPDATE) must not let the commit go
+/// through with that row still holding its old vector. The commit detects the
+/// uncovered row, and the rescan re-embeds it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reused_chunk_id_never_takes_the_old_chunks_vector() {
+async fn an_untracked_text_change_is_caught_before_the_commit() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "old-model", 64);
     let server = MockServer::start().await;
@@ -731,38 +732,25 @@ async fn a_reused_chunk_id_never_takes_the_old_chunks_vector() {
         short_alias: Some("ail-embed".into()),
     };
     mgr.upsert_folder_file(
-        "reuse",
+        "untracked",
         32,
         &one_chunk("a.md", "Head text.", basis(64, 2)),
         Some(&old_meta),
     )
     .unwrap();
-    mgr.upsert_folder_file(
-        "reuse",
-        32,
-        &one_chunk("last.md", "Old tail.", basis(64, 2)),
-        Some(&old_meta),
-    )
-    .unwrap();
 
-    let idx = mgr.get_or_open("reuse", 32).unwrap();
+    let idx = mgr.get_or_open("untracked", 32).unwrap();
     let fired = Arc::new(AtomicBool::new(false));
-    let (f2, meta2) = (Arc::clone(&fired), old_meta.clone());
+    let f2 = Arc::clone(&fired);
     *idx.before_rebuild_commit.lock().unwrap() = Some(Box::new(move |i: &FolderIndex| {
         if !f2.swap(true, Ordering::SeqCst) {
-            // Delete the top file's chunks, then add a new file: SQLite reuses the
-            // freed top ids for the new chunk (an upsert alone inserts first, so
-            // it would not reuse them).
-            {
-                let conn = i.lock_conn().unwrap();
-                conn.execute("DELETE FROM chunks WHERE file_path = 'last.md'", [])
-                    .unwrap();
-            }
-            i.upsert_file_with_model(
-                &one_chunk("new.md", "New tail.", basis(64, 2)),
-                Some(&meta2),
-            )
-            .unwrap();
+            i.lock_conn()
+                .unwrap()
+                .execute(
+                    "UPDATE chunks SET text = 'Changed text.' WHERE file_path = 'a.md'",
+                    [],
+                )
+                .unwrap();
         }
     }));
 
@@ -770,10 +758,10 @@ async fn a_reused_chunk_id_never_takes_the_old_chunks_vector() {
     let _ = mgr
         .search_folder(
             FolderSearchRequest {
-                folder_id: "reuse".into(),
+                folder_id: "untracked".into(),
                 dim: 32,
                 k: 5,
-                query: Some("tail".into()),
+                query: Some("text".into()),
                 query_vector: None,
                 query_model: None,
                 query_dim: None,
@@ -784,7 +772,7 @@ async fn a_reused_chunk_id_never_takes_the_old_chunks_vector() {
         )
         .await
         .unwrap();
-    mgr.wait_for_rebuild("reuse").await;
+    mgr.wait_for_rebuild("untracked").await;
     assert!(fired.load(Ordering::SeqCst), "hook never ran");
 
     let status = idx.model_status().unwrap();
@@ -801,5 +789,8 @@ async fn a_reused_chunk_id_never_takes_the_old_chunks_vector() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(not_new, 0, "a row kept an old-model vector under Ready");
+    assert_eq!(
+        not_new, 0,
+        "the changed row kept its old vector under Ready"
+    );
 }
