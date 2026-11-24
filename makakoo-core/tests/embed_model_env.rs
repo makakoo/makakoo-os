@@ -86,12 +86,18 @@ async fn sancho_sync_embed_uses_bulk_client_and_records_reported_model() {
         .with_bulk_embeddings(bulk_emb);
     let report = SuperbrainSyncEmbedHandler::new().run(&ctx).await.unwrap();
     assert!(report.ok);
-    assert!(report.message.contains("1 vectors embedded"));
+    assert!(
+        report.message.contains("rebuild scheduled"),
+        "expected scheduled background rebuild, got: {}",
+        report.message
+    );
+    ctx.brain_rebuild.wait(store.path()).await;
 
     let status = store.vector_status().unwrap();
     assert_eq!(status.index_state, IndexModelState::Ready);
     assert_eq!(status.embed_model.as_deref(), Some("Qwen3-Embedding-0.6B"));
     assert_eq!(status.embed_dim, Some(4));
+    assert_eq!(store.stats().unwrap().vector_count, 1);
 
     match prev_flag {
         Some(v) => std::env::set_var("MAKAKOO_ENABLE_BACKGROUND_EMBED_SYNC", v),

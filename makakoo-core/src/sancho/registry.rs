@@ -13,6 +13,7 @@ use crate::event_bus::PersistentEventBus;
 use crate::llm::LlmClient;
 use crate::sancho::gates::Gate;
 use crate::superbrain::store::SuperbrainStore;
+use crate::superbrain::vector_model::BrainRebuildCoordinator;
 
 /// Proactive task trait. Handlers are short, async, side-effecting.
 #[async_trait]
@@ -28,6 +29,7 @@ pub struct SanchoContext {
     pub llm: Arc<LlmClient>,
     pub emb: Arc<EmbeddingClient>,
     pub bulk_emb: Arc<EmbeddingClient>,
+    pub brain_rebuild: Arc<BrainRebuildCoordinator>,
     pub home: PathBuf,
 }
 
@@ -46,12 +48,18 @@ impl SanchoContext {
             llm,
             emb,
             bulk_emb,
+            brain_rebuild: Arc::new(BrainRebuildCoordinator::new()),
             home,
         }
     }
 
     pub fn with_bulk_embeddings(mut self, bulk_emb: Arc<EmbeddingClient>) -> Self {
         self.bulk_emb = bulk_emb;
+        self
+    }
+
+    pub fn with_brain_rebuild(mut self, brain_rebuild: Arc<BrainRebuildCoordinator>) -> Self {
+        self.brain_rebuild = brain_rebuild;
         self
     }
 }
