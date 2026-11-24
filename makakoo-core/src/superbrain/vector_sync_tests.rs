@@ -162,7 +162,8 @@ async fn a_top_up_write_never_lands_inside_a_running_rebuild() {
     assert!(r
         .store
         .try_mark_vectors_rebuilding("other_process")
-        .unwrap());
+        .unwrap()
+        .is_some());
     let vec = vec![1.0_f32; 8];
     assert!(!r
         .store
@@ -175,10 +176,18 @@ async fn a_top_up_write_never_lands_inside_a_running_rebuild() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_one_rebuild_claim_wins_and_the_coordinator_respects_it() {
     let r = rig("model-1", &["alpha"]).await;
-    assert!(r.store.try_mark_vectors_rebuilding("cli_rebuild").unwrap());
-    assert!(!r.store.try_mark_vectors_rebuilding("cli_rebuild").unwrap());
+    assert!(r
+        .store
+        .try_mark_vectors_rebuilding("cli_rebuild")
+        .unwrap()
+        .is_some());
+    assert!(r
+        .store
+        .try_mark_vectors_rebuilding("cli_rebuild")
+        .unwrap()
+        .is_none());
     let coord = Arc::new(BrainRebuildCoordinator::new());
-    coord.spawn_rebuild(Arc::clone(&r.store), Arc::clone(&r.bulk), None, None);
+    assert!(!coord.spawn_rebuild(Arc::clone(&r.store), Arc::clone(&r.bulk), None, None));
     assert!(!coord.is_active(r.store.path()));
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(r.endpoint.calls.load(Ordering::SeqCst), 0);
@@ -238,8 +247,13 @@ async fn deleting_mismatched_vectors_also_drops_rows_without_a_model() {
             [],
         )
         .unwrap();
+    let owner = r
+        .store
+        .try_mark_vectors_rebuilding("drop_null_model")
+        .unwrap()
+        .unwrap();
     r.store
-        .finish_rebuild("model-1", 8, "ail-embed-bulk", None)
+        .finish_rebuild(&owner, "model-1", 8, "ail-embed-bulk", None)
         .unwrap();
     assert_eq!(vector_models(&r.store), vec![Some("model-1".to_string())]);
 }
@@ -250,9 +264,16 @@ async fn deleting_mismatched_vectors_also_drops_rows_without_a_model() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dead_rebuild_claim_is_taken_over_after_its_lease() {
     let r = rig("model-1", &["alpha"]).await;
-    assert!(r.store.try_mark_vectors_rebuilding("crashed").unwrap());
+    assert!(r
+        .store
+        .try_mark_vectors_rebuilding("crashed")
+        .unwrap()
+        .is_some());
     assert!(
-        !r.store.try_mark_vectors_rebuilding("other").unwrap(),
+        r.store
+            .try_mark_vectors_rebuilding("other")
+            .unwrap()
+            .is_none(),
         "a live claim must not be taken"
     );
     // The owner died: its heartbeat stops and goes stale.
@@ -285,7 +306,11 @@ async fn a_dead_rebuild_claim_is_taken_over_after_its_lease() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn open_check_leaves_a_live_rebuild_alone() {
     let r = rig("model-1", &["alpha"]).await;
-    assert!(r.store.try_mark_vectors_rebuilding("live").unwrap());
+    assert!(r
+        .store
+        .try_mark_vectors_rebuilding("live")
+        .unwrap()
+        .is_some());
     let status = r
         .store
         .check_brain_alias_on_open("a-different-bulk-alias", None)

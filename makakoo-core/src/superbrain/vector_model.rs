@@ -13,9 +13,11 @@ use super::folder_index::model_meta::{
 };
 use super::store::{cosine_similarity, pack_vector, unpack_vector, SuperbrainStore, VectorHit};
 
+pub use super::vector_probe::{
+    check_and_probe_brain_on_open, probe_and_reconcile_brain, search_brain_vectors_checked,
+};
 pub use super::vector_rebuild::{
-    check_and_probe_brain_on_open, embed_pending_brain, probe_and_reconcile_brain,
-    rebuild_brain_vectors, search_brain_vectors_checked, BrainRebuildCoordinator,
+    embed_pending_brain, rebuild_brain_vectors, BrainRebuildCoordinator, BrainSyncOutcome,
 };
 
 #[cfg(test)]
@@ -25,6 +27,10 @@ mod tests;
 #[cfg(test)]
 #[path = "vector_sync_tests.rs"]
 mod sync_tests;
+
+#[cfg(test)]
+#[path = "vector_fence_tests.rs"]
+mod fence_tests;
 
 pub const DEFAULT_EMBED_TRUNCATE_CHARS: usize = 2000;
 /// Stale reason when a top-up finds the endpoint answering with another model.
@@ -41,7 +47,7 @@ pub struct BrainVectorStatus {
     pub stale_reason: Option<String>,
 }
 
-fn read_meta_opt(conn: &Connection, key: &str) -> Result<Option<String>> {
+pub(crate) fn read_meta_opt(conn: &Connection, key: &str) -> Result<Option<String>> {
     let val: Option<String> = conn
         .query_row(
             "SELECT value FROM brain_vector_meta WHERE key = ?1",
@@ -52,7 +58,7 @@ fn read_meta_opt(conn: &Connection, key: &str) -> Result<Option<String>> {
     Ok(val.filter(|s| !s.is_empty()))
 }
 
-fn write_meta_opt(conn: &Connection, key: &str, value: Option<&str>) -> Result<()> {
+pub(crate) fn write_meta_opt(conn: &Connection, key: &str, value: Option<&str>) -> Result<()> {
     match value.filter(|s| !s.is_empty()) {
         Some(v) => {
             conn.execute(
@@ -67,42 +73,17 @@ fn write_meta_opt(conn: &Connection, key: &str, value: Option<&str>) -> Result<(
     Ok(())
 }
 
-fn write_state(conn: &Connection, state: IndexModelState, reason: Option<&str>) -> Result<()> {
+pub(crate) fn write_state(
+    conn: &Connection,
+    state: IndexModelState,
+    reason: Option<&str>,
+) -> Result<()> {
     write_meta_opt(conn, META_INDEX_STATE, Some(state.as_str()))?;
     write_meta_opt(conn, META_STALE_REASON, reason)?;
     Ok(())
 }
 
-/// A rebuild that has not refreshed its heartbeat for this long is dead (crash,
-/// kill, power loss) and its claim may be taken over.
-pub(crate) const REBUILD_LEASE_MS: i64 = 120_000;
-const META_REBUILD_HEARTBEAT: &str = "rebuild_heartbeat_ms";
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-fn touch_heartbeat(conn: &Connection) -> Result<()> {
-    write_meta_opt(conn, META_REBUILD_HEARTBEAT, Some(&now_ms().to_string()))
-}
-
-/// True while a rebuild claim is held and its heartbeat is recent.
-fn lease_fresh(conn: &Connection) -> Result<bool> {
-    if read_index_state(conn)? != IndexModelState::Rebuilding {
-        return Ok(false);
-    }
-    let beat = read_meta_opt(conn, META_REBUILD_HEARTBEAT)?
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-    // A heartbeat in the future (clock stepped back) is not a live owner.
-    let age = now_ms() - beat;
-    Ok((0..REBUILD_LEASE_MS).contains(&age))
-}
-
-fn read_index_state(conn: &Connection) -> Result<IndexModelState> {
+pub(crate) fn read_index_state(conn: &Connection) -> Result<IndexModelState> {
     match read_meta_opt(conn, META_INDEX_STATE)? {
         Some(raw) => IndexModelState::parse(&raw),
         None => Ok(IndexModelState::Ready),
@@ -210,60 +191,6 @@ impl SuperbrainStore {
         write_state(&conn, IndexModelState::Rebuilding, Some(reason))
     }
 
-    /// Claim the rebuild for this database: writes `rebuilding` only when no
-    /// rebuild holds it, read and write under one connection lock. The state
-    /// lives in the database, so this also keeps a second process (the CLI,
-    /// the daemon) from rebuilding at the same time as the Brain service.
-    pub fn try_mark_vectors_rebuilding(&self, reason: &str) -> Result<bool> {
-        let mut conn = self.lock_conn()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if lease_fresh(&tx)? {
-            return Ok(false);
-        }
-        write_state(&tx, IndexModelState::Rebuilding, Some(reason))?;
-        touch_heartbeat(&tx)?;
-        tx.commit()?;
-        Ok(true)
-    }
-
-    /// Refresh the rebuild's heartbeat; called per batch by the rebuild loop.
-    pub fn touch_rebuild_heartbeat(&self) -> Result<()> {
-        let conn = self.lock_conn()?;
-        touch_heartbeat(&conn)
-    }
-
-    /// True while another rebuild (any process) holds a live claim.
-    pub fn rebuild_lease_fresh(&self) -> Result<bool> {
-        let conn = self.lock_conn()?;
-        lease_fresh(&conn)
-    }
-
-    /// Finish a rebuild: drop vectors of other models and mark the index
-    /// ready, in one transaction, so no reader sees one without the other.
-    pub fn finish_rebuild(
-        &self,
-        model: &str,
-        dim: usize,
-        bulk_alias: &str,
-        short_alias: Option<&str>,
-    ) -> Result<()> {
-        let mut conn = self.lock_conn()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "DELETE FROM brain_vectors WHERE model IS NOT ?1 OR dim IS NOT ?2",
-            params![model, dim as i64],
-        )?;
-        write_meta_opt(&tx, META_EMBED_MODEL, Some(model))?;
-        write_meta_opt(&tx, META_EMBED_DIM, Some(&dim.to_string()))?;
-        write_meta_opt(&tx, META_EMBED_ALIAS, Some(bulk_alias))?;
-        if let Some(short) = short_alias {
-            write_meta_opt(&tx, META_SHORT_EMBED_ALIAS, Some(short))?;
-        }
-        write_state(&tx, IndexModelState::Ready, None)?;
-        tx.commit()?;
-        Ok(())
-    }
-
     pub fn set_vectors_ready(
         &self,
         model: &str,
@@ -314,7 +241,12 @@ impl SuperbrainStore {
     }
 }
 
-fn write_vector_row(conn: &Connection, doc_id: &str, vec: &[f32], model: &str) -> Result<()> {
+pub(crate) fn write_vector_row(
+    conn: &Connection,
+    doc_id: &str,
+    vec: &[f32],
+    model: &str,
+) -> Result<()> {
     let row_id: Option<i64> = conn
         .query_row(
             "SELECT id FROM brain_docs WHERE path = ?1",
