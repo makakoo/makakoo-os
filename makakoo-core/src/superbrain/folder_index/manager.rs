@@ -177,6 +177,38 @@ impl FolderIndexManager {
         self.rebuilds.wait(folder_id).await;
     }
 
+    #[cfg(test)]
+    pub(crate) fn get_or_open_without_probe_for_test(
+        &self,
+        folder_id: &str,
+        dim: usize,
+    ) -> Result<Arc<FolderIndex>> {
+        self.get_or_open_with_overrides(folder_id, dim, None, None, false)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn probe_folder_model_for_test(
+        &self,
+        folder_id: &str,
+        dim: usize,
+    ) -> Result<()> {
+        let short_emb = self.short_emb.clone();
+        let bulk_emb = self
+            .bulk_emb
+            .clone()
+            .or_else(|| short_emb.clone())
+            .ok_or_else(|| MakakooError::internal("folder model probe requires an embedder"))?;
+        let idx = self.get_or_open_with_overrides(
+            folder_id,
+            dim,
+            short_emb.as_ref(),
+            Some(&bulk_emb),
+            false,
+        )?;
+        rebuild::probe_and_reconcile(idx, short_emb, bulk_emb, Arc::clone(&self.rebuilds)).await;
+        Ok(())
+    }
+
     /// Flush all currently open folder indexes to disk.
     pub fn flush_all(&self) -> Result<()> {
         let indexes: Vec<Arc<FolderIndex>> = {

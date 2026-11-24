@@ -353,8 +353,9 @@ fn commit_rebuild(
     Ok(true)
 }
 
-/// Execute a model-aware search against `idx`, triggering background rebuild and
-/// serving FTS fallback whenever the index is stale, rebuilding, or mismatched.
+/// Execute a model-aware search against `idx`, triggering background rebuild only
+/// when the bulk embedder differs from the index and serving FTS fallback whenever
+/// the index is stale, rebuilding, or the query metadata is mismatched.
 pub(crate) async fn search_folder_checked(
     idx: Arc<FolderIndex>,
     short_emb: Option<Arc<EmbeddingClient>>,
@@ -429,21 +430,7 @@ pub(crate) async fn search_folder_checked(
                 status.embed_dim, q_dim
             )
         };
-        if !idx.mark_stale_unless_rebuilding(&reason)? {
-            // A rebuild is already running toward the new model: answer from FTS.
-            return fts_fallback_response(&idx, &req, &rebuilds, true);
-        }
-        let observed_short = q_model.zip(q_dim);
-        let fresh_status = idx.model_status()?;
-        maybe_trigger_rebuild(
-            &idx,
-            &fresh_status,
-            short_emb,
-            bulk_emb,
-            &rebuilds,
-            observed_short,
-        )
-        .await;
+        idx.record_query_mismatch(&reason)?;
         return fts_fallback_response(&idx, &req, &rebuilds, true);
     }
 
@@ -453,6 +440,7 @@ pub(crate) async fn search_folder_checked(
     }
 
     if let Some(vec) = q_vec {
+        idx.clear_query_mismatch()?;
         let passages = idx.search(&vec, req.k, &req.filter)?;
         Ok(FolderSearchResponse {
             folder_id: req.folder_id,

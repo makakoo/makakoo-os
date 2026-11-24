@@ -16,6 +16,7 @@ pub(crate) const META_EMBED_ALIAS: &str = "embed_alias";
 pub(crate) const META_SHORT_EMBED_ALIAS: &str = "short_embed_alias";
 pub(crate) const META_INDEX_STATE: &str = "index_state";
 pub(crate) const META_STALE_REASON: &str = "stale_reason";
+pub(crate) const META_QUERY_MISMATCH_REASON: &str = "query_mismatch_reason";
 
 pub(crate) const SHORT_BULK_MISMATCH_REASON: &str = "short_bulk_model_mismatch";
 
@@ -67,6 +68,7 @@ pub struct FolderModelStatus {
     pub embed_alias: Option<String>,
     pub short_embed_alias: Option<String>,
     pub stale_reason: Option<String>,
+    pub query_mismatch_reason: Option<String>,
 }
 
 /// Model provenance recorded when upserting chunks from an embedding client.
@@ -147,6 +149,7 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
     let embed_alias = read_meta_opt(conn, META_EMBED_ALIAS)?;
     let short_embed_alias = read_meta_opt(conn, META_SHORT_EMBED_ALIAS)?;
     let stale_reason = read_meta_opt(conn, META_STALE_REASON)?;
+    let query_mismatch_reason = read_meta_opt(conn, META_QUERY_MISMATCH_REASON)?;
     Ok(FolderModelStatus {
         index_state,
         embed_model,
@@ -154,6 +157,7 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
         embed_alias,
         short_embed_alias,
         stale_reason,
+        query_mismatch_reason,
     })
 }
 
@@ -331,6 +335,26 @@ impl FolderIndex {
         }
         write_model_state(&conn, IndexModelState::Stale, Some(reason))?;
         Ok(true)
+    }
+
+    /// Persist a query-side model mismatch separately from index freshness.
+    /// Query metadata describes the caller's vector, not the model that wrote
+    /// the index, so it must never make the index eligible for a rebuild. Avoid
+    /// rewriting SQLite when a client repeats the same mismatched request.
+    pub(crate) fn record_query_mismatch(&self, reason: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        if read_meta_opt(&conn, META_QUERY_MISMATCH_REASON)?.as_deref() != Some(reason) {
+            write_meta_opt(&conn, META_QUERY_MISMATCH_REASON, Some(reason))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clear_query_mismatch(&self) -> Result<()> {
+        let conn = self.lock_conn()?;
+        if read_meta_opt(&conn, META_QUERY_MISMATCH_REASON)?.is_some() {
+            write_meta_opt(&conn, META_QUERY_MISMATCH_REASON, None)?;
+        }
+        Ok(())
     }
 
     pub fn search_fts(&self, query: &str, k: usize, filter: &SearchFilter) -> Result<Vec<Passage>> {

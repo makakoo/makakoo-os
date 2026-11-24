@@ -354,8 +354,19 @@ async fn folder_index_rebuild_and_query_enforce_16_batch_and_2000_utf8_byte_cap(
         expected_texts.push((format!("file-{i:02}.md"), text));
     }
 
-    // Switch model so search triggers a paged folder rebuild over all 25 chunks.
+    // Switch the bulk model and probe it to trigger a paged folder rebuild over
+    // all 25 chunks. Query metadata alone must not trigger that rebuild.
     *endpoint.model.lock().unwrap() = "model-v2".to_string();
+    mgr.probe_folder_model_for_test("eu-docs", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("eu-docs").await;
+
+    let idx = mgr.get_or_open("eu-docs", 32).unwrap();
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("model-v2"));
+
     let long_query = long_german_2000_chars(1);
     let first = mgr
         .search_folder(
@@ -374,21 +385,14 @@ async fn folder_index_rebuild_and_query_enforce_16_batch_and_2000_utf8_byte_cap(
         )
         .await
         .unwrap();
-    assert_eq!(first.mode, SearchMode::Fts);
-    assert!(first.stale);
+    assert_eq!(first.mode, SearchMode::Vector);
+    assert!(!first.stale);
 
-    mgr.wait_for_rebuild("eu-docs").await;
-
-    let idx = mgr.get_or_open("eu-docs", 32).unwrap();
-    let status = idx.model_status().unwrap();
-    assert_eq!(status.index_state, IndexModelState::Ready);
-    assert_eq!(status.embed_model.as_deref(), Some("model-v2"));
-
-    // First request was the short query (len 1), followed by rebuild batches [16, 9].
+    // Bulk rebuild batches [16, 9] are followed by the short query (len 1).
     let sizes = endpoint.batch_sizes.lock().unwrap().clone();
     assert_eq!(
         sizes.as_slice(),
-        &[1, 16, 9],
+        &[16, 9, 1],
         "folder rebuild must split 25 chunks into batches of 16 and 9"
     );
     for sent in endpoint.received_inputs.lock().unwrap().iter() {
