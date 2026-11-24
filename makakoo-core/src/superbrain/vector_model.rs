@@ -12,12 +12,15 @@ use super::folder_index::model_meta::{
     META_SHORT_EMBED_ALIAS, META_STALE_REASON,
 };
 use super::store::{cosine_similarity, pack_vector, unpack_vector, SuperbrainStore, VectorHit};
+use super::vector_claim::{clear_claim_meta, lease_fresh};
 
+pub use super::vector_claim::REBUILD_LEASE_MS;
 pub use super::vector_probe::{
     check_and_probe_brain_on_open, probe_and_reconcile_brain, search_brain_vectors_checked,
 };
 pub use super::vector_rebuild::{
     embed_pending_brain, rebuild_brain_vectors, BrainRebuildCoordinator, BrainSyncOutcome,
+    DEFAULT_REBUILD_WAIT_TIMEOUT,
 };
 
 #[cfg(test)]
@@ -31,6 +34,10 @@ mod sync_tests;
 #[cfg(test)]
 #[path = "vector_fence_tests.rs"]
 mod fence_tests;
+
+#[cfg(test)]
+#[path = "vector_heartbeat_tests.rs"]
+mod heartbeat_tests;
 
 pub const DEFAULT_EMBED_TRUNCATE_CHARS: usize = 2000;
 /// Stale reason when a top-up finds the endpoint answering with another model.
@@ -80,6 +87,9 @@ pub(crate) fn write_state(
 ) -> Result<()> {
     write_meta_opt(conn, META_INDEX_STATE, Some(state.as_str()))?;
     write_meta_opt(conn, META_STALE_REASON, reason)?;
+    if state != IndexModelState::Rebuilding {
+        clear_claim_meta(conn)?;
+    }
     Ok(())
 }
 
@@ -120,8 +130,11 @@ impl SuperbrainStore {
     }
 
     pub fn mark_vectors_stale(&self, reason: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        write_state(&conn, IndexModelState::Stale, Some(reason))
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        write_state(&tx, IndexModelState::Stale, Some(reason))?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Probe/query-time stale mark: never overwrites `rebuilding`. Read and
@@ -158,8 +171,8 @@ impl SuperbrainStore {
     }
 
     /// Clear an alias-only stale mark: writes `ready` only while the index is
-    /// still `stale` for one of `reasons`, under one lock. A rebuild that
-    /// started in between keeps its `rebuilding` state.
+    /// still `stale` for one of `reasons`, under one transaction. A rebuild
+    /// that started in between keeps its `rebuilding` state.
     pub fn set_vectors_ready_if_stale_for(
         &self,
         reasons: &[&str],
@@ -168,27 +181,24 @@ impl SuperbrainStore {
         bulk_alias: &str,
         short_alias: Option<&str>,
     ) -> Result<bool> {
-        let conn = self.lock_conn()?;
-        if read_index_state(&conn)? != IndexModelState::Stale {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if read_index_state(&tx)? != IndexModelState::Stale {
             return Ok(false);
         }
-        let reason = read_meta_opt(&conn, META_STALE_REASON)?;
+        let reason = read_meta_opt(&tx, META_STALE_REASON)?;
         if !reason.as_deref().is_some_and(|r| reasons.contains(&r)) {
             return Ok(false);
         }
-        write_meta_opt(&conn, META_EMBED_MODEL, Some(model))?;
-        write_meta_opt(&conn, META_EMBED_DIM, Some(&dim.to_string()))?;
-        write_meta_opt(&conn, META_EMBED_ALIAS, Some(bulk_alias))?;
+        write_meta_opt(&tx, META_EMBED_MODEL, Some(model))?;
+        write_meta_opt(&tx, META_EMBED_DIM, Some(&dim.to_string()))?;
+        write_meta_opt(&tx, META_EMBED_ALIAS, Some(bulk_alias))?;
         if let Some(short) = short_alias {
-            write_meta_opt(&conn, META_SHORT_EMBED_ALIAS, Some(short))?;
+            write_meta_opt(&tx, META_SHORT_EMBED_ALIAS, Some(short))?;
         }
-        write_state(&conn, IndexModelState::Ready, None)?;
+        write_state(&tx, IndexModelState::Ready, None)?;
+        tx.commit()?;
         Ok(true)
-    }
-
-    pub fn mark_vectors_rebuilding(&self, reason: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        write_state(&conn, IndexModelState::Rebuilding, Some(reason))
     }
 
     pub fn set_vectors_ready(
@@ -198,14 +208,17 @@ impl SuperbrainStore {
         bulk_alias: &str,
         short_alias: Option<&str>,
     ) -> Result<()> {
-        let conn = self.lock_conn()?;
-        write_meta_opt(&conn, META_EMBED_MODEL, Some(model))?;
-        write_meta_opt(&conn, META_EMBED_DIM, Some(&dim.to_string()))?;
-        write_meta_opt(&conn, META_EMBED_ALIAS, Some(bulk_alias))?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        write_meta_opt(&tx, META_EMBED_MODEL, Some(model))?;
+        write_meta_opt(&tx, META_EMBED_DIM, Some(&dim.to_string()))?;
+        write_meta_opt(&tx, META_EMBED_ALIAS, Some(bulk_alias))?;
         if let Some(short) = short_alias {
-            write_meta_opt(&conn, META_SHORT_EMBED_ALIAS, Some(short))?;
+            write_meta_opt(&tx, META_SHORT_EMBED_ALIAS, Some(short))?;
         }
-        write_state(&conn, IndexModelState::Ready, None)
+        write_state(&tx, IndexModelState::Ready, None)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Top-up write: stores the vector only while the index is still `ready`
@@ -373,8 +386,13 @@ impl SuperbrainStore {
         }
         if vector_count == 0 {
             if status.index_state != IndexModelState::Ready || status.stale_reason.is_some() {
-                let conn = self.lock_conn()?;
-                write_state(&conn, IndexModelState::Ready, None)?;
+                let lease_ms = self.rebuild_lease_ms();
+                let mut conn = self.lock_conn()?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if !lease_fresh(&tx, lease_ms)? {
+                    write_state(&tx, IndexModelState::Ready, None)?;
+                    tx.commit()?;
+                }
             }
             return self.vector_status();
         }

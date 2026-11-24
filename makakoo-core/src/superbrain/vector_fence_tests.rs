@@ -393,6 +393,13 @@ async fn rebuild_refreshes_heartbeat_per_batch_and_before_finish() {
              BEGIN
                  INSERT INTO hb_audit (val, vec_count)
                  VALUES (CAST(NEW.value AS INTEGER), (SELECT COUNT(*) FROM brain_vectors));
+             END;
+             CREATE TEMP TRIGGER trg_hb_audit_update
+             AFTER UPDATE ON brain_vector_meta
+             WHEN NEW.key = 'rebuild_heartbeat_ms'
+             BEGIN
+                 INSERT INTO hb_audit (val, vec_count)
+                 VALUES (CAST(NEW.value AS INTEGER), (SELECT COUNT(*) FROM brain_vectors));
              END;",
         )
         .unwrap();

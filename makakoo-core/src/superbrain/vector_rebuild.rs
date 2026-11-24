@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::sync::Notify;
 
@@ -13,9 +14,14 @@ use crate::error::{MakakooError, Result};
 
 use super::folder_index::model_meta::{IndexModelState, SHORT_BULK_MISMATCH_REASON};
 use super::store::SuperbrainStore;
+use super::vector_claim::{mark_stale_for_owner_with_retry, HeartbeatGuard, REBUILD_LEASE_MS};
 use super::vector_model::DEFAULT_EMBED_TRUNCATE_CHARS;
 
 const REBUILD_BATCH_SIZE: usize = 32;
+
+/// Default upper bound for bounded `wait_all` calls (`4 × LEASE` = 480 s).
+pub const DEFAULT_REBUILD_WAIT_TIMEOUT: Duration =
+    Duration::from_millis((REBUILD_LEASE_MS as u64) * 4);
 
 /// Outcome of a non-blocking Brain vector sync pass (SANCHO tick).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,13 +46,31 @@ impl Drop for ActiveSlotGuard {
     }
 }
 
+/// Tracks an in-flight store-open probe on a coordinator so `wait_all` waits
+/// until any probe-triggered rebuild has been scheduled and finished.
+pub(crate) struct ProbeSlotGuard {
+    coord: Arc<BrainRebuildCoordinator>,
+}
+
+impl Drop for ProbeSlotGuard {
+    fn drop(&mut self) {
+        if self.coord.active_probes.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.coord.probe_notify.notify_waiters();
+        }
+    }
+}
+
 /// Coordinates deduplicated background rebuilds per Brain SQLite path.
 #[derive(Default)]
 pub struct BrainRebuildCoordinator {
     active: Mutex<HashMap<PathBuf, Arc<Notify>>>,
     spawned: AtomicUsize,
+    active_probes: AtomicUsize,
+    probe_notify: Notify,
     #[cfg(test)]
     pub(crate) after_lookup: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    #[cfg(test)]
+    pub(crate) before_rebuild: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl BrainRebuildCoordinator {
@@ -59,9 +83,41 @@ impl BrainRebuildCoordinator {
         guard.contains_key(db_path)
     }
 
+    /// True while any open-probe or background rebuild is still running on this
+    /// coordinator.
+    pub fn has_active_work(&self) -> bool {
+        if self.active_probes.load(Ordering::SeqCst) > 0 {
+            return true;
+        }
+        let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        !guard.is_empty()
+    }
+
     /// Number of background rebuilds spawned through this coordinator.
     pub fn spawned_count(&self) -> usize {
         self.spawned.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn enter_probe(self: &Arc<Self>) -> ProbeSlotGuard {
+        self.active_probes.fetch_add(1, Ordering::SeqCst);
+        ProbeSlotGuard {
+            coord: Arc::clone(self),
+        }
+    }
+
+    async fn wait_probes(&self) {
+        loop {
+            if self.active_probes.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            let notified = self.probe_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.active_probes.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            notified.await;
+        }
     }
 
     pub async fn wait(&self, db_path: &Path) {
@@ -99,21 +155,30 @@ impl BrainRebuildCoordinator {
         }
     }
 
-    /// Wait until every background rebuild spawned on this coordinator finishes.
+    /// Wait until every in-flight open-probe and background rebuild spawned on
+    /// this coordinator finishes.
     pub async fn wait_all(&self) {
         loop {
+            self.wait_probes().await;
             let next = {
                 let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
                 guard.keys().next().cloned()
             };
             match next {
                 Some(path) => self.wait(&path).await,
-                None => return,
+                None if self.active_probes.load(Ordering::SeqCst) == 0 => return,
+                None => {}
             }
         }
     }
 
-    pub fn spawn_rebuild(
+    /// Bounded variant of [`Self::wait_all`]. Returns `true` if all probes and
+    /// rebuilds finished within `timeout`, or `false` if the bound elapsed.
+    pub async fn wait_all_timeout(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, self.wait_all()).await.is_ok()
+    }
+
+    pub async fn spawn_rebuild(
         self: &Arc<Self>,
         store: Arc<SuperbrainStore>,
         bulk_emb: Arc<EmbeddingClient>,
@@ -124,26 +189,44 @@ impl BrainRebuildCoordinator {
         if !self.try_acquire(&key) {
             return false;
         }
-
-        // The database claim keeps another process (the CLI) from rebuilding
-        // at the same time; this process's slot is released if it is taken.
-        let owner = match store.try_mark_vectors_rebuilding("rebuilding") {
-            Ok(Some(owner)) => owner,
-            Ok(None) | Err(_) => {
-                self.finish(&key);
-                return false;
-            }
-        };
-        self.spawned.fetch_add(1, Ordering::SeqCst);
         let guard = ActiveSlotGuard {
             coord: Arc::clone(self),
             key,
         };
-        tokio::spawn(async move {
-            let _slot = guard;
+
+        // Run the `BEGIN IMMEDIATE` claim in `spawn_blocking` so cross-process
+        // SQLite busy-wait never stalls a Tokio async worker thread.
+        let store_claim = Arc::clone(&store);
+        let owner = match tokio::task::spawn_blocking(move || {
+            store_claim.try_mark_vectors_rebuilding("rebuilding")
+        })
+        .await
+        {
+            Ok(Ok(Some(owner))) => owner,
+            Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                // `guard` drops here and releases the active slot.
+                return false;
+            }
+        };
+
+        self.spawned.fetch_add(1, Ordering::SeqCst);
+        let owner_worker = owner.clone();
+        let store_worker = Arc::clone(&store);
+        #[cfg(test)]
+        let coord_for_hook = Arc::clone(self);
+        let worker = tokio::spawn(async move {
+            #[cfg(test)]
+            if let Some(hook) = coord_for_hook
+                .before_rebuild
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
+                hook();
+            }
             if let Err(err) = rebuild_brain_vectors_with_owner(
-                Arc::clone(&store),
-                &owner,
+                Arc::clone(&store_worker),
+                &owner_worker,
                 bulk_emb,
                 short_emb,
                 observed_short,
@@ -151,8 +234,30 @@ impl BrainRebuildCoordinator {
             .await
             {
                 if !matches!(err, MakakooError::RebuildClaimLost) {
-                    let _ = store
-                        .mark_vectors_stale_for_owner(&owner, &format!("rebuild_failed: {err}"));
+                    mark_stale_for_owner_with_retry(
+                        &store_worker,
+                        &owner_worker,
+                        &format!("rebuild_failed: {err}"),
+                    )
+                    .await;
+                }
+            }
+        });
+
+        // Hold `ActiveSlotGuard` in the JoinHandle watcher so a panic inside
+        // the worker marks the index `stale` (`rebuild_panicked`) for its owner
+        // BEFORE waiters unblock.
+        tokio::spawn(async move {
+            let _slot = guard;
+            match worker.await {
+                Ok(()) => {}
+                Err(join_err) if join_err.is_panic() => {
+                    tracing::warn!(error = %join_err, "brain vector rebuild task panicked");
+                    mark_stale_for_owner_with_retry(&store, &owner, "rebuild_panicked").await;
+                }
+                Err(join_err) => {
+                    tracing::warn!(error = %join_err, "brain vector rebuild task cancelled");
+                    mark_stale_for_owner_with_retry(&store, &owner, "rebuild_cancelled").await;
                 }
             }
         });
@@ -184,7 +289,7 @@ impl BrainRebuildCoordinator {
         if status.index_state == IndexModelState::Ready && !has_model && store.count()? == 0 {
             return Ok(BrainSyncOutcome::RebuildSkipped);
         }
-        if self.spawn_rebuild(store, bulk, short, None) {
+        if self.spawn_rebuild(store, bulk, short, None).await {
             Ok(BrainSyncOutcome::RebuildScheduled)
         } else {
             Ok(BrainSyncOutcome::RebuildSkipped)
@@ -214,9 +319,29 @@ impl BrainRebuildCoordinator {
 }
 
 /// Re-embed all `brain_docs` with `bulk_emb` under an already-acquired rebuild
-/// claim `owner`. Every heartbeat refresh, vector write, stale mark, and
-/// completion is fenced against `owner`.
+/// claim `owner`. A concurrent heartbeat ticker (`LEASE / 4`) runs for the full
+/// owner scope (probe, every batch, finish), stops when the rebuild ends, and
+/// cancels the rebuild on [`MakakooError::RebuildClaimLost`]. Per-batch touches
+/// also remain active.
 pub(crate) async fn rebuild_brain_vectors_with_owner(
+    store: Arc<SuperbrainStore>,
+    owner: &str,
+    bulk_emb: Arc<EmbeddingClient>,
+    short_emb: Option<Arc<EmbeddingClient>>,
+    observed_short: Option<(String, usize)>,
+) -> Result<usize> {
+    let hb = HeartbeatGuard::start(Arc::clone(&store), owner.to_string());
+    let body = rebuild_brain_vectors_body(store, owner, bulk_emb, short_emb, observed_short);
+    let result = tokio::select! {
+        biased;
+        res = body => res,
+        _ = hb.claim_lost() => Err(MakakooError::RebuildClaimLost),
+    };
+    drop(hb);
+    result
+}
+
+async fn rebuild_brain_vectors_body(
     store: Arc<SuperbrainStore>,
     owner: &str,
     bulk_emb: Arc<EmbeddingClient>,
@@ -301,7 +426,12 @@ pub async fn rebuild_brain_vectors(
     short_emb: Option<Arc<EmbeddingClient>>,
     observed_short: Option<(String, usize)>,
 ) -> Result<usize> {
-    let Some(owner) = store.try_mark_vectors_rebuilding("rebuilding")? else {
+    let store_claim = Arc::clone(&store);
+    let Some(owner) =
+        tokio::task::spawn_blocking(move || store_claim.try_mark_vectors_rebuilding("rebuilding"))
+            .await
+            .map_err(|e| MakakooError::internal(format!("rebuild claim join error: {e}")))??
+    else {
         return Ok(0);
     };
     let result = rebuild_brain_vectors_with_owner(
@@ -314,7 +444,8 @@ pub async fn rebuild_brain_vectors(
     .await;
     if let Err(err) = &result {
         if !matches!(err, MakakooError::RebuildClaimLost) {
-            let _ = store.mark_vectors_stale_for_owner(&owner, &format!("rebuild_failed: {err}"));
+            mark_stale_for_owner_with_retry(&store, &owner, &format!("rebuild_failed: {err}"))
+                .await;
         }
     }
     result
@@ -340,14 +471,20 @@ pub async fn embed_pending_brain(
     if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
         return Ok(0);
     }
-    let Some(owner) = store.try_mark_vectors_rebuilding("embed_pending")? else {
+    let store_claim = Arc::clone(&store);
+    let Some(owner) = tokio::task::spawn_blocking(move || {
+        store_claim.try_mark_vectors_rebuilding("embed_pending")
+    })
+    .await
+    .map_err(|e| MakakooError::internal(format!("rebuild claim join error: {e}")))??
+    else {
         return Ok(0);
     };
     let result =
         rebuild_brain_vectors_with_owner(Arc::clone(&store), &owner, bulk, short, None).await;
     if let Err(e) = &result {
         if !matches!(e, MakakooError::RebuildClaimLost) {
-            let _ = store.mark_vectors_stale_for_owner(&owner, &format!("rebuild_failed: {e}"));
+            mark_stale_for_owner_with_retry(&store, &owner, &format!("rebuild_failed: {e}")).await;
         }
     }
     result

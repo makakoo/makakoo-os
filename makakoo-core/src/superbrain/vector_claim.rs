@@ -10,9 +10,14 @@
 //! was taken over by another owner stops with [`MakakooError::RebuildClaimLost`]
 //! without touching the new owner's vectors or state.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use rand::rngs::OsRng;
 use rand::RngCore;
 use rusqlite::{params, Connection, TransactionBehavior};
+use tokio::sync::Notify;
 
 use crate::error::{MakakooError, Result};
 
@@ -26,7 +31,7 @@ use super::vector_model::{
 
 /// A rebuild that has not refreshed its heartbeat for this long is dead (crash,
 /// kill, power loss) and its claim may be taken over.
-pub(crate) const REBUILD_LEASE_MS: i64 = 120_000;
+pub const REBUILD_LEASE_MS: i64 = 120_000;
 pub(crate) const META_REBUILD_HEARTBEAT: &str = "rebuild_heartbeat_ms";
 pub(crate) const META_REBUILD_OWNER: &str = "rebuild_owner";
 
@@ -47,23 +52,25 @@ fn touch_heartbeat(conn: &Connection) -> Result<()> {
     write_meta_opt(conn, META_REBUILD_HEARTBEAT, Some(&now_ms().to_string()))
 }
 
-fn clear_claim_meta(conn: &Connection) -> Result<()> {
+pub(crate) fn clear_claim_meta(conn: &Connection) -> Result<()> {
     write_meta_opt(conn, META_REBUILD_OWNER, None)?;
     write_meta_opt(conn, META_REBUILD_HEARTBEAT, None)?;
     Ok(())
 }
 
-/// True while a rebuild claim is held and its heartbeat is recent.
-fn lease_fresh(conn: &Connection) -> Result<bool> {
+/// True while a rebuild claim is held and its heartbeat is within one lease of
+/// `now_ms()` (`-LEASE < age < LEASE`). Accepting a small negative age avoids
+/// immediately stealing a live rebuild when NTP or a VM resume steps the wall
+/// clock backward within one lease window.
+pub(crate) fn lease_fresh(conn: &Connection, lease_ms: i64) -> Result<bool> {
     if read_index_state(conn)? != IndexModelState::Rebuilding {
         return Ok(false);
     }
     let beat = read_meta_opt(conn, META_REBUILD_HEARTBEAT)?
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
-    // A heartbeat in the future (clock stepped back) is not a live owner.
-    let age = now_ms() - beat;
-    Ok((0..REBUILD_LEASE_MS).contains(&age))
+    let age = now_ms().saturating_sub(beat);
+    Ok(age > -lease_ms && age < lease_ms)
 }
 
 /// True iff the index is currently in `rebuilding` state and owned by `owner`.
@@ -81,9 +88,10 @@ impl SuperbrainStore {
     /// `Ok(Some(owner))` when claimed or `Ok(None)` when another rebuild holds
     /// a fresh lease.
     pub fn try_mark_vectors_rebuilding(&self, reason: &str) -> Result<Option<String>> {
+        let lease_ms = self.rebuild_lease_ms();
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if lease_fresh(&tx)? {
+        if lease_fresh(&tx, lease_ms)? {
             return Ok(None);
         }
         let owner = new_owner_token();
@@ -110,8 +118,9 @@ impl SuperbrainStore {
 
     /// True while another rebuild (any process) holds a live claim.
     pub fn rebuild_lease_fresh(&self) -> Result<bool> {
+        let lease_ms = self.rebuild_lease_ms();
         let conn = self.lock_conn()?;
-        lease_fresh(&conn)
+        lease_fresh(&conn, lease_ms)
     }
 
     /// Store one rebuilt vector iff `owner` still holds the active rebuild
@@ -183,4 +192,118 @@ impl SuperbrainStore {
         tx.commit()?;
         Ok(true)
     }
+}
+
+/// Concurrent heartbeat ticker running at `LEASE / 4` (30 s in production) for
+/// the full owner scope of a rebuild. Stops on drop or when ownership is lost.
+pub(crate) struct HeartbeatGuard {
+    handle: tokio::task::JoinHandle<()>,
+    lost_flag: Arc<AtomicBool>,
+    lost_notify: Arc<Notify>,
+}
+
+impl HeartbeatGuard {
+    pub(crate) fn start(store: Arc<SuperbrainStore>, owner: String) -> Self {
+        let lease_ms = store.rebuild_lease_ms();
+        let interval_dur = Duration::from_millis((lease_ms / 4).max(1) as u64);
+        let lost_flag = Arc::new(AtomicBool::new(false));
+        let lost_notify = Arc::new(Notify::new());
+        let flag_task = Arc::clone(&lost_flag);
+        let notify_task = Arc::clone(&lost_notify);
+        let handle = tokio::spawn(async move {
+            let start = tokio::time::Instant::now() + interval_dur;
+            let mut ticker = tokio::time::interval_at(start, interval_dur);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let s = Arc::clone(&store);
+                let o = owner.clone();
+                match tokio::task::spawn_blocking(move || s.touch_rebuild_heartbeat(&o)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(MakakooError::RebuildClaimLost)) => {
+                        flag_task.store(true, Ordering::SeqCst);
+                        notify_task.notify_waiters();
+                        break;
+                    }
+                    Ok(Err(err)) => {
+                        tracing::warn!(error = %err, "brain rebuild heartbeat touch failed");
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "brain rebuild heartbeat task failed");
+                    }
+                }
+            }
+        });
+        Self {
+            handle,
+            lost_flag,
+            lost_notify,
+        }
+    }
+
+    pub(crate) async fn claim_lost(&self) {
+        let notified = self.lost_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.lost_flag.load(Ordering::SeqCst) {
+            notified.await;
+        }
+    }
+}
+
+impl Drop for HeartbeatGuard {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+/// Mark the index `stale` for `owner`, retrying once after a brief backoff on
+/// transient failure (e.g. `SQLITE_BUSY`) and logging at `warn` if both
+/// attempts fail.
+pub(crate) async fn mark_stale_for_owner_with_retry(
+    store: &Arc<SuperbrainStore>,
+    owner: &str,
+    reason: &str,
+) -> bool {
+    for attempt in 0..2 {
+        let s = Arc::clone(store);
+        let o = owner.to_string();
+        let r = reason.to_string();
+        match tokio::task::spawn_blocking(move || s.mark_vectors_stale_for_owner(&o, &r)).await {
+            Ok(Ok(changed)) => return changed,
+            Ok(Err(err)) => {
+                if attempt == 0 {
+                    tracing::debug!(
+                        error = %err,
+                        reason,
+                        "brain vector stale mark failed on first attempt; retrying once"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                } else {
+                    tracing::warn!(
+                        error = %err,
+                        reason,
+                        "failed to mark brain vectors stale after retry"
+                    );
+                }
+            }
+            Err(err) => {
+                if attempt == 0 {
+                    tracing::debug!(
+                        error = %err,
+                        reason,
+                        "brain vector stale mark task failed on first attempt; retrying once"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                } else {
+                    tracing::warn!(
+                        error = %err,
+                        reason,
+                        "failed to mark brain vectors stale after retry"
+                    );
+                }
+            }
+        }
+    }
+    false
 }

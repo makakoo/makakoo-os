@@ -353,7 +353,10 @@ fn rebuilding_store() -> (TempDir, SuperbrainStore) {
     store
         .set_vectors_ready("qwen3-real", 3, "ail-embed", None)
         .unwrap();
-    store.mark_vectors_rebuilding("rebuilding").unwrap();
+    assert!(store
+        .try_mark_vectors_rebuilding("rebuilding")
+        .unwrap()
+        .is_some());
     (dir, store)
 }
 
@@ -392,9 +395,11 @@ fn brain_alias_only_ready_never_clears_a_running_rebuild_or_another_reason() {
     );
     // The state decides, not only the reason: a rebuild carrying an alias
     // reason is still a rebuild.
-    store
-        .mark_vectors_rebuilding("embed_alias_changed")
-        .unwrap();
+    store.mark_vectors_stale("reset").unwrap();
+    assert!(store
+        .try_mark_vectors_rebuilding("embed_alias_changed")
+        .unwrap()
+        .is_some());
     assert!(!store
         .set_vectors_ready_if_stale_for(&reasons, "qwen3-real", 3, "ail-embed", None)
         .unwrap());

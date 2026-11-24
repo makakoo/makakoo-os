@@ -187,7 +187,11 @@ async fn only_one_rebuild_claim_wins_and_the_coordinator_respects_it() {
         .unwrap()
         .is_none());
     let coord = Arc::new(BrainRebuildCoordinator::new());
-    assert!(!coord.spawn_rebuild(Arc::clone(&r.store), Arc::clone(&r.bulk), None, None));
+    assert!(
+        !coord
+            .spawn_rebuild(Arc::clone(&r.store), Arc::clone(&r.bulk), None, None)
+            .await
+    );
     assert!(!coord.is_active(r.store.path()));
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(r.endpoint.calls.load(Ordering::SeqCst), 0);

@@ -24,7 +24,9 @@ pub fn check_and_probe_brain_on_open(
     if tokio::runtime::Handle::try_current().is_ok()
         && store.stats().map(|s| s.vector_count > 0).unwrap_or(false)
     {
+        let probe_guard = coordinator.enter_probe();
         tokio::spawn(async move {
+            let _probe = probe_guard;
             probe_and_reconcile_brain(store, short_emb, bulk_emb, coordinator).await;
         });
     }
@@ -94,7 +96,9 @@ pub async fn probe_and_reconcile_brain(
             return;
         }
         if status.index_state == IndexModelState::Stale {
-            coordinator.spawn_rebuild(store, bulk_emb, short_emb, short_result);
+            coordinator
+                .spawn_rebuild(store, bulk_emb, short_emb, short_result)
+                .await;
         }
         return;
     }
@@ -106,7 +110,9 @@ pub async fn probe_and_reconcile_brain(
     ) {
         return;
     }
-    coordinator.spawn_rebuild(store, bulk_emb, short_emb, short_result);
+    coordinator
+        .spawn_rebuild(store, bulk_emb, short_emb, short_result)
+        .await;
 }
 
 /// Model-checked vector search over `SuperbrainStore`. Returns empty vector
@@ -192,10 +198,12 @@ async fn maybe_trigger_brain_rebuild(
             None => return,
         }
     }
-    coordinator.spawn_rebuild(
-        Arc::clone(store),
-        Arc::clone(b_emb),
-        short_emb.cloned(),
-        observed_short,
-    );
+    coordinator
+        .spawn_rebuild(
+            Arc::clone(store),
+            Arc::clone(b_emb),
+            short_emb.cloned(),
+            observed_short,
+        )
+        .await;
 }
