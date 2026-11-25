@@ -27,7 +27,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use petgraph::graph::{NodeIndex, UnGraph};
-use rusqlite::{params, Connection, TransactionBehavior};
+use petgraph::visit::EdgeRef;
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +76,10 @@ impl GraphStore {
         Self { conn }
     }
 
+    pub(crate) fn conn_arc(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Write path
     // ─────────────────────────────────────────────────────────────
@@ -117,7 +122,7 @@ impl GraphStore {
         Ok(())
     }
 
-    /// Return current `(node_count, edge_count)` in O(1) without rewriting the graph.
+    /// Return current `(node_count, edge_count)` without rewriting the graph.
     pub fn counts(&self) -> Result<(usize, usize)> {
         let conn = self.conn.lock().expect("graph conn poisoned");
         let nodes: i64 =
@@ -133,7 +138,15 @@ impl GraphStore {
     pub fn rebuild_from_entity_graph(&self) -> Result<(usize, usize)> {
         let mut conn = self.conn.lock().expect("graph conn poisoned");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let counts = Self::rebuild_from_entity_graph_in_tx(&tx)?;
+        tx.commit()?;
+        Ok(counts)
+    }
 
+    /// Transactional inner helper so `IngestEngine` can rebuild `entity_graph`
+    /// and `brain_graph_{nodes,edges}` atomically inside one `BEGIN IMMEDIATE`
+    /// transaction when both stores share the same connection.
+    pub(crate) fn rebuild_from_entity_graph_in_tx(tx: &Transaction<'_>) -> Result<(usize, usize)> {
         let triples: Vec<(String, String, String)> = {
             let mut stmt = tx.prepare("SELECT subject, predicate, object FROM entity_graph")?;
             let rows = stmt
@@ -180,9 +193,11 @@ impl GraphStore {
             }
         }
 
+        // Accumulate cumulative incoming weight per destination node, matching
+        // `add_edge`'s +1 per triple mention semantics.
         let mut in_degree: HashMap<&str, i64> = HashMap::with_capacity(nodes.len());
-        for (_, dst, _) in edges.keys() {
-            *in_degree.entry(dst.as_str()).or_insert(0) += 1;
+        for ((_, dst, _), weight) in &edges {
+            *in_degree.entry(dst.as_str()).or_insert(0) += *weight as i64;
         }
 
         tx.execute("DELETE FROM brain_graph_edges", [])?;
@@ -206,7 +221,6 @@ impl GraphStore {
                 edge_stmt.execute(params![src, dst, edge_type, *weight as f64])?;
             }
         }
-        tx.commit()?;
         Ok((nodes.len(), edges.len()))
     }
 
@@ -350,6 +364,9 @@ impl GraphStore {
                     Some(i) => *i,
                     None => continue,
                 };
+                if a == b {
+                    continue;
+                }
                 let lo = a.index().min(b.index());
                 let hi = a.index().max(b.index());
                 if !seen_edges.insert((lo, hi)) {
@@ -558,19 +575,22 @@ fn louvain_phase_one(g: &UnGraph<String, f32>) -> Vec<Vec<NodeIndex>> {
     if n == 0 {
         return Vec::new();
     }
-    let m: f32 = g.edge_count() as f32;
-    if m == 0.0 {
+    let m: f32 = g.edge_weights().copied().sum();
+    if m <= 0.0 {
         return g.node_indices().map(|i| vec![i]).collect();
     }
     let two_m = 2.0 * m;
 
-    let mut comm: HashMap<NodeIndex, usize> = HashMap::new();
+    let mut comm: HashMap<NodeIndex, usize> = HashMap::with_capacity(n);
     for (c, ni) in g.node_indices().enumerate() {
         comm.insert(ni, c);
     }
     let deg: HashMap<NodeIndex, f32> = g
         .node_indices()
-        .map(|i| (i, g.neighbors(i).count() as f32))
+        .map(|i| {
+            let w: f32 = g.edges(i).map(|e| *e.weight()).sum();
+            (i, w)
+        })
         .collect();
 
     let mut tot: HashMap<usize, f32> = HashMap::with_capacity(n);
@@ -588,29 +608,45 @@ fn louvain_phase_one(g: &UnGraph<String, f32>) -> Vec<Vec<NodeIndex>> {
         for ni in order {
             let current = *comm.get(&ni).unwrap();
             let my_deg = deg[&ni];
-            let mut ki_in: HashMap<usize, f32> = HashMap::new();
-            for nb in g.neighbors(ni) {
-                let c = *comm.get(&nb).unwrap();
-                *ki_in.entry(c).or_insert(0.0) += 1.0;
+            // Temporarily remove `ni` from its current community before
+            // computing true Blondel et al. net modularity delta ΔQ.
+            if let Some(cur_tot) = tot.get_mut(&current) {
+                *cur_tot -= my_deg;
             }
-            let mut best = current;
-            let mut best_gain = 0.0f32;
-            for (c, &k_i_in) in ki_in.iter() {
-                if *c == current {
+            let sigma_tot_cur = *tot.get(&current).unwrap_or(&0.0);
+
+            let mut ki_in: HashMap<usize, f32> = HashMap::new();
+            for edge in g.edges(ni) {
+                let nb = if edge.source() == ni {
+                    edge.target()
+                } else {
+                    edge.source()
+                };
+                if nb == ni {
                     continue;
                 }
-                let sigma_tot = *tot.get(c).unwrap_or(&0.0);
-                let gain = k_i_in / m - (my_deg * sigma_tot) / (two_m * m);
-                if gain > best_gain {
-                    best_gain = gain;
-                    best = *c;
+                let c = *comm.get(&nb).unwrap();
+                *ki_in.entry(c).or_insert(0.0) += *edge.weight();
+            }
+            let k_i_in_cur = *ki_in.get(&current).unwrap_or(&0.0);
+
+            let mut best = current;
+            let mut best_gain = 1e-6f32;
+            for (&c, &k_i_in_c) in &ki_in {
+                if c == current {
+                    continue;
+                }
+                let sigma_tot_c = *tot.get(&c).unwrap_or(&0.0);
+                // Net ΔQ = ΔQ(insert into c) - ΔQ(re-insert into current).
+                let delta_q = (k_i_in_c - k_i_in_cur) / m
+                    - (my_deg * (sigma_tot_c - sigma_tot_cur)) / (two_m * m);
+                if delta_q > best_gain {
+                    best_gain = delta_q;
+                    best = c;
                 }
             }
+            *tot.entry(best).or_insert(0.0) += my_deg;
             if best != current {
-                if let Some(cur_tot) = tot.get_mut(&current) {
-                    *cur_tot -= my_deg;
-                }
-                *tot.entry(best).or_insert(0.0) += my_deg;
                 comm.insert(ni, best);
                 improved = true;
             }
@@ -783,6 +819,39 @@ mod tests {
             .flat_map(|c| c.members.iter().cloned())
             .collect();
         assert_eq!(all_members.len(), 6);
+    }
+
+    #[test]
+    fn louvain_splits_two_bridged_cliques_by_modularity() {
+        let (_d, g) = make_store();
+        let left = ["L1", "L2", "L3", "L4"];
+        let right = ["R1", "R2", "R3", "R4"];
+        for p in left.iter().chain(right.iter()) {
+            g.add_node(p, "page").unwrap();
+        }
+        // Complete 4-clique on left
+        for i in 0..left.len() {
+            for j in (i + 1)..left.len() {
+                g.add_edge(left[i], left[j], "mentions", 1.0).unwrap();
+            }
+        }
+        // Complete 4-clique on right
+        for i in 0..right.len() {
+            for j in (i + 1)..right.len() {
+                g.add_edge(right[i], right[j], "mentions", 1.0).unwrap();
+            }
+        }
+        // Single weak bridge connecting the two cliques into one connected component
+        g.add_edge("L1", "R1", "mentions", 1.0).unwrap();
+
+        let comms = g.communities(3).unwrap();
+        assert_eq!(
+            comms.len(),
+            2,
+            "Louvain must split two 4-cliques joined by a single bridge into 2 communities, got: {comms:?}"
+        );
+        assert_eq!(comms[0].members.len(), 4);
+        assert_eq!(comms[1].members.len(), 4);
     }
 
     #[test]

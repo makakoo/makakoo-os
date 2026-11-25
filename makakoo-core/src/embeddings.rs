@@ -215,12 +215,12 @@ impl EmbeddingClient {
         }
     }
 
-    fn http_client(&self) -> &reqwest::Client {
-        self.client.get_or_init(|| {
+    fn http_client(&self) -> Result<&reqwest::Client> {
+        self.client.get_or_try_init(|| {
             reqwest::Client::builder()
                 .timeout(DEFAULT_EMBED_TIMEOUT)
                 .build()
-                .expect("reqwest client build")
+                .map_err(|e| MakakooError::llm(format!("embedding http client init failed: {e}")))
         })
     }
 
@@ -419,7 +419,7 @@ impl EmbeddingClient {
             "model": self.model,
             "input": texts,
         });
-        let mut req = self.http_client().post(&url).json(&body);
+        let mut req = self.http_client()?.post(&url).json(&body);
         if let Some(t) = timeout {
             req = req.timeout(t);
         }

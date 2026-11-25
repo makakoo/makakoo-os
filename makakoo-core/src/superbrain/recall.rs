@@ -249,7 +249,7 @@ impl RecallTracker {
         }
         let query_hash = Self::hash(&Self::normalize(query));
         let mut conn = self.conn.lock().expect("recall conn mutex poisoned");
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO recall_log (
@@ -282,7 +282,7 @@ impl RecallTracker {
     /// while preserving `first_recalled_at` on existing entries.
     pub fn rebuild_stats(&self) -> Result<usize> {
         let mut conn = self.conn.lock().expect("recall conn mutex poisoned");
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let rows: Vec<StatsAggregate> = {
             let mut stmt = tx.prepare(
                 "SELECT

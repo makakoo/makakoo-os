@@ -39,12 +39,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::{open_db, run_migrations};
 use crate::error::{MakakooError, Result};
+
+/// Cache key toggled to `'1'` inside `write_document` / `delete_document`
+/// transactions and reset to `'0'` atomically when `IngestEngine` finishes
+/// rebuilding `entity_graph` + `brain_graph_{nodes,edges}`.
+pub(crate) const GRAPH_DIRTY_CACHE_KEY: &str = "superbrain:graph_dirty";
 
 // ─────────────────────────────────────────────────────────────────────
 // Public types
@@ -169,41 +174,90 @@ pub fn vector_norm(v: &[f32]) -> f32 {
 /// Zero-allocation cosine similarity directly between a query slice (with
 /// precomputed L2 norm) and a packed little-endian `f32` byte blob.
 ///
-/// Matches `cosine_similarity(query, &unpack_vector(blob))` semantics:
-/// trailing non-multiple-of-4 bytes are ignored (`blob.len() / 4`),
-/// mismatched dimensions return `0.0`, and zero-norm inputs return `0.0`.
+/// Uses 4 independent accumulator lanes so LLVM can auto-vectorize under
+/// strict IEEE-754 (NEON on aarch64, SSE2 on x86_64). Matches
+/// `cosine_similarity(query, &unpack_vector(blob))` semantics: trailing
+/// non-multiple-of-4 bytes are ignored (`blob.len() / 4`), mismatched
+/// dimensions return `0.0`, zero-norm inputs return `0.0`, and any
+/// non-finite (`NaN`/`Inf`) result returns `0.0` so corrupt vectors cannot
+/// destabilize ranking.
 #[inline]
 pub fn cosine_similarity_le_bytes(query: &[f32], query_norm: f32, blob: &[u8]) -> f32 {
-    if query_norm == 0.0 || blob.len() / 4 != query.len() {
+    if !query_norm.is_finite() || query_norm == 0.0 || blob.len() / 4 != query.len() {
         return 0.0;
     }
-    let mut dot: f32 = 0.0;
-    let mut norm_b: f32 = 0.0;
-    for (&q, chunk) in query.iter().zip(blob.chunks_exact(4)) {
+    let mut dot0: f32 = 0.0;
+    let mut dot1: f32 = 0.0;
+    let mut dot2: f32 = 0.0;
+    let mut dot3: f32 = 0.0;
+    let mut nb0: f32 = 0.0;
+    let mut nb1: f32 = 0.0;
+    let mut nb2: f32 = 0.0;
+    let mut nb3: f32 = 0.0;
+
+    let q_chunks = query.chunks_exact(4);
+    let q_rem = q_chunks.remainder();
+    let b_chunks = blob.chunks_exact(16);
+    let b_rem = b_chunks.remainder();
+
+    for (q4, b16) in q_chunks.zip(b_chunks) {
+        let b0 = f32::from_le_bytes([b16[0], b16[1], b16[2], b16[3]]);
+        let b1 = f32::from_le_bytes([b16[4], b16[5], b16[6], b16[7]]);
+        let b2 = f32::from_le_bytes([b16[8], b16[9], b16[10], b16[11]]);
+        let b3 = f32::from_le_bytes([b16[12], b16[13], b16[14], b16[15]]);
+        dot0 += q4[0] * b0;
+        dot1 += q4[1] * b1;
+        dot2 += q4[2] * b2;
+        dot3 += q4[3] * b3;
+        nb0 += b0 * b0;
+        nb1 += b1 * b1;
+        nb2 += b2 * b2;
+        nb3 += b3 * b3;
+    }
+    let mut dot = (dot0 + dot1) + (dot2 + dot3);
+    let mut norm_b = (nb0 + nb1) + (nb2 + nb3);
+    for (&q, chunk) in q_rem.iter().zip(b_rem.chunks_exact(4)) {
         let b = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         dot += q * b;
         norm_b += b * b;
     }
-    if norm_b == 0.0 {
+    if !norm_b.is_finite() || norm_b == 0.0 {
         return 0.0;
     }
-    dot / (query_norm * norm_b.sqrt())
+    let sim = dot / (query_norm * norm_b.sqrt());
+    if sim.is_finite() {
+        sim
+    } else {
+        0.0
+    }
 }
 
 /// Fetch `(path, content)` from `brain_docs` only for the top `limit` scored
 /// `(doc_id, similarity)` pairs, preserving descending similarity order.
+///
+/// Uses O(N) partial selection (`select_nth_unstable_by`) so only the top
+/// `limit` candidates are sorted in O(k log k). Falls back to the remaining
+/// tail only in the rare case an orphaned vector points to a deleted doc.
 pub(crate) fn fetch_top_vector_hits(
     conn: &Connection,
     mut scored: Vec<(i64, f32)>,
     limit: usize,
 ) -> Result<Vec<VectorHit>> {
+    scored.retain(|(_, sim)| sim.is_finite());
     if scored.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let mut out = Vec::with_capacity(limit.min(scored.len()));
+    let cmp_desc = |a: &(i64, f32), b: &(i64, f32)| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0));
+    let head_len = limit.min(scored.len());
+    if scored.len() > limit {
+        scored.select_nth_unstable_by(limit, cmp_desc);
+        scored[..limit].sort_by(cmp_desc);
+    } else {
+        scored.sort_by(cmp_desc);
+    }
+    let mut out = Vec::with_capacity(head_len);
     let mut doc_stmt = conn.prepare("SELECT path, content FROM brain_docs WHERE id = ?1")?;
-    for (doc_id, similarity) in scored {
+    for &(doc_id, similarity) in &scored[..head_len] {
         if let Some((path, content)) = doc_stmt
             .query_row(params![doc_id], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -216,7 +270,28 @@ pub(crate) fn fetch_top_vector_hits(
                 content,
             });
             if out.len() == limit {
-                break;
+                return Ok(out);
+            }
+        }
+    }
+    // Rare path: one or more top doc_ids were orphaned; inspect the tail.
+    if out.len() < limit && head_len < scored.len() {
+        scored[head_len..].sort_by(cmp_desc);
+        for &(doc_id, similarity) in &scored[head_len..] {
+            if let Some((path, content)) = doc_stmt
+                .query_row(params![doc_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .optional()?
+            {
+                out.push(VectorHit {
+                    doc_id: path,
+                    similarity,
+                    content,
+                });
+                if out.len() == limit {
+                    break;
+                }
             }
         }
     }
@@ -543,7 +618,7 @@ impl SuperbrainStore {
         let char_count = content.chars().count() as i64;
 
         let mut conn = self.lock_conn()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Fetch the pre-existing row's rowid + FTS column values (if any)
         // so we can issue a matching 'delete' into the external-content
         // FTS5 shadow before overwriting. External-content FTS5 does NOT
@@ -619,6 +694,11 @@ impl SuperbrainStore {
              VALUES (?1, ?2, ?3, ?4)",
             params![rid, name, content, fts_entities_json],
         )?;
+        tx.execute(
+            "INSERT INTO cache (key, value) VALUES (?1, '1')
+             ON CONFLICT(key) DO UPDATE SET value = '1'",
+            params![GRAPH_DIRTY_CACHE_KEY],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -626,7 +706,7 @@ impl SuperbrainStore {
     /// Delete a document and its vector (if any).
     pub fn delete_document(&self, doc_id: &str) -> Result<()> {
         let mut conn = self.lock_conn()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Resolve FTS columns + rowid before the DELETE so we can mirror
         // the removal into `brain_fts` (external-content FTS5 does not
         // auto-sync).
@@ -652,6 +732,11 @@ impl SuperbrainStore {
                 params![rid, name, content, fts_entities],
             )?;
             tx.execute("DELETE FROM brain_vectors WHERE doc_id = ?1", params![rid])?;
+            tx.execute(
+                "INSERT INTO cache (key, value) VALUES (?1, '1')
+                 ON CONFLICT(key) DO UPDATE SET value = '1'",
+                params![GRAPH_DIRTY_CACHE_KEY],
+            )?;
         }
         tx.execute("DELETE FROM brain_docs WHERE path = ?1", params![doc_id])?;
         tx.commit()?;
@@ -1473,6 +1558,29 @@ mod tests {
             ),
             0.0
         );
+        // Non-finite query or stored vector returns 0.0 (never NaN/Inf).
+        assert_eq!(
+            cosine_similarity_le_bytes(
+                &[1.0, 0.0, 0.0, 0.0],
+                1.0,
+                &pack_vector(&[f32::NAN, 1.0, 0.0, 0.0])
+            ),
+            0.0
+        );
+        assert_eq!(
+            cosine_similarity_le_bytes(
+                &[1.0, 0.0, 0.0, 0.0],
+                1.0,
+                &pack_vector(&[f32::INFINITY, 1.0, 0.0, 0.0])
+            ),
+            0.0
+        );
+        // Odd dimensions > 4 verify 4-lane SIMD loop + scalar tail equivalence.
+        let q7 = [0.2f32, -0.5, 0.8, 0.1, -0.3, 0.6, 0.4];
+        let b7 = [0.9f32, 0.2, -0.1, 0.7, 0.5, -0.4, 0.3];
+        let exp7 = cosine_similarity(&q7, &b7);
+        let fast7 = cosine_similarity_le_bytes(&q7, vector_norm(&q7), &pack_vector(&b7));
+        assert!((fast7 - exp7).abs() < 1e-6);
     }
 
     #[test]

@@ -58,14 +58,19 @@ impl SleepGuard {
     /// Returns [`SleepGuard::noop()`] when `MAKAKOO_NO_WAKE_LOCK` is enabled or
     /// when the underlying OS mechanism is unavailable.
     pub fn acquire(reason: &str) -> Self {
-        if wake_lock_disabled() {
+        Self::acquire_with_disabled(reason, wake_lock_disabled())
+    }
+
+    pub(crate) fn acquire_with_disabled(reason: &str, disabled: bool) -> Self {
+        if disabled {
             return Self::noop();
         }
         use crate::PlatformAdapter;
         crate::CurrentPlatform::default().prevent_idle_sleep(reason)
     }
 
-    /// Returns `true` when this guard owns a live OS wake-lock handle/child.
+    /// Returns `true` when this guard holds an OS wake-lock handle/child that
+    /// passed startup liveness verification.
     pub fn is_active(&self) -> bool {
         !matches!(self.inner, SleepGuardInner::Noop)
     }
@@ -86,13 +91,17 @@ impl SleepGuard {
     }
 
     /// Best-effort helper to spawn a wake-lock child process (e.g. `caffeinate`
-    /// or `systemd-inhibit`). Any spawn failure degrades silently to a no-op.
+    /// or `systemd-inhibit`). Any spawn failure or immediate helper exit (such
+    /// as `systemd-inhibit` in a headless container without D-Bus or where
+    /// polkit denies inhibition) reaps the child immediately and degrades
+    /// silently to a no-op with zero zombies.
     #[cfg(any(target_os = "macos", target_os = "linux", all(unix, test)))]
     pub(crate) fn spawn_child(
         program: &str,
         args: &[&str],
         pipe_stdin: bool,
         kill_immediately: bool,
+        probe_early_exit: bool,
     ) -> Self {
         let mut cmd = std::process::Command::new(program);
         cmd.args(args)
@@ -105,6 +114,39 @@ impl SleepGuard {
         }
         match cmd.spawn() {
             Ok(mut child) => {
+                // Check whether the helper exited immediately (e.g. missing
+                // system D-Bus or polkit denial under systemd-inhibit). When
+                // `probe_early_exit` is set, poll briefly up to 25 ms so a
+                // failing helper is reaped immediately instead of lingering as
+                // a zombie while `is_active()` falsely reports true.
+                let polls = if probe_early_exit { 5 } else { 1 };
+                for i in 0..polls {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            tracing::debug!(
+                                program,
+                                status = %status,
+                                "wake-lock helper exited immediately; continuing without idle-sleep assertion"
+                            );
+                            return Self::noop();
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                program,
+                                error = %e,
+                                "failed to poll wake-lock helper; reaping and continuing as no-op"
+                            );
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return Self::noop();
+                        }
+                        Ok(None) => {
+                            if i + 1 < polls {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                        }
+                    }
+                }
                 let stdin = if pipe_stdin { child.stdin.take() } else { None };
                 Self::from_child(child, stdin, kill_immediately)
             }
@@ -128,27 +170,45 @@ impl SleepGuard {
             SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
         };
 
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<bool>(1);
         let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel::<()>(0);
         let spawned = std::thread::Builder::new()
             .name("makakoo-sleep-guard".to_string())
             .spawn(move || {
                 // SAFETY: `SetThreadExecutionState` is a thread-local Win32 API
-                // taking plain bitflags and returning the previous state bitmask.
-                unsafe {
-                    SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+                // taking plain bitflags and returning the previous state bitmask
+                // (or 0 on failure).
+                let acquired =
+                    unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) } != 0;
+                let _ = ready_tx.send(acquired);
+                if !acquired {
+                    tracing::debug!(
+                        "SetThreadExecutionState failed to acquire wake lock; continuing as no-op"
+                    );
+                    return;
                 }
                 let _ = stop_rx.recv();
-                unsafe {
-                    SetThreadExecutionState(ES_CONTINUOUS);
+                let cleared = unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+                if cleared == 0 {
+                    tracing::warn!(
+                        "SetThreadExecutionState failed to clear wake lock on SleepGuard drop"
+                    );
                 }
             });
 
         match spawned {
-            Ok(handle) => Self {
-                inner: SleepGuardInner::Windows {
-                    stop_tx: Some(stop_tx),
-                    handle: Some(handle),
+            Ok(handle) => match ready_rx.recv() {
+                Ok(true) => Self {
+                    inner: SleepGuardInner::Windows {
+                        stop_tx: Some(stop_tx),
+                        handle: Some(handle),
+                    },
                 },
+                _ => {
+                    drop(stop_tx);
+                    let _ = handle.join();
+                    Self::noop()
+                }
             },
             Err(e) => {
                 tracing::debug!(error = %e, "failed to spawn Windows sleep-guard thread");
@@ -203,23 +263,22 @@ impl Drop for SleepGuard {
 
 /// Returns `true` when the user opted out of wake locks via `MAKAKOO_NO_WAKE_LOCK`.
 pub(crate) fn wake_lock_disabled() -> bool {
-    std::env::var("MAKAKOO_NO_WAKE_LOCK")
-        .ok()
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
+    is_disabled_value(std::env::var("MAKAKOO_NO_WAKE_LOCK").ok().as_deref())
+}
+
+pub(crate) fn is_disabled_value(raw: Option<&str>) -> bool {
+    raw.map(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+    .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn noop_guard_is_inactive() {
@@ -228,34 +287,49 @@ mod tests {
     }
 
     #[test]
-    fn env_opt_out_disables_wake_lock() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("MAKAKOO_NO_WAKE_LOCK").ok();
-        std::env::set_var("MAKAKOO_NO_WAKE_LOCK", "1");
-
-        let g = SleepGuard::acquire("unit-test");
+    fn env_opt_out_parser_and_disabled_acquire_return_noop() {
+        for truthy in ["1", "true", "TRUE", " yes ", "on", "On"] {
+            assert!(is_disabled_value(Some(truthy)), "{truthy:?} must disable");
+        }
+        for falsy in [None, Some(""), Some("0"), Some("false"), Some("no")] {
+            assert!(!is_disabled_value(falsy), "{falsy:?} must not disable");
+        }
+        let g = SleepGuard::acquire_with_disabled("unit-test", true);
         assert!(
             !g.is_active(),
-            "MAKAKOO_NO_WAKE_LOCK=1 must yield no-op guard"
+            "disabled acquire must yield no-op guard without mutating global env"
         );
-
-        match prev {
-            Some(v) => std::env::set_var("MAKAKOO_NO_WAKE_LOCK", v),
-            None => std::env::remove_var("MAKAKOO_NO_WAKE_LOCK"),
-        }
     }
 
     #[cfg(unix)]
     #[test]
     fn missing_binary_degrades_silently_to_noop() {
-        let g = SleepGuard::spawn_child("makakoo-nonexistent-wake-binary-xyz", &[], false, true);
+        let g = SleepGuard::spawn_child(
+            "makakoo-nonexistent-wake-binary-xyz",
+            &[],
+            false,
+            true,
+            false,
+        );
         assert!(!g.is_active());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn fast_exiting_helper_reaps_immediately_and_returns_noop() {
+        // Mirrors systemd-inhibit exiting immediately in a headless container
+        // without D-Bus or where polkit denies inhibition.
+        let g = SleepGuard::spawn_child("sh", &["-c", "exit 1"], true, false, true);
+        assert!(
+            !g.is_active(),
+            "helper that exits immediately must degrade to inactive no-op"
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn drop_reaps_child_immediately_with_zero_zombies() {
-        let g = SleepGuard::spawn_child("sleep", &["60"], false, true);
+        let g = SleepGuard::spawn_child("sleep", &["60"], false, true, false);
         assert!(g.is_active());
         let pid = g.child_pid().expect("child pid present");
         drop(g);
@@ -273,13 +347,19 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn stdin_eof_guard_exits_cleanly_on_drop() {
-        let g = SleepGuard::spawn_child("cat", &[], true, false);
+        let g = SleepGuard::spawn_child("cat", &[], true, false, false);
         assert!(g.is_active());
         let pid = g.child_pid().expect("child pid present");
+        let start = std::time::Instant::now();
         drop(g);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "cat should exit cleanly on stdin EOF well before SIGKILL fallback ({elapsed:?})"
+        );
 
         let out = std::process::Command::new("ps")
             .args(["-o", "stat=", "-p", &pid.to_string()])
@@ -295,24 +375,33 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_acquire_registers_caffeinate_and_clears_on_drop() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("MAKAKOO_NO_WAKE_LOCK").ok();
-        std::env::remove_var("MAKAKOO_NO_WAKE_LOCK");
-
-        let g = SleepGuard::acquire("makakoo unit test");
+        if wake_lock_disabled() {
+            // Respect explicit runner opt-out without mutating global env vars.
+            return;
+        }
+        let g = SleepGuard::acquire_with_disabled("makakoo unit test", false);
         assert!(g.is_active(), "macOS caffeinate should spawn cleanly");
         let pid = g.child_pid().expect("caffeinate pid present");
+        let needle = format!("pid {pid}(");
 
-        // Give caffeinate a brief moment to register its IOPM assertion with powerd.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let assertions = std::process::Command::new("pmset")
-            .args(["-g", "assertions"])
-            .output()
-            .expect("pmset runs");
-        let text = String::from_utf8_lossy(&assertions.stdout);
+        // Poll `pmset -g assertions` up to 500 ms for our exact child PID.
+        let mut seen = false;
+        let mut last_output = String::new();
+        for _ in 0..20 {
+            let assertions = std::process::Command::new("pmset")
+                .args(["-g", "assertions"])
+                .output()
+                .expect("pmset runs");
+            last_output = String::from_utf8_lossy(&assertions.stdout).into_owned();
+            if last_output.contains(&needle) {
+                seen = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
         assert!(
-            text.contains(&format!("pid {pid}(")) || text.contains("PreventUserIdleSystemSleep"),
-            "expected macOS assertion while SleepGuard is live; pmset output:\n{text}"
+            seen,
+            "expected macOS pmset assertion for {needle:?} while SleepGuard is live; last output:\n{last_output}"
         );
 
         drop(g);
@@ -323,10 +412,5 @@ mod tests {
             .output()
             .expect("ps runs");
         assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
-
-        match prev {
-            Some(v) => std::env::set_var("MAKAKOO_NO_WAKE_LOCK", v),
-            None => std::env::remove_var("MAKAKOO_NO_WAKE_LOCK"),
-        }
     }
 }

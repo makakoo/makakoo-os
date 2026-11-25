@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value as YamlValue;
 
@@ -22,11 +22,16 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use crate::superbrain::graph::GraphStore;
-use crate::superbrain::store::{SourceMetadata, SuperbrainStore};
+use crate::superbrain::store::{SourceMetadata, SuperbrainStore, GRAPH_DIRTY_CACHE_KEY};
 use crate::superbrain::vector_model::embed_pending_brain;
 
 const MIN_CONTENT_CHARS: usize = 20;
 const EDGE_ENTITY_PREFIX: &str = "__makakoo_edge__|";
+/// Git-style "racy clean" safety window: files modified within the last 2s
+/// (or with a future timestamp due to clock skew) bypass the O(stat) fast-skip
+/// and verify via blake3 content hash so same-second, same-size edits on
+/// coarse-mtime filesystems (HFS+ 1s, FAT/exFAT 2s, SMB/NFS) are never missed.
+const RACY_MTIME_WINDOW_NS: i64 = 2_000_000_000;
 
 /// What happened to a single file during sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -104,6 +109,7 @@ struct SourceSpec {
 struct SyncDirState<'a> {
     existing: &'a HashMap<String, StoredIngestState>,
     force: bool,
+    stat_cutoff_ns: Option<i64>,
     report: &'a mut SyncReport,
     seen: &'a mut HashSet<String>,
     stat_backfills: &'a mut Vec<(String, i64, i64)>,
@@ -166,6 +172,7 @@ impl IngestEngine {
     /// entity graph only when documents changed or the graph is empty.
     pub fn sync(&self, opts: SyncOptions) -> Result<SyncReport> {
         let mut report = SyncReport::default();
+        let stat_cutoff_ns = current_unix_ns().map(|now| now.saturating_sub(RACY_MTIME_WINDOW_NS));
 
         let existing = if opts.force {
             HashMap::new()
@@ -193,6 +200,7 @@ impl IngestEngine {
                 let mut state = SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
                     stat_backfills: &mut stat_backfills,
@@ -205,6 +213,7 @@ impl IngestEngine {
                 let mut state = SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
                     stat_backfills: &mut stat_backfills,
@@ -222,6 +231,7 @@ impl IngestEngine {
                 &mut SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
                     stat_backfills: &mut stat_backfills,
@@ -245,6 +255,7 @@ impl IngestEngine {
                 &mut SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
                     stat_backfills: &mut stat_backfills,
@@ -277,11 +288,10 @@ impl IngestEngine {
             || report.memories > 0
             || report.removed > 0
             || deleted_during_ingest
-            || self.graph_needs_initial_build()?;
+            || self.graph_is_dirty_or_unbuilt()?;
 
         let (n, e) = if graph_dirty {
-            self.rebuild_triples()?;
-            self.graph.rebuild_from_entity_graph()?
+            self.rebuild_triples_and_graph()?
         } else {
             self.graph.counts()?
         };
@@ -290,14 +300,50 @@ impl IngestEngine {
         Ok(report)
     }
 
-    /// Rebuild the `entity_graph` triples table from `brain_docs.entities`.
-    /// Mirrors Python `rebuild_entity_graph` so the materialised graph
-    /// downstream (`GraphStore::rebuild_from_entity_graph`) sees the same
-    /// (subject, links_to, object) shape.
-    fn rebuild_triples(&self) -> Result<()> {
-        let conn = self.store.conn_arc();
-        let mut conn = conn.lock().expect("ingest conn poisoned");
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    /// Rebuild `entity_graph` and materialize `brain_graph_{nodes,edges}`
+    /// atomically inside a single `BEGIN IMMEDIATE` transaction (clearing the
+    /// persistent dirty flag only on commit). If `store` and `graph` share the
+    /// same connection (all standard setups), both tables commit or roll back
+    /// together; if distinct connections were injected, the dirty flag clears
+    /// only after both steps succeed.
+    fn rebuild_triples_and_graph(&self) -> Result<(usize, usize)> {
+        let store_arc = self.store.conn_arc();
+        let graph_arc = self.graph.conn_arc();
+        if Arc::ptr_eq(&store_arc, &graph_arc) {
+            let mut conn = store_arc.lock().expect("ingest conn poisoned");
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            Self::rebuild_triples_in_tx(&tx)?;
+            let counts = GraphStore::rebuild_from_entity_graph_in_tx(&tx)?;
+            tx.execute(
+                "INSERT INTO cache (key, value) VALUES (?1, '0')
+                 ON CONFLICT(key) DO UPDATE SET value = '0'",
+                params![GRAPH_DIRTY_CACHE_KEY],
+            )?;
+            tx.commit()?;
+            Ok(counts)
+        } else {
+            {
+                let mut conn = store_arc.lock().expect("ingest conn poisoned");
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                Self::rebuild_triples_in_tx(&tx)?;
+                tx.commit()?;
+            }
+            let counts = self.graph.rebuild_from_entity_graph()?;
+            {
+                let conn = store_arc.lock().expect("ingest conn poisoned");
+                conn.execute(
+                    "INSERT INTO cache (key, value) VALUES (?1, '0')
+                     ON CONFLICT(key) DO UPDATE SET value = '0'",
+                    params![GRAPH_DIRTY_CACHE_KEY],
+                )?;
+            }
+            Ok(counts)
+        }
+    }
+
+    /// Rebuild the `entity_graph` triples table from `brain_docs.entities`
+    /// inside an existing `BEGIN IMMEDIATE` transaction.
+    fn rebuild_triples_in_tx(tx: &Transaction<'_>) -> Result<()> {
         tx.execute("DELETE FROM entity_graph", [])?;
         let rows: Vec<GraphSourceRow> = {
             let mut stmt = tx.prepare(
@@ -351,7 +397,6 @@ impl IngestEngine {
                 }
             }
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -379,9 +424,10 @@ impl IngestEngine {
             }
         };
         let file_stat = read_file_stat(path);
-        let result = self.ingest_one(path, doc_type, &source, None, file_stat, true, None, None)?;
-        let _ = self.rebuild_triples();
-        let _ = self.graph.rebuild_from_entity_graph();
+        let result = self.ingest_one(
+            path, doc_type, &source, None, file_stat, None, true, None, None,
+        )?;
+        let _ = self.rebuild_triples_and_graph();
         Ok(result)
     }
 
@@ -472,6 +518,7 @@ impl IngestEngine {
                 source,
                 stored,
                 file_stat,
+                state.stat_cutoff_ns,
                 state.force,
                 Some(state.stat_backfills),
                 Some(state.deleted_during_ingest),
@@ -589,6 +636,7 @@ impl IngestEngine {
         source: &SourceSpec,
         stored: Option<&StoredIngestState>,
         file_stat: Option<(i64, i64)>,
+        stat_cutoff_ns: Option<i64>,
         force: bool,
         stat_backfills: Option<&mut Vec<(String, i64, i64)>>,
         deleted_during_ingest: Option<&mut bool>,
@@ -599,11 +647,15 @@ impl IngestEngine {
             .map(|p| p.to_string_lossy().to_string());
 
         // O(stat) fast-skip: if mtime_ns, byte size, doc_type, and source
-        // metadata all match the preloaded DB row, skip without opening,
-        // reading, hashing, or regex-parsing the file.
+        // metadata all match the preloaded DB row — AND the file's mtime is
+        // strictly older than the 2s racy-mtime safety window — skip without
+        // opening, reading, hashing, or regex-parsing the file.
         if !force {
-            if let (Some(stored), Some((mtime_ns, file_size))) = (stored, file_stat) {
-                if stored.file_mtime_ns == Some(mtime_ns)
+            if let (Some(stored), Some((mtime_ns, file_size)), Some(cutoff_ns)) =
+                (stored, file_stat, stat_cutoff_ns)
+            {
+                if mtime_ns <= cutoff_ns
+                    && stored.file_mtime_ns == Some(mtime_ns)
                     && stored.file_size == Some(file_size)
                     && stored.doc_type == doc_type
                     && stored.source_name == source.name
@@ -804,12 +856,23 @@ impl IngestEngine {
         Ok(())
     }
 
-    /// Returns true if the materialized graph is empty while indexed documents
-    /// carry entities (for example, docs inserted directly via `write_document`
-    /// before the first full `sync`).
-    fn graph_needs_initial_build(&self) -> Result<bool> {
+    /// Returns true if any direct `write_document` / `delete_document` (e.g.
+    /// MCP/API writes) or a previously aborted graph rebuild left the dirty
+    /// flag set, OR if the materialized graph is empty while indexed documents
+    /// carry entities.
+    fn graph_is_dirty_or_unbuilt(&self) -> Result<bool> {
         let conn = self.store.conn_arc();
         let conn = conn.lock().expect("ingest conn poisoned");
+        let dirty: Option<String> = conn
+            .query_row(
+                "SELECT value FROM cache WHERE key = ?1",
+                params![GRAPH_DIRTY_CACHE_KEY],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if dirty.as_deref() == Some("1") {
+            return Ok(true);
+        }
         let needed: i64 = conn.query_row(
             "SELECT (SELECT COUNT(*) FROM brain_graph_nodes) = 0
                 AND EXISTS(
@@ -880,6 +943,13 @@ impl IngestEngine {
 }
 
 // ───────── helpers ─────────
+
+fn current_unix_ns() -> Option<i64> {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    i64::try_from(dur.as_nanos()).ok()
+}
 
 fn read_file_stat(path: &Path) -> Option<(i64, i64)> {
     let meta = std::fs::metadata(path).ok()?;
@@ -2541,8 +2611,8 @@ mod tests {
         assert_eq!(engine.store.search("BBBB", 5).unwrap().len(), 1);
         assert!(engine.store.search("AAAA", 5).unwrap().is_empty());
 
-        // Different byte size (even if mtime happened to collide): shift stored
-        // file_size to verify size mismatch triggers re-index independently.
+        // Different byte size (even if mtime happened to collide): longer
+        // body changes file_size and triggers re-indexing independently.
         write(
             &page,
             "# StatTest\n\nBody marker CCCCCCCC — longer body to change size",
@@ -2550,6 +2620,147 @@ mod tests {
         let r3 = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(r3.pages, 1, "changed file size must re-index");
         assert_eq!(engine.store.search("CCCCCCCC", 5).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sync_reindexes_racy_same_mtime_same_size_edit_within_window() {
+        let (dir, engine) = make_engine();
+        let page = dir
+            .path()
+            .join("data")
+            .join("Brain")
+            .join("pages")
+            .join("RacyEdit.md");
+        write(
+            &page,
+            "# RacyEdit\n\nPayload token XXXX — exact same length!",
+        );
+        let r1 = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(r1.pages, 1);
+
+        // Overwrite with identical byte length immediately (within the 2s
+        // racy-mtime window) and restore the exact stored mtime_ns to simulate
+        // a coarse-tick filesystem collision.
+        write(
+            &page,
+            "# RacyEdit\n\nPayload token YYYY — exact same length!",
+        );
+        let (actual_mtime, actual_size) = read_file_stat(&page).unwrap();
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            conn.execute(
+                "UPDATE brain_docs SET file_mtime_ns = ?1, file_size = ?2",
+                params![actual_mtime, actual_size],
+            )
+            .unwrap();
+        }
+
+        let r2 = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(
+            r2.pages, 1,
+            "racy same-mtime same-size edit within 2s window must fall back to blake3"
+        );
+        assert_eq!(engine.store.search("YYYY", 5).unwrap().len(), 1);
+        assert!(engine.store.search("XXXX", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sync_rebuilds_graph_after_direct_write_document_with_zero_file_changes() {
+        let (dir, engine) = make_engine();
+        let brain = dir.path().join("data").join("Brain");
+        write(
+            &brain.join("pages").join("Seed.md"),
+            "# Seed\nLinks to [[Alpha]] in the initial sync.",
+        );
+        let first = engine.sync(SyncOptions::default()).unwrap();
+        assert!(first.graph_nodes > 0);
+
+        // Simulate an MCP/API direct document write outside the file walker
+        // (doc_type="note" is not owned by the pages/journals file pruner).
+        engine
+            .store
+            .write_document(
+                "mcp://direct-note",
+                "Direct API note referencing [[DirectEntity]]",
+                "note",
+                serde_json::json!(["DirectEntity"]),
+            )
+            .unwrap();
+
+        // Next sync sees zero file changes on disk, yet MUST rebuild the graph
+        // because write_document flipped the persistent graph-dirty marker.
+        let second = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(second.pages, 0);
+        let (_, incoming) = engine.graph.neighbors("DirectEntity").unwrap();
+        assert_eq!(
+            incoming.len(),
+            1,
+            "direct write_document entity must appear in materialized graph on next sync"
+        );
+    }
+
+    #[test]
+    fn sync_retries_atomic_graph_rebuild_after_injected_failure() {
+        let (dir, engine) = make_engine();
+        let brain = dir.path().join("data").join("Brain");
+        write(
+            &brain.join("pages").join("Initial.md"),
+            "# Initial\nLinks to [[InitialTarget]] in v1.",
+        );
+        let first = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(first.pages, 1);
+
+        // Modify file and inject a failure on brain_graph_edges insert so the
+        // combined rebuild_triples + rebuild_from_entity_graph transaction aborts.
+        write(
+            &brain.join("pages").join("Initial.md"),
+            "# Initial\nLinks to [[UpdatedTarget]] after edit!",
+        );
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_graph_rebuild BEFORE INSERT ON brain_graph_edges
+                 BEGIN
+                     SELECT RAISE(ABORT, 'injected atomic sync failure');
+                 END;",
+            )
+            .unwrap();
+        }
+        let err = engine.sync(SyncOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("injected atomic sync failure"));
+
+        // Both entity_graph and brain_graph_edges must still reflect the old
+        // committed state (atomic rollback), and the dirty flag must stay '1'.
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            let updated_triples: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM entity_graph WHERE object = 'UpdatedTarget'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                updated_triples, 0,
+                "entity_graph must roll back atomically with brain_graph_edges"
+            );
+            conn.execute_batch("DROP TRIGGER fail_graph_rebuild;")
+                .unwrap();
+        }
+
+        // Next sync has 0 file changes on disk, yet MUST retry the rebuild and
+        // materialize [[UpdatedTarget]] because the dirty flag remained set.
+        let retry = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(retry.pages, 0);
+        let (_, incoming) = engine.graph.neighbors("UpdatedTarget").unwrap();
+        assert_eq!(
+            incoming.len(),
+            1,
+            "failed graph rebuild must retry on next 0-change sync"
+        );
     }
 
     #[test]

@@ -159,22 +159,22 @@ impl LlmClient {
         }
     }
 
-    fn http_client(&self) -> &reqwest::Client {
-        self.client.get_or_init(|| {
+    fn http_client(&self) -> Result<&reqwest::Client> {
+        self.client.get_or_try_init(|| {
             reqwest::Client::builder()
                 .timeout(self.timeout)
                 .build()
-                .expect("reqwest client build")
+                .map_err(|e| MakakooError::llm(format!("http client init failed: {e}")))
         })
     }
 
-    fn image_client(&self) -> &reqwest::Client {
-        self.image_download_client.get_or_init(|| {
+    fn image_client(&self) -> Result<&reqwest::Client> {
+        self.image_download_client.get_or_try_init(|| {
             reqwest::Client::builder()
                 .timeout(self.timeout)
                 .redirect(Policy::none())
                 .build()
-                .expect("reqwest image client build")
+                .map_err(|e| MakakooError::llm(format!("image http client init failed: {e}")))
         })
     }
 
@@ -335,7 +335,7 @@ impl LlmClient {
         max_bytes: usize,
     ) -> Result<GeneratedImage> {
         let validated = self.validate_generated_image_url(raw_url)?;
-        let mut request = self.image_client().get(validated.url);
+        let mut request = self.image_client()?.get(validated.url);
         if validated.same_gateway_origin {
             if let Some(auth) = self.auth_header() {
                 request = request.header("Authorization", auth);
@@ -457,7 +457,7 @@ impl LlmClient {
         let url = format!("{}{}", self.base_url, path);
         let mut attempt: u32 = 0;
         loop {
-            let mut req = self.http_client().post(&url).json(body);
+            let mut req = self.http_client()?.post(&url).json(body);
             if let Some(auth) = self.auth_header() {
                 req = req.header("Authorization", auth);
             }

@@ -54,16 +54,16 @@ makakoo daemon run
 
 ## Boot checks & power behavior
 
-- **Fast integrity probe:** On startup (`daemon run` and headless preflight),
-  the daemon runs `PRAGMA quick_check(1)` against `superbrain.db` instead of a
-  blocking full-database index scan, catching B-tree corruption immediately
-  without multi-second startup stalls.
+- **Integrity probe on boot:** On startup (`daemon run` and headless preflight),
+  the daemon runs `PRAGMA integrity_check` against `superbrain.db` once so any
+  post-crash SQLite corruption is logged immediately rather than failing later
+  on read/write paths.
 - **Battery-friendly sleep policy:** The idle daemon does **not** hold an OS
   wake lock, so laptops sleep normally when idle. Scoped idle-sleep guards
   (`SleepGuard`) are acquired only during active foreground/maintenance work
   such as `makakoo sync --embed`, `makakoo dream`, `makakoo sancho tick`, and
   opt-in `makakoo run --keep-awake` (disable globally via
-  `MAKAKOO_NO_WAKE_LOCK=1`).
+  `MAKAKOO_NO_WAKE_LOCK=1` in your shell or `~/.env`).
 
 ## Log location
 

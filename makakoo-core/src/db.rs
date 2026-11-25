@@ -15,6 +15,11 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
+/// Current SQLite schema version persisted in `PRAGMA user_version`.
+///
+/// **Invariant:** `run_migrations` fast-paths whenever `user_version >= SCHEMA_VERSION`.
+/// Any future table, column, index, or trigger addition MUST bump `SCHEMA_VERSION`
+/// and add a corresponding `migrate_to_vN` step.
 pub const SCHEMA_VERSION: i64 = 2;
 
 /// Open a SQLite database in WAL mode with sensible defaults.
@@ -48,21 +53,54 @@ pub fn open_db(path: &Path) -> Result<Connection> {
 /// Fast-paths immediately when `PRAGMA user_version >= SCHEMA_VERSION`
 /// (single integer read, zero DDL, zero full-table scans, zero write locks
 /// on read-only CLI/MCP commands).
+///
+/// When an upgrade is required, wraps the entire schema transition — including
+/// `SCHEMA_V1`, legacy drift healing, v2 column/dedup/index migration, and
+/// `PRAGMA user_version` bump — inside one atomic `BEGIN IMMEDIATE` transaction
+/// with double-checked version re-validation so concurrent cold-boot processes
+/// never race on `ALTER TABLE` or hit `SQLITE_BUSY_SNAPSHOT`.
 pub fn run_migrations(conn: &Connection) -> Result<()> {
-    if schema_version(conn)? >= SCHEMA_VERSION {
+    let current = schema_version(conn)?;
+    if current >= SCHEMA_VERSION {
+        if current > SCHEMA_VERSION {
+            tracing::warn!(
+                db_version = current,
+                supported_version = SCHEMA_VERSION,
+                "opening SQLite database with newer schema version than this binary"
+            );
+        }
         return Ok(());
     }
-    conn.execute_batch(SCHEMA_V1)?;
-    heal_legacy_schema_drift(conn)?;
-    migrate_to_v2(conn)?;
-    // `PRAGMA user_version = N` is a no-row PRAGMA on most builds but
-    // we run it through the same drain-rows path as `open_db` for
-    // forward-compat with rusqlite strictness changes.
-    let sql = format!("PRAGMA user_version = {SCHEMA_VERSION}");
-    let mut s = conn.prepare(&sql)?;
-    let mut rows = s.query([])?;
-    while rows.next()?.is_some() {}
-    Ok(())
+
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let res: Result<()> = (|| {
+        // Double-check inside the write lock in case a concurrent process
+        // finished migrating while we waited for BEGIN IMMEDIATE.
+        if schema_version(conn)? >= SCHEMA_VERSION {
+            return Ok(());
+        }
+        conn.execute_batch(SCHEMA_V1)?;
+        heal_legacy_schema_drift(conn)?;
+        migrate_to_v2(conn)?;
+        // `PRAGMA user_version = N` is transactional in SQLite and a no-row
+        // PRAGMA on most builds; drain rows for forward-compat with rusqlite.
+        let sql = format!("PRAGMA user_version = {SCHEMA_VERSION}");
+        let mut s = conn.prepare(&sql)?;
+        let mut rows = s.query([])?;
+        while rows.next()?.is_some() {}
+        Ok(())
+    })();
+
+    match res {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
 }
 
 /// Converge Python-era schema drift so a migrated DB behaves identically
@@ -126,75 +164,56 @@ fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Schema v2 additions:
+/// Schema v2 additions (called inside `run_migrations`'s `BEGIN IMMEDIATE` tx):
 /// 1. `brain_docs.file_mtime_ns` and `brain_docs.file_size` for O(stat) sync fast-skip.
 /// 2. Deduplicate any pre-existing duplicate `(src, dst, edge_type)` rows in
-///    `brain_graph_edges` (summing weights into `MIN(id)`) and enforce uniqueness
-///    via `idx_brain_graph_edges_triple` so edge upserts are O(log N) via `ON CONFLICT`.
+///    `brain_graph_edges` (summing weights into `MIN(id)` in a single linear pass
+///    via a temp PK lookup table) and enforce uniqueness via
+///    `idx_brain_graph_edges_triple` so edge upserts are O(log N) via `ON CONFLICT`.
 fn migrate_to_v2(conn: &Connection) -> Result<()> {
     ensure_column(conn, "brain_docs", "file_mtime_ns", "INTEGER")?;
     ensure_column(conn, "brain_docs", "file_size", "INTEGER")?;
 
-    conn.execute_batch("SAVEPOINT migrate_to_v2")?;
-    let res: Result<()> = (|| {
-        let has_dups: bool = conn
-            .query_row(
-                "SELECT EXISTS(
-                     SELECT 1 FROM brain_graph_edges
-                     GROUP BY src, dst, edge_type
-                     HAVING COUNT(*) > 1
-                 )",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|v| v != 0)?;
-        if has_dups {
-            conn.execute(
-                "UPDATE brain_graph_edges
-                 SET weight = (
-                     SELECT SUM(e2.weight)
-                     FROM brain_graph_edges e2
-                     WHERE e2.src = brain_graph_edges.src
-                       AND e2.dst = brain_graph_edges.dst
-                       AND e2.edge_type = brain_graph_edges.edge_type
-                 )
-                 WHERE id IN (
-                     SELECT MIN(id)
-                     FROM brain_graph_edges
-                     GROUP BY src, dst, edge_type
-                     HAVING COUNT(*) > 1
-                 )",
-                [],
-            )?;
-            conn.execute(
-                "DELETE FROM brain_graph_edges
-                 WHERE id NOT IN (
-                     SELECT MIN(id)
-                     FROM brain_graph_edges
-                     GROUP BY src, dst, edge_type
-                 )",
-                [],
-            )?;
-        }
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_brain_graph_edges_triple
-             ON brain_graph_edges(src, dst, edge_type)",
+    let has_dups: bool = conn
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM brain_graph_edges
+                 GROUP BY src, dst, edge_type
+                 HAVING COUNT(*) > 1
+             )",
             [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|v| v != 0)?;
+    if has_dups {
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS temp._v2_edge_keep;
+             CREATE TEMP TABLE _v2_edge_keep (
+                 keep_id INTEGER PRIMARY KEY,
+                 total_weight REAL NOT NULL
+             );
+             INSERT INTO _v2_edge_keep (keep_id, total_weight)
+                 SELECT MIN(id), SUM(weight)
+                 FROM brain_graph_edges
+                 GROUP BY src, dst, edge_type;
+             UPDATE brain_graph_edges
+                 SET weight = (
+                     SELECT total_weight
+                     FROM _v2_edge_keep
+                     WHERE keep_id = brain_graph_edges.id
+                 )
+                 WHERE id IN (SELECT keep_id FROM _v2_edge_keep);
+             DELETE FROM brain_graph_edges
+                 WHERE id NOT IN (SELECT keep_id FROM _v2_edge_keep);
+             DROP TABLE _v2_edge_keep;",
         )?;
-        Ok(())
-    })();
-    match res {
-        Ok(()) => {
-            conn.execute_batch("RELEASE SAVEPOINT migrate_to_v2")?;
-            Ok(())
-        }
-        Err(e) => {
-            let _ = conn.execute_batch(
-                "ROLLBACK TO SAVEPOINT migrate_to_v2; RELEASE SAVEPOINT migrate_to_v2;",
-            );
-            Err(e)
-        }
     }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_brain_graph_edges_triple
+         ON brain_graph_edges(src, dst, edge_type)",
+        [],
+    )?;
+    Ok(())
 }
 
 fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
@@ -979,5 +998,66 @@ mod tests {
             .unwrap();
         assert!(cols.iter().any(|c| c == "file_mtime_ns"));
         assert!(cols.iter().any(|c| c == "file_size"));
+    }
+
+    #[test]
+    fn concurrent_v1_to_v2_migrations_succeed_without_race_errors() {
+        let (_dir, path) = tmp_db_path();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE brain_docs (
+                    id INTEGER PRIMARY KEY,
+                    path TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    doc_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    entities TEXT DEFAULT '[]',
+                    char_count INTEGER DEFAULT 0,
+                    updated_at TEXT DEFAULT (datetime('now'))
+                 );
+                 CREATE TABLE brain_graph_edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    src TEXT NOT NULL,
+                    dst TEXT NOT NULL,
+                    edge_type TEXT NOT NULL DEFAULT 'mentions',
+                    weight REAL NOT NULL DEFAULT 1.0,
+                    metadata TEXT DEFAULT '{}'
+                 );
+                 INSERT INTO brain_graph_edges (src, dst, edge_type, weight)
+                     VALUES ('X', 'Y', 'mentions', 1.0),
+                            ('X', 'Y', 'mentions', 2.0);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let p = path.clone();
+                let b = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let conn = open_db(&p).unwrap();
+                    b.wait();
+                    run_migrations(&conn).unwrap();
+                    assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("concurrent migration thread panicked");
+        }
+
+        let conn = open_db(&path).unwrap();
+        let weight: f64 = conn
+            .query_row(
+                "SELECT weight FROM brain_graph_edges WHERE src = 'X' AND dst = 'Y'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((weight - 3.0).abs() < 1e-9);
     }
 }

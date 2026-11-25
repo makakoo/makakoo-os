@@ -137,13 +137,15 @@ impl PlatformAdapter for LinuxPlatform {
             clean.trim()
         };
         let why_arg = format!("--why={why}");
-        // Hold a piped stdin to `cat` under `systemd-inhibit`: closing stdin on
-        // Drop or process crash causes immediate clean release. Missing binary
-        // or headless containers without D-Bus degrade silently.
+        // Hold a piped stdin to `cat` under `systemd-inhibit --what=idle`:
+        // inhibits automatic idle suspend (without blocking manual user
+        // suspend or lid close). Closing stdin on Drop or process crash causes
+        // immediate clean release; missing binary or headless containers
+        // without D-Bus/polkit exit immediately and degrade silently to no-op.
         crate::SleepGuard::spawn_child(
             "systemd-inhibit",
             &[
-                "--what=sleep:idle",
+                "--what=idle",
                 "--who=makakoo",
                 &why_arg,
                 "--mode=block",
@@ -151,6 +153,7 @@ impl PlatformAdapter for LinuxPlatform {
             ],
             true,
             false,
+            true,
         )
     }
 }

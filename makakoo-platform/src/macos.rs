@@ -160,7 +160,7 @@ impl PlatformAdapter for MacOsPlatform {
         let pid = std::process::id().to_string();
         // `-i` prevents system idle sleep while allowing the display to sleep.
         // `-w <pid>` binds the assertion to our process so even SIGKILL releases it.
-        crate::SleepGuard::spawn_child("caffeinate", &["-i", "-w", &pid], false, true)
+        crate::SleepGuard::spawn_child("caffeinate", &["-i", "-w", &pid], false, true, false)
     }
 }
 
