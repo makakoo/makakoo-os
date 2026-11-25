@@ -93,7 +93,10 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
 
     match res {
         Ok(()) => {
-            conn.execute_batch("COMMIT")?;
+            if let Err(e) = conn.execute_batch("COMMIT") {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e.into());
+            }
             Ok(())
         }
         Err(e) => {

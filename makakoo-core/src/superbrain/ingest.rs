@@ -758,11 +758,15 @@ impl IngestEngine {
                     && stored.source_role == source.role
                     && stored.relative_path == relative_path
                 {
-                    if let (Some(backfills), Some((mtime_ns, file_size))) =
-                        (stat_backfills, file_stat)
+                    // Only persist/backfill settled stats (mtime <= cutoff) so a
+                    // racily-clean file edited again in the same coarse tick can
+                    // never be falsely skipped by a later sync after the window.
+                    if let (Some(backfills), Some((mtime_ns, file_size)), Some(cutoff_ns)) =
+                        (stat_backfills, file_stat, stat_cutoff_ns)
                     {
-                        if stored.file_mtime_ns != Some(mtime_ns)
-                            || stored.file_size != Some(file_size)
+                        if mtime_ns <= cutoff_ns
+                            && (stored.file_mtime_ns != Some(mtime_ns)
+                                || stored.file_size != Some(file_size))
                         {
                             backfills.push((path_str, mtime_ns, file_size));
                         }
@@ -772,9 +776,12 @@ impl IngestEngine {
             }
         }
 
-        let (file_mtime_ns, file_size) = match file_stat {
-            Some((m, s)) => (Some(m), Some(s)),
-            None => (None, None),
+        // Git-style racily-clean smudging at record time: if the file's mtime
+        // is inside the 2s safety window (or unknown cutoff), store NULL stats
+        // so the next sync re-verifies with blake3 even if it runs hours later.
+        let (file_mtime_ns, file_size) = match (file_stat, stat_cutoff_ns) {
+            (Some((m, s)), Some(cutoff)) if m <= cutoff => (Some(m), Some(s)),
+            _ => (None, None),
         };
         self.store.write_document_with_source_and_stat(
             &path_str,
@@ -2588,6 +2595,13 @@ mod tests {
             &page,
             "# StatTest\n\nBody marker AAAA — long enough to index",
         );
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&page)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
         let r1 = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(r1.pages, 1);
 
@@ -2638,28 +2652,44 @@ mod tests {
         let r1 = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(r1.pages, 1);
 
-        // Overwrite with identical byte length immediately (within the 2s
-        // racy-mtime window) and restore the exact stored mtime_ns to simulate
-        // a coarse-tick filesystem collision.
+        // Because the file was just written (within the 2s racy window), record-
+        // time smudging must leave file_mtime_ns/file_size NULL in SQLite.
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            let (stored_mtime, stored_size): (Option<i64>, Option<i64>) = conn
+                .query_row(
+                    "SELECT file_mtime_ns, file_size FROM brain_docs LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert!(
+                stored_mtime.is_none() && stored_size.is_none(),
+                "racy freshly-written file must not persist stat fast-skip key yet"
+            );
+        }
+
+        // Overwrite with identical byte length and backdate mtime to 60s ago so
+        // the next sync sees an already-settled mtime (simulating a sync that
+        // happens well after the 2s window expires). Because record-time smudging
+        // left stats NULL, the next sync MUST still hash and catch the edit.
         write(
             &page,
             "# RacyEdit\n\nPayload token YYYY — exact same length!",
         );
-        let (actual_mtime, actual_size) = read_file_stat(&page).unwrap();
-        {
-            let conn = engine.store.conn_arc();
-            let conn = conn.lock().unwrap();
-            conn.execute(
-                "UPDATE brain_docs SET file_mtime_ns = ?1, file_size = ?2",
-                params![actual_mtime, actual_size],
-            )
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&page)
+            .unwrap()
+            .set_modified(past)
             .unwrap();
-        }
 
         let r2 = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(
             r2.pages, 1,
-            "racy same-mtime same-size edit within 2s window must fall back to blake3"
+            "racy same-mtime same-size edit must be caught even by a later sync"
         );
         assert_eq!(engine.store.search("YYYY", 5).unwrap().len(), 1);
         assert!(engine.store.search("XXXX", 5).unwrap().is_empty());
@@ -2776,6 +2806,14 @@ mod tests {
             &page,
             "# Backfill\n\nLinks to [[EntityOne]] and [[EntityTwo]] in body.",
         );
+        // Set a settled mtime (>2s old) so backfill persists the stat fast-skip key.
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&page)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
         let first = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(first.pages, 1);
 

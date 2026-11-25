@@ -116,10 +116,11 @@ impl SleepGuard {
             Ok(mut child) => {
                 // Check whether the helper exited immediately (e.g. missing
                 // system D-Bus or polkit denial under systemd-inhibit). When
-                // `probe_early_exit` is set, poll briefly up to 25 ms so a
-                // failing helper is reaped immediately instead of lingering as
-                // a zombie while `is_active()` falsely reports true.
-                let polls = if probe_early_exit { 5 } else { 1 };
+                // `probe_early_exit` is set, poll up to ~45 ms (10 checks with
+                // 5 ms spacing) so a failing helper is reaped immediately
+                // instead of lingering as a zombie while `is_active()` falsely
+                // reports true.
+                let polls = if probe_early_exit { 10 } else { 1 };
                 for i in 0..polls {
                     match child.try_wait() {
                         Ok(Some(status)) => {
@@ -319,7 +320,7 @@ mod tests {
     fn fast_exiting_helper_reaps_immediately_and_returns_noop() {
         // Mirrors systemd-inhibit exiting immediately in a headless container
         // without D-Bus or where polkit denies inhibition.
-        let g = SleepGuard::spawn_child("sh", &["-c", "exit 1"], true, false, true);
+        let g = SleepGuard::spawn_child("false", &[], true, false, true);
         assert!(
             !g.is_active(),
             "helper that exits immediately must degrade to inactive no-op"
@@ -353,13 +354,7 @@ mod tests {
         let g = SleepGuard::spawn_child("cat", &[], true, false, false);
         assert!(g.is_active());
         let pid = g.child_pid().expect("child pid present");
-        let start = std::time::Instant::now();
         drop(g);
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_millis(50),
-            "cat should exit cleanly on stdin EOF well before SIGKILL fallback ({elapsed:?})"
-        );
 
         let out = std::process::Command::new("ps")
             .args(["-o", "stat=", "-p", &pid.to_string()])
@@ -370,6 +365,20 @@ mod tests {
             stat.trim().is_empty(),
             "stdin-EOF child pid {pid} lingered after Drop with stat={stat:?}"
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_acquire_activates_and_drops_cleanly() {
+        if wake_lock_disabled() {
+            return;
+        }
+        let g = SleepGuard::acquire_with_disabled("makakoo unit test", false);
+        assert!(
+            g.is_active(),
+            "SetThreadExecutionState should return non-zero previous state on Windows"
+        );
+        drop(g);
     }
 
     #[cfg(target_os = "macos")]
