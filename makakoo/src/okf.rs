@@ -1840,8 +1840,9 @@ fn validate_log(bundle: &Path, path: &Path, content: &str, report: &mut Validati
             message: "log.md must not contain frontmatter".to_string(),
         });
     }
-    static DATE_VALUE_RE: once_cell::sync::Lazy<Regex> =
-        once_cell::sync::Lazy::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2})$").expect("date value regex"));
+    static DATE_VALUE_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"^(\d{4}-\d{2}-\d{2})$").expect("date value regex")
+    });
     let date_value = &*DATE_VALUE_RE;
     let mut title_seen = false;
     let mut date_sections = 0usize;

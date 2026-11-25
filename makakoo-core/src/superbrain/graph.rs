@@ -167,8 +167,7 @@ impl GraphStore {
                 nodes
                     .entry(subj.clone())
                     .and_modify(|existing| {
-                        if *existing == "concept"
-                            || (*existing == "page" && subj_type == "journal")
+                        if *existing == "concept" || (*existing == "page" && subj_type == "journal")
                         {
                             *existing = subj_type;
                         }

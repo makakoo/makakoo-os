@@ -200,10 +200,7 @@ pub(crate) fn fetch_top_vector_hits(
     if scored.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    scored.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let mut out = Vec::with_capacity(limit.min(scored.len()));
     let mut doc_stmt = conn.prepare("SELECT path, content FROM brain_docs WHERE id = ?1")?;
     for (doc_id, similarity) in scored {
@@ -522,7 +519,9 @@ impl SuperbrainStore {
         metadata: Value,
         source: SourceMetadata,
     ) -> Result<()> {
-        self.write_document_with_source_and_stat(doc_id, content, doc_type, metadata, source, None, None)
+        self.write_document_with_source_and_stat(
+            doc_id, content, doc_type, metadata, source, None, None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1467,7 +1466,11 @@ mod tests {
             0.0
         );
         assert_eq!(
-            cosine_similarity_le_bytes(&[1.0, 1.0], vector_norm(&[1.0, 1.0]), &pack_vector(&[0.0, 0.0])),
+            cosine_similarity_le_bytes(
+                &[1.0, 1.0],
+                vector_norm(&[1.0, 1.0]),
+                &pack_vector(&[0.0, 0.0])
+            ),
             0.0
         );
     }

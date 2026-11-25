@@ -336,9 +336,8 @@ impl IngestEngine {
                 for ent in entities {
                     let (predicate, object) = decode_edge_entity(&ent)
                         .unwrap_or_else(|| ("links_to".to_string(), ent.clone()));
-                    insert_stmt.execute(params![
-                        subject, predicate, object, valid_from, row.path
-                    ])?;
+                    insert_stmt
+                        .execute(params![subject, predicate, object, valid_from, row.path])?;
                 }
             }
         }
@@ -2489,7 +2488,10 @@ mod tests {
             .join("Brain")
             .join("pages")
             .join("StatTest.md");
-        write(&page, "# StatTest\n\nBody marker AAAA — long enough to index");
+        write(
+            &page,
+            "# StatTest\n\nBody marker AAAA — long enough to index",
+        );
         let r1 = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(r1.pages, 1);
 
@@ -2504,7 +2506,10 @@ mod tests {
             )
             .unwrap();
         }
-        write(&page, "# StatTest\n\nBody marker BBBB — long enough to index");
+        write(
+            &page,
+            "# StatTest\n\nBody marker BBBB — long enough to index",
+        );
         let r2 = engine.sync(SyncOptions::default()).unwrap();
         assert_eq!(r2.pages, 1, "changed mtime with same size must re-index");
         assert_eq!(engine.store.search("BBBB", 5).unwrap().len(), 1);

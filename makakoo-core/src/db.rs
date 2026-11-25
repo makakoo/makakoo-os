@@ -900,8 +900,8 @@ mod tests {
         }
         // Opening strictly read-only proves the v2 fast-path issues zero
         // DDL, zero DELETE scans, and zero PRAGMA writes.
-        let ro = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .unwrap();
+        let ro =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         run_migrations(&ro).unwrap();
         assert_eq!(schema_version(&ro).unwrap(), SCHEMA_VERSION);
     }
