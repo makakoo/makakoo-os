@@ -259,7 +259,17 @@ impl IngestEngine {
             self.backfill_file_stats(&stat_backfills)?;
         }
 
-        report.removed = self.prune_unseen(&seen, &prune_scopes, &active_sources)?;
+        let existing_matches_db = !opts.force
+            && report.pages == 0
+            && report.journals == 0
+            && report.memories == 0
+            && !deleted_during_ingest;
+        report.removed = self.prune_unseen(
+            &seen,
+            &prune_scopes,
+            &active_sources,
+            existing_matches_db.then_some(&existing),
+        )?;
 
         let graph_dirty = opts.force
             || report.pages > 0
@@ -817,33 +827,49 @@ impl IngestEngine {
         seen: &HashSet<String>,
         prune_scopes: &HashSet<(String, String)>,
         active_sources: &HashSet<String>,
+        preloaded: Option<&HashMap<String, StoredIngestState>>,
     ) -> Result<usize> {
-        let conn = self.store.conn_arc();
-        let conn = conn.lock().expect("ingest conn poisoned");
-        let all: Vec<(String, String, String)> = {
-            let mut stmt = conn.prepare("SELECT path, source_name, doc_type FROM brain_docs")?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, Option<String>>(1)?
-                            .unwrap_or_else(|| "default".to_string()),
-                        r.get::<_, String>(2)?,
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
+        let stale: Vec<String> = if let Some(existing) = preloaded {
+            // Reuse the rows already fetched by `load_existing_states` instead
+            // of running a second full-table scan over `brain_docs`.
+            existing
+                .iter()
+                .filter_map(|(path, state)| {
+                    let source_removed = !active_sources.contains(&state.source_name);
+                    let file_removed = prune_scopes
+                        .contains(&(state.source_name.clone(), state.doc_type.clone()))
+                        && !seen.contains(path);
+                    (source_removed || file_removed).then(|| path.clone())
+                })
+                .collect()
+        } else {
+            let conn = self.store.conn_arc();
+            let conn = conn.lock().expect("ingest conn poisoned");
+            let all: Vec<(String, String, String)> = {
+                let mut stmt =
+                    conn.prepare("SELECT path, source_name, doc_type FROM brain_docs")?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, Option<String>>(1)?
+                                .unwrap_or_else(|| "default".to_string()),
+                            r.get::<_, String>(2)?,
+                        ))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            };
+            drop(conn);
+            all.into_iter()
+                .filter_map(|(path, source_name, doc_type)| {
+                    let source_removed = !active_sources.contains(&source_name);
+                    let file_removed =
+                        prune_scopes.contains(&(source_name, doc_type)) && !seen.contains(&path);
+                    (source_removed || file_removed).then_some(path)
+                })
+                .collect()
         };
-        drop(conn);
-        let stale: Vec<String> = all
-            .into_iter()
-            .filter_map(|(path, source_name, doc_type)| {
-                let source_removed = !active_sources.contains(&source_name);
-                let file_removed =
-                    prune_scopes.contains(&(source_name, doc_type)) && !seen.contains(&path);
-                (source_removed || file_removed).then_some(path)
-            })
-            .collect();
         let mut removed = 0usize;
         for path in stale {
             self.store.delete_document(&path)?;

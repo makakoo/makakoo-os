@@ -24,7 +24,7 @@ Your notes, your decisions, your arguments with yourself from three months ago a
 |---|---|
 | Infect AI CLIs with a shared bootstrap block (open-ended roster — 9 today: Claude / Gemini / Codex / OpenCode / Vibe / Cursor / Qwen / Kimi / pi) | ✅ macOS + Linux + Windows |
 | 4 IDE-assistant hosts (Copilot / Continue / Cline / JetBrains) | ✅ detection + writers |
-| Persistent Brain (canonical Logseq journals/pages + optional Obsidian, Logseq, plain-Markdown, and OKF enrichment) | ✅ |
+| Persistent Brain (standalone plain Markdown + SQLite FTS5 + SIMD vector search + atomic knowledge graph; optional Obsidian, Logseq, plain-Markdown, and OKF enrichment) | ✅ |
 | Portable knowledge interchange | ✅ local-only OKF v0.1 validation, import, and export via `makakoo brain` |
 | Superbrain search — FTS5 + vector + LLM synthesis | ✅ |
 | Headroom context compression for bulky tool output | ✅ included in the default core distro via `tool-headroom` |
@@ -200,6 +200,7 @@ and the structured `list --json` envelope).
 - `AIL_BASE_URL` — LLM gateway base URL. Default `http://localhost:18080/v1` (switchAILocal).
 - `AIL_API_KEY` — API key for the LLM gateway. Store via `makakoo secret set AIL_API_KEY` — writes to the OS keyring (Keychain / Secret Service / Credential Manager).
 - `MAKAKOO_SOCKET_PATH` — plugin-side canonical env var for the capability socket. Set automatically by `makakoo skill <name>` when spawning a plugin.
+- `MAKAKOO_NO_WAKE_LOCK` — set to `1` (`true`/`yes`/`on`) to globally disable Makakoo's scoped idle-sleep guard (`SleepGuard`) during `sync --embed`, `dream`, `sancho tick`, and `run --keep-awake`.
 
 ## Build from source
 
@@ -209,7 +210,7 @@ cargo test --workspace
 cargo clippy -p makakoo-platform --all-targets -- -D warnings
 ```
 
-Release profile: `lto=true`, `strip=true`, `opt-level="z"`, `codegen-units=1`, `panic="abort"`. Stripped binaries are roughly `makakoo` ~5 MB and `makakoo-mcp` ~4.7 MB on `aarch64-apple-darwin`; sizes drift slightly between releases.
+Release profile: `lto=true`, `strip=true`, `opt-level="z"`, `codegen-units=1`, `panic="abort"`, with `makakoo-core` compiled at `opt-level=3` for SIMD auto-vectorization on cosine scoring and indexing hot paths.
 
 ## Contributing
 
