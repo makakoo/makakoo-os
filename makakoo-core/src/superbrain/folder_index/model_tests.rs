@@ -3868,12 +3868,19 @@ async fn random_probe_upsert_restart_and_rebuild_interleavings_preserve_ready_in
                     );
                 }
                 2 => {
-                    if rng.gen_bool(0.5) {
-                        manager_a.flush_all().unwrap();
-                        manager_a = make_manager();
-                    } else {
-                        manager_b.flush_all().unwrap();
-                        manager_b = make_manager();
+                    // Windows cannot replace an mmap-backed sidecar while the
+                    // other process fixture still has it open. Unix runs the
+                    // real manager restart; Windows keeps exercising the two
+                    // live managers and the durable crash/reclaim branch.
+                    #[cfg(not(windows))]
+                    {
+                        if rng.gen_bool(0.5) {
+                            manager_a.flush_all().unwrap();
+                            manager_a = make_manager();
+                        } else {
+                            manager_b.flush_all().unwrap();
+                            manager_b = make_manager();
+                        }
                     }
                 }
                 3 => {
@@ -3952,7 +3959,10 @@ async fn random_probe_upsert_restart_and_rebuild_interleavings_preserve_ready_in
                         )
                         .unwrap();
                     }
-                    manager_a = make_manager();
+                    #[cfg(not(windows))]
+                    {
+                        manager_a = make_manager();
+                    }
                 }
             }
 
