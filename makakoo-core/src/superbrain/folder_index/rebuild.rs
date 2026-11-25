@@ -11,10 +11,12 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::model_meta::{
-    clear_persisted_rebuild_retry, read_model_status, read_persisted_rebuild_retry,
-    record_observed_bulk, truncate_utf8, write_model_state, write_persisted_rebuild_retry,
+    clear_persisted_rebuild_retry, read_model_status, read_persisted_automatic_rebuild_success,
+    read_persisted_rebuild_retry, record_observed_bulk, truncate_utf8, write_model_state,
+    write_persisted_automatic_rebuild_success, write_persisted_rebuild_retry,
     write_ready_model_meta, FolderSearchRequest, FolderSearchResponse, IndexModelState,
-    PersistedRebuildRetry, SearchMode, SHORT_BULK_MISMATCH_REASON,
+    PersistedAutomaticRebuildSuccess, PersistedRebuildRetry, SearchMode,
+    SHORT_BULK_MISMATCH_REASON,
 };
 use super::rebuild_pages::{all_chunks_parked, reembed_pages, reset_parked, swap_in_parked};
 use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
@@ -27,7 +29,8 @@ const DEFAULT_PROBE_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
 const DEFAULT_REBUILD_FAILURE_BACKOFF: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_REBUILD_FAILURE_CAP: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_MAX_SAME_CLASS_REBUILD_FAILURES: u32 = 3;
-const MODEL_CHANGE_CONFIRMATIONS: u32 = 2;
+const MAX_MODEL_CHANGE_CONFIRMATION_DELAY: Duration = Duration::from_secs(60);
+const AUTOMATIC_REBUILD_SUCCESS_WINDOW: Duration = Duration::from_secs(60 * 60);
 const MAX_PERSISTED_ERROR_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Copy)]
@@ -165,6 +168,26 @@ impl FolderRebuildRegistry {
         }
     }
 
+    fn now_unix_ms(&self) -> u64 {
+        let base = unix_time_ms();
+        #[cfg(test)]
+        {
+            let offset = *self.clock_offset.lock().unwrap_or_else(|e| e.into_inner());
+            base.saturating_add(offset.as_millis().min(u128::from(u64::MAX)) as u64)
+        }
+        #[cfg(not(test))]
+        {
+            base
+        }
+    }
+
+    fn model_change_confirmation_delay_ms(&self) -> u64 {
+        self.probe_interval
+            .min(MAX_MODEL_CHANGE_CONFIRMATION_DELAY)
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
     #[cfg(test)]
     pub(crate) fn advance_time(&self, duration: Duration) {
         let mut offset = self.clock_offset.lock().unwrap_or_else(|e| e.into_inner());
@@ -181,9 +204,31 @@ impl FolderRebuildRegistry {
         }
     }
 
-    fn try_acquire(&self, idx: &FolderIndex, key: &RebuildKey) -> Option<Arc<Notify>> {
+    fn try_acquire(
+        &self,
+        idx: &FolderIndex,
+        key: &RebuildKey,
+        automatic: bool,
+    ) -> Option<Arc<Notify>> {
         let folder_id = idx.folder_id();
         let now = self.now();
+        if automatic {
+            let last_success = idx.lock_conn().ok().and_then(|conn| {
+                read_persisted_automatic_rebuild_success(&conn)
+                    .ok()
+                    .flatten()
+            });
+            if last_success.is_some_and(|success| {
+                self.now_unix_ms()
+                    < success.last_success_unix_ms.saturating_add(
+                        AUTOMATIC_REBUILD_SUCCESS_WINDOW
+                            .as_millis()
+                            .min(u128::from(u64::MAX)) as u64,
+                    )
+            }) {
+                return None;
+            }
+        }
         let persisted = idx
             .lock_conn()
             .ok()
@@ -425,6 +470,53 @@ impl FolderRebuildRegistry {
     }
 }
 
+pub(crate) struct RebuildActivityGuard {
+    rebuilds: Arc<FolderRebuildRegistry>,
+    folder_id: String,
+}
+
+impl RebuildActivityGuard {
+    pub(crate) fn new(rebuilds: Arc<FolderRebuildRegistry>, folder_id: String) -> Self {
+        Self {
+            rebuilds,
+            folder_id,
+        }
+    }
+}
+
+impl Drop for RebuildActivityGuard {
+    fn drop(&mut self) {
+        self.rebuilds.finish(&self.folder_id);
+    }
+}
+
+pub(crate) struct ProbeActivityGuard {
+    rebuilds: Arc<FolderRebuildRegistry>,
+    folder_id: String,
+    reached_bulk: bool,
+}
+
+impl ProbeActivityGuard {
+    pub(crate) fn new(rebuilds: Arc<FolderRebuildRegistry>, folder_id: String) -> Self {
+        Self {
+            rebuilds,
+            folder_id,
+            reached_bulk: false,
+        }
+    }
+
+    fn set_reached_bulk(&mut self, reached_bulk: bool) {
+        self.reached_bulk = reached_bulk;
+    }
+}
+
+impl Drop for ProbeActivityGuard {
+    fn drop(&mut self) {
+        self.rebuilds
+            .finish_probe(&self.folder_id, self.reached_bulk);
+    }
+}
+
 fn exponential_backoff(initial: Duration, cap: Duration, failures: u32) -> Duration {
     let shift = failures.saturating_sub(1).min(31);
     initial.saturating_mul(1_u32 << shift).min(cap)
@@ -476,17 +568,19 @@ pub(crate) async fn probe_and_reconcile(
     let Ok((bulk_model, bulk_dim)) = bulk_emb.probe_model().await else {
         return false;
     };
-    let observed = idx
-        .lock_conn()
-        .ok()
-        .and_then(|conn| record_observed_bulk(&conn, &bulk_model, bulk_dim).ok());
+    let observed = idx.lock_conn().ok().and_then(|mut conn| {
+        record_observed_bulk(&mut conn, &bulk_model, bulk_dim, rebuilds.now_unix_ms()).ok()
+    });
 
-    let short_result = match short_emb.as_ref() {
+    let (short_result, short_probe_failed) = match short_emb.as_ref() {
         Some(s) if s.model() != bulk_emb.model() || s.base_url() != bulk_emb.base_url() => {
-            s.probe_model().await.ok()
+            match s.probe_model().await {
+                Ok(pair) => (Some(pair), false),
+                Err(_) => (None, true),
+            }
         }
-        Some(_) => Some((bulk_model.clone(), bulk_dim)),
-        None => None,
+        Some(_) => (Some((bulk_model.clone(), bulk_dim)), false),
+        None => (None, false),
     };
 
     // A rebuild already running owns the model state; its own probe and the next
@@ -531,6 +625,10 @@ pub(crate) async fn probe_and_reconcile(
             let _ = idx.mark_stale_unless_rebuilding(SHORT_BULK_MISMATCH_REASON);
             return true;
         }
+        if short_probe_failed && status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON)
+        {
+            return true;
+        }
         if status.index_state == IndexModelState::Stale
             && status
                 .stale_reason
@@ -557,6 +655,7 @@ pub(crate) async fn probe_and_reconcile(
                 rebuilds,
                 Some((bulk_model, bulk_dim)),
                 short_result,
+                true,
             );
         }
         return true;
@@ -569,7 +668,7 @@ pub(crate) async fn probe_and_reconcile(
     }
     if observed
         .as_ref()
-        .is_none_or(|value| value.consecutive < MODEL_CHANGE_CONFIRMATIONS)
+        .is_none_or(|value| !value.is_confirmed(rebuilds.model_change_confirmation_delay_ms()))
     {
         return true;
     }
@@ -581,6 +680,7 @@ pub(crate) async fn probe_and_reconcile(
         rebuilds,
         Some((bulk_model, bulk_dim)),
         short_result,
+        true,
     );
     true
 }
@@ -609,9 +709,9 @@ pub(crate) fn schedule_probe(
     }
     tokio::spawn(async move {
         let folder_id = idx.folder_id().to_string();
-        let reached_bulk =
-            probe_and_reconcile(idx, short_emb, bulk_emb, Arc::clone(&rebuilds)).await;
-        rebuilds.finish_probe(&folder_id, reached_bulk);
+        let mut activity = ProbeActivityGuard::new(Arc::clone(&rebuilds), folder_id);
+        let reached_bulk = probe_and_reconcile(idx, short_emb, bulk_emb, rebuilds).await;
+        activity.set_reached_bulk(reached_bulk);
     });
 }
 
@@ -622,12 +722,16 @@ pub(crate) fn spawn_folder_rebuild(
     rebuilds: Arc<FolderRebuildRegistry>,
     observed_bulk: Option<(String, usize)>,
     observed_short: Option<(String, usize)>,
+    automatic: bool,
 ) {
     let Some((model, dim)) = observed_bulk.as_ref() else {
         return;
     };
     let rebuild_key = RebuildKey::new(model.clone(), *dim);
-    if rebuilds.try_acquire(&idx, &rebuild_key).is_none() {
+    if rebuilds
+        .try_acquire(&idx, &rebuild_key, automatic)
+        .is_none()
+    {
         return;
     }
 
@@ -642,12 +746,14 @@ pub(crate) fn spawn_folder_rebuild(
     let rebuilds_clone = Arc::clone(&rebuilds);
     tokio::spawn(async move {
         let fid = idx.folder_id().to_string();
+        let _activity = RebuildActivityGuard::new(Arc::clone(&rebuilds_clone), fid);
         let succeeded = match run_folder_rebuild(
             Arc::clone(&idx),
             short_emb,
             bulk_emb,
             observed_bulk,
             observed_short,
+            automatic.then(|| Arc::clone(&rebuilds_clone)),
         )
         .await
         {
@@ -670,7 +776,6 @@ pub(crate) fn spawn_folder_rebuild(
         if succeeded {
             rebuilds_clone.clear_rebuild_retry(&idx);
         }
-        rebuilds_clone.finish(&fid);
     });
 }
 
@@ -680,6 +785,7 @@ async fn run_folder_rebuild(
     bulk_emb: Arc<EmbeddingClient>,
     observed_bulk: Option<(String, usize)>,
     mut observed_short: Option<(String, usize)>,
+    automatic_success_clock: Option<Arc<FolderRebuildRegistry>>,
 ) -> Result<()> {
     let (start_gen, chunk_count) = {
         let conn = idx.lock_conn()?;
@@ -731,11 +837,16 @@ async fn run_folder_rebuild(
         {
             let mut conn = idx.lock_conn()?;
             let gen_now = read_generation(&conn)?;
-            if gen_now == seen_gen
-                && commit_rebuild(
-                    &idx, &mut conn, seen_gen, &b_model, b_dim, &bulk_emb, &short_emb,
-                )?
-            {
+            let commit_meta = RebuildCommitMeta {
+                model: &b_model,
+                dim: b_dim,
+                bulk_emb: &bulk_emb,
+                short_emb: &short_emb,
+                automatic_success_unix_ms: automatic_success_clock
+                    .as_ref()
+                    .map(|clock| clock.now_unix_ms()),
+            };
+            if gen_now == seen_gen && commit_rebuild(&idx, &mut conn, seen_gen, &commit_meta)? {
                 drop(conn);
                 idx.checkpoint_wal()?;
                 idx.clear_query_mismatch();
@@ -759,14 +870,19 @@ async fn run_folder_rebuild(
 /// Commit the parked vectors if the index is still at `seen_gen` and every
 /// chunk holds a parked vector for its current text. Returns false when the
 /// caller must rescan (a writer got in, or a row is not covered).
+struct RebuildCommitMeta<'a> {
+    model: &'a str,
+    dim: usize,
+    bulk_emb: &'a EmbeddingClient,
+    short_emb: &'a Option<Arc<EmbeddingClient>>,
+    automatic_success_unix_ms: Option<u64>,
+}
+
 fn commit_rebuild(
     idx: &FolderIndex,
     conn: &mut rusqlite::Connection,
     seen_gen: u64,
-    b_model: &str,
-    b_dim: usize,
-    bulk_emb: &EmbeddingClient,
-    short_emb: &Option<Arc<EmbeddingClient>>,
+    meta: &RebuildCommitMeta<'_>,
 ) -> Result<bool> {
     // Vectors, generation and the ready model record commit together: a crash
     // leaves the old state, never new vectors under the old model's record.
@@ -780,17 +896,25 @@ fn commit_rebuild(
         let new_gen = bump_generation_tx(&tx)?;
         write_ready_model_meta(
             &tx,
-            b_model,
-            b_dim,
-            bulk_emb.model(),
-            short_emb.as_deref().map(EmbeddingClient::model),
+            meta.model,
+            meta.dim,
+            meta.bulk_emb.model(),
+            meta.short_emb.as_deref().map(EmbeddingClient::model),
         )?;
+        if let Some(last_success_unix_ms) = meta.automatic_success_unix_ms {
+            write_persisted_automatic_rebuild_success(
+                &tx,
+                &PersistedAutomaticRebuildSuccess {
+                    last_success_unix_ms,
+                },
+            )?;
+        }
         tx.commit()?;
         new_gen
     };
     let count = read_chunk_count(conn)?;
     idx.vectors
-        .set_model_meta(Some(b_model.to_string()), Some(b_dim));
+        .set_model_meta(Some(meta.model.to_string()), Some(meta.dim));
     idx.vectors.rebuild_from_sqlite(conn, new_gen, count)?;
     Ok(true)
 }
@@ -801,7 +925,6 @@ fn commit_rebuild(
 pub(crate) async fn search_folder_checked(
     idx: Arc<FolderIndex>,
     short_emb: Option<Arc<EmbeddingClient>>,
-    _bulk_emb: Option<Arc<EmbeddingClient>>,
     rebuilds: Arc<FolderRebuildRegistry>,
     req: FolderSearchRequest,
 ) -> Result<FolderSearchResponse> {

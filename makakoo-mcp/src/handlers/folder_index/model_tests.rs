@@ -109,7 +109,7 @@ impl Respond for McpEmbedResponder {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_folder_index_model_switch_rebuild_and_states() {
     let tmp = tempfile::tempdir().unwrap();
-    let responder = McpEmbedResponder::new("ail-embed", "ail-embed-bulk", "qwen3-v1", 64);
+    let responder = McpEmbedResponder::new("test-embed", "test-embed-bulk", "qwen3-v1", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
@@ -117,12 +117,13 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
         .mount(&server)
         .await;
 
-    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let bulk_emb =
-        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed-bulk"));
+        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed-bulk"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path().join("indexes"))
-            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
+            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb))
+            .with_model_reprobe_interval(std::time::Duration::from_secs(1)),
     );
     let ctx = Arc::new(
         ToolContext::empty(tmp.path().to_path_buf())
@@ -177,42 +178,13 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     responder.switch("bge-v2", 48, 3);
     responder.gate_bulk.store(true, Ordering::SeqCst);
 
-    // Reopen the manager so its index-side bulk probe observes the change. A
-    // query-side mismatch only falls back to FTS; it never starts the rebuild.
-    drop(reg);
-    drop(mgr);
-    let mgr = Arc::new(
-        FolderIndexManager::new(tmp.path().join("indexes"))
-            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
-    );
-    let ctx = Arc::new(
-        ToolContext::empty(tmp.path().to_path_buf())
-            .with_embeddings(Arc::clone(&short_emb))
-            .with_bulk_embeddings(Arc::clone(&bulk_emb))
-            .with_folder_index(Arc::clone(&mgr)),
-    );
-    let mut reg = ToolRegistry::new();
-    register_folder_index(&mut reg, ctx);
+    // The same long-lived manager must observe and confirm the switch. Process
+    // restart is not evidence that an alias change is stable.
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
     mgr.get_or_open("legal", 32).unwrap();
     mgr.wait_for_model_probe("legal").await;
 
-    // A second agreeing observation confirms the new pair before corpus work
-    // starts. Reopening exercises the persisted observation used by short-lived
-    // MCP processes without waiting for the production probe interval.
-    drop(reg);
-    drop(mgr);
-    let mgr = Arc::new(
-        FolderIndexManager::new(tmp.path().join("indexes"))
-            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
-    );
-    let ctx = Arc::new(
-        ToolContext::empty(tmp.path().to_path_buf())
-            .with_embeddings(Arc::clone(&short_emb))
-            .with_bulk_embeddings(Arc::clone(&bulk_emb))
-            .with_folder_index(Arc::clone(&mgr)),
-    );
-    let mut reg = ToolRegistry::new();
-    register_folder_index(&mut reg, ctx);
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
     mgr.get_or_open("legal", 32).unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -366,9 +338,9 @@ async fn mcp_folder_index_upsert_splits_over_16_chunks_and_truncates_utf8_bytes(
         .mount(&server)
         .await;
 
-    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let bulk_emb =
-        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed-bulk"));
+        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed-bulk"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path().join("indexes"))
             .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),

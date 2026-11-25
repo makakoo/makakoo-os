@@ -10,7 +10,7 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::model_meta::{
-    FolderSearchRequest, FolderSearchResponse, UpsertModelMeta, OBSERVED_BULK_UPSERT_REASON,
+    claim_observed_bulk_probe_expedite, FolderSearchRequest, FolderSearchResponse, UpsertModelMeta,
 };
 use super::rebuild::{self, FolderRebuildRegistry};
 use super::{
@@ -147,7 +147,13 @@ impl FolderIndexManager {
         };
 
         if allow_probe && tokio::runtime::Handle::try_current().is_ok() {
-            self.schedule_probe(&idx, short_ref, bulk_ref);
+            // Per-call embedders may answer this query, but only the manager's
+            // configured bulk endpoint may establish index-side provenance.
+            self.schedule_probe(
+                &idx,
+                self.short_emb.as_ref(),
+                self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
+            );
         }
         Ok(idx)
     }
@@ -186,8 +192,7 @@ impl FolderIndexManager {
             bulk_ref.as_ref(),
             true,
         )?;
-        rebuild::search_folder_checked(idx, short_ref, bulk_ref, Arc::clone(&self.rebuilds), req)
-            .await
+        rebuild::search_folder_checked(idx, short_ref, Arc::clone(&self.rebuilds), req).await
     }
 
     pub fn upsert_folder_file(
@@ -229,15 +234,17 @@ impl FolderIndexManager {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        if idx.model_status().ok().is_some_and(|status| {
-            model_meta.is_some_and(|meta| {
-                status.embed_model.as_deref() != Some(meta.model.as_str())
-                    || status.embed_dim != Some(meta.embed_dim)
-            }) || matches!(
-                status.stale_reason.as_deref(),
-                Some(OBSERVED_BULK_UPSERT_REASON) | Some("bulk_model_change_pending")
-            )
-        }) {
+        let should_expedite = model_meta.is_some_and(|meta| {
+            idx.model_status().ok().is_some_and(|status| {
+                (status.embed_model.as_deref() != Some(meta.model.as_str())
+                    || status.embed_dim != Some(meta.embed_dim))
+                    && idx.lock_conn().ok().is_some_and(|mut conn| {
+                        claim_observed_bulk_probe_expedite(&mut conn, &meta.model, meta.embed_dim)
+                            .unwrap_or(false)
+                    })
+            })
+        });
+        if should_expedite {
             self.rebuilds.expedite_probe(idx.folder_id());
         }
         self.schedule_probe(
@@ -294,6 +301,7 @@ impl FolderIndexManager {
             Arc::clone(&self.rebuilds),
             Some(observed_bulk),
             observed_short,
+            false,
         );
         Ok(())
     }

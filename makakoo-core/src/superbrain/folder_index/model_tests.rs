@@ -2,7 +2,7 @@
 //! stale detection, background rebuilds, FTS fallback, and bulk/short split.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -13,6 +13,16 @@ use crate::embeddings::EmbeddingClient;
 
 use super::model_meta::SHORT_BULK_MISMATCH_REASON;
 use super::*;
+
+static OBSERVED_BULK_SQL_TRACE: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+fn capture_observed_bulk_sql(sql: &str) {
+    OBSERVED_BULK_SQL_TRACE
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(sql.to_string());
+}
 
 #[derive(Clone)]
 struct DynamicEmbedResponder {
@@ -30,6 +40,7 @@ struct DynamicEmbedResponder {
     calls: Arc<AtomicUsize>,
     bulk_probe_calls: Arc<AtomicUsize>,
     bulk_calls: Arc<AtomicUsize>,
+    fail_short_probes: Arc<AtomicBool>,
     fail_bulk_probes: Arc<AtomicBool>,
     fail_bulk_embeddings: Arc<AtomicBool>,
     vary_failure_body: Arc<AtomicBool>,
@@ -52,6 +63,7 @@ impl DynamicEmbedResponder {
             calls: Arc::new(AtomicUsize::new(0)),
             bulk_probe_calls: Arc::new(AtomicUsize::new(0)),
             bulk_calls: Arc::new(AtomicUsize::new(0)),
+            fail_short_probes: Arc::new(AtomicBool::new(false)),
             fail_bulk_probes: Arc::new(AtomicBool::new(false)),
             fail_bulk_embeddings: Arc::new(AtomicBool::new(false)),
             vary_failure_body: Arc::new(AtomicBool::new(false)),
@@ -97,6 +109,13 @@ impl Respond for DynamicEmbedResponder {
             if self.fail_bulk_probes.load(Ordering::SeqCst) {
                 return ResponseTemplate::new(503);
             }
+        }
+        if is_probe
+            && req_model == self.short_alias
+            && req_model != self.bulk_alias
+            && self.fail_short_probes.load(Ordering::SeqCst)
+        {
+            return ResponseTemplate::new(503);
         }
 
         if !is_probe && (is_bulk || inputs > 1) {
@@ -157,7 +176,7 @@ fn basis(dim: usize, slot: usize) -> Vec<f32> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_switch_rebuilds_in_background_and_serves_fts_until_ready() {
     let tmp = TempDir::new().unwrap();
-    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed-bulk", "model-v1", 64);
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed-bulk", "model-v1", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
@@ -165,9 +184,9 @@ async fn model_switch_rebuilds_in_background_and_serves_fts_until_ready() {
         .mount(&server)
         .await;
 
-    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let bulk_emb =
-        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed-bulk"));
+        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed-bulk"));
     let initial_mgr = Arc::new(
         FolderIndexManager::new(tmp.path())
             .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
@@ -198,8 +217,8 @@ async fn model_switch_rebuilds_in_background_and_serves_fts_until_ready() {
             Some(&UpsertModelMeta {
                 model: "model-v1".into(),
                 embed_dim: 64,
-                bulk_alias: "ail-embed-bulk".into(),
-                short_alias: Some("ail-embed".into()),
+                bulk_alias: "test-embed-bulk".into(),
+                short_alias: Some("test-embed".into()),
             }),
         )
         .unwrap();
@@ -240,6 +259,7 @@ async fn model_switch_rebuilds_in_background_and_serves_fts_until_ready() {
     );
     let idx = mgr.get_or_open("docs", 32).unwrap();
     mgr.wait_for_model_probe("docs").await;
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
     mgr.probe_folder_model_for_test("docs", 32).await.unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -340,7 +360,7 @@ async fn model_switch_rebuilds_in_background_and_serves_fts_until_ready() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_query_mismatch_records_fallback_without_reembedding() {
     let tmp = TempDir::new().unwrap();
-    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "index-model", 64);
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "index-model", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
@@ -348,7 +368,7 @@ async fn repeated_query_mismatch_records_fallback_without_reembedding() {
         .mount(&server)
         .await;
 
-    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let mgr =
         FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb));
     mgr.upsert_folder_file(
@@ -358,8 +378,8 @@ async fn repeated_query_mismatch_records_fallback_without_reembedding() {
         Some(&UpsertModelMeta {
             model: "index-model".into(),
             embed_dim: 64,
-            bulk_alias: "ail-embed".into(),
-            short_alias: Some("ail-embed".into()),
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
         }),
     )
     .unwrap();
@@ -505,6 +525,7 @@ async fn periodic_probe_rebuilds_once_after_alias_switch() {
         .unwrap();
     assert_eq!(response.mode, SearchMode::Fts);
     mgr.wait_for_model_probe("switch").await;
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(25));
     mgr.probe_folder_model_for_test("switch", 32).await.unwrap();
     mgr.wait_for_rebuild("switch").await;
 
@@ -724,6 +745,7 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
         .await
         .unwrap();
     mgr.wait_for_model_probe("failed").await;
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
     mgr.probe_folder_model_for_test("failed", 32).await.unwrap();
     mgr.wait_for_rebuild("failed").await;
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 4);
@@ -882,6 +904,10 @@ async fn observed_bulk_switch_accepts_new_model_upsert_and_rebuilds_once() {
     )
     .expect("the latest observed bulk pair must be accepted");
     mgr.wait_for_model_probe("observed-upsert").await;
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
+    mgr.probe_folder_model_for_test("observed-upsert", 32)
+        .await
+        .unwrap();
     mgr.wait_for_rebuild("observed-upsert").await;
 
     let status = mgr
@@ -910,7 +936,7 @@ async fn observed_bulk_switch_accepts_new_model_upsert_and_rebuilds_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flapping_bulk_pair_needs_two_consecutive_observations() {
+async fn bulk_change_confirmation_requires_elapsed_window() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
     let server = MockServer::start().await;
@@ -923,9 +949,9 @@ async fn flapping_bulk_pair_needs_two_consecutive_observations() {
     let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
     let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
     mgr.upsert_folder_file(
-        "flapping",
+        "confirmation-window",
         32,
-        &one_chunk("a.md", "Flapping text.", basis(64, 1)),
+        &one_chunk("a.md", "Confirmation text.", basis(64, 1)),
         Some(&UpsertModelMeta {
             model: "model-a".into(),
             embed_dim: 64,
@@ -934,40 +960,37 @@ async fn flapping_bulk_pair_needs_two_consecutive_observations() {
         }),
     )
     .unwrap();
-    mgr.wait_for_model_probe("flapping").await;
+    mgr.wait_for_model_probe("confirmation-window").await;
 
     responder.set_both_model("model-b", 64, 2);
-    mgr.probe_folder_model_for_test("flapping", 32)
+    mgr.probe_folder_model_for_test("confirmation-window", 32)
         .await
         .unwrap();
-    mgr.wait_for_rebuild("flapping").await;
-    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
-
-    responder.set_both_model("model-a", 64, 1);
-    mgr.probe_folder_model_for_test("flapping", 32)
+    mgr.probe_folder_model_for_test("confirmation-window", 32)
         .await
         .unwrap();
+    mgr.wait_for_rebuild("confirmation-window").await;
     assert_eq!(
-        mgr.get_or_open_without_probe_for_test("flapping", 32)
-            .unwrap()
-            .model_status()
-            .unwrap()
-            .index_state,
-        IndexModelState::Ready
+        responder.bulk_calls.load(Ordering::SeqCst),
+        0,
+        "a count-only second sighting confirmed the change"
     );
+
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(59));
+    mgr.probe_folder_model_for_test("confirmation-window", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("confirmation-window").await;
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
 
-    responder.set_both_model("model-b", 64, 2);
-    mgr.probe_folder_model_for_test("flapping", 32)
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(1));
+    mgr.probe_folder_model_for_test("confirmation-window", 32)
         .await
         .unwrap();
-    mgr.probe_folder_model_for_test("flapping", 32)
-        .await
-        .unwrap();
-    mgr.wait_for_rebuild("flapping").await;
+    mgr.wait_for_rebuild("confirmation-window").await;
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
-        mgr.get_or_open_without_probe_for_test("flapping", 32)
+        mgr.get_or_open_without_probe_for_test("confirmation-window", 32)
             .unwrap()
             .model_status()
             .unwrap()
@@ -1020,6 +1043,7 @@ async fn varying_failure_text_persists_backoff_and_halt_while_ingest_continues()
     mgr.probe_folder_model_for_test("persisted-failure", 32)
         .await
         .unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(10));
     mgr.probe_folder_model_for_test("persisted-failure", 32)
         .await
         .unwrap();
@@ -1113,10 +1137,10 @@ async fn varying_failure_text_persists_backoff_and_halt_while_ingest_continues()
         .model_status()
         .unwrap();
     assert_eq!(status.index_state, IndexModelState::Stale);
-    assert!(status
-        .stale_reason
-        .as_deref()
-        .is_some_and(|reason| reason.starts_with("rebuild_suppressed:")));
+    assert_eq!(
+        status.stale_reason.as_deref(),
+        Some(model_meta::OBSERVED_BULK_UPSERT_REASON)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1228,8 +1252,8 @@ async fn interrupted_rebuild_is_marked_stale_and_resumes() {
         Some(&UpsertModelMeta {
             model: "stable-model".into(),
             embed_dim: 64,
-            bulk_alias: "ail-embed".into(),
-            short_alias: Some("ail-embed".into()),
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
         }),
     )
     .unwrap();
@@ -1240,8 +1264,8 @@ async fn interrupted_rebuild_is_marked_stale_and_resumes() {
         Some(&UpsertModelMeta {
             model: "stable-model".into(),
             embed_dim: 64,
-            bulk_alias: "ail-embed".into(),
-            short_alias: Some("ail-embed".into()),
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
         }),
     )
     .unwrap();
@@ -1259,7 +1283,7 @@ async fn interrupted_rebuild_is_marked_stale_and_resumes() {
         tmp.path(),
         "interrupted",
         FolderIndexConfig::with_dim(32)
-            .with_embed_aliases(Some("ail-embed".into()), Some("ail-embed".into())),
+            .with_embed_aliases(Some("test-embed".into()), Some("test-embed".into())),
     )
     .unwrap();
     let reopened_status = reopened.model_status().unwrap();
@@ -1270,14 +1294,14 @@ async fn interrupted_rebuild_is_marked_stale_and_resumes() {
     );
     drop(reopened);
 
-    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "stable-model", 64);
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "stable-model", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
         .respond_with(responder.clone())
         .mount(&server)
         .await;
-    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let mgr =
         FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb));
     let response = mgr
@@ -1427,7 +1451,7 @@ async fn short_vs_bulk_mismatch_stays_stale_fts_only_without_rebuild_loop() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn same_model_different_dim_marks_stale_and_rebuilds() {
     let tmp = TempDir::new().unwrap();
-    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "qwen3-0.6b", 64);
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "qwen3-0.6b", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
@@ -1435,7 +1459,7 @@ async fn same_model_different_dim_marks_stale_and_rebuilds() {
         .mount(&server)
         .await;
 
-    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb)),
     );
@@ -1463,8 +1487,8 @@ async fn same_model_different_dim_marks_stale_and_rebuilds() {
         Some(&UpsertModelMeta {
             model: "qwen3-0.6b".into(),
             embed_dim: 64,
-            bulk_alias: "ail-embed".into(),
-            short_alias: Some("ail-embed".into()),
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
         }),
     )
     .unwrap();
@@ -1476,8 +1500,8 @@ async fn same_model_different_dim_marks_stale_and_rebuilds() {
         Some(&UpsertModelMeta {
             model: "qwen3-0.6b".into(),
             embed_dim: 64,
-            bulk_alias: "ail-embed".into(),
-            short_alias: Some("ail-embed".into()),
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
         }),
     )
     .unwrap();
@@ -1487,6 +1511,7 @@ async fn same_model_different_dim_marks_stale_and_rebuilds() {
     mgr.probe_folder_model_for_test("dim-test", 32)
         .await
         .unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
     mgr.probe_folder_model_for_test("dim-test", 32)
         .await
         .unwrap();
@@ -1556,6 +1581,572 @@ fn probe_stale_mark_never_hides_a_running_rebuild() {
     assert_eq!(st.stale_reason.as_deref(), Some("model_changed_on_probe"));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observed_upsert_flap_back_rebuilds_stored_space_before_ready() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "flap-upsert",
+        32,
+        &one_chunk("a.md", "Original A text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("flap-upsert").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("flap-upsert", 32)
+        .await
+        .unwrap();
+    mgr.upsert_folder_file(
+        "flap-upsert",
+        32,
+        &one_chunk("b.md", "Observed B text.", basis(64, 2)),
+        Some(&UpsertModelMeta {
+            model: "model-b".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("flap-upsert").await;
+    let idx = mgr
+        .get_or_open_without_probe_for_test("flap-upsert", 32)
+        .unwrap();
+    let pending = idx.model_status().unwrap();
+    assert_eq!(pending.index_state, IndexModelState::Stale);
+    assert_eq!(
+        pending.stale_reason.as_deref(),
+        Some(model_meta::OBSERVED_BULK_UPSERT_REASON)
+    );
+
+    responder.set_both_model("model-a", 64, 1);
+    mgr.probe_folder_model_for_test("flap-upsert", 32)
+        .await
+        .unwrap();
+    assert_ne!(
+        idx.model_status().unwrap().index_state,
+        IndexModelState::Ready,
+        "the flap probe published Ready before removing model-b vectors"
+    );
+    mgr.wait_for_rebuild("flap-upsert").await;
+
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("model-a"));
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+    let expected_quantized =
+        crate::superbrain::folder_index::quantize::truncate_and_quantize_i8(&basis(64, 1), 32)
+            .unwrap();
+    let expected =
+        crate::superbrain::folder_index::quantize::i8_slice_to_bytes(&expected_quantized);
+    let non_a: i64 = idx
+        .lock_conn()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM chunks WHERE vector_i8 IS NOT ?1",
+            [&expected],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(non_a, 0, "Ready(model-a) retained a model-b vector");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observed_pair_upsert_during_rebuilding_is_reembedded_before_ready() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr =
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&short), Arc::clone(&bulk));
+    mgr.upsert_folder_file(
+        "rebuilding-upsert",
+        32,
+        &one_chunk("a.md", "Original A text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("rebuilding-upsert").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("rebuilding-upsert", 32)
+        .await
+        .unwrap();
+    let idx = mgr
+        .get_or_open_without_probe_for_test("rebuilding-upsert", 32)
+        .unwrap();
+    let fired = Arc::new(AtomicBool::new(false));
+    let hook_fired = Arc::clone(&fired);
+    let observed_b = UpsertModelMeta {
+        model: "model-b".into(),
+        embed_dim: 64,
+        bulk_alias: "bulk-alias".into(),
+        short_alias: Some("short-alias".into()),
+    };
+    *idx.before_rebuild_commit.lock().unwrap() = Some(Box::new(move |index: &FolderIndex| {
+        if !hook_fired.swap(true, Ordering::SeqCst) {
+            index
+                .upsert_file_with_model(
+                    &one_chunk("b.md", "Observed B during rebuild.", basis(64, 2)),
+                    Some(&observed_b),
+                )
+                .expect("the observed pair must remain ingestible while rebuilding");
+        }
+    }));
+    responder.set_both_model("model-a", 64, 1);
+    mgr.request_folder_rebuild("rebuilding-upsert", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("rebuilding-upsert").await;
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "rebuild commit hook never ran"
+    );
+
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("model-a"));
+    let expected_quantized =
+        crate::superbrain::folder_index::quantize::truncate_and_quantize_i8(&basis(64, 1), 32)
+            .unwrap();
+    let expected =
+        crate::superbrain::folder_index::quantize::i8_slice_to_bytes(&expected_quantized);
+    let non_a: i64 = idx
+        .lock_conn()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM chunks WHERE vector_i8 IS NOT ?1",
+            [&expected],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(non_a, 0, "rebuild committed over a model-b vector");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observed_pair_upserts_expedite_only_one_probe() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "one-expedite",
+        32,
+        &one_chunk("a.md", "Original text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("one-expedite").await;
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("one-expedite", 32)
+        .await
+        .unwrap();
+    let before_upserts = responder.bulk_probe_calls.load(Ordering::SeqCst);
+
+    mgr.upsert_folder_file(
+        "one-expedite",
+        32,
+        &one_chunk("b0.md", "First B text.", basis(64, 2)),
+        Some(&UpsertModelMeta {
+            model: "model-b".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("one-expedite").await;
+    assert_eq!(
+        responder.bulk_probe_calls.load(Ordering::SeqCst),
+        before_upserts + 1
+    );
+
+    for i in 1..=5 {
+        mgr.upsert_folder_file(
+            "one-expedite",
+            32,
+            &one_chunk(&format!("b{i}.md"), "More B text.", basis(64, 2)),
+            Some(&UpsertModelMeta {
+                model: "model-b".into(),
+                embed_dim: 64,
+                bulk_alias: "bulk-alias".into(),
+                short_alias: Some("short-alias".into()),
+            }),
+        )
+        .unwrap();
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        responder.bulk_probe_calls.load(Ordering::SeqCst),
+        before_upserts + 1,
+        "pending upserts repeatedly expedited the same observed pair"
+    );
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn corrupt_observed_bulk_json_self_heals_with_defaulted_fields() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
+    let mgr =
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb));
+    mgr.upsert_folder_file(
+        "corrupt-observed",
+        32,
+        &one_chunk("a.md", "Corrupt metadata text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("corrupt-observed").await;
+    let idx = mgr
+        .get_or_open_without_probe_for_test("corrupt-observed", 32)
+        .unwrap();
+    idx.lock_conn()
+        .unwrap()
+        .execute(
+            "INSERT OR REPLACE INTO folder_meta (key, value) VALUES ('observed_bulk', '{bad json')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        model_meta::read_observed_bulk(&idx.lock_conn().unwrap()).unwrap(),
+        None
+    );
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("corrupt-observed", 32)
+        .await
+        .unwrap();
+    let observed = model_meta::read_observed_bulk(&idx.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed.model, "model-b");
+    assert_eq!(observed.dim, 64);
+    assert_eq!(observed.consecutive, 1);
+    assert!(observed.first_seen_unix_ms > 0);
+    assert_eq!(observed.last_seen_unix_ms, observed.first_seen_unix_ms);
+
+    let old_shape: model_meta::ObservedBulkModel =
+        serde_json::from_str(r#"{"model":"legacy","dim":12,"consecutive":1}"#).unwrap();
+    assert_eq!(old_shape.first_seen_unix_ms, 0);
+    assert_eq!(old_shape.last_seen_unix_ms, 0);
+    assert!(!old_shape.probe_expedited);
+}
+
+#[test]
+fn observed_bulk_record_uses_immediate_transaction() {
+    let tmp = TempDir::new().unwrap();
+    let idx = FolderIndex::open(tmp.path(), "immediate-observation", 8).unwrap();
+    let trace = OBSERVED_BULK_SQL_TRACE.get_or_init(|| Mutex::new(Vec::new()));
+    trace.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    let mut conn = idx.lock_conn().unwrap();
+    conn.trace(Some(capture_observed_bulk_sql));
+    model_meta::record_observed_bulk(&mut conn, "model-a", 64, 1).unwrap();
+    conn.trace(None);
+    let statements = trace.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(
+        statements
+            .iter()
+            .any(|statement| statement.eq_ignore_ascii_case("BEGIN IMMEDIATE")),
+        "observed-pair read/write did not start with BEGIN IMMEDIATE: {statements:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_call_override_never_records_observed_bulk() {
+    let tmp = TempDir::new().unwrap();
+    let configured = DynamicEmbedResponder::new("configured", "configured", "model-a", 64);
+    let configured_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(configured.clone())
+        .mount(&configured_server)
+        .await;
+    let override_responder = DynamicEmbedResponder::new("override", "override", "model-b", 64);
+    let override_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(override_responder.clone())
+        .mount(&override_server)
+        .await;
+    let configured_emb =
+        Arc::new(EmbeddingClient::with_base_url(configured_server.uri()).with_model("configured"));
+    let override_emb =
+        Arc::new(EmbeddingClient::with_base_url(override_server.uri()).with_model("override"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(Arc::clone(&configured_emb), Arc::clone(&configured_emb));
+    mgr.upsert_folder_file(
+        "override-probe",
+        32,
+        &one_chunk("a.md", "Configured model text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "configured".into(),
+            short_alias: Some("configured".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("override-probe").await;
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
+    mgr.search_folder(
+        FolderSearchRequest {
+            folder_id: "override-probe".into(),
+            dim: 32,
+            k: 1,
+            query: Some("Configured".into()),
+            query_vector: None,
+            query_model: None,
+            query_dim: None,
+            filter: SearchFilter::default(),
+        },
+        Some(&override_emb),
+        Some(&override_emb),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("override-probe").await;
+
+    assert_eq!(
+        override_responder.bulk_probe_calls.load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(configured.bulk_probe_calls.load(Ordering::SeqCst), 2);
+    let idx = mgr
+        .get_or_open_without_probe_for_test("override-probe", 32)
+        .unwrap();
+    let observed = model_meta::read_observed_bulk(&idx.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed.model, "model-a");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_rebuild_success_cap_survives_manager_restart() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let make_manager = || {
+        FolderIndexManager::new(tmp.path())
+            .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
+            .with_model_recovery_timings_for_test(
+                std::time::Duration::from_secs(10 * 60),
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(30 * 60),
+                std::time::Duration::from_secs(6 * 60 * 60),
+                3,
+            )
+    };
+    let mgr = make_manager();
+    mgr.upsert_folder_file(
+        "success-cap",
+        32,
+        &one_chunk("a.md", "Cap text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("success-cap").await;
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("success-cap", 32)
+        .await
+        .unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
+    mgr.probe_folder_model_for_test("success-cap", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("success-cap").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+    drop(mgr);
+
+    let mgr = make_manager();
+    responder.set_both_model("model-c", 64, 3);
+    mgr.probe_folder_model_for_test("success-cap", 32)
+        .await
+        .unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
+    mgr.probe_folder_model_for_test("success-cap", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("success-cap").await;
+    assert_eq!(
+        responder.bulk_calls.load(Ordering::SeqCst),
+        1,
+        "restart bypassed the persisted one-hour success cap"
+    );
+    let capped = mgr
+        .get_or_open_without_probe_for_test("success-cap", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(capped.index_state, IndexModelState::Stale);
+    assert_eq!(capped.embed_model.as_deref(), Some("model-b"));
+
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60 * 60 + 1));
+    mgr.probe_folder_model_for_test("success-cap", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("success-cap").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 2);
+    let recovered = mgr
+        .get_or_open_without_probe_for_test("success-cap", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(recovered.index_state, IndexModelState::Ready);
+    assert_eq!(recovered.embed_model.as_deref(), Some("model-c"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_short_probe_preserves_short_bulk_stale_reason() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "bulk-model", 64);
+    *responder.short_model.lock().unwrap() = "short-model".to_string();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "short-error",
+        32,
+        &one_chunk("a.md", "Short error text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "bulk-model".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("short-error").await;
+    let idx = mgr
+        .get_or_open_without_probe_for_test("short-error", 32)
+        .unwrap();
+    assert_eq!(
+        idx.model_status().unwrap().stale_reason.as_deref(),
+        Some(SHORT_BULK_MISMATCH_REASON)
+    );
+
+    responder.fail_short_probes.store(true, Ordering::SeqCst);
+    mgr.probe_folder_model_for_test("short-error", 32)
+        .await
+        .unwrap();
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(
+        status.stale_reason.as_deref(),
+        Some(SHORT_BULK_MISMATCH_REASON)
+    );
+}
+
+#[tokio::test]
+async fn panicking_rebuild_task_drop_guard_releases_active_entry() {
+    let registry = Arc::new(rebuild::FolderRebuildRegistry::new());
+    registry
+        .try_acquire_for_test("panic-rebuild")
+        .expect("free rebuild slot");
+    let task_registry = Arc::clone(&registry);
+    let join = tokio::spawn(async move {
+        let _activity =
+            rebuild::RebuildActivityGuard::new(task_registry, "panic-rebuild".to_string());
+        panic!("intentional rebuild task panic");
+    })
+    .await;
+    assert!(join.unwrap_err().is_panic());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        registry.wait("panic-rebuild"),
+    )
+    .await
+    .expect("panicking rebuild leaked the active entry");
+}
+
+#[tokio::test]
+async fn panicking_probe_task_drop_guard_releases_active_entry() {
+    let registry = Arc::new(rebuild::FolderRebuildRegistry::new());
+    assert!(registry.try_probe("panic-probe"));
+    let task_registry = Arc::clone(&registry);
+    let join = tokio::spawn(async move {
+        let _activity = rebuild::ProbeActivityGuard::new(task_registry, "panic-probe".to_string());
+        panic!("intentional probe task panic");
+    })
+    .await;
+    assert!(join.unwrap_err().is_panic());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        registry.wait_for_probe("panic-probe"),
+    )
+    .await
+    .expect("panicking probe leaked the active entry");
+}
+
 #[tokio::test]
 async fn rebuild_wait_returns_when_finish_lands_between_lookup_and_await() {
     let reg = Arc::new(rebuild::FolderRebuildRegistry::new());
@@ -1591,22 +2182,22 @@ fn one_chunk(file: &str, text: &str, vector: Vec<f32>) -> UpsertFileRequest {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
     let tmp = TempDir::new().unwrap();
-    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "old-model", 64);
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "old-model", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
         .respond_with(responder.clone())
         .mount(&server)
         .await;
-    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb)),
     );
     let old_meta = UpsertModelMeta {
         model: "old-model".into(),
         embed_dim: 64,
-        bulk_alias: "ail-embed".into(),
-        short_alias: Some("ail-embed".into()),
+        bulk_alias: "test-embed".into(),
+        short_alias: Some("test-embed".into()),
     };
     mgr.upsert_folder_file(
         "tail",
@@ -1631,6 +2222,7 @@ async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
 
     responder.set_both_model("new-model", 64, 5);
     mgr.probe_folder_model_for_test("tail", 32).await.unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
     mgr.probe_folder_model_for_test("tail", 32).await.unwrap();
     mgr.wait_for_rebuild("tail").await;
     assert!(fired.load(Ordering::SeqCst), "hook never ran");
@@ -1660,22 +2252,22 @@ async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
     let tmp = TempDir::new().unwrap();
-    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "old-model", 64);
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "old-model", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
         .respond_with(responder.clone())
         .mount(&server)
         .await;
-    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb)),
     );
     let old_meta = UpsertModelMeta {
         model: "old-model".into(),
         embed_dim: 64,
-        bulk_alias: "ail-embed".into(),
-        short_alias: Some("ail-embed".into()),
+        bulk_alias: "test-embed".into(),
+        short_alias: Some("test-embed".into()),
     };
     let files = super::rebuild_pages::REBUILD_PAGE_ROWS + 40;
     for i in 0..files {
@@ -1691,6 +2283,7 @@ async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
 
     responder.set_both_model("new-model", 64, 5);
     mgr.probe_folder_model_for_test("paged", 32).await.unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
     mgr.probe_folder_model_for_test("paged", 32).await.unwrap();
     let _ = mgr
         .search_folder(
@@ -1750,22 +2343,22 @@ async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_untracked_text_change_is_caught_before_the_commit() {
     let tmp = TempDir::new().unwrap();
-    let responder = DynamicEmbedResponder::new("ail-embed", "ail-embed", "old-model", 64);
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "old-model", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
         .respond_with(responder.clone())
         .mount(&server)
         .await;
-    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb)),
     );
     let old_meta = UpsertModelMeta {
         model: "old-model".into(),
         embed_dim: 64,
-        bulk_alias: "ail-embed".into(),
-        short_alias: Some("ail-embed".into()),
+        bulk_alias: "test-embed".into(),
+        short_alias: Some("test-embed".into()),
     };
     mgr.upsert_folder_file(
         "untracked",
@@ -1797,6 +2390,7 @@ async fn an_untracked_text_change_is_caught_before_the_commit() {
     mgr.probe_folder_model_for_test("untracked", 32)
         .await
         .unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
     mgr.probe_folder_model_for_test("untracked", 32)
         .await
         .unwrap();

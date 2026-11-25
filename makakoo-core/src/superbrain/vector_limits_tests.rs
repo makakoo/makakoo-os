@@ -360,6 +360,7 @@ async fn folder_index_rebuild_and_query_enforce_16_batch_and_2000_utf8_byte_cap(
     mgr.probe_folder_model_for_test("eu-docs", 32)
         .await
         .unwrap();
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
     mgr.probe_folder_model_for_test("eu-docs", 32)
         .await
         .unwrap();

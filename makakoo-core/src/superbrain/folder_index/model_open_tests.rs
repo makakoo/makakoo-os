@@ -193,7 +193,7 @@ fn legacy_index_without_fts_or_model_backfills_fts_and_marks_stale() {
 #[test]
 fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
     let tmp = TempDir::new().unwrap();
-    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("ail-embed".into()), None);
+    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("test-embed".into()), None);
     let dir_path;
     {
         let idx = FolderIndex::open_with_config(tmp.path(), "inc-folder", cfg.clone()).unwrap();
@@ -202,7 +202,8 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
         // never record the alias as the model.
         {
             let conn = idx.lock_conn().unwrap();
-            model_meta::write_ready_model_meta(&conn, "qwen3-real", 16, "ail-embed", None).unwrap();
+            model_meta::write_ready_model_meta(&conn, "qwen3-real", 16, "test-embed", None)
+                .unwrap();
         }
         idx.begin_file_indexing("doc.pdf", "v1", 1).unwrap();
         idx.put_file_chunks_batch(
@@ -266,7 +267,7 @@ fn unnamed_chunk(text: &str, slot: usize) -> ChunkInput {
 #[test]
 fn unnamed_rows_on_a_fresh_index_never_claim_the_alias_as_model() {
     let tmp = TempDir::new().unwrap();
-    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("ail-embed".into()), None);
+    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("test-embed".into()), None);
     let idx = FolderIndex::open_with_config(tmp.path(), "fresh", cfg).unwrap();
     for (file, slot) in [("a.pdf", 0), ("b.pdf", 1)] {
         idx.begin_file_indexing(file, "v1", 1).unwrap();

@@ -1,7 +1,7 @@
 //! Metadata persistence, alias checks, and search/upsert types for tracking
 //! the active embedding model and dimension of a [`super::store::FolderIndex`].
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{MakakooError, Result};
@@ -20,13 +20,34 @@ pub(crate) const OBSERVED_BULK_UPSERT_REASON: &str = "observed_bulk_model_upsert
 pub(crate) const SHORT_BULK_MISMATCH_REASON: &str = "short_bulk_model_mismatch";
 const META_OBSERVED_BULK: &str = "observed_bulk";
 const META_REBUILD_RETRY: &str = "rebuild_retry";
+const META_AUTOMATIC_REBUILD_SUCCESS: &str = "automatic_rebuild_success";
 const MAX_QUERY_MISMATCH_REASON_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ObservedBulkModel {
+    #[serde(default)]
     pub(crate) model: String,
+    #[serde(default)]
     pub(crate) dim: usize,
+    #[serde(default)]
     pub(crate) consecutive: u32,
+    #[serde(default)]
+    pub(crate) first_seen_unix_ms: u64,
+    #[serde(default)]
+    pub(crate) last_seen_unix_ms: u64,
+    #[serde(default)]
+    pub(crate) probe_expedited: bool,
+}
+
+impl ObservedBulkModel {
+    pub(crate) fn is_confirmed(&self, min_elapsed_ms: u64) -> bool {
+        self.consecutive >= 2
+            && self.first_seen_unix_ms > 0
+            && self
+                .last_seen_unix_ms
+                .saturating_sub(self.first_seen_unix_ms)
+                >= min_elapsed_ms
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +58,12 @@ pub(crate) struct PersistedRebuildRetry {
     pub(crate) failures: u32,
     pub(crate) halted: bool,
     pub(crate) not_before_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PersistedAutomaticRebuildSuccess {
+    #[serde(default)]
+    pub(crate) last_success_unix_ms: u64,
 }
 
 /// Lifecycle state of a folder or Brain vector index relative to the configured
@@ -209,33 +236,77 @@ pub(crate) fn read_observed_bulk(conn: &Connection) -> Result<Option<ObservedBul
     let Some(raw) = read_meta_opt(conn, META_OBSERVED_BULK)? else {
         return Ok(None);
     };
-    Ok(Some(serde_json::from_str(&raw)?))
+    // A manual edit or a future schema must not wedge every later probe/upsert.
+    // The next successful observation replaces an unreadable value.
+    Ok(serde_json::from_str(&raw).ok())
 }
 
 pub(crate) fn record_observed_bulk(
-    conn: &Connection,
+    conn: &mut Connection,
     model: &str,
     dim: usize,
+    now_unix_ms: u64,
 ) -> Result<ObservedBulkModel> {
-    let previous = read_observed_bulk(conn)?;
-    let consecutive = previous.as_ref().map_or(1, |observed| {
-        if observed.model == model && observed.dim == dim {
-            observed.consecutive.saturating_add(1)
-        } else {
-            1
+    // IMMEDIATE makes the cross-process read/modify/write one serialization
+    // point. Two probes cannot both read the same counter then lose a sighting.
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let previous = read_observed_bulk(&tx)?;
+    let observed = match previous {
+        Some(previous)
+            if previous.model == model
+                && previous.dim == dim
+                && previous.first_seen_unix_ms > 0 =>
+        {
+            ObservedBulkModel {
+                model: model.to_string(),
+                dim,
+                consecutive: previous.consecutive.saturating_add(1),
+                first_seen_unix_ms: previous.first_seen_unix_ms,
+                last_seen_unix_ms: now_unix_ms,
+                probe_expedited: previous.probe_expedited,
+            }
         }
-    });
-    let observed = ObservedBulkModel {
-        model: model.to_string(),
-        dim,
-        consecutive,
+        _ => ObservedBulkModel {
+            model: model.to_string(),
+            dim,
+            consecutive: 1,
+            first_seen_unix_ms: now_unix_ms,
+            last_seen_unix_ms: now_unix_ms,
+            probe_expedited: false,
+        },
     };
     write_meta_opt(
-        conn,
+        &tx,
         META_OBSERVED_BULK,
         Some(&serde_json::to_string(&observed)?),
     )?;
+    tx.commit()?;
     Ok(observed)
+}
+
+/// Atomically claim the one expedited probe allowed for an observed pair.
+/// Returns false for stored/foreign pairs, corrupt metadata, or a pair whose
+/// expedition was already claimed by this or another process.
+pub(crate) fn claim_observed_bulk_probe_expedite(
+    conn: &mut Connection,
+    model: &str,
+    dim: usize,
+) -> Result<bool> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let Some(mut observed) = read_observed_bulk(&tx)? else {
+        return Ok(false);
+    };
+    if observed.model != model || observed.dim != dim || observed.probe_expedited {
+        return Ok(false);
+    }
+    observed.probe_expedited = true;
+    write_meta_opt(
+        &tx,
+        META_OBSERVED_BULK,
+        Some(&serde_json::to_string(&observed)?),
+    )?;
+    tx.commit()?;
+    Ok(true)
 }
 
 pub(crate) fn read_persisted_rebuild_retry(
@@ -260,6 +331,26 @@ pub(crate) fn write_persisted_rebuild_retry(
 
 pub(crate) fn clear_persisted_rebuild_retry(conn: &Connection) -> Result<()> {
     write_meta_opt(conn, META_REBUILD_RETRY, None)
+}
+
+pub(crate) fn read_persisted_automatic_rebuild_success(
+    conn: &Connection,
+) -> Result<Option<PersistedAutomaticRebuildSuccess>> {
+    let Some(raw) = read_meta_opt(conn, META_AUTOMATIC_REBUILD_SUCCESS)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str(&raw).ok())
+}
+
+pub(crate) fn write_persisted_automatic_rebuild_success(
+    conn: &Connection,
+    success: &PersistedAutomaticRebuildSuccess,
+) -> Result<()> {
+    write_meta_opt(
+        conn,
+        META_AUTOMATIC_REBUILD_SUCCESS,
+        Some(&serde_json::to_string(success)?),
+    )
 }
 
 /// Evaluate model metadata and configured aliases on `open()`.
@@ -385,7 +476,7 @@ pub(crate) fn apply_upsert_model_meta_tx(
         let matches_observed = read_observed_bulk(conn)?
             .is_some_and(|observed| observed.model == m.model && observed.dim == m.embed_dim);
         if matches_observed {
-            if status.index_state == IndexModelState::Ready {
+            if status.index_state != IndexModelState::Rebuilding {
                 write_model_state(
                     conn,
                     IndexModelState::Stale,
