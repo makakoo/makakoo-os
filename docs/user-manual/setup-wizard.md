@@ -60,10 +60,13 @@ that default, for example persona name `[1]`, pronoun `[they]`, voice `[1]`,
 or model-provider `[skip]`.
 
 
-### Brain and Obsidian
+### Brain and external vaults (Obsidian / Logseq optional)
 
 The Brain section always seeds the canonical Makakoo Brain at
-`$MAKAKOO_HOME/data/Brain/`. If you use Obsidian, there are two paths:
+`$MAKAKOO_HOME/data/Brain/`. **You do not need Obsidian or Logseq to use
+Makakoo OS** — the Brain is plain Markdown backed by Makakoo's native SQLite
+FTS5 index, vector search, and entity graph. If you already use Obsidian, there
+are two optional paths:
 
 - Open the canonical Brain folder as an Obsidian vault. No Brain replacement, no
   source-of-truth change.

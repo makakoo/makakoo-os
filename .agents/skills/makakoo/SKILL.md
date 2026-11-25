@@ -74,8 +74,9 @@ Primary command surface — these are real. For the long tail, run `makakoo --he
 | `makakoo sancho {tick,status}` | Proactive task engine — fire eligible tasks / inspect registry |
 | `makakoo nursery {list,hatch}` | Mascot registry |
 | `makakoo buddy status` | Active mascot's ASCII frame + state |
-| `makakoo dream` | Force a Brain consolidation pass |
-| `makakoo sync [--force] [--embed]` | Index canonical Brain content, auto-memory, and registered enrichment sources into FTS5 |
+| `makakoo dream` | Force a Brain consolidation pass (holds scoped idle-sleep guard; opt out via `MAKAKOO_NO_WAKE_LOCK=1`) |
+| `makakoo sync [--force] [--embed]` | Index canonical Brain content, auto-memory, and registered enrichment sources into FTS5 + entity graph (O(stat) fast-skip; `--embed` holds scoped wake lock) |
+| `makakoo run <pattern> [--keep-awake]` | Execute a pattern with strategy + mascot composition (`--keep-awake` prevents idle sleep while running) |
 | `makakoo brain {list,add,remove,export,validate,ingest}` | Manage Brain sources and local OKF v0.1 import/export; `ingest` builds a bundle from arbitrary Markdown files/folders |
 | `makakoo search <query>` | Full-text search across the Brain |
 | `makakoo query <question>` | FTS retrieval + LLM synthesis (requires a configured model provider) |

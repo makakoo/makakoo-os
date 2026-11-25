@@ -3,7 +3,7 @@ resolver = "2"
 members = ["makakoo-core", "makakoo-client", "makakoo-mcp", "makakoo-platform", "makakoo", "makakoo-docs-mcp"]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 authors = ["Makakoo OS contributors"]
 license = "MIT"
@@ -43,7 +43,7 @@ toml = "0.8"
 toml_edit = "0.22"
 semver = { version = "1", features = ["serde"] }
 libc = "0.2"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Pipes", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Pipes", "Win32_System_Power", "Win32_System_Threading"] }
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "pkcs8"] }
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "ws"] }
 tar = "0.4"
@@ -59,6 +59,12 @@ strip = true
 opt-level = "z"
 codegen-units = 1
 panic = "abort"
+
+# Enable LLVM opt-level=3 (unrolled NEON/SSE2 auto-vectorization) in core
+# hot paths (cosine vector scoring, graph/FTS processing, blake3) while
+# keeping CLI glue size-optimized.
+[profile.release.package.makakoo-core]
+opt-level = 3
 
 [workspace.metadata.dist]
 # cargo-dist packaging config. Phase G (sprint-013) flipped ci = ["github"]

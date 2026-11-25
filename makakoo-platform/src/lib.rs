@@ -33,8 +33,10 @@ use anyhow::Result;
 
 pub mod error;
 pub mod paths;
+pub mod sleep;
 
 pub use error::PlatformError;
+pub use sleep::SleepGuard;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -121,6 +123,14 @@ pub trait PlatformAdapter: Send + Sync {
     /// Always `true` on POSIX, checks Developer Mode on Windows, always
     /// `false` on Redox stub.
     fn can_symlink(&self) -> bool;
+
+    /// Acquire a scoped idle-sleep prevention assertion for the lifetime of
+    /// the returned [`SleepGuard`]. Degrades silently to [`SleepGuard::noop()`]
+    /// when `MAKAKOO_NO_WAKE_LOCK=1` or when no OS power daemon is available.
+    fn prevent_idle_sleep(&self, reason: &str) -> SleepGuard {
+        let _ = reason;
+        SleepGuard::noop()
+    }
 }
 
 // --- Tests that apply to every platform ---------------------------------

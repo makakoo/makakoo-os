@@ -46,7 +46,9 @@ makakoo <command> [options] [arguments]
 | [distro](makakoo-distro.md) | Manage distro bundles |
 | [secret](makakoo-secret.md) | Manage secrets |
 | [perms](makakoo-perms.md) | Runtime write-access grants (v0.3 / hardened in v0.3.1-v0.3.2) |
-| [sync](makakoo-sync.md) | Index on-disk Brain journals, pages, and auto-memory into FTS5. Use after manual file edits. |
+| [sync](makakoo-sync.md) | Index on-disk Brain journals, pages, and auto-memory into FTS5 + entity graph (O(stat) fast-skip; `--embed` holds a scoped wake lock). |
+| [dream](makakoo-sancho.md) | Run a memory consolidation pass (holds a scoped idle-sleep guard while running; disable via `MAKAKOO_NO_WAKE_LOCK=1`). |
+| `run <pattern> [--keep-awake]` | Execute a pattern with strategy + mascot composition; pass `--keep-awake` to prevent idle sleep during long runs. |
 | [brain](makakoo-brain.md) | Manage knowledge sources and OKF v0.1 import/export. |
 | [memory](makakoo-memory.md) | Memory diagnostics and maintenance. |
 | [skill](makakoo-skill-security.md) | Run a plugin skill or execute security audits |

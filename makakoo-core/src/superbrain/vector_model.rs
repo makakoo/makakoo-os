@@ -10,7 +10,10 @@ use super::folder_index::model_meta::{
     IndexModelState, META_EMBED_ALIAS, META_EMBED_DIM, META_EMBED_MODEL, META_INDEX_STATE,
     META_SHORT_EMBED_ALIAS, META_STALE_REASON,
 };
-use super::store::{cosine_similarity, pack_vector, unpack_vector, SuperbrainStore, VectorHit};
+use super::store::{
+    cosine_similarity_le_bytes, fetch_top_vector_hits, pack_vector, vector_norm, SuperbrainStore,
+    VectorHit,
+};
 use super::vector_claim::{clear_claim_meta, lease_fresh};
 
 pub use super::vector_claim::REBUILD_LEASE_MS;
@@ -325,41 +328,45 @@ impl SuperbrainStore {
             }
         }
 
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let query_norm = vector_norm(query_vec);
+        if query_norm == 0.0 {
+            return Ok(Vec::new());
+        }
+
+        // Two-phase zero-allocation scan:
+        // Phase A reads only `(doc_id, embedding)` using `idx_brain_vectors_model`,
+        // borrowing `&[u8]` directly from SQLite without joining `brain_docs.content`
+        // or heap-allocating per-row `Vec<f32>`.
+        // Phase B fetches `(path, content)` only for the <= `limit` winning hits.
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT d.path, d.content, v.embedding
-             FROM brain_vectors v
-             JOIN brain_docs d ON v.doc_id = d.id
-             WHERE v.model = ?1 AND v.dim = ?2",
+            "SELECT doc_id, embedding
+             FROM brain_vectors
+             WHERE model = ?1 AND dim = ?2",
         )?;
-        let rows = stmt.query_map(params![model, query_vec.len() as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-            ))
-        })?;
+        let mut rows = stmt.query(params![model, query_vec.len() as i64])?;
 
-        let mut scored: Vec<VectorHit> = Vec::new();
-        for row in rows {
-            let (path, content, blob) = row?;
-            let stored = unpack_vector(&blob);
-            let sim = cosine_similarity(query_vec, &stored);
+        let mut scored: Vec<(i64, f32)> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let doc_id: i64 = row.get(0)?;
+            let blob = row.get_ref(1)?.as_blob().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
+            })?;
+            let sim = cosine_similarity_le_bytes(query_vec, query_norm, blob);
             if sim > 0.3 {
-                scored.push(VectorHit {
-                    doc_id: path,
-                    similarity: sim,
-                    content,
-                });
+                scored.push((doc_id, sim));
             }
         }
-        scored.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        scored.truncate(limit);
-        Ok(scored)
+        drop(rows);
+        drop(stmt);
+        fetch_top_vector_hits(&conn, scored, limit)
     }
 
     /// Documents missing a vector OR carrying a vector from a different `(model, dim)`.

@@ -187,6 +187,10 @@ pub enum Commands {
         /// responses produce exit code 2 with the body on stderr.
         #[arg(long)]
         json: bool,
+        /// Prevent system idle sleep while this pattern run executes
+        /// (display may still sleep; opt out globally with MAKAKOO_NO_WAKE_LOCK=1).
+        #[arg(long)]
+        keep_awake: bool,
     },
 
     /// Print version, persona, and build metadata.

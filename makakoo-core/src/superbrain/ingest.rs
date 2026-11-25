@@ -9,11 +9,11 @@
 //! full sync. Embedding is split out into a separate async helper so
 //! the sync path stays cheap and synchronous.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value as YamlValue;
 
@@ -22,11 +22,16 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use crate::superbrain::graph::GraphStore;
-use crate::superbrain::store::{SourceMetadata, SuperbrainStore};
+use crate::superbrain::store::{SourceMetadata, SuperbrainStore, GRAPH_DIRTY_CACHE_KEY};
 use crate::superbrain::vector_model::embed_pending_brain;
 
 const MIN_CONTENT_CHARS: usize = 20;
 const EDGE_ENTITY_PREFIX: &str = "__makakoo_edge__|";
+/// Git-style "racy clean" safety window: files modified within the last 2s
+/// (or with a future timestamp due to clock skew) bypass the O(stat) fast-skip
+/// and verify via blake3 content hash so same-second, same-size edits on
+/// coarse-mtime filesystems (HFS+ 1s, FAT/exFAT 2s, SMB/NFS) are never missed.
+const RACY_MTIME_WINDOW_NS: i64 = 2_000_000_000;
 
 /// What happened to a single file during sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -102,10 +107,13 @@ struct SourceSpec {
 }
 
 struct SyncDirState<'a> {
-    existing: &'a HashSet<String>,
+    existing: &'a HashMap<String, StoredIngestState>,
     force: bool,
+    stat_cutoff_ns: Option<i64>,
     report: &'a mut SyncReport,
     seen: &'a mut HashSet<String>,
+    stat_backfills: &'a mut Vec<(String, i64, i64)>,
+    deleted_during_ingest: &'a mut bool,
 }
 
 struct StoredIngestState {
@@ -116,6 +124,8 @@ struct StoredIngestState {
     source_type: String,
     source_role: String,
     relative_path: Option<String>,
+    file_mtime_ns: Option<i64>,
+    file_size: Option<i64>,
 }
 
 struct GraphSourceRow {
@@ -157,19 +167,23 @@ impl IngestEngine {
     }
 
     /// Full sync. Walks pages/, journals/, optionally auto-memory/.
-    /// Skips files whose stored hash matches, prunes deleted rows,
-    /// and rebuilds the entity graph at the end.
+    /// Skips unchanged files via `(mtime_ns, file_size)` stat fast-skip
+    /// with `blake3` fallback, prunes deleted rows, and rebuilds the
+    /// entity graph only when documents changed or the graph is empty.
     pub fn sync(&self, opts: SyncOptions) -> Result<SyncReport> {
         let mut report = SyncReport::default();
+        let stat_cutoff_ns = current_unix_ns().map(|now| now.saturating_sub(RACY_MTIME_WINDOW_NS));
 
         let existing = if opts.force {
-            HashSet::new()
+            HashMap::new()
         } else {
-            self.load_existing_paths()?
+            self.load_existing_states()?
         };
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut prune_scopes: HashSet<(String, String)> = HashSet::new();
+        let mut stat_backfills: Vec<(String, i64, i64)> = Vec::new();
+        let mut deleted_during_ingest = false;
         let sources = self.load_sources()?;
         let mut active_sources: HashSet<String> =
             sources.iter().map(|source| source.name.clone()).collect();
@@ -186,8 +200,11 @@ impl IngestEngine {
                 let mut state = SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
+                    stat_backfills: &mut stat_backfills,
+                    deleted_during_ingest: &mut deleted_during_ingest,
                 };
                 if pages_dir.exists() && self.sync_dir(&pages_dir, "page", &source, &mut state)? {
                     prune_scopes.insert((source.name.clone(), "page".to_string()));
@@ -196,8 +213,11 @@ impl IngestEngine {
                 let mut state = SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
+                    stat_backfills: &mut stat_backfills,
+                    deleted_during_ingest: &mut deleted_during_ingest,
                 };
                 if journals_dir.exists()
                     && self.sync_dir(&journals_dir, "journal", &source, &mut state)?
@@ -211,8 +231,11 @@ impl IngestEngine {
                 &mut SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
+                    stat_backfills: &mut stat_backfills,
+                    deleted_during_ingest: &mut deleted_during_ingest,
                 },
             )? {
                 prune_scopes.insert((source.name.clone(), "page".to_string()));
@@ -232,30 +255,95 @@ impl IngestEngine {
                 &mut SyncDirState {
                     existing: &existing,
                     force: opts.force,
+                    stat_cutoff_ns,
                     report: &mut report,
                     seen: &mut seen,
+                    stat_backfills: &mut stat_backfills,
+                    deleted_during_ingest: &mut deleted_during_ingest,
                 },
             )? {
                 prune_scopes.insert((memory_source.name.clone(), "memory".to_string()));
             }
         }
 
-        report.removed = self.prune_unseen(&seen, &prune_scopes, &active_sources)?;
-        self.rebuild_triples()?;
-        let (n, e) = self.graph.rebuild_from_entity_graph()?;
+        if !stat_backfills.is_empty() {
+            self.backfill_file_stats(&stat_backfills)?;
+        }
+
+        let existing_matches_db = !opts.force
+            && report.pages == 0
+            && report.journals == 0
+            && report.memories == 0
+            && !deleted_during_ingest;
+        report.removed = self.prune_unseen(
+            &seen,
+            &prune_scopes,
+            &active_sources,
+            existing_matches_db.then_some(&existing),
+        )?;
+
+        let graph_dirty = opts.force
+            || report.pages > 0
+            || report.journals > 0
+            || report.memories > 0
+            || report.removed > 0
+            || deleted_during_ingest
+            || self.graph_is_dirty_or_unbuilt()?;
+
+        let (n, e) = if graph_dirty {
+            self.rebuild_triples_and_graph()?
+        } else {
+            self.graph.counts()?
+        };
         report.graph_nodes = n;
         report.graph_edges = e;
         Ok(report)
     }
 
-    /// Rebuild the `entity_graph` triples table from `brain_docs.entities`.
-    /// Mirrors Python `rebuild_entity_graph` so the materialised graph
-    /// downstream (`GraphStore::rebuild_from_entity_graph`) sees the same
-    /// (subject, links_to, object) shape.
-    fn rebuild_triples(&self) -> Result<()> {
-        let conn = self.store.conn_arc();
-        let mut conn = conn.lock().expect("ingest conn poisoned");
-        let tx = conn.transaction()?;
+    /// Rebuild `entity_graph` and materialize `brain_graph_{nodes,edges}`
+    /// atomically inside a single `BEGIN IMMEDIATE` transaction (clearing the
+    /// persistent dirty flag only on commit). If `store` and `graph` share the
+    /// same connection (all standard setups), both tables commit or roll back
+    /// together; if distinct connections were injected, the dirty flag clears
+    /// only after both steps succeed.
+    fn rebuild_triples_and_graph(&self) -> Result<(usize, usize)> {
+        let store_arc = self.store.conn_arc();
+        let graph_arc = self.graph.conn_arc();
+        if Arc::ptr_eq(&store_arc, &graph_arc) {
+            let mut conn = store_arc.lock().expect("ingest conn poisoned");
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            Self::rebuild_triples_in_tx(&tx)?;
+            let counts = GraphStore::rebuild_from_entity_graph_in_tx(&tx)?;
+            tx.execute(
+                "INSERT INTO cache (key, value) VALUES (?1, '0')
+                 ON CONFLICT(key) DO UPDATE SET value = '0'",
+                params![GRAPH_DIRTY_CACHE_KEY],
+            )?;
+            tx.commit()?;
+            Ok(counts)
+        } else {
+            {
+                let mut conn = store_arc.lock().expect("ingest conn poisoned");
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                Self::rebuild_triples_in_tx(&tx)?;
+                tx.commit()?;
+            }
+            let counts = self.graph.rebuild_from_entity_graph()?;
+            {
+                let conn = store_arc.lock().expect("ingest conn poisoned");
+                conn.execute(
+                    "INSERT INTO cache (key, value) VALUES (?1, '0')
+                     ON CONFLICT(key) DO UPDATE SET value = '0'",
+                    params![GRAPH_DIRTY_CACHE_KEY],
+                )?;
+            }
+            Ok(counts)
+        }
+    }
+
+    /// Rebuild the `entity_graph` triples table from `brain_docs.entities`
+    /// inside an existing `BEGIN IMMEDIATE` transaction.
+    fn rebuild_triples_in_tx(tx: &Transaction<'_>) -> Result<()> {
         tx.execute("DELETE FROM entity_graph", [])?;
         let rows: Vec<GraphSourceRow> = {
             let mut stmt = tx.prepare(
@@ -277,36 +365,38 @@ impl IngestEngine {
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             r
         };
-        for row in rows {
-            let entities: Vec<String> = serde_json::from_str(&row.entities).unwrap_or_default();
-            let valid_from = if row.doc_type == "journal" {
-                let stem: String = row.name.replace('_', "-").chars().take(10).collect();
-                Some(stem)
-            } else {
-                None
-            };
-            let subject = if row.source_type.eq_ignore_ascii_case("okf") {
-                row.relative_path
-                    .as_deref()
-                    .and_then(|relative| {
-                        qualified_okf_concept_id(&row.source_name, Path::new(relative))
-                    })
-                    .unwrap_or(row.name)
-            } else {
-                row.name
-            };
-            for ent in entities {
-                let (predicate, object) = decode_edge_entity(&ent)
-                    .unwrap_or_else(|| ("links_to".to_string(), ent.clone()));
-                tx.execute(
-                    "INSERT INTO entity_graph
-                     (subject, predicate, object, valid_from, valid_to, confidence, source)
-                     VALUES (?1, ?2, ?3, ?4, NULL, 1.0, ?5)",
-                    params![subject, predicate, object, valid_from, row.path],
-                )?;
+        {
+            let mut insert_stmt = tx.prepare(
+                "INSERT INTO entity_graph
+                 (subject, predicate, object, valid_from, valid_to, confidence, source)
+                 VALUES (?1, ?2, ?3, ?4, NULL, 1.0, ?5)",
+            )?;
+            for row in rows {
+                let entities: Vec<String> = serde_json::from_str(&row.entities).unwrap_or_default();
+                let valid_from = if row.doc_type == "journal" {
+                    let stem: String = row.name.replace('_', "-").chars().take(10).collect();
+                    Some(stem)
+                } else {
+                    None
+                };
+                let subject = if row.source_type.eq_ignore_ascii_case("okf") {
+                    row.relative_path
+                        .as_deref()
+                        .and_then(|relative| {
+                            qualified_okf_concept_id(&row.source_name, Path::new(relative))
+                        })
+                        .unwrap_or(row.name)
+                } else {
+                    row.name
+                };
+                for ent in entities {
+                    let (predicate, object) = decode_edge_entity(&ent)
+                        .unwrap_or_else(|| ("links_to".to_string(), ent.clone()));
+                    insert_stmt
+                        .execute(params![subject, predicate, object, valid_from, row.path])?;
+                }
             }
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -333,9 +423,11 @@ impl IngestEngine {
                 root: self.brain_dir.clone(),
             }
         };
-        let result = self.ingest_one(path, doc_type, &source, None, true)?;
-        let _ = self.rebuild_triples();
-        let _ = self.graph.rebuild_from_entity_graph();
+        let file_stat = read_file_stat(path);
+        let result = self.ingest_one(
+            path, doc_type, &source, None, file_stat, None, true, None, None,
+        )?;
+        let _ = self.rebuild_triples_and_graph();
         Ok(result)
     }
 
@@ -411,12 +503,26 @@ impl IngestEngine {
             }
             let path_str = path.to_string_lossy().to_string();
             state.seen.insert(path_str.clone());
-            let known = if state.force {
-                false
+            let file_stat = entry
+                .metadata()
+                .ok()
+                .and_then(|meta| file_stat_from_metadata(&meta));
+            let stored = if state.force {
+                None
             } else {
-                state.existing.contains(&path_str)
+                state.existing.get(&path_str)
             };
-            match self.ingest_one(&path, doc_type, source, Some(known), state.force)? {
+            match self.ingest_one(
+                &path,
+                doc_type,
+                source,
+                stored,
+                file_stat,
+                state.stat_cutoff_ns,
+                state.force,
+                Some(state.stat_backfills),
+                Some(state.deleted_during_ingest),
+            )? {
                 IngestResult::Page => state.report.pages += 1,
                 IngestResult::Journal => state.report.journals += 1,
                 IngestResult::Memory => state.report.memories += 1,
@@ -521,17 +627,47 @@ impl IngestEngine {
         Ok(sources)
     }
 
-    /// Hash-skip + upsert one file. `existed` is a hint — when the
-    /// caller already pulled the path/hash table we use it to skip the
-    /// extra SELECT.
+    /// Stat fast-skip + hash-skip + upsert one file.
+    #[allow(clippy::too_many_arguments)]
     fn ingest_one(
         &self,
         path: &Path,
         doc_type: &str,
         source: &SourceSpec,
-        existed_hint: Option<bool>,
+        stored: Option<&StoredIngestState>,
+        file_stat: Option<(i64, i64)>,
+        stat_cutoff_ns: Option<i64>,
         force: bool,
+        stat_backfills: Option<&mut Vec<(String, i64, i64)>>,
+        deleted_during_ingest: Option<&mut bool>,
     ) -> Result<IngestResult> {
+        let relative_path = path
+            .strip_prefix(&source.root)
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
+
+        // O(stat) fast-skip: if mtime_ns, byte size, doc_type, and source
+        // metadata all match the preloaded DB row — AND the file's mtime is
+        // strictly older than the 2s racy-mtime safety window — skip without
+        // opening, reading, hashing, or regex-parsing the file.
+        if !force {
+            if let (Some(stored), Some((mtime_ns, file_size)), Some(cutoff_ns)) =
+                (stored, file_stat, stat_cutoff_ns)
+            {
+                if mtime_ns <= cutoff_ns
+                    && stored.file_mtime_ns == Some(mtime_ns)
+                    && stored.file_size == Some(file_size)
+                    && stored.doc_type == doc_type
+                    && stored.source_name == source.name
+                    && stored.source_type == source.source_type
+                    && stored.source_role == source.role
+                    && stored.relative_path == relative_path
+                {
+                    return Ok(IngestResult::Skipped);
+                }
+            }
+        }
+
         let raw_content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(error) => {
@@ -548,6 +684,8 @@ impl IngestEngine {
                             error = %delete_error,
                             "failed to remove stale unreadable OKF concept"
                         );
+                    } else if let Some(deleted) = deleted_during_ingest {
+                        *deleted = true;
                     }
                 }
                 return Ok(IngestResult::Errors);
@@ -565,6 +703,8 @@ impl IngestEngine {
                             error = %delete_error,
                             "failed to remove stale invalid OKF concept"
                         );
+                    } else if let Some(deleted) = deleted_during_ingest {
+                        *deleted = true;
                     }
                     return Ok(IngestResult::Errors);
                 }
@@ -607,13 +747,9 @@ impl IngestEngine {
                 .map(serde_json::Value::String)
                 .collect(),
         );
-        let relative_path = path
-            .strip_prefix(&source.root)
-            .ok()
-            .map(|p| p.to_string_lossy().to_string());
 
-        if !force && existed_hint != Some(false) {
-            if let Some(stored) = self.stored_ingest_state(&path_str)? {
+        if !force {
+            if let Some(stored) = stored {
                 if stored.content_hash == content_hash
                     && stored.doc_type == doc_type
                     && stored.entities == entities_json
@@ -622,12 +758,32 @@ impl IngestEngine {
                     && stored.source_role == source.role
                     && stored.relative_path == relative_path
                 {
+                    // Only persist/backfill settled stats (mtime <= cutoff) so a
+                    // racily-clean file edited again in the same coarse tick can
+                    // never be falsely skipped by a later sync after the window.
+                    if let (Some(backfills), Some((mtime_ns, file_size)), Some(cutoff_ns)) =
+                        (stat_backfills, file_stat, stat_cutoff_ns)
+                    {
+                        if mtime_ns <= cutoff_ns
+                            && (stored.file_mtime_ns != Some(mtime_ns)
+                                || stored.file_size != Some(file_size))
+                        {
+                            backfills.push((path_str, mtime_ns, file_size));
+                        }
+                    }
                     return Ok(IngestResult::Skipped);
                 }
             }
         }
 
-        self.store.write_document_with_source(
+        // Git-style racily-clean smudging at record time: if the file's mtime
+        // is inside the 2s safety window (or unknown cutoff), store NULL stats
+        // so the next sync re-verifies with blake3 even if it runs hours later.
+        let (file_mtime_ns, file_size) = match (file_stat, stat_cutoff_ns) {
+            (Some((m, s)), Some(cutoff)) if m <= cutoff => (Some(m), Some(s)),
+            _ => (None, None),
+        };
+        self.store.write_document_with_source_and_stat(
             &path_str,
             &content,
             doc_type,
@@ -638,6 +794,8 @@ impl IngestEngine {
                 source_role: source.role.clone(),
                 relative_path,
             },
+            file_mtime_ns,
+            file_size,
         )?;
 
         Ok(match doc_type {
@@ -648,38 +806,90 @@ impl IngestEngine {
         })
     }
 
-    fn load_existing_paths(&self) -> Result<HashSet<String>> {
+    fn load_existing_states(&self) -> Result<HashMap<String, StoredIngestState>> {
         let conn = self.store.conn_arc();
         let conn = conn.lock().expect("ingest conn poisoned");
-        let mut stmt = conn.prepare("SELECT path FROM brain_docs")?;
-        let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows.into_iter().collect())
+        let mut stmt = conn.prepare(
+            "SELECT path, content_hash, doc_type, entities, source_name, source_type,
+                    source_role, relative_path, file_mtime_ns, file_size
+             FROM brain_docs",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                StoredIngestState {
+                    content_hash: row.get(1)?,
+                    doc_type: row.get(2)?,
+                    entities: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    source_name: row
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| "default".to_string()),
+                    source_type: row
+                        .get::<_, Option<String>>(5)?
+                        .unwrap_or_else(|| "logseq".to_string()),
+                    source_role: row
+                        .get::<_, Option<String>>(6)?
+                        .unwrap_or_else(|| "canonical".to_string()),
+                    relative_path: row.get(7)?,
+                    file_mtime_ns: row.get(8)?,
+                    file_size: row.get(9)?,
+                },
+            ))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (path, state) = row?;
+            map.insert(path, state);
+        }
+        Ok(map)
     }
 
-    fn stored_ingest_state(&self, path: &str) -> Result<Option<StoredIngestState>> {
+    /// Persist freshly observed `(file_mtime_ns, file_size)` for files whose
+    /// content hash matched an existing row (e.g. first post-v2 sync or a
+    /// `touch` without content edits), without rewriting FTS5 or the graph.
+    fn backfill_file_stats(&self, updates: &[(String, i64, i64)]) -> Result<()> {
+        let conn = self.store.conn_arc();
+        let mut conn = conn.lock().expect("ingest conn poisoned");
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE brain_docs SET file_mtime_ns = ?1, file_size = ?2 WHERE path = ?3",
+            )?;
+            for (path, mtime_ns, file_size) in updates {
+                stmt.execute(params![mtime_ns, file_size, path])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Returns true if any direct `write_document` / `delete_document` (e.g.
+    /// MCP/API writes) or a previously aborted graph rebuild left the dirty
+    /// flag set, OR if the materialized graph is empty while indexed documents
+    /// carry entities.
+    fn graph_is_dirty_or_unbuilt(&self) -> Result<bool> {
         let conn = self.store.conn_arc();
         let conn = conn.lock().expect("ingest conn poisoned");
-        conn.query_row(
-            "SELECT content_hash, doc_type, entities, source_name, source_type,
-                    source_role, relative_path
-             FROM brain_docs WHERE path = ?1",
-            params![path],
-            |row| {
-                Ok(StoredIngestState {
-                    content_hash: row.get(0)?,
-                    doc_type: row.get(1)?,
-                    entities: row.get(2)?,
-                    source_name: row.get(3)?,
-                    source_type: row.get(4)?,
-                    source_role: row.get(5)?,
-                    relative_path: row.get(6)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
+        let dirty: Option<String> = conn
+            .query_row(
+                "SELECT value FROM cache WHERE key = ?1",
+                params![GRAPH_DIRTY_CACHE_KEY],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if dirty.as_deref() == Some("1") {
+            return Ok(true);
+        }
+        let needed: i64 = conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM brain_graph_nodes) = 0
+                AND EXISTS(
+                    SELECT 1 FROM brain_docs
+                    WHERE entities IS NOT NULL AND entities != '[]' AND entities != ''
+                )",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(needed != 0)
     }
 
     fn prune_unseen(
@@ -687,33 +897,49 @@ impl IngestEngine {
         seen: &HashSet<String>,
         prune_scopes: &HashSet<(String, String)>,
         active_sources: &HashSet<String>,
+        preloaded: Option<&HashMap<String, StoredIngestState>>,
     ) -> Result<usize> {
-        let conn = self.store.conn_arc();
-        let conn = conn.lock().expect("ingest conn poisoned");
-        let all: Vec<(String, String, String)> = {
-            let mut stmt = conn.prepare("SELECT path, source_name, doc_type FROM brain_docs")?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, Option<String>>(1)?
-                            .unwrap_or_else(|| "default".to_string()),
-                        r.get::<_, String>(2)?,
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
+        let stale: Vec<String> = if let Some(existing) = preloaded {
+            // Reuse the rows already fetched by `load_existing_states` instead
+            // of running a second full-table scan over `brain_docs`.
+            existing
+                .iter()
+                .filter_map(|(path, state)| {
+                    let source_removed = !active_sources.contains(&state.source_name);
+                    let file_removed = prune_scopes
+                        .contains(&(state.source_name.clone(), state.doc_type.clone()))
+                        && !seen.contains(path);
+                    (source_removed || file_removed).then(|| path.clone())
+                })
+                .collect()
+        } else {
+            let conn = self.store.conn_arc();
+            let conn = conn.lock().expect("ingest conn poisoned");
+            let all: Vec<(String, String, String)> = {
+                let mut stmt =
+                    conn.prepare("SELECT path, source_name, doc_type FROM brain_docs")?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, Option<String>>(1)?
+                                .unwrap_or_else(|| "default".to_string()),
+                            r.get::<_, String>(2)?,
+                        ))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            };
+            drop(conn);
+            all.into_iter()
+                .filter_map(|(path, source_name, doc_type)| {
+                    let source_removed = !active_sources.contains(&source_name);
+                    let file_removed =
+                        prune_scopes.contains(&(source_name, doc_type)) && !seen.contains(&path);
+                    (source_removed || file_removed).then_some(path)
+                })
+                .collect()
         };
-        drop(conn);
-        let stale: Vec<String> = all
-            .into_iter()
-            .filter_map(|(path, source_name, doc_type)| {
-                let source_removed = !active_sources.contains(&source_name);
-                let file_removed =
-                    prune_scopes.contains(&(source_name, doc_type)) && !seen.contains(&path);
-                (source_removed || file_removed).then_some(path)
-            })
-            .collect();
         let mut removed = 0usize;
         for path in stale {
             self.store.delete_document(&path)?;
@@ -724,6 +950,26 @@ impl IngestEngine {
 }
 
 // ───────── helpers ─────────
+
+fn current_unix_ns() -> Option<i64> {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    i64::try_from(dur.as_nanos()).ok()
+}
+
+fn read_file_stat(path: &Path) -> Option<(i64, i64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    file_stat_from_metadata(&meta)
+}
+
+fn file_stat_from_metadata(meta: &std::fs::Metadata) -> Option<(i64, i64)> {
+    let modified = meta.modified().ok()?;
+    let dur = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let mtime_ns = i64::try_from(dur.as_nanos()).ok()?;
+    let size = i64::try_from(meta.len()).ok()?;
+    Some((mtime_ns, size))
+}
 
 fn doc_type_for(path: &Path) -> Option<&'static str> {
     let s = path.to_string_lossy();
@@ -757,11 +1003,13 @@ fn expand_path(raw: &str, home: &Path) -> PathBuf {
 }
 
 fn expand_environment_variables(raw: &str, home: &Path) -> String {
-    let variables = regex::Regex::new(
-        r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
-    )
-    .expect("environment variable regex");
-    variables
+    static ENV_VAR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(
+            r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
+        )
+        .expect("environment variable regex")
+    });
+    ENV_VAR_RE
         .replace_all(raw, |captures: &regex::Captures<'_>| {
             let name = captures
                 .name("braced")
@@ -2298,5 +2546,314 @@ mod tests {
 
         let error = engine.load_sources().unwrap_err().to_string();
         assert!(error.contains("brain source roots overlap"));
+    }
+
+    #[test]
+    fn sync_zero_change_second_run_writes_zero_sqlite_rows_and_preserves_graph_counts() {
+        let (dir, engine) = make_engine();
+        let brain = dir.path().join("data").join("Brain");
+        write(
+            &brain.join("pages").join("Tytus.md"),
+            "# Tytus\nlinks to [[Harvey]] and [[Makakoo OS]]",
+        );
+        write(
+            &brain.join("journals").join("2026_11_25.md"),
+            "- shipped [[Tytus]] performance overhaul today",
+        );
+
+        let first = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(first.pages, 1);
+        assert_eq!(first.journals, 1);
+        assert!(first.graph_nodes > 0);
+        assert!(first.graph_edges > 0);
+
+        let changes_before = engine.store.conn_arc().lock().unwrap().total_changes();
+        let second = engine.sync(SyncOptions::default()).unwrap();
+        let changes_after = engine.store.conn_arc().lock().unwrap().total_changes();
+
+        assert_eq!(second.pages, 0);
+        assert_eq!(second.journals, 0);
+        assert_eq!(second.skipped, 2);
+        assert_eq!(second.graph_nodes, first.graph_nodes);
+        assert_eq!(second.graph_edges, first.graph_edges);
+        assert_eq!(
+            changes_before, changes_after,
+            "0-change sync must perform zero SQLite mutations (no WAL churn)"
+        );
+    }
+
+    #[test]
+    fn sync_reindexes_on_changed_mtime_same_size_and_changed_size() {
+        let (dir, engine) = make_engine();
+        let page = dir
+            .path()
+            .join("data")
+            .join("Brain")
+            .join("pages")
+            .join("StatTest.md");
+        write(
+            &page,
+            "# StatTest\n\nBody marker AAAA — long enough to index",
+        );
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&page)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        let r1 = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(r1.pages, 1);
+
+        // Same byte length, different mtime: simulate an edit with a newer mtime
+        // by shifting stored file_mtime_ns back 1s (avoids coarse-FS flake).
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            conn.execute(
+                "UPDATE brain_docs SET file_mtime_ns = file_mtime_ns - 1000000000",
+                [],
+            )
+            .unwrap();
+        }
+        write(
+            &page,
+            "# StatTest\n\nBody marker BBBB — long enough to index",
+        );
+        let r2 = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(r2.pages, 1, "changed mtime with same size must re-index");
+        assert_eq!(engine.store.search("BBBB", 5).unwrap().len(), 1);
+        assert!(engine.store.search("AAAA", 5).unwrap().is_empty());
+
+        // Different byte size (even if mtime happened to collide): longer
+        // body changes file_size and triggers re-indexing independently.
+        write(
+            &page,
+            "# StatTest\n\nBody marker CCCCCCCC — longer body to change size",
+        );
+        let r3 = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(r3.pages, 1, "changed file size must re-index");
+        assert_eq!(engine.store.search("CCCCCCCC", 5).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sync_reindexes_racy_same_mtime_same_size_edit_within_window() {
+        let (dir, engine) = make_engine();
+        let page = dir
+            .path()
+            .join("data")
+            .join("Brain")
+            .join("pages")
+            .join("RacyEdit.md");
+        write(
+            &page,
+            "# RacyEdit\n\nPayload token XXXX — exact same length!",
+        );
+        let r1 = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(r1.pages, 1);
+
+        // Because the file was just written (within the 2s racy window), record-
+        // time smudging must leave file_mtime_ns/file_size NULL in SQLite.
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            let (stored_mtime, stored_size): (Option<i64>, Option<i64>) = conn
+                .query_row(
+                    "SELECT file_mtime_ns, file_size FROM brain_docs LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert!(
+                stored_mtime.is_none() && stored_size.is_none(),
+                "racy freshly-written file must not persist stat fast-skip key yet"
+            );
+        }
+
+        // Overwrite with identical byte length and backdate mtime to 60s ago so
+        // the next sync sees an already-settled mtime (simulating a sync that
+        // happens well after the 2s window expires). Because record-time smudging
+        // left stats NULL, the next sync MUST still hash and catch the edit.
+        write(
+            &page,
+            "# RacyEdit\n\nPayload token YYYY — exact same length!",
+        );
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&page)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+
+        let r2 = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(
+            r2.pages, 1,
+            "racy same-mtime same-size edit must be caught even by a later sync"
+        );
+        assert_eq!(engine.store.search("YYYY", 5).unwrap().len(), 1);
+        assert!(engine.store.search("XXXX", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sync_rebuilds_graph_after_direct_write_document_with_zero_file_changes() {
+        let (dir, engine) = make_engine();
+        let brain = dir.path().join("data").join("Brain");
+        write(
+            &brain.join("pages").join("Seed.md"),
+            "# Seed\nLinks to [[Alpha]] in the initial sync.",
+        );
+        let first = engine.sync(SyncOptions::default()).unwrap();
+        assert!(first.graph_nodes > 0);
+
+        // Simulate an MCP/API direct document write outside the file walker
+        // (doc_type="note" is not owned by the pages/journals file pruner).
+        engine
+            .store
+            .write_document(
+                "mcp://direct-note",
+                "Direct API note referencing [[DirectEntity]]",
+                "note",
+                serde_json::json!(["DirectEntity"]),
+            )
+            .unwrap();
+
+        // Next sync sees zero file changes on disk, yet MUST rebuild the graph
+        // because write_document flipped the persistent graph-dirty marker.
+        let second = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(second.pages, 0);
+        let (_, incoming) = engine.graph.neighbors("DirectEntity").unwrap();
+        assert_eq!(
+            incoming.len(),
+            1,
+            "direct write_document entity must appear in materialized graph on next sync"
+        );
+    }
+
+    #[test]
+    fn sync_retries_atomic_graph_rebuild_after_injected_failure() {
+        let (dir, engine) = make_engine();
+        let brain = dir.path().join("data").join("Brain");
+        write(
+            &brain.join("pages").join("Initial.md"),
+            "# Initial\nLinks to [[InitialTarget]] in v1.",
+        );
+        let first = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(first.pages, 1);
+
+        // Modify file and inject a failure on brain_graph_edges insert so the
+        // combined rebuild_triples + rebuild_from_entity_graph transaction aborts.
+        write(
+            &brain.join("pages").join("Initial.md"),
+            "# Initial\nLinks to [[UpdatedTarget]] after edit!",
+        );
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_graph_rebuild BEFORE INSERT ON brain_graph_edges
+                 BEGIN
+                     SELECT RAISE(ABORT, 'injected atomic sync failure');
+                 END;",
+            )
+            .unwrap();
+        }
+        let err = engine.sync(SyncOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("injected atomic sync failure"));
+
+        // Both entity_graph and brain_graph_edges must still reflect the old
+        // committed state (atomic rollback), and the dirty flag must stay '1'.
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            let updated_triples: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM entity_graph WHERE object = 'UpdatedTarget'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                updated_triples, 0,
+                "entity_graph must roll back atomically with brain_graph_edges"
+            );
+            conn.execute_batch("DROP TRIGGER fail_graph_rebuild;")
+                .unwrap();
+        }
+
+        // Next sync has 0 file changes on disk, yet MUST retry the rebuild and
+        // materialize [[UpdatedTarget]] because the dirty flag remained set.
+        let retry = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(retry.pages, 0);
+        let (_, incoming) = engine.graph.neighbors("UpdatedTarget").unwrap();
+        assert_eq!(
+            incoming.len(),
+            1,
+            "failed graph rebuild must retry on next 0-change sync"
+        );
+    }
+
+    #[test]
+    fn sync_backfills_null_file_stats_without_rewriting_fts_or_graph() {
+        let (dir, engine) = make_engine();
+        let page = dir
+            .path()
+            .join("data")
+            .join("Brain")
+            .join("pages")
+            .join("Backfill.md");
+        write(
+            &page,
+            "# Backfill\n\nLinks to [[EntityOne]] and [[EntityTwo]] in body.",
+        );
+        // Set a settled mtime (>2s old) so backfill persists the stat fast-skip key.
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&page)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        let first = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(first.pages, 1);
+
+        // Simulate a v1→v2 migrated DB where file_mtime_ns and file_size are NULL.
+        {
+            let conn = engine.store.conn_arc();
+            let conn = conn.lock().unwrap();
+            conn.execute(
+                "UPDATE brain_docs SET file_mtime_ns = NULL, file_size = NULL",
+                [],
+            )
+            .unwrap();
+        }
+
+        let backfill_run = engine.sync(SyncOptions::default()).unwrap();
+        assert_eq!(backfill_run.pages, 0);
+        assert_eq!(backfill_run.skipped, 1);
+        assert_eq!(backfill_run.graph_nodes, first.graph_nodes);
+        assert_eq!(backfill_run.graph_edges, first.graph_edges);
+
+        // Verify stat columns were backfilled.
+        let (mtime, size): (Option<i64>, Option<i64>) = engine
+            .store
+            .conn_arc()
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT file_mtime_ns, file_size FROM brain_docs LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(mtime.is_some());
+        assert!(size.is_some());
+
+        // Subsequent sync must now hit the zero-mutation stat fast-skip.
+        let changes_before = engine.store.conn_arc().lock().unwrap().total_changes();
+        let third = engine.sync(SyncOptions::default()).unwrap();
+        let changes_after = engine.store.conn_arc().lock().unwrap().total_changes();
+        assert_eq!(third.skipped, 1);
+        assert_eq!(changes_before, changes_after);
     }
 }
