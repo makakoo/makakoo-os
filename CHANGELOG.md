@@ -8,6 +8,30 @@ Entries are added on every tagged release. The GitHub Release workflow at
 via `generate_release_notes: true` — this file is the curated long-form
 complement, focused on user-visible changes and migration notes.
 
+## [0.4.2] - 2026-11-25
+
+### Added
+
+- **Cross-platform scoped idle-sleep guard (`SleepGuard` in `makakoo-platform`).**
+  - Prevents idle system sleep strictly during active long-running jobs: `makakoo sync --embed`, `makakoo dream`, `makakoo sancho tick`, and opt-in `makakoo run --keep-awake`. The idle background daemon **never** holds a wake lock, preserving laptop battery life.
+  - Platform backends: macOS `caffeinate -i -w <pid>` (display may still sleep; auto-releases on crash/SIGKILL), Linux `systemd-inhibit --what=idle:sleep --mode=block cat` over a piped stdin (works across logind, GNOME, and KDE while keeping lid-close sleep enabled; exits cleanly on EOF or crash; early-exit probe reaps missing-D-Bus / polkit-denied helpers immediately with zero zombies), Windows dedicated waiter thread calling `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` with return-value verification.
+  - Global opt-out via `MAKAKOO_NO_WAKE_LOCK=1` (also honored from `~/.env` under macOS launchd). Degrades silently to a no-op on Redox/FreeBSD or headless containers without a power daemon.
+- **Per-folder compact int8 vector index, headless mode, and strict distro lint (`#27`, `#28`).**
+  - Compact int8 folder indexes with SQLite metadata and FTS5, `makakoo daemon run --headless` / `MAKAKOO_HEADLESS=1` fail-closed preflight and allowlisted MCP tools, and `makakoo distro lint`.
+- **Model-aware vector indexing and fenced rebuild coordinator (`#29`, `#30`).**
+  - Brain and folder indexes record their active embedding model and coordinate safe, lease-fenced rebuilds across CLI, daemon, and MCP without mixing vectors across models.
+  - Unified `EmbedRequestLimits` caps embedding batches at 16 inputs and 2,000 UTF-8 bytes with single-document retry on top-up failures.
+
+### Changed & Improved
+
+- **SQLite schema v2 & Superbrain performance overhaul (`#32`).**
+  - **Zero-write boot fast-path:** `run_migrations` checks `PRAGMA user_version >= 2` first (zero DDL, zero scans, zero write locks on read-only CLI/MCP commands). Upgrades from v1→v2 wrap `SCHEMA_V1`, drift healing, `file_mtime_ns`/`file_size` columns, linear temp-table `brain_graph_edges` deduplication + unique index `idx_brain_graph_edges_triple`, and `PRAGMA user_version = 2` inside one atomic `BEGIN IMMEDIATE` transaction with double-checked locking. Sets `PRAGMA cache_size = -16384` (16 MiB) and `temp_store = MEMORY`.
+  - **O(stat) incremental sync with Git-style racily-clean smudging:** `IngestEngine::sync` preloads existing rows in one query, skips unchanged files via `(file_mtime_ns, file_size)` without opening or hashing (~152× faster on a 4,200-file Brain, 0 B WAL churn on unchanged syncs), smudges freshly modified files (<2s) to `NULL` stats at record time so coarse-FS same-tick edits are never missed, backfills NULL v1 stats without FTS/graph churn, and reuses preloaded rows in `prune_unseen`.
+  - **Atomic entity + materialized graph rebuild & true Louvain modularity:** `rebuild_triples` and `rebuild_from_entity_graph` now commit or roll back together in one `BEGIN IMMEDIATE` transaction keyed by a persistent `superbrain:graph_dirty` marker (catching direct MCP/API `write_document`/`delete_document` writes and retrying failed rebuilds automatically). Fixed node/edge overcounting, enforced deterministic `journal > page > concept` precedence, and upgraded `louvain_phase_one` to O(N+E) Blondel et al. net modularity delta.
+  - **Zero-allocation 4-lane SIMD vector search:** `cosine_similarity_le_bytes` scores SQLite `&[u8]` blobs directly with 4 independent IEEE-754 accumulator lanes (enabling NEON/SSE2 auto-vectorization under `[profile.release.package.makakoo-core] opt-level = 3`), rejects `NaN`/`Inf` safely, and uses two-phase O(N) `select_nth_unstable_by` top-k selection before fetching winning `brain_docs.content` rows.
+  - **Lazy fallible HTTP/TLS client init & regex hygiene:** `LlmClient` and `EmbeddingClient` initialize `reqwest::Client` lazily via `OnceCell::get_or_try_init` (eliminating redundant root-cert loading on read-only CLI/MCP startup and removing panic-on-abort risk); compiled hot-path regexes once via `once_cell::sync::Lazy`.
+  - **Standalone Brain docs & setup UX:** Clarified across setup wizard, user manuals, FAQ, README, and `SKILL.md` that Makakoo's Brain runs completely standalone on plain Markdown + SQLite — Obsidian and Logseq are optional viewers, never required.
+
 ## [0.4.1] - 2026-11-19
 
 ### Fixed
