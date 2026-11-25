@@ -509,7 +509,7 @@ async fn periodic_probe_rebuilds_once_after_alias_switch() {
     mgr.wait_for_rebuild("switch").await;
 
     let status = mgr
-        .get_or_open("switch", 32)
+        .get_or_open_without_probe_for_test("switch", 32)
         .unwrap()
         .model_status()
         .unwrap();
