@@ -39,6 +39,7 @@ pub struct FolderIndex {
     pub(crate) default_bulk_alias: Option<String>,
     pub(crate) default_short_alias: Option<String>,
     pub(crate) conn: Mutex<Connection>,
+    pub(crate) query_mismatch_reason: Mutex<Option<String>>,
     pub(crate) vectors: VectorStore,
     /// Test hook: runs before each rebuild commit attempt, lock not held.
     #[cfg(test)]
@@ -96,6 +97,7 @@ impl FolderIndex {
             default_bulk_alias: cfg.embed_alias,
             default_short_alias: cfg.short_embed_alias,
             conn: Mutex::new(conn),
+            query_mismatch_reason: Mutex::new(None),
             vectors,
             #[cfg(test)]
             before_rebuild_commit: Mutex::new(None),

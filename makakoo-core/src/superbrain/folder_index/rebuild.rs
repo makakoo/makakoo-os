@@ -1,8 +1,9 @@
 //! Background re-embedding rebuild orchestration and model-checked search
 //! with FTS fallback for [`super::store::FolderIndex`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
@@ -10,9 +11,8 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::model_meta::{
-    read_model_status, write_model_state, write_ready_model_meta, FolderModelStatus,
-    FolderSearchRequest, FolderSearchResponse, IndexModelState, SearchMode,
-    SHORT_BULK_MISMATCH_REASON,
+    read_model_status, write_model_state, write_ready_model_meta, FolderSearchRequest,
+    FolderSearchResponse, IndexModelState, SearchMode, SHORT_BULK_MISMATCH_REASON,
 };
 use super::rebuild_pages::{all_chunks_parked, reembed_pages, reset_parked, swap_in_parked};
 use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
@@ -20,13 +20,32 @@ use super::FolderIndex;
 
 /// Commit attempts before a rebuild that keeps racing writers gives up stale.
 const MAX_REBUILD_COMMIT_ATTEMPTS: usize = 8;
+pub(crate) const DEFAULT_MODEL_REPROBE_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const DEFAULT_PROBE_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
+const DEFAULT_REBUILD_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy)]
+struct RetryState {
+    failures: u32,
+    next_allowed: Instant,
+}
+
+#[derive(Default)]
+struct ProbeState {
+    active: HashMap<String, Arc<Notify>>,
+    retry: HashMap<String, RetryState>,
+}
 
 /// Per-folder deduplication and completion notification registry for background
 /// re-embedding rebuilds.
-#[derive(Default)]
 pub(crate) struct FolderRebuildRegistry {
     active: Mutex<HashMap<String, Arc<Notify>>>,
-    probed: Mutex<HashSet<String>>,
+    rebuild_retry: Mutex<HashMap<String, RetryState>>,
+    probes: Mutex<ProbeState>,
+    probe_interval: Duration,
+    probe_failure_backoff: Duration,
+    rebuild_failure_backoff: Duration,
+    rebuild_failure_cap: Duration,
     /// Test hook: runs in `wait` after the lookup, before the waiter registers.
     #[cfg(test)]
     pub(crate) after_lookup: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -34,15 +53,54 @@ pub(crate) struct FolderRebuildRegistry {
 
 impl FolderRebuildRegistry {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self::with_timings(
+            DEFAULT_MODEL_REPROBE_INTERVAL,
+            DEFAULT_PROBE_FAILURE_BACKOFF,
+            DEFAULT_REBUILD_FAILURE_BACKOFF,
+            DEFAULT_MODEL_REPROBE_INTERVAL,
+        )
     }
 
-    pub(crate) fn mark_probed(&self, folder_id: &str) -> bool {
-        let mut guard = self.probed.lock().unwrap_or_else(|e| e.into_inner());
-        guard.insert(folder_id.to_string())
+    pub(crate) fn with_timings(
+        probe_interval: Duration,
+        probe_failure_backoff: Duration,
+        rebuild_failure_backoff: Duration,
+        rebuild_failure_cap: Duration,
+    ) -> Self {
+        Self {
+            active: Mutex::new(HashMap::new()),
+            rebuild_retry: Mutex::new(HashMap::new()),
+            probes: Mutex::new(ProbeState::default()),
+            probe_interval,
+            probe_failure_backoff,
+            rebuild_failure_backoff,
+            rebuild_failure_cap,
+            #[cfg(test)]
+            after_lookup: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn with_probe_interval(probe_interval: Duration) -> Self {
+        let probe_interval = probe_interval.max(Duration::from_secs(1));
+        Self::with_timings(
+            probe_interval,
+            DEFAULT_PROBE_FAILURE_BACKOFF.min(probe_interval),
+            DEFAULT_REBUILD_FAILURE_BACKOFF.min(probe_interval),
+            probe_interval,
+        )
     }
 
     pub(crate) fn try_acquire(&self, folder_id: &str) -> Option<Arc<Notify>> {
+        let now = Instant::now();
+        if self
+            .rebuild_retry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(folder_id)
+            .is_some_and(|state| now < state.next_allowed)
+        {
+            return None;
+        }
         let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
         if guard.contains_key(folder_id) {
             return None;
@@ -52,11 +110,32 @@ impl FolderRebuildRegistry {
         Some(notify)
     }
 
-    pub(crate) fn finish(&self, folder_id: &str) {
+    pub(crate) fn finish(&self, folder_id: &str, succeeded: bool) {
         let notify = {
             let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
             guard.remove(folder_id)
         };
+        let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
+        if succeeded {
+            retry.remove(folder_id);
+        } else {
+            let failures = retry
+                .get(folder_id)
+                .map_or(1, |state| state.failures.saturating_add(1));
+            let delay = exponential_backoff(
+                self.rebuild_failure_backoff,
+                self.rebuild_failure_cap,
+                failures,
+            );
+            retry.insert(
+                folder_id.to_string(),
+                RetryState {
+                    failures,
+                    next_allowed: Instant::now() + delay,
+                },
+            );
+        }
+        drop(retry);
         if let Some(n) = notify {
             n.notify_waiters();
         }
@@ -103,6 +182,85 @@ impl FolderRebuildRegistry {
             notified.await;
         }
     }
+
+    pub(crate) fn try_probe(&self, folder_id: &str) -> bool {
+        let now = Instant::now();
+        let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+        if probes.active.contains_key(folder_id)
+            || probes
+                .retry
+                .get(folder_id)
+                .is_some_and(|state| now < state.next_allowed)
+        {
+            return false;
+        }
+        probes
+            .active
+            .insert(folder_id.to_string(), Arc::new(Notify::new()));
+        true
+    }
+
+    pub(crate) fn finish_probe(&self, folder_id: &str, reached_bulk: bool) {
+        let notify = {
+            let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+            let notify = probes.active.remove(folder_id);
+            let failures = if reached_bulk {
+                0
+            } else {
+                probes
+                    .retry
+                    .get(folder_id)
+                    .map_or(1, |state| state.failures.saturating_add(1))
+            };
+            let delay = if reached_bulk {
+                self.probe_interval
+            } else {
+                exponential_backoff(self.probe_failure_backoff, self.probe_interval, failures)
+            };
+            probes.retry.insert(
+                folder_id.to_string(),
+                RetryState {
+                    failures,
+                    next_allowed: Instant::now() + delay,
+                },
+            );
+            notify
+        };
+        if let Some(notify) = notify {
+            notify.notify_waiters();
+        }
+    }
+
+    pub(crate) async fn wait_for_probe(&self, folder_id: &str) {
+        loop {
+            let notify = {
+                let probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+                match probes.active.get(folder_id) {
+                    Some(notify) => Arc::clone(notify),
+                    None => return,
+                }
+            };
+            let notified = notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let still_same = {
+                let probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+                probes
+                    .active
+                    .get(folder_id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &notify))
+            };
+            if !still_same {
+                continue;
+            }
+            notified.await;
+        }
+    }
+}
+
+fn exponential_backoff(initial: Duration, cap: Duration, failures: u32) -> Duration {
+    let shift = failures.saturating_sub(1).min(31);
+    initial.saturating_mul(1_u32 << shift).min(cap)
 }
 
 /// Non-blocking startup/open probe: verifies configured endpoint(s) against stored
@@ -112,13 +270,13 @@ pub(crate) async fn probe_and_reconcile(
     short_emb: Option<Arc<EmbeddingClient>>,
     bulk_emb: Arc<EmbeddingClient>,
     rebuilds: Arc<FolderRebuildRegistry>,
-) {
+) -> bool {
     if idx.chunk_count().unwrap_or(0) == 0 {
-        return;
+        return true;
     }
 
     let Ok((bulk_model, bulk_dim)) = bulk_emb.probe_model().await else {
-        return;
+        return false;
     };
 
     let short_result = match short_emb.as_ref() {
@@ -132,18 +290,17 @@ pub(crate) async fn probe_and_reconcile(
     // A rebuild already running owns the model state; its own probe and the next
     // probe after it finishes decide. Writing `stale` here would hide `rebuilding`.
     if rebuilds.is_active(idx.folder_id()) {
-        return;
+        return true;
     }
 
-    if let Some((ref short_model, short_dim)) = short_result {
-        if short_model != &bulk_model || short_dim != bulk_dim {
-            let _ = idx.mark_stale_unless_rebuilding(SHORT_BULK_MISMATCH_REASON);
-            return;
-        }
-    }
+    let short_mismatch = short_result
+        .as_ref()
+        .is_some_and(|(short_model, short_dim)| {
+            short_model != &bulk_model || *short_dim != bulk_dim
+        });
 
     let Ok(status) = idx.model_status() else {
-        return;
+        return true;
     };
     if status.embed_model.is_none() && status.embed_dim == Some(bulk_dim) {
         // Rows were written without a model id by the bulk alias: name it now.
@@ -162,21 +319,21 @@ pub(crate) async fn probe_and_reconcile(
             }
         }
         idx.update_sidecar_if_ready();
-        return;
+        return true;
     }
     let matches_stored =
         status.embed_model.as_deref() == Some(&bulk_model) && status.embed_dim == Some(bulk_dim);
 
     if matches_stored {
+        if short_mismatch {
+            let _ = idx.mark_stale_unless_rebuilding(SHORT_BULK_MISMATCH_REASON);
+            return true;
+        }
         if status.index_state == IndexModelState::Stale
-            && matches!(
-                status.stale_reason.as_deref(),
-                Some(
-                    "embed_alias_changed"
-                        | "short_embed_alias_changed"
-                        | SHORT_BULK_MISMATCH_REASON
-                )
-            )
+            && status
+                .stale_reason
+                .as_deref()
+                .is_some_and(is_metadata_only_stale_reason)
         {
             if let Ok(conn) = idx.lock_conn() {
                 let _ = write_ready_model_meta(
@@ -188,21 +345,63 @@ pub(crate) async fn probe_and_reconcile(
                 );
             }
             idx.update_sidecar_if_ready();
-            return;
+            return true;
         }
         if status.index_state == IndexModelState::Stale {
-            spawn_folder_rebuild(idx, short_emb, bulk_emb, rebuilds, short_result);
+            spawn_folder_rebuild(
+                idx,
+                short_emb,
+                bulk_emb,
+                rebuilds,
+                Some((bulk_model, bulk_dim)),
+                short_result,
+            );
         }
-        return;
+        return true;
     }
 
     if !matches!(
         idx.mark_stale_unless_rebuilding("model_changed_on_probe"),
         Ok(true)
     ) {
+        return true;
+    }
+    spawn_folder_rebuild(
+        idx,
+        short_emb,
+        bulk_emb,
+        rebuilds,
+        Some((bulk_model, bulk_dim)),
+        short_result,
+    );
+    true
+}
+
+fn is_metadata_only_stale_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "embed_alias_changed" | "short_embed_alias_changed" | SHORT_BULK_MISMATCH_REASON
+    ) || reason.starts_with("model_mismatch:")
+        || reason.starts_with("dim_mismatch:")
+}
+
+/// Schedule one rate-limited endpoint reconciliation. Query metadata is never
+/// passed here: only the bulk endpoint can establish that stored vectors changed.
+pub(crate) fn schedule_probe(
+    idx: Arc<FolderIndex>,
+    short_emb: Option<Arc<EmbeddingClient>>,
+    bulk_emb: Arc<EmbeddingClient>,
+    rebuilds: Arc<FolderRebuildRegistry>,
+) {
+    if idx.chunk_count().unwrap_or(0) == 0 || !rebuilds.try_probe(idx.folder_id()) {
         return;
     }
-    spawn_folder_rebuild(idx, short_emb, bulk_emb, rebuilds, short_result);
+    tokio::spawn(async move {
+        let folder_id = idx.folder_id().to_string();
+        let reached_bulk =
+            probe_and_reconcile(idx, short_emb, bulk_emb, Arc::clone(&rebuilds)).await;
+        rebuilds.finish_probe(&folder_id, reached_bulk);
+    });
 }
 
 pub(crate) fn spawn_folder_rebuild(
@@ -210,6 +409,7 @@ pub(crate) fn spawn_folder_rebuild(
     short_emb: Option<Arc<EmbeddingClient>>,
     bulk_emb: Arc<EmbeddingClient>,
     rebuilds: Arc<FolderRebuildRegistry>,
+    observed_bulk: Option<(String, usize)>,
     observed_short: Option<(String, usize)>,
 ) {
     let folder_id = idx.folder_id().to_string();
@@ -228,12 +428,22 @@ pub(crate) fn spawn_folder_rebuild(
     let rebuilds_clone = Arc::clone(&rebuilds);
     tokio::spawn(async move {
         let fid = idx.folder_id().to_string();
-        if let Err(err) =
-            run_folder_rebuild(Arc::clone(&idx), short_emb, bulk_emb, observed_short).await
+        let succeeded = match run_folder_rebuild(
+            Arc::clone(&idx),
+            short_emb,
+            bulk_emb,
+            observed_bulk,
+            observed_short,
+        )
+        .await
         {
-            let _ = idx.mark_stale(&format!("rebuild_failed: {err}"));
-        }
-        rebuilds_clone.finish(&fid);
+            Ok(()) => true,
+            Err(err) => {
+                let _ = idx.mark_stale(&format!("rebuild_failed: {err}"));
+                false
+            }
+        };
+        rebuilds_clone.finish(&fid, succeeded);
     });
 }
 
@@ -241,6 +451,7 @@ async fn run_folder_rebuild(
     idx: Arc<FolderIndex>,
     short_emb: Option<Arc<EmbeddingClient>>,
     bulk_emb: Arc<EmbeddingClient>,
+    observed_bulk: Option<(String, usize)>,
     mut observed_short: Option<(String, usize)>,
 ) -> Result<()> {
     let (start_gen, chunk_count) = {
@@ -255,7 +466,10 @@ async fn run_folder_rebuild(
         return Ok(());
     }
 
-    let (b_model, b_dim) = bulk_emb.probe_model().await?;
+    let (b_model, b_dim) = match observed_bulk {
+        Some(pair) => pair,
+        None => bulk_emb.probe_model().await?,
+    };
     if observed_short.is_none() {
         if let Some(ref s) = short_emb {
             if s.model() != bulk_emb.model() || s.base_url() != bulk_emb.base_url() {
@@ -266,12 +480,9 @@ async fn run_folder_rebuild(
         }
     }
 
-    if let Some((ref s_model, s_dim)) = observed_short {
-        if s_model != &b_model || s_dim != b_dim {
-            idx.mark_stale(SHORT_BULK_MISMATCH_REASON)?;
-            return Ok(());
-        }
-    }
+    let short_mismatch = observed_short
+        .as_ref()
+        .is_some_and(|(s_model, s_dim)| s_model != &b_model || *s_dim != b_dim);
 
     reembed_pages(&idx, &bulk_emb, &b_model, b_dim).await?;
 
@@ -300,6 +511,10 @@ async fn run_folder_rebuild(
             {
                 drop(conn);
                 idx.checkpoint_wal()?;
+                idx.clear_query_mismatch();
+                if short_mismatch {
+                    idx.mark_stale(SHORT_BULK_MISMATCH_REASON)?;
+                }
                 return Ok(());
             }
             seen_gen = read_generation(&conn)?;
@@ -359,7 +574,7 @@ fn commit_rebuild(
 pub(crate) async fn search_folder_checked(
     idx: Arc<FolderIndex>,
     short_emb: Option<Arc<EmbeddingClient>>,
-    bulk_emb: Option<Arc<EmbeddingClient>>,
+    _bulk_emb: Option<Arc<EmbeddingClient>>,
     rebuilds: Arc<FolderRebuildRegistry>,
     req: FolderSearchRequest,
 ) -> Result<FolderSearchResponse> {
@@ -384,7 +599,6 @@ pub(crate) async fn search_folder_checked(
     }
 
     if req.query_vector.is_none() && status.index_state != IndexModelState::Ready {
-        maybe_trigger_rebuild(&idx, &status, short_emb, bulk_emb, &rebuilds, None).await;
         return fts_fallback_response(&idx, &req, &rebuilds, true);
     }
 
@@ -430,17 +644,18 @@ pub(crate) async fn search_folder_checked(
                 status.embed_dim, q_dim
             )
         };
-        idx.record_query_mismatch(&reason)?;
+        if status.index_state == IndexModelState::Ready {
+            idx.record_query_mismatch(&reason);
+        }
         return fts_fallback_response(&idx, &req, &rebuilds, true);
     }
 
     if status.index_state != IndexModelState::Ready {
-        maybe_trigger_rebuild(&idx, &status, short_emb, bulk_emb, &rebuilds, None).await;
         return fts_fallback_response(&idx, &req, &rebuilds, true);
     }
 
     if let Some(vec) = q_vec {
-        idx.clear_query_mismatch()?;
+        idx.clear_query_mismatch();
         let passages = idx.search(&vec, req.k, &req.filter)?;
         Ok(FolderSearchResponse {
             folder_id: req.folder_id,
@@ -477,39 +692,4 @@ fn fts_fallback_response(
         embed_model: cur.embed_model,
         embed_dim: cur.embed_dim,
     })
-}
-
-async fn maybe_trigger_rebuild(
-    idx: &Arc<FolderIndex>,
-    status: &FolderModelStatus,
-    short_emb: Option<Arc<EmbeddingClient>>,
-    bulk_emb: Option<Arc<EmbeddingClient>>,
-    rebuilds: &Arc<FolderRebuildRegistry>,
-    observed_short: Option<(String, usize)>,
-) {
-    let Some(b_emb) = bulk_emb else {
-        return;
-    };
-    if rebuilds.is_active(idx.folder_id()) {
-        return;
-    }
-    if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
-        let Ok(b_pair) = b_emb.probe_model().await else {
-            return;
-        };
-        match short_emb.as_ref() {
-            Some(s_emb) => match s_emb.probe_model().await {
-                Ok(s_pair) if s_pair == b_pair => {}
-                _ => return,
-            },
-            None => return,
-        }
-    }
-    spawn_folder_rebuild(
-        Arc::clone(idx),
-        short_emb,
-        b_emb,
-        Arc::clone(rebuilds),
-        observed_short,
-    );
 }

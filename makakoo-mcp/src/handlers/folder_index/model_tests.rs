@@ -160,6 +160,7 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
         .await
         .unwrap();
     assert_eq!(up["chunks_written"], 1);
+    mgr.wait_for_model_probe("legal").await;
 
     let st1 = reg
         .call(
@@ -171,19 +172,6 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     assert_eq!(st1["index_state"], "ready");
     assert_eq!(st1["embed_model"], "qwen3-v1");
     assert_eq!(st1["embed_dim"], 64);
-
-    // The states call schedules the manager's first model probe. Let that task
-    // release its index handle before switching models or reopening the same
-    // vector files (Windows forbids replacing files held by another mmap).
-    let initial_idx = mgr.get_or_open("legal", 32).unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while Arc::strong_count(&initial_idx) > 2 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("initial model probe did not release the index");
-    drop(initial_idx);
 
     // Model behind alias changes; gate bulk rebuild so mid-rebuild assertions are deterministic.
     responder.switch("bge-v2", 48, 3);
@@ -308,6 +296,7 @@ impl Respond for StrictUpsertResponder {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let is_probe = arr.len() == 1 && arr.first().and_then(Value::as_str) == Some("probe");
         if arr.len() > 16 {
             return ResponseTemplate::new(400).set_body_json(json!({
                 "error": format!("batch size {} > 16", arr.len())
@@ -321,7 +310,9 @@ impl Respond for StrictUpsertResponder {
                     "error": format!("input bytes {} > 2000", text.len())
                 }));
             }
-            self.received_bytes.lock().unwrap().push(text.len());
+            if !is_probe {
+                self.received_bytes.lock().unwrap().push(text.len());
+            }
             let page_idx = text
                 .split(':')
                 .next()
@@ -331,7 +322,9 @@ impl Respond for StrictUpsertResponder {
             vec[page_idx % 32] = 1.0;
             data.push(json!({ "index": i, "embedding": vec }));
         }
-        self.batch_sizes.lock().unwrap().push(arr.len());
+        if !is_probe {
+            self.batch_sizes.lock().unwrap().push(arr.len());
+        }
         ResponseTemplate::new(200).set_body_json(json!({
             "model": "qwen3-strict",
             "data": data,

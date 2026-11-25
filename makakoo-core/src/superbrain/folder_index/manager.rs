@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
@@ -43,6 +44,30 @@ impl FolderIndexManager {
     ) -> Self {
         self.short_emb = Some(short_emb);
         self.bulk_emb = Some(bulk_emb);
+        self
+    }
+
+    /// Set the successful bulk-model re-probe interval. The default is ten
+    /// minutes; endpoint failures retry sooner with capped exponential backoff.
+    pub fn with_model_reprobe_interval(mut self, interval: Duration) -> Self {
+        self.rebuilds = Arc::new(FolderRebuildRegistry::with_probe_interval(interval));
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_model_recovery_timings_for_test(
+        mut self,
+        probe_interval: Duration,
+        probe_failure_backoff: Duration,
+        rebuild_failure_backoff: Duration,
+        rebuild_failure_cap: Duration,
+    ) -> Self {
+        self.rebuilds = Arc::new(FolderRebuildRegistry::with_timings(
+            probe_interval,
+            probe_failure_backoff,
+            rebuild_failure_backoff,
+            rebuild_failure_cap,
+        ));
         self
     }
 
@@ -100,23 +125,26 @@ impl FolderIndexManager {
             }
         };
 
-        if allow_probe {
-            if let Some(b_emb) = bulk_ref {
-                if tokio::runtime::Handle::try_current().is_ok()
-                    && idx.chunk_count().unwrap_or(0) > 0
-                    && self.rebuilds.mark_probed(folder_id)
-                {
-                    let idx_c = Arc::clone(&idx);
-                    let short_c = short_ref.cloned();
-                    let bulk_c = Arc::clone(b_emb);
-                    let reb_c = Arc::clone(&self.rebuilds);
-                    tokio::spawn(async move {
-                        rebuild::probe_and_reconcile(idx_c, short_c, bulk_c, reb_c).await;
-                    });
-                }
-            }
+        if allow_probe && tokio::runtime::Handle::try_current().is_ok() {
+            self.schedule_probe(&idx, short_ref, bulk_ref);
         }
         Ok(idx)
+    }
+
+    fn schedule_probe(
+        &self,
+        idx: &Arc<FolderIndex>,
+        short_emb: Option<&Arc<EmbeddingClient>>,
+        bulk_emb: Option<&Arc<EmbeddingClient>>,
+    ) {
+        if let Some(bulk_emb) = bulk_emb {
+            rebuild::schedule_probe(
+                Arc::clone(idx),
+                short_emb.cloned(),
+                Arc::clone(bulk_emb),
+                Arc::clone(&self.rebuilds),
+            );
+        }
     }
 
     pub async fn search_folder(
@@ -135,7 +163,7 @@ impl FolderIndexManager {
             req.dim,
             short_ref.as_ref(),
             bulk_ref.as_ref(),
-            false,
+            true,
         )?;
         rebuild::search_folder_checked(idx, short_ref, bulk_ref, Arc::clone(&self.rebuilds), req)
             .await
@@ -148,8 +176,16 @@ impl FolderIndexManager {
         req: &UpsertFileRequest,
         model_meta: Option<&UpsertModelMeta>,
     ) -> Result<UpsertOutcome> {
-        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
-        idx.upsert_file_with_model(req, model_meta)
+        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, true)?;
+        let outcome = idx.upsert_file_with_model(req, model_meta)?;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.schedule_probe(
+                &idx,
+                self.short_emb.as_ref(),
+                self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
+            );
+        }
+        Ok(outcome)
     }
 
     pub fn upsert_folder_file_and_flush(
@@ -160,8 +196,15 @@ impl FolderIndexManager {
         model_meta: Option<&UpsertModelMeta>,
         flush: bool,
     ) -> Result<(UpsertOutcome, IndexSizeReport)> {
-        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
+        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, true)?;
         let outcome = idx.upsert_file_with_model(req, model_meta)?;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.schedule_probe(
+                &idx,
+                self.short_emb.as_ref(),
+                self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
+            );
+        }
         if flush && !outcome.skipped_unchanged {
             idx.flush()?;
         }
@@ -175,6 +218,10 @@ impl FolderIndexManager {
 
     pub async fn wait_for_rebuild(&self, folder_id: &str) {
         self.rebuilds.wait(folder_id).await;
+    }
+
+    pub async fn wait_for_model_probe(&self, folder_id: &str) {
+        self.rebuilds.wait_for_probe(folder_id).await;
     }
 
     #[cfg(test)]
@@ -205,7 +252,8 @@ impl FolderIndexManager {
             Some(&bulk_emb),
             false,
         )?;
-        rebuild::probe_and_reconcile(idx, short_emb, bulk_emb, Arc::clone(&self.rebuilds)).await;
+        let _ = rebuild::probe_and_reconcile(idx, short_emb, bulk_emb, Arc::clone(&self.rebuilds))
+            .await;
         Ok(())
     }
 

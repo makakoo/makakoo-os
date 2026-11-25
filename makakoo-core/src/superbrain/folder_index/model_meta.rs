@@ -16,9 +16,8 @@ pub(crate) const META_EMBED_ALIAS: &str = "embed_alias";
 pub(crate) const META_SHORT_EMBED_ALIAS: &str = "short_embed_alias";
 pub(crate) const META_INDEX_STATE: &str = "index_state";
 pub(crate) const META_STALE_REASON: &str = "stale_reason";
-pub(crate) const META_QUERY_MISMATCH_REASON: &str = "query_mismatch_reason";
-
 pub(crate) const SHORT_BULK_MISMATCH_REASON: &str = "short_bulk_model_mismatch";
+const MAX_QUERY_MISMATCH_REASON_BYTES: usize = 256;
 
 /// Lifecycle state of a folder or Brain vector index relative to the configured
 /// embedding model and dimension.
@@ -149,7 +148,6 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
     let embed_alias = read_meta_opt(conn, META_EMBED_ALIAS)?;
     let short_embed_alias = read_meta_opt(conn, META_SHORT_EMBED_ALIAS)?;
     let stale_reason = read_meta_opt(conn, META_STALE_REASON)?;
-    let query_mismatch_reason = read_meta_opt(conn, META_QUERY_MISMATCH_REASON)?;
     Ok(FolderModelStatus {
         index_state,
         embed_model,
@@ -157,7 +155,7 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
         embed_alias,
         short_embed_alias,
         stale_reason,
-        query_mismatch_reason,
+        query_mismatch_reason: None,
     })
 }
 
@@ -312,7 +310,14 @@ pub(crate) fn apply_upsert_model_meta_tx(
 impl FolderIndex {
     pub fn model_status(&self) -> Result<FolderModelStatus> {
         let conn = self.lock_conn()?;
-        read_model_status(&conn)
+        let mut status = read_model_status(&conn)?;
+        drop(conn);
+        status.query_mismatch_reason = self
+            .query_mismatch_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        Ok(status)
     }
 
     pub fn chunk_count(&self) -> Result<u64> {
@@ -337,24 +342,23 @@ impl FolderIndex {
         Ok(true)
     }
 
-    /// Persist a query-side model mismatch separately from index freshness.
+    /// Keep a query-side model mismatch separately from index freshness.
     /// Query metadata describes the caller's vector, not the model that wrote
-    /// the index, so it must never make the index eligible for a rebuild. Avoid
-    /// rewriting SQLite when a client repeats the same mismatched request.
-    pub(crate) fn record_query_mismatch(&self, reason: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        if read_meta_opt(&conn, META_QUERY_MISMATCH_REASON)?.as_deref() != Some(reason) {
-            write_meta_opt(&conn, META_QUERY_MISMATCH_REASON, Some(reason))?;
-        }
-        Ok(())
+    /// the index, so it must never make the index eligible for a rebuild or
+    /// create SQLite write pressure. Bound the client-controlled diagnostic.
+    pub(crate) fn record_query_mismatch(&self, reason: &str) {
+        let bounded = truncate_utf8(reason, MAX_QUERY_MISMATCH_REASON_BYTES);
+        *self
+            .query_mismatch_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(bounded);
     }
 
-    pub(crate) fn clear_query_mismatch(&self) -> Result<()> {
-        let conn = self.lock_conn()?;
-        if read_meta_opt(&conn, META_QUERY_MISMATCH_REASON)?.is_some() {
-            write_meta_opt(&conn, META_QUERY_MISMATCH_REASON, None)?;
-        }
-        Ok(())
+    pub(crate) fn clear_query_mismatch(&self) {
+        *self
+            .query_mismatch_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     pub fn search_fts(&self, query: &str, k: usize, filter: &SearchFilter) -> Result<Vec<Passage>> {
@@ -395,4 +399,15 @@ impl FolderIndex {
             }
         }
     }
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
 }

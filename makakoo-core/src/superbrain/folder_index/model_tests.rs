@@ -11,6 +11,7 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use crate::embeddings::EmbeddingClient;
 
+use super::model_meta::SHORT_BULK_MISMATCH_REASON;
 use super::*;
 
 #[derive(Clone)]
@@ -27,7 +28,10 @@ struct DynamicEmbedResponder {
     gate_entered: Arc<AtomicBool>,
     gate_release: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
+    bulk_probe_calls: Arc<AtomicUsize>,
     bulk_calls: Arc<AtomicUsize>,
+    fail_bulk_probes: Arc<AtomicBool>,
+    fail_bulk_embeddings: Arc<AtomicBool>,
 }
 
 impl DynamicEmbedResponder {
@@ -45,7 +49,10 @@ impl DynamicEmbedResponder {
             gate_entered: Arc::new(AtomicBool::new(false)),
             gate_release: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(AtomicUsize::new(0)),
+            bulk_probe_calls: Arc::new(AtomicUsize::new(0)),
             bulk_calls: Arc::new(AtomicUsize::new(0)),
+            fail_bulk_probes: Arc::new(AtomicBool::new(false)),
+            fail_bulk_embeddings: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -55,6 +62,12 @@ impl DynamicEmbedResponder {
         self.short_dim.store(dim, Ordering::SeqCst);
         self.bulk_dim.store(dim, Ordering::SeqCst);
         self.short_vec_slot.store(vec_slot, Ordering::SeqCst);
+        self.bulk_vec_slot.store(vec_slot, Ordering::SeqCst);
+    }
+
+    fn set_bulk_model(&self, model: &str, dim: usize, vec_slot: usize) {
+        *self.bulk_model.lock().unwrap() = model.to_string();
+        self.bulk_dim.store(dim, Ordering::SeqCst);
         self.bulk_vec_slot.store(vec_slot, Ordering::SeqCst);
     }
 }
@@ -77,8 +90,18 @@ impl Respond for DynamicEmbedResponder {
                 .and_then(Value::as_str)
                 == Some("probe");
 
+        if is_probe && req_model == self.bulk_alias {
+            self.bulk_probe_calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_bulk_probes.load(Ordering::SeqCst) {
+                return ResponseTemplate::new(503);
+            }
+        }
+
         if !is_probe && (is_bulk || inputs > 1) {
             self.bulk_calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_bulk_embeddings.load(Ordering::SeqCst) {
+                return ResponseTemplate::new(503);
+            }
             if self.gate_bulk.load(Ordering::SeqCst) {
                 // wiremock answers on its own current-thread runtime: block with std, not tokio.
                 self.gate_entered.store(true, Ordering::SeqCst);
@@ -170,6 +193,7 @@ async fn model_switch_rebuilds_in_background_and_serves_fts_until_ready() {
             }),
         )
         .unwrap();
+    initial_mgr.wait_for_model_probe("docs").await;
 
     // Baseline vector search succeeds under model-v1.
     let res1 = initial_mgr
@@ -327,6 +351,10 @@ async fn repeated_query_mismatch_records_fallback_without_reembedding() {
         }),
     )
     .unwrap();
+    mgr.wait_for_model_probe("query-mismatch").await;
+    let calls_after_open_probe = responder.calls.load(Ordering::SeqCst);
+    let bulk_probes_after_open = responder.bulk_probe_calls.load(Ordering::SeqCst);
+    assert_eq!(bulk_probes_after_open, 1);
 
     let mismatches = [
         ("client-resolved-model", 64, "model_mismatch:"),
@@ -366,7 +394,14 @@ async fn repeated_query_mismatch_records_fallback_without_reembedding() {
             .is_some_and(|reason| reason.starts_with(reason_prefix)));
     }
 
-    assert_eq!(responder.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        responder.calls.load(Ordering::SeqCst),
+        calls_after_open_probe
+    );
+    assert_eq!(
+        responder.bulk_probe_calls.load(Ordering::SeqCst),
+        bulk_probes_after_open
+    );
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
 
     let matched = mgr
@@ -395,7 +430,346 @@ async fn repeated_query_mismatch_records_fallback_without_reembedding() {
             .query_mismatch_reason,
         None
     );
-    assert_eq!(responder.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        responder.calls.load(Ordering::SeqCst),
+        calls_after_open_probe
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_mismatch_reprobes_bulk_and_rebuilds_once_after_alias_switch() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-v1", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_millis(25),
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
+        );
+    mgr.upsert_folder_file(
+        "switch",
+        32,
+        &one_chunk("a.md", "Alias switch text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-v1".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("switch").await;
+    let probes_before = responder.bulk_probe_calls.load(Ordering::SeqCst);
+
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    responder.set_bulk_model("model-v2", 64, 3);
+    let response = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "switch".into(),
+                dim: 32,
+                k: 5,
+                query: Some("Alias".into()),
+                query_vector: Some(basis(64, 2)),
+                query_model: Some("client-claimed-model".into()),
+                query_dim: Some(64),
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.mode, SearchMode::Fts);
+    mgr.wait_for_model_probe("switch").await;
+    mgr.wait_for_rebuild("switch").await;
+
+    let status = mgr
+        .get_or_open("switch", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(status.embed_model.as_deref(), Some("model-v2"));
+    assert_eq!(
+        status.stale_reason.as_deref(),
+        Some(SHORT_BULK_MISMATCH_REASON)
+    );
+    assert_eq!(
+        responder.bulk_probe_calls.load(Ordering::SeqCst),
+        probes_before + 1
+    );
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+
+    for _ in 0..20 {
+        let _ = mgr
+            .search_folder(
+                FolderSearchRequest {
+                    folder_id: "switch".into(),
+                    dim: 32,
+                    k: 1,
+                    query: Some("Alias".into()),
+                    query_vector: Some(basis(64, 2)),
+                    query_model: Some("still-client-claimed".into()),
+                    query_dim: Some(64),
+                    filter: SearchFilter::default(),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_open_probe_retries_after_backoff() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "stable", 64);
+    responder.fail_bulk_probes.store(true, Ordering::SeqCst);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(short, bulk)
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
+        );
+    mgr.upsert_folder_file(
+        "retry",
+        32,
+        &one_chunk("a.md", "Retry text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "stable".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("retry").await;
+    assert_eq!(responder.bulk_probe_calls.load(Ordering::SeqCst), 1);
+
+    responder.fail_bulk_probes.store(false, Ordering::SeqCst);
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    let _ = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "retry".into(),
+                dim: 32,
+                k: 1,
+                query: Some("Retry".into()),
+                query_vector: Some(basis(64, 2)),
+                query_model: Some("client-mismatch".into()),
+                query_dim: Some(64),
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    mgr.wait_for_model_probe("retry").await;
+    assert_eq!(responder.bulk_probe_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_rebuild_has_backoff_across_one_hundred_queries() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "old", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(short, bulk)
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(2),
+        );
+    mgr.upsert_folder_file(
+        "failed",
+        32,
+        &one_chunk("a.md", "Failure text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "old".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("failed").await;
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    responder.set_both_model("new", 64, 2);
+    responder.fail_bulk_embeddings.store(true, Ordering::SeqCst);
+    let _ = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "failed".into(),
+                dim: 32,
+                k: 1,
+                query: Some("Failure".into()),
+                query_vector: Some(basis(64, 2)),
+                query_model: Some("mismatch".into()),
+                query_dim: Some(64),
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    mgr.wait_for_model_probe("failed").await;
+    mgr.wait_for_rebuild("failed").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+
+    for _ in 0..100 {
+        let _ = mgr
+            .search_folder(
+                FolderSearchRequest {
+                    folder_id: "failed".into(),
+                    dim: 32,
+                    k: 1,
+                    query: Some("Failure".into()),
+                    query_vector: Some(basis(64, 2)),
+                    query_model: Some("mismatch".into()),
+                    query_dim: Some(64),
+                    filter: SearchFilter::default(),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    mgr.wait_for_model_probe("failed").await;
+    mgr.wait_for_rebuild("failed").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_query_claim_stale_reason_is_cleared_when_bulk_matches() {
+    let tmp = TempDir::new().unwrap();
+    let seed = FolderIndexManager::new(tmp.path());
+    for (folder, reason) in [
+        ("legacy-model", "model_mismatch: index=stable query=client"),
+        ("legacy-dim", "dim_mismatch: index=64 query=48"),
+    ] {
+        seed.upsert_folder_file(
+            folder,
+            32,
+            &one_chunk("a.md", "Legacy text.", basis(64, 1)),
+            Some(&UpsertModelMeta {
+                model: "stable".into(),
+                embed_dim: 64,
+                bulk_alias: "bulk-alias".into(),
+                short_alias: Some("short-alias".into()),
+            }),
+        )
+        .unwrap();
+        seed.get_or_open(folder, 32)
+            .unwrap()
+            .mark_stale(reason)
+            .unwrap();
+    }
+    drop(seed);
+
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "stable", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    for folder in ["legacy-model", "legacy-dim"] {
+        let idx = mgr.get_or_open(folder, 32).unwrap();
+        mgr.wait_for_model_probe(folder).await;
+        let status = idx.model_status().unwrap();
+        assert_eq!(status.index_state, IndexModelState::Ready, "{folder}");
+        assert_eq!(status.stale_reason, None, "{folder}");
+    }
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_mismatch_diagnostic_is_bounded_and_never_persisted() {
+    let tmp = TempDir::new().unwrap();
+    let mgr = FolderIndexManager::new(tmp.path());
+    mgr.upsert_folder_file(
+        "diagnostic",
+        32,
+        &one_chunk("a.md", "Diagnostic text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "stable".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: None,
+        }),
+    )
+    .unwrap();
+    let long_model = "é".repeat(500);
+    let _ = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "diagnostic".into(),
+                dim: 32,
+                k: 1,
+                query: Some("Diagnostic".into()),
+                query_vector: Some(basis(64, 2)),
+                query_model: Some(long_model),
+                query_dim: Some(64),
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let idx = mgr
+        .get_or_open_without_probe_for_test("diagnostic", 32)
+        .unwrap();
+    let reason = idx.model_status().unwrap().query_mismatch_reason.unwrap();
+    assert!(reason.len() <= 256);
+    let persisted: i64 = idx
+        .lock_conn()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM folder_meta WHERE key = 'query_mismatch_reason'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(persisted, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -480,6 +854,7 @@ async fn interrupted_rebuild_is_marked_stale_and_resumes() {
         .unwrap();
     assert_eq!(response.mode, SearchMode::Fts);
     assert!(response.stale);
+    mgr.wait_for_model_probe("interrupted").await;
     mgr.wait_for_rebuild("interrupted").await;
 
     let status = mgr
@@ -539,9 +914,11 @@ async fn short_vs_bulk_mismatch_stays_stale_fts_only_without_rebuild_loop() {
         }),
     )
     .unwrap();
+    mgr.wait_for_model_probe("mismatch").await;
+    let probes_after_open = responder.bulk_probe_calls.load(Ordering::SeqCst);
 
-    // Search invokes short-a -> gets model-a != stored model-b, records the query
-    // mismatch, verifies bulk-b is unchanged, and stays FTS-only without rebuilding.
+    // The first-open probe records the endpoint split. Searches stay FTS-only
+    // and do not pay another pair of probe calls inside the rate-limit window.
     let res1 = mgr
         .search_folder(
             FolderSearchRequest {
@@ -567,11 +944,11 @@ async fn short_vs_bulk_mismatch_stays_stale_fts_only_without_rebuild_loop() {
 
     let idx = mgr.get_or_open("mismatch", 32).unwrap();
     let status = idx.model_status().unwrap();
-    assert_eq!(status.index_state, IndexModelState::Ready);
-    assert!(status
-        .query_mismatch_reason
-        .as_deref()
-        .is_some_and(|reason| reason.starts_with("model_mismatch:")));
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(
+        status.stale_reason.as_deref(),
+        Some(SHORT_BULK_MISMATCH_REASON)
+    );
 
     let calls_before = responder.bulk_calls.load(Ordering::SeqCst);
     let res2 = mgr
@@ -595,7 +972,10 @@ async fn short_vs_bulk_mismatch_stays_stale_fts_only_without_rebuild_loop() {
     assert_eq!(res2.mode, SearchMode::Fts);
     assert!(res2.stale);
     assert!(!res2.rebuilding);
-    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        responder.bulk_probe_calls.load(Ordering::SeqCst),
+        probes_after_open
+    );
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), calls_before);
 }
 
@@ -643,6 +1023,7 @@ async fn same_model_different_dim_marks_stale_and_rebuilds() {
         }),
     )
     .unwrap();
+    mgr.wait_for_model_probe("dim-test").await;
     mgr.upsert_folder_file(
         "dim-test",
         32,
@@ -655,7 +1036,6 @@ async fn same_model_different_dim_marks_stale_and_rebuilds() {
         }),
     )
     .unwrap();
-
     // Same model name, changed pre-truncation dim (64 -> 48).
     responder.set_both_model("qwen3-0.6b", 48, 4);
     responder.gate_bulk.store(true, Ordering::SeqCst);
@@ -734,7 +1114,7 @@ async fn rebuild_wait_returns_when_finish_lands_between_lookup_and_await() {
     reg.try_acquire("f").expect("free");
     let r2 = Arc::clone(&reg);
     // The rebuild finishes exactly after wait() looked the folder up.
-    *reg.after_lookup.lock().unwrap() = Some(Box::new(move || r2.finish("f")));
+    *reg.after_lookup.lock().unwrap() = Some(Box::new(move || r2.finish("f", true)));
     tokio::time::timeout(std::time::Duration::from_secs(5), reg.wait("f"))
         .await
         .expect("wait() missed a finish between lookup and await");
@@ -787,6 +1167,7 @@ async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
         Some(&old_meta),
     )
     .unwrap();
+    mgr.wait_for_model_probe("tail").await;
 
     // A writer with an old-model vector lands after every tail read, once,
     // right before the first commit attempt.
@@ -857,6 +1238,7 @@ async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
         )
         .unwrap();
     }
+    mgr.wait_for_model_probe("paged").await;
 
     responder.set_both_model("new-model", 64, 5);
     mgr.probe_folder_model_for_test("paged", 32).await.unwrap();
@@ -942,6 +1324,7 @@ async fn an_untracked_text_change_is_caught_before_the_commit() {
         Some(&old_meta),
     )
     .unwrap();
+    mgr.wait_for_model_probe("untracked").await;
 
     let idx = mgr
         .get_or_open_without_probe_for_test("untracked", 32)
