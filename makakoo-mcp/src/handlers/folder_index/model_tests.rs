@@ -126,8 +126,8 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     );
     let ctx = Arc::new(
         ToolContext::empty(tmp.path().to_path_buf())
-            .with_embeddings(short_emb)
-            .with_bulk_embeddings(bulk_emb)
+            .with_embeddings(Arc::clone(&short_emb))
+            .with_bulk_embeddings(Arc::clone(&bulk_emb))
             .with_folder_index(Arc::clone(&mgr)),
     );
     let mut reg = ToolRegistry::new();
@@ -176,6 +176,32 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     responder.switch("bge-v2", 48, 3);
     responder.gate_bulk.store(true, Ordering::SeqCst);
 
+    // Reopen the manager so its index-side bulk probe observes the change. A
+    // query-side mismatch only falls back to FTS; it never starts the rebuild.
+    drop(reg);
+    drop(mgr);
+    let mgr = Arc::new(
+        FolderIndexManager::new(tmp.path().join("indexes"))
+            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
+    );
+    let ctx = Arc::new(
+        ToolContext::empty(tmp.path().to_path_buf())
+            .with_embeddings(Arc::clone(&short_emb))
+            .with_bulk_embeddings(Arc::clone(&bulk_emb))
+            .with_folder_index(Arc::clone(&mgr)),
+    );
+    let mut reg = ToolRegistry::new();
+    register_folder_index(&mut reg, ctx);
+    mgr.get_or_open("legal", 32).unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("bulk embed call never reached the gate");
+
     let mid_query = reg
         .call(
             "folder_index_search",
@@ -193,14 +219,6 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     assert_eq!(mid_query["rebuilding"], true);
     assert_eq!(mid_query["passages"].as_array().unwrap().len(), 1);
     assert_eq!(mid_query["passages"][0]["anchor"]["value"], "7");
-
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !responder.gate_entered.load(Ordering::SeqCst) {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("bulk embed call never reached the gate");
 
     // query_vector-only while stale returns empty passages and stale=true.
     let mid_vec_only = reg
