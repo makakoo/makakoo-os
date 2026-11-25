@@ -455,6 +455,7 @@ async fn query_mismatch_reprobes_bulk_and_rebuilds_once_after_alias_switch() {
             std::time::Duration::from_millis(5),
             std::time::Duration::from_secs(1),
             std::time::Duration::from_secs(1),
+            3,
         );
     mgr.upsert_folder_file(
         "switch",
@@ -553,6 +554,7 @@ async fn failed_open_probe_retries_after_backoff() {
             std::time::Duration::from_millis(20),
             std::time::Duration::from_secs(1),
             std::time::Duration::from_secs(1),
+            3,
         );
     mgr.upsert_folder_file(
         "retry",
@@ -594,7 +596,7 @@ async fn failed_open_probe_retries_after_backoff() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn failed_rebuild_has_backoff_across_one_hundred_queries() {
+async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "old", 64);
     let server = MockServer::start().await;
@@ -608,10 +610,11 @@ async fn failed_rebuild_has_backoff_across_one_hundred_queries() {
     let mgr = FolderIndexManager::new(tmp.path())
         .with_embedders(short, bulk)
         .with_model_recovery_timings_for_test(
-            std::time::Duration::from_millis(1),
-            std::time::Duration::from_millis(1),
-            std::time::Duration::from_secs(2),
-            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(10 * 60),
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(6 * 60 * 60),
+            3,
         );
     mgr.upsert_folder_file(
         "failed",
@@ -626,31 +629,11 @@ async fn failed_rebuild_has_backoff_across_one_hundred_queries() {
     )
     .unwrap();
     mgr.wait_for_model_probe("failed").await;
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     responder.set_both_model("new", 64, 2);
     responder.fail_bulk_embeddings.store(true, Ordering::SeqCst);
-    let _ = mgr
-        .search_folder(
-            FolderSearchRequest {
-                folder_id: "failed".into(),
-                dim: 32,
-                k: 1,
-                query: Some("Failure".into()),
-                query_vector: Some(basis(64, 2)),
-                query_model: Some("mismatch".into()),
-                query_dim: Some(64),
-                filter: SearchFilter::default(),
-            },
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    mgr.wait_for_model_probe("failed").await;
-    mgr.wait_for_rebuild("failed").await;
-    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
 
-    for _ in 0..100 {
+    for _ in 0..2 {
+        mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
         let _ = mgr
             .search_folder(
                 FolderSearchRequest {
@@ -668,10 +651,167 @@ async fn failed_rebuild_has_backoff_across_one_hundred_queries() {
             )
             .await
             .unwrap();
+        mgr.wait_for_model_probe("failed").await;
+        mgr.wait_for_rebuild("failed").await;
     }
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+
+    for _ in 2..(24 * 6) {
+        mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
+        let _ = mgr
+            .search_folder(
+                FolderSearchRequest {
+                    folder_id: "failed".into(),
+                    dim: 32,
+                    k: 1,
+                    query: Some("Failure".into()),
+                    query_vector: Some(basis(64, 2)),
+                    query_model: Some("mismatch".into()),
+                    query_dim: Some(64),
+                    filter: SearchFilter::default(),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        mgr.wait_for_model_probe("failed").await;
+        mgr.wait_for_rebuild("failed").await;
+    }
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 3);
+    let status = mgr
+        .get_or_open_without_probe_for_test("failed", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert!(status
+        .stale_reason
+        .as_deref()
+        .is_some_and(|reason| reason.starts_with("rebuild_suppressed:")
+            && reason.contains("after 3 identical failures")));
+
+    responder.set_both_model("newer", 64, 3);
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
+    let _ = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "failed".into(),
+                dim: 32,
+                k: 1,
+                query: Some("Failure".into()),
+                query_vector: Some(basis(64, 3)),
+                query_model: Some("mismatch".into()),
+                query_dim: Some(64),
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     mgr.wait_for_model_probe("failed").await;
     mgr.wait_for_rebuild("failed").await;
-    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 4);
+
+    responder
+        .fail_bulk_embeddings
+        .store(false, Ordering::SeqCst);
+    mgr.request_folder_rebuild("failed", 32).await.unwrap();
+    mgr.wait_for_rebuild("failed").await;
+    let recovered = mgr
+        .get_or_open_without_probe_for_test("failed", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(recovered.index_state, IndexModelState::Ready);
+    assert_eq!(recovered.embed_model.as_deref(), Some("newer"));
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_upsert_cannot_rewrite_model_or_trigger_periodic_rebuilds() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "bulk-model", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(short, bulk)
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_secs(10 * 60),
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30 * 60),
+            std::time::Duration::from_secs(6 * 60 * 60),
+            3,
+        );
+    mgr.upsert_folder_file(
+        "upsert-guard",
+        32,
+        &one_chunk("a.md", "Stable indexed text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "bulk-model".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("upsert-guard").await;
+
+    for version in 2..=(24 * 6 + 1) {
+        let mut foreign = one_chunk("a.md", "Foreign client text.", basis(64, 2));
+        foreign.file_version = format!("v{version}");
+        let err = mgr
+            .upsert_folder_file(
+                "upsert-guard",
+                32,
+                &foreign,
+                Some(&UpsertModelMeta {
+                    model: "client-model".into(),
+                    embed_dim: 64,
+                    bulk_alias: "bulk-alias".into(),
+                    short_alias: Some("short-alias".into()),
+                }),
+            )
+            .expect_err("foreign model metadata must be rejected");
+        assert!(matches!(err, crate::error::MakakooError::InvalidInput(_)));
+
+        mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
+        let _ = mgr
+            .search_folder(
+                FolderSearchRequest {
+                    folder_id: "upsert-guard".into(),
+                    dim: 32,
+                    k: 1,
+                    query: Some("Stable".into()),
+                    query_vector: Some(basis(64, 1)),
+                    query_model: Some("bulk-model".into()),
+                    query_dim: Some(64),
+                    filter: SearchFilter::default(),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        mgr.wait_for_model_probe("upsert-guard").await;
+        mgr.wait_for_rebuild("upsert-guard").await;
+    }
+
+    let status = mgr
+        .get_or_open_without_probe_for_test("upsert-guard", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("bulk-model"));
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1111,7 +1251,7 @@ fn probe_stale_mark_never_hides_a_running_rebuild() {
 #[tokio::test]
 async fn rebuild_wait_returns_when_finish_lands_between_lookup_and_await() {
     let reg = Arc::new(rebuild::FolderRebuildRegistry::new());
-    reg.try_acquire("f").expect("free");
+    reg.try_acquire_for_test("f").expect("free");
     let r2 = Arc::clone(&reg);
     // The rebuild finishes exactly after wait() looked the folder up.
     *reg.after_lookup.lock().unwrap() = Some(Box::new(move || r2.finish("f", true)));

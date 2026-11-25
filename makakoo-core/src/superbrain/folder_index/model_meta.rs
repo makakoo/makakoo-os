@@ -281,30 +281,36 @@ pub(crate) fn apply_upsert_model_meta_tx(
         return Ok(());
     };
 
-    if !other_chunks_exist {
-        if status.stale_reason.as_deref() == Some(SHORT_BULK_MISMATCH_REASON) {
-            write_meta_opt(conn, META_EMBED_MODEL, Some(&m.model))?;
-            write_meta_opt(conn, META_EMBED_DIM, Some(&m.embed_dim.to_string()))?;
-            write_meta_opt(conn, META_EMBED_ALIAS, Some(&m.bulk_alias))?;
-            return Ok(());
+    // Once index metadata exists, only the bulk probe/rebuild may change it.
+    // Client-provided provenance is accepted for the first rows, but a later
+    // foreign upsert must not rewrite the index model or manufacture a stale
+    // state that the periodic probe would turn into an endless rebuild loop.
+    if status.index_state == IndexModelState::Rebuilding {
+        return Ok(());
+    }
+    let metadata_exists =
+        status.embed_model.is_some() || status.embed_dim.is_some() || status.stale_reason.is_some();
+    if metadata_exists {
+        let model_mismatch = status
+            .embed_model
+            .as_deref()
+            .is_some_and(|stored| stored != m.model);
+        let dim_mismatch = status.embed_dim.is_some_and(|stored| stored != m.embed_dim);
+        if model_mismatch || dim_mismatch {
+            return Err(MakakooError::invalid_input(
+                "upsert model metadata does not match the folder index; rebuild with the configured bulk embedder first",
+            ));
         }
-        write_ready_model_meta(
-            conn,
-            &m.model,
-            m.embed_dim,
-            &m.bulk_alias,
-            m.short_alias.as_deref(),
-        )?;
         return Ok(());
     }
 
-    let model_matches = status.embed_model.as_deref() == Some(m.model.as_str());
-    let dim_matches = status.embed_dim == Some(m.embed_dim);
-    // A running rebuild owns the state; its tail pass re-embeds rows written meanwhile.
-    if (!model_matches || !dim_matches) && status.index_state != IndexModelState::Rebuilding {
-        write_model_state(conn, IndexModelState::Stale, Some("mixed_model_upsert"))?;
-    }
-    Ok(())
+    write_ready_model_meta(
+        conn,
+        &m.model,
+        m.embed_dim,
+        &m.bulk_alias,
+        m.short_alias.as_deref(),
+    )
 }
 
 impl FolderIndex {

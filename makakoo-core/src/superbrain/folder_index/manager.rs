@@ -54,6 +54,23 @@ impl FolderIndexManager {
         self
     }
 
+    /// Configure automatic rebuild retries. Repeated identical failures are
+    /// halted after `max_identical_failures` until the bulk model changes or
+    /// [`Self::request_folder_rebuild`] explicitly clears the halt.
+    pub fn with_model_rebuild_failure_policy(
+        mut self,
+        initial_backoff: Duration,
+        backoff_cap: Duration,
+        max_identical_failures: u32,
+    ) -> Self {
+        self.rebuilds = Arc::new(self.rebuilds.with_rebuild_failure_policy(
+            initial_backoff,
+            backoff_cap,
+            max_identical_failures,
+        ));
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn with_model_recovery_timings_for_test(
         mut self,
@@ -61,12 +78,14 @@ impl FolderIndexManager {
         probe_failure_backoff: Duration,
         rebuild_failure_backoff: Duration,
         rebuild_failure_cap: Duration,
+        max_identical_rebuild_failures: u32,
     ) -> Self {
         self.rebuilds = Arc::new(FolderRebuildRegistry::with_timings(
             probe_interval,
             probe_failure_backoff,
             rebuild_failure_backoff,
             rebuild_failure_cap,
+            max_identical_rebuild_failures,
         ));
         self
     }
@@ -222,6 +241,50 @@ impl FolderIndexManager {
 
     pub async fn wait_for_model_probe(&self, folder_id: &str) {
         self.rebuilds.wait_for_probe(folder_id).await;
+    }
+
+    /// Explicitly request a full folder rebuild. This bypasses a halt caused
+    /// by repeated identical automatic failures, while active work remains
+    /// deduplicated.
+    pub async fn request_folder_rebuild(&self, folder_id: &str, dim: usize) -> Result<()> {
+        let short_emb = self.short_emb.clone();
+        let bulk_emb = self
+            .bulk_emb
+            .clone()
+            .or_else(|| short_emb.clone())
+            .ok_or_else(|| MakakooError::internal("folder rebuild requires an embedder"))?;
+        let idx = self.get_or_open_with_overrides(
+            folder_id,
+            dim,
+            short_emb.as_ref(),
+            Some(&bulk_emb),
+            false,
+        )?;
+        let observed_bulk = bulk_emb.probe_model().await?;
+        let observed_short = match short_emb.as_ref() {
+            Some(short)
+                if short.model() != bulk_emb.model() || short.base_url() != bulk_emb.base_url() =>
+            {
+                short.probe_model().await.ok()
+            }
+            Some(_) => Some(observed_bulk.clone()),
+            None => None,
+        };
+        self.rebuilds.clear_rebuild_retry(folder_id);
+        rebuild::spawn_folder_rebuild(
+            idx,
+            short_emb,
+            bulk_emb,
+            Arc::clone(&self.rebuilds),
+            Some(observed_bulk),
+            observed_short,
+        );
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn advance_model_recovery_time_for_test(&self, duration: Duration) {
+        self.rebuilds.advance_time(duration);
     }
 
     #[cfg(test)]

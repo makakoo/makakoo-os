@@ -22,12 +22,44 @@ use super::FolderIndex;
 const MAX_REBUILD_COMMIT_ATTEMPTS: usize = 8;
 pub(crate) const DEFAULT_MODEL_REPROBE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const DEFAULT_PROBE_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
-const DEFAULT_REBUILD_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+const DEFAULT_REBUILD_FAILURE_BACKOFF: Duration = Duration::from_secs(30 * 60);
+const DEFAULT_REBUILD_FAILURE_CAP: Duration = Duration::from_secs(6 * 60 * 60);
+const DEFAULT_MAX_IDENTICAL_REBUILD_FAILURES: u32 = 3;
 
 #[derive(Debug, Clone, Copy)]
 struct RetryState {
     failures: u32,
     next_allowed: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RebuildKey {
+    model: String,
+    dim: usize,
+}
+
+impl RebuildKey {
+    fn new(model: impl Into<String>, dim: usize) -> Self {
+        Self {
+            model: model.into(),
+            dim,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RebuildRetryState {
+    key: RebuildKey,
+    error: String,
+    failures: u32,
+    next_allowed: Instant,
+    halted: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RebuildFailureDisposition {
+    failures: u32,
+    halted: bool,
 }
 
 #[derive(Default)]
@@ -40,12 +72,15 @@ struct ProbeState {
 /// re-embedding rebuilds.
 pub(crate) struct FolderRebuildRegistry {
     active: Mutex<HashMap<String, Arc<Notify>>>,
-    rebuild_retry: Mutex<HashMap<String, RetryState>>,
+    rebuild_retry: Mutex<HashMap<String, RebuildRetryState>>,
     probes: Mutex<ProbeState>,
     probe_interval: Duration,
     probe_failure_backoff: Duration,
     rebuild_failure_backoff: Duration,
     rebuild_failure_cap: Duration,
+    max_identical_rebuild_failures: u32,
+    #[cfg(test)]
+    clock_offset: Mutex<Duration>,
     /// Test hook: runs in `wait` after the lookup, before the waiter registers.
     #[cfg(test)]
     pub(crate) after_lookup: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -57,7 +92,8 @@ impl FolderRebuildRegistry {
             DEFAULT_MODEL_REPROBE_INTERVAL,
             DEFAULT_PROBE_FAILURE_BACKOFF,
             DEFAULT_REBUILD_FAILURE_BACKOFF,
-            DEFAULT_MODEL_REPROBE_INTERVAL,
+            DEFAULT_REBUILD_FAILURE_CAP,
+            DEFAULT_MAX_IDENTICAL_REBUILD_FAILURES,
         )
     }
 
@@ -66,7 +102,9 @@ impl FolderRebuildRegistry {
         probe_failure_backoff: Duration,
         rebuild_failure_backoff: Duration,
         rebuild_failure_cap: Duration,
+        max_identical_rebuild_failures: u32,
     ) -> Self {
+        let rebuild_failure_backoff = rebuild_failure_backoff.max(probe_interval.saturating_mul(2));
         Self {
             active: Mutex::new(HashMap::new()),
             rebuild_retry: Mutex::new(HashMap::new()),
@@ -74,7 +112,10 @@ impl FolderRebuildRegistry {
             probe_interval,
             probe_failure_backoff,
             rebuild_failure_backoff,
-            rebuild_failure_cap,
+            rebuild_failure_cap: rebuild_failure_cap.max(rebuild_failure_backoff),
+            max_identical_rebuild_failures: max_identical_rebuild_failures.max(1),
+            #[cfg(test)]
+            clock_offset: Mutex::new(Duration::ZERO),
             #[cfg(test)]
             after_lookup: Mutex::new(None),
         }
@@ -85,21 +126,67 @@ impl FolderRebuildRegistry {
         Self::with_timings(
             probe_interval,
             DEFAULT_PROBE_FAILURE_BACKOFF.min(probe_interval),
-            DEFAULT_REBUILD_FAILURE_BACKOFF.min(probe_interval),
-            probe_interval,
+            DEFAULT_REBUILD_FAILURE_BACKOFF,
+            DEFAULT_REBUILD_FAILURE_CAP,
+            DEFAULT_MAX_IDENTICAL_REBUILD_FAILURES,
         )
     }
 
-    pub(crate) fn try_acquire(&self, folder_id: &str) -> Option<Arc<Notify>> {
-        let now = Instant::now();
-        if self
-            .rebuild_retry
+    pub(crate) fn with_rebuild_failure_policy(
+        &self,
+        initial_backoff: Duration,
+        backoff_cap: Duration,
+        max_identical_failures: u32,
+    ) -> Self {
+        Self::with_timings(
+            self.probe_interval,
+            self.probe_failure_backoff,
+            initial_backoff,
+            backoff_cap,
+            max_identical_failures,
+        )
+    }
+
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        {
+            let offset = *self.clock_offset.lock().unwrap_or_else(|e| e.into_inner());
+            Instant::now()
+                .checked_add(offset)
+                .unwrap_or_else(Instant::now)
+        }
+        #[cfg(not(test))]
+        {
+            Instant::now()
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn advance_time(&self, duration: Duration) {
+        let mut offset = self.clock_offset.lock().unwrap_or_else(|e| e.into_inner());
+        *offset = offset.saturating_add(duration);
+    }
+
+    pub(crate) fn clear_rebuild_retry(&self, folder_id: &str) {
+        self.rebuild_retry
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(folder_id)
-            .is_some_and(|state| now < state.next_allowed)
+            .remove(folder_id);
+    }
+
+    fn try_acquire(&self, folder_id: &str, key: &RebuildKey) -> Option<Arc<Notify>> {
+        let now = self.now();
         {
-            return None;
+            let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
+            if retry.get(folder_id).is_some_and(|state| state.key != *key) {
+                retry.remove(folder_id);
+            }
+            if retry
+                .get(folder_id)
+                .is_some_and(|state| state.halted || now < state.next_allowed)
+            {
+                return None;
+            }
         }
         let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
         if guard.contains_key(folder_id) {
@@ -110,32 +197,52 @@ impl FolderRebuildRegistry {
         Some(notify)
     }
 
+    #[cfg(test)]
+    pub(crate) fn try_acquire_for_test(&self, folder_id: &str) -> Option<Arc<Notify>> {
+        self.try_acquire(folder_id, &RebuildKey::new("test-model", 1))
+    }
+
+    fn record_failure(
+        &self,
+        folder_id: &str,
+        key: &RebuildKey,
+        error: &str,
+    ) -> RebuildFailureDisposition {
+        let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
+        let failures = retry.get(folder_id).map_or(1, |state| {
+            if state.key == *key && state.error == error {
+                state.failures.saturating_add(1)
+            } else {
+                1
+            }
+        });
+        let halted = failures >= self.max_identical_rebuild_failures;
+        let delay = exponential_backoff(
+            self.rebuild_failure_backoff,
+            self.rebuild_failure_cap,
+            failures,
+        );
+        retry.insert(
+            folder_id.to_string(),
+            RebuildRetryState {
+                key: key.clone(),
+                error: error.to_string(),
+                failures,
+                next_allowed: self.now() + delay,
+                halted,
+            },
+        );
+        RebuildFailureDisposition { failures, halted }
+    }
+
     pub(crate) fn finish(&self, folder_id: &str, succeeded: bool) {
         let notify = {
             let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
             guard.remove(folder_id)
         };
-        let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
         if succeeded {
-            retry.remove(folder_id);
-        } else {
-            let failures = retry
-                .get(folder_id)
-                .map_or(1, |state| state.failures.saturating_add(1));
-            let delay = exponential_backoff(
-                self.rebuild_failure_backoff,
-                self.rebuild_failure_cap,
-                failures,
-            );
-            retry.insert(
-                folder_id.to_string(),
-                RetryState {
-                    failures,
-                    next_allowed: Instant::now() + delay,
-                },
-            );
+            self.clear_rebuild_retry(folder_id);
         }
-        drop(retry);
         if let Some(n) = notify {
             n.notify_waiters();
         }
@@ -184,7 +291,7 @@ impl FolderRebuildRegistry {
     }
 
     pub(crate) fn try_probe(&self, folder_id: &str) -> bool {
-        let now = Instant::now();
+        let now = self.now();
         let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
         if probes.active.contains_key(folder_id)
             || probes
@@ -221,7 +328,7 @@ impl FolderRebuildRegistry {
                 folder_id.to_string(),
                 RetryState {
                     failures,
-                    next_allowed: Instant::now() + delay,
+                    next_allowed: self.now() + delay,
                 },
             );
             notify
@@ -360,12 +467,6 @@ pub(crate) async fn probe_and_reconcile(
         return true;
     }
 
-    if !matches!(
-        idx.mark_stale_unless_rebuilding("model_changed_on_probe"),
-        Ok(true)
-    ) {
-        return true;
-    }
     spawn_folder_rebuild(
         idx,
         short_emb,
@@ -413,7 +514,11 @@ pub(crate) fn spawn_folder_rebuild(
     observed_short: Option<(String, usize)>,
 ) {
     let folder_id = idx.folder_id().to_string();
-    if rebuilds.try_acquire(&folder_id).is_none() {
+    let Some((model, dim)) = observed_bulk.as_ref() else {
+        return;
+    };
+    let rebuild_key = RebuildKey::new(model.clone(), *dim);
+    if rebuilds.try_acquire(&folder_id, &rebuild_key).is_none() {
         return;
     }
 
@@ -439,7 +544,17 @@ pub(crate) fn spawn_folder_rebuild(
         {
             Ok(()) => true,
             Err(err) => {
-                let _ = idx.mark_stale(&format!("rebuild_failed: {err}"));
+                let error = err.to_string();
+                let disposition = rebuilds_clone.record_failure(&fid, &rebuild_key, &error);
+                let reason = if disposition.halted {
+                    format!(
+                        "rebuild_suppressed: model={} dim={} after {} identical failures: {}",
+                        rebuild_key.model, rebuild_key.dim, disposition.failures, error
+                    )
+                } else {
+                    format!("rebuild_failed: {error}")
+                };
+                let _ = idx.mark_stale(&reason);
                 false
             }
         };
