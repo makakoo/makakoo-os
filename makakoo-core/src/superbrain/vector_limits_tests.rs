@@ -349,7 +349,8 @@ async fn folder_index_rebuild_and_query_enforce_16_batch_and_2000_utf8_byte_cap(
                 }],
             },
             Some(&old_meta),
-        ).await
+        )
+        .await
         .unwrap();
         expected_texts.push((format!("file-{i:02}.md"), text));
     }
