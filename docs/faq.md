@@ -124,17 +124,34 @@ turn. After the first turn it's cached by the LLM provider. If you
 measure perceptible latency growth, run `makakoo infect --verify` —
 sometimes the block got written twice.
 
+### Do I need Obsidian or Logseq to use Makakoo?
+
+No. Makakoo's canonical Brain at `~/MAKAKOO/data/Brain/` is plain Markdown
+indexed by SQLite FTS5, vector search, and a built-in entity graph. It works
+standalone with zero third-party note apps installed.
+
 ### Can I use Makakoo with Obsidian / Logseq alongside its Brain?
 
-Yes. The Makakoo Brain at `~/MAKAKOO/data/Brain/` is plain Markdown and remains canonical. Two scenarios:
+Yes — both are optional. Two scenarios:
 
-- **Use Obsidian as a UI over the existing Brain.** No registration
+- **Use Obsidian (or any Markdown editor) as a UI over the existing Brain.** No registration
   needed. Open Obsidian → `Open folder as vault` → point at
-  `~/MAKAKOO/data/Brain/`. Same files, Obsidian UX.
+  `~/MAKAKOO/data/Brain/`. Same files, your choice of editor.
 - **Connect a separate vault as enrichment.** Run `makakoo setup brain`. The picker can offer to install Obsidian first if the app is missing and Homebrew, Flatpak, or winget is available. Advanced users can run `makakoo brain add personal obsidian ~/Documents/MyVault --read-only`. Normal journal writes still go to the canonical Brain.
 - **Connect an OKF bundle as enrichment.** Run `makakoo brain validate <bundle>`, then `makakoo brain add <name> okf <bundle>` and `makakoo sync`. OKF sources are always read-only.
 
 See [use case #3](use-cases.md#3-connect-my-obsidian-vault-or-a-folder-of-notes) and the [`makakoo brain` manual](user-manual/makakoo-brain.md).
+
+### Does Makakoo prevent my laptop from sleeping?
+
+Not while idle. The background daemon never holds a wake lock, so your laptop
+sleeps normally. Makakoo acquires a scoped OS idle-sleep guard (`caffeinate -i`
+on macOS, `systemd-inhibit` on Linux, `SetThreadExecutionState` on Windows)
+only during active long-running maintenance commands (`makakoo sync --embed`,
+`makakoo dream`, `makakoo sancho tick`) or when you explicitly pass
+`makakoo run <pattern> --keep-awake`. Your display may still sleep, the lock
+releases immediately when the command exits or crashes, and you can disable
+wake locks everywhere with `MAKAKOO_NO_WAKE_LOCK=1`.
 
 ### Does Makakoo work on a corporate / locked-down machine?
 

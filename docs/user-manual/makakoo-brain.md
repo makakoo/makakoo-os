@@ -2,7 +2,11 @@
 
 `makakoo brain` manages the knowledge sources indexed by Superbrain and imports or exports [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.1 bundles.
 
-The canonical Brain never moves. It remains at `$MAKAKOO_HOME/data/Brain`. Obsidian, plain-Markdown, Logseq, and OKF paths are enrichment sources.
+The canonical Brain never moves. It remains at `$MAKAKOO_HOME/data/Brain` as
+plain Markdown indexed by SQLite FTS5, vector search, and a native entity
+graph. **No third-party note app is required** — Makakoo Brain works
+standalone out of the box. Obsidian, Logseq, plain-Markdown folders, and OKF
+bundles are completely optional viewers or enrichment sources.
 
 ## List sources
 

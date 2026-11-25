@@ -10,11 +10,13 @@
 //! module so callers get identical semantics across languages.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use futures_util::StreamExt;
+use once_cell::sync::OnceCell;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{redirect::Policy, Url};
 use serde::{Deserialize, Serialize};
@@ -124,10 +126,9 @@ pub struct GeneratedImage {
 pub struct LlmClient {
     base_url: String,
     api_key: Option<String>,
-    client: reqwest::Client,
-    image_download_client: reqwest::Client,
+    client: Arc<OnceCell<reqwest::Client>>,
+    image_download_client: Arc<OnceCell<reqwest::Client>>,
     max_retries: u32,
-    #[allow(dead_code)]
     timeout: Duration,
 }
 
@@ -141,27 +142,40 @@ impl LlmClient {
     /// Construct with env-driven defaults. Canonical AIL names win, then
     /// legacy switchAILocal-compatible aliases. Missing credentials remain
     /// valid for gateways that intentionally run without authentication.
+    ///
+    /// Underlying HTTP/TLS clients are initialized lazily on first request so
+    /// read-only CLI/MCP boot paths avoid redundant OS root-cert loading.
     pub fn new() -> Self {
         let base_url = resolve_base_url_with(|name| std::env::var(name).ok());
         let api_key = resolve_api_key_with(|name| std::env::var(name).ok());
         let timeout = Duration::from_secs(120);
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .expect("reqwest client build");
-        let image_download_client = reqwest::Client::builder()
-            .timeout(timeout)
-            .redirect(Policy::none())
-            .build()
-            .expect("reqwest image client build");
         Self {
             base_url,
             api_key,
-            client,
-            image_download_client,
+            client: Arc::new(OnceCell::new()),
+            image_download_client: Arc::new(OnceCell::new()),
             max_retries: 3,
             timeout,
         }
+    }
+
+    fn http_client(&self) -> Result<&reqwest::Client> {
+        self.client.get_or_try_init(|| {
+            reqwest::Client::builder()
+                .timeout(self.timeout)
+                .build()
+                .map_err(|e| MakakooError::llm(format!("http client init failed: {e}")))
+        })
+    }
+
+    fn image_client(&self) -> Result<&reqwest::Client> {
+        self.image_download_client.get_or_try_init(|| {
+            reqwest::Client::builder()
+                .timeout(self.timeout)
+                .redirect(Policy::none())
+                .build()
+                .map_err(|e| MakakooError::llm(format!("image http client init failed: {e}")))
+        })
     }
 
     /// Construct with an explicit base URL (tests, injected configs).
@@ -321,7 +335,7 @@ impl LlmClient {
         max_bytes: usize,
     ) -> Result<GeneratedImage> {
         let validated = self.validate_generated_image_url(raw_url)?;
-        let mut request = self.image_download_client.get(validated.url);
+        let mut request = self.image_client()?.get(validated.url);
         if validated.same_gateway_origin {
             if let Some(auth) = self.auth_header() {
                 request = request.header("Authorization", auth);
@@ -443,7 +457,7 @@ impl LlmClient {
         let url = format!("{}{}", self.base_url, path);
         let mut attempt: u32 = 0;
         loop {
-            let mut req = self.client.post(&url).json(body);
+            let mut req = self.http_client()?.post(&url).json(body);
             if let Some(auth) = self.auth_header() {
                 req = req.header("Authorization", auth);
             }

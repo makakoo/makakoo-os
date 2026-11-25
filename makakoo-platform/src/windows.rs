@@ -153,6 +153,20 @@ impl PlatformAdapter for WindowsPlatform {
     fn can_symlink(&self) -> bool {
         Self::developer_mode_enabled()
     }
+
+    fn prevent_idle_sleep(&self, _reason: &str) -> crate::SleepGuard {
+        if crate::sleep::wake_lock_disabled() {
+            return crate::SleepGuard::noop();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            crate::SleepGuard::spawn_windows_thread()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            crate::SleepGuard::noop()
+        }
+    }
 }
 
 #[cfg(test)]

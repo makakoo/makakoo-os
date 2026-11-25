@@ -528,8 +528,10 @@ fn write_registry(
 }
 
 fn validate_source_name(name: &str) -> anyhow::Result<()> {
-    let valid = Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$").expect("source name regex");
-    if !valid.is_match(name) {
+    static SOURCE_NAME_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$").expect("source name regex")
+    });
+    if !SOURCE_NAME_RE.is_match(name) {
         bail!("invalid source name {name:?}; use 1-64 letters, digits, '.', '_' or '-'");
     }
     Ok(())
@@ -554,11 +556,13 @@ fn expand_source_path(raw: &str, home: &Path) -> PathBuf {
 }
 
 fn expand_environment_variables(raw: &str, home: &Path) -> String {
-    let variables = Regex::new(
-        r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
-    )
-    .expect("environment variable regex");
-    variables
+    static ENV_VAR_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(
+            r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
+        )
+        .expect("environment variable regex")
+    });
+    ENV_VAR_RE
         .replace_all(raw, |captures: &regex::Captures<'_>| {
             let name = captures
                 .name("braced")

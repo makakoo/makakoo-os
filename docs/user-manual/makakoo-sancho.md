@@ -43,6 +43,13 @@ makakoo sancho status
 makakoo sancho tick
 ```
 
+While `makakoo sancho tick` is actively executing tasks or waiting on a Brain
+vector rebuild, Makakoo holds a scoped OS idle-sleep guard (`SleepGuard`) so
+unattended consolidation or re-embedding jobs finish even if the machine idles.
+The display may still sleep, the guard drops as soon as the tick ends, and the
+idle background daemon never holds a wake lock. Opt out globally with
+`MAKAKOO_NO_WAKE_LOCK=1`.
+
 ## Task eligibility
 
 A task is eligible for a tick when its last-run timestamp is older than its

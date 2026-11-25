@@ -39,12 +39,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::{open_db, run_migrations};
 use crate::error::{MakakooError, Result};
+
+/// Cache key toggled to `'1'` inside `write_document` / `delete_document`
+/// transactions and reset to `'0'` atomically when `IngestEngine` finishes
+/// rebuilding `entity_graph` + `brain_graph_{nodes,edges}`.
+pub(crate) const GRAPH_DIRTY_CACHE_KEY: &str = "superbrain:graph_dirty";
 
 // ─────────────────────────────────────────────────────────────────────
 // Public types
@@ -154,6 +159,143 @@ pub fn unpack_vector(blob: &[u8]) -> Vec<f32> {
         out.push(f32::from_le_bytes(bytes));
     }
     out
+}
+
+/// Compute the Euclidean (L2) norm of a vector once before scanning candidates.
+#[inline]
+pub fn vector_norm(v: &[f32]) -> f32 {
+    let mut sum: f32 = 0.0;
+    for &x in v {
+        sum += x * x;
+    }
+    sum.sqrt()
+}
+
+/// Zero-allocation cosine similarity directly between a query slice (with
+/// precomputed L2 norm) and a packed little-endian `f32` byte blob.
+///
+/// Uses 4 independent accumulator lanes so LLVM can auto-vectorize under
+/// strict IEEE-754 (NEON on aarch64, SSE2 on x86_64). Matches
+/// `cosine_similarity(query, &unpack_vector(blob))` semantics: trailing
+/// non-multiple-of-4 bytes are ignored (`blob.len() / 4`), mismatched
+/// dimensions return `0.0`, zero-norm inputs return `0.0`, and any
+/// non-finite (`NaN`/`Inf`) result returns `0.0` so corrupt vectors cannot
+/// destabilize ranking.
+#[inline]
+pub fn cosine_similarity_le_bytes(query: &[f32], query_norm: f32, blob: &[u8]) -> f32 {
+    if !query_norm.is_finite() || query_norm == 0.0 || blob.len() / 4 != query.len() {
+        return 0.0;
+    }
+    let mut dot0: f32 = 0.0;
+    let mut dot1: f32 = 0.0;
+    let mut dot2: f32 = 0.0;
+    let mut dot3: f32 = 0.0;
+    let mut nb0: f32 = 0.0;
+    let mut nb1: f32 = 0.0;
+    let mut nb2: f32 = 0.0;
+    let mut nb3: f32 = 0.0;
+
+    let q_chunks = query.chunks_exact(4);
+    let q_rem = q_chunks.remainder();
+    let b_chunks = blob.chunks_exact(16);
+    let b_rem = b_chunks.remainder();
+
+    for (q4, b16) in q_chunks.zip(b_chunks) {
+        let b0 = f32::from_le_bytes([b16[0], b16[1], b16[2], b16[3]]);
+        let b1 = f32::from_le_bytes([b16[4], b16[5], b16[6], b16[7]]);
+        let b2 = f32::from_le_bytes([b16[8], b16[9], b16[10], b16[11]]);
+        let b3 = f32::from_le_bytes([b16[12], b16[13], b16[14], b16[15]]);
+        dot0 += q4[0] * b0;
+        dot1 += q4[1] * b1;
+        dot2 += q4[2] * b2;
+        dot3 += q4[3] * b3;
+        nb0 += b0 * b0;
+        nb1 += b1 * b1;
+        nb2 += b2 * b2;
+        nb3 += b3 * b3;
+    }
+    let mut dot = (dot0 + dot1) + (dot2 + dot3);
+    let mut norm_b = (nb0 + nb1) + (nb2 + nb3);
+    for (&q, chunk) in q_rem.iter().zip(b_rem.chunks_exact(4)) {
+        let b = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        dot += q * b;
+        norm_b += b * b;
+    }
+    if !norm_b.is_finite() || norm_b == 0.0 {
+        return 0.0;
+    }
+    let sim = dot / (query_norm * norm_b.sqrt());
+    if sim.is_finite() {
+        sim
+    } else {
+        0.0
+    }
+}
+
+/// Fetch `(path, content)` from `brain_docs` only for the top `limit` scored
+/// `(doc_id, similarity)` pairs, preserving descending similarity order.
+///
+/// Uses O(N) partial selection (`select_nth_unstable_by`) so only the top
+/// `limit` candidates are sorted in O(k log k). Falls back to the remaining
+/// tail only in the rare case an orphaned vector points to a deleted doc.
+pub(crate) fn fetch_top_vector_hits(
+    conn: &Connection,
+    mut scored: Vec<(i64, f32)>,
+    limit: usize,
+) -> Result<Vec<VectorHit>> {
+    scored.retain(|(_, sim)| sim.is_finite());
+    if scored.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let cmp_desc = |a: &(i64, f32), b: &(i64, f32)| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0));
+    let head_len = limit.min(scored.len());
+    if scored.len() > limit {
+        scored.select_nth_unstable_by(limit, cmp_desc);
+        scored[..limit].sort_by(cmp_desc);
+    } else {
+        scored.sort_by(cmp_desc);
+    }
+    let mut out = Vec::with_capacity(head_len);
+    let mut doc_stmt = conn.prepare("SELECT path, content FROM brain_docs WHERE id = ?1")?;
+    for &(doc_id, similarity) in &scored[..head_len] {
+        if let Some((path, content)) = doc_stmt
+            .query_row(params![doc_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .optional()?
+        {
+            out.push(VectorHit {
+                doc_id: path,
+                similarity,
+                content,
+            });
+            if out.len() == limit {
+                return Ok(out);
+            }
+        }
+    }
+    // Rare path: one or more top doc_ids were orphaned; inspect the tail.
+    if out.len() < limit && head_len < scored.len() {
+        scored[head_len..].sort_by(cmp_desc);
+        for &(doc_id, similarity) in &scored[head_len..] {
+            if let Some((path, content)) = doc_stmt
+                .query_row(params![doc_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .optional()?
+            {
+                out.push(VectorHit {
+                    doc_id: path,
+                    similarity,
+                    content,
+                });
+                if out.len() == limit {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Cosine similarity between two vectors.
@@ -452,6 +594,22 @@ impl SuperbrainStore {
         metadata: Value,
         source: SourceMetadata,
     ) -> Result<()> {
+        self.write_document_with_source_and_stat(
+            doc_id, content, doc_type, metadata, source, None, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_document_with_source_and_stat(
+        &self,
+        doc_id: &str,
+        content: &str,
+        doc_type: &str,
+        metadata: Value,
+        source: SourceMetadata,
+        file_mtime_ns: Option<i64>,
+        file_size: Option<i64>,
+    ) -> Result<()> {
         let entities = normalize_entities(&metadata, content);
         let entities_json = serde_json::to_string(&entities)?;
         let fts_entities_json = entities_for_fts_json(&entities)?;
@@ -460,7 +618,7 @@ impl SuperbrainStore {
         let char_count = content.chars().count() as i64;
 
         let mut conn = self.lock_conn()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Fetch the pre-existing row's rowid + FTS column values (if any)
         // so we can issue a matching 'delete' into the external-content
         // FTS5 shadow before overwriting. External-content FTS5 does NOT
@@ -490,8 +648,9 @@ impl SuperbrainStore {
         tx.execute(
             "INSERT INTO brain_docs
                 (path, name, doc_type, content, content_hash, entities, char_count,
-                 source_name, source_type, source_role, relative_path, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
+                 source_name, source_type, source_role, relative_path,
+                 file_mtime_ns, file_size, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
              ON CONFLICT(path) DO UPDATE SET
                  name = excluded.name,
                  doc_type = excluded.doc_type,
@@ -503,6 +662,8 @@ impl SuperbrainStore {
                  source_type = excluded.source_type,
                  source_role = excluded.source_role,
                  relative_path = excluded.relative_path,
+                 file_mtime_ns = excluded.file_mtime_ns,
+                 file_size = excluded.file_size,
                  updated_at = excluded.updated_at",
             params![
                 doc_id,
@@ -516,17 +677,27 @@ impl SuperbrainStore {
                 source.source_type,
                 source.source_role,
                 source.relative_path,
+                file_mtime_ns,
+                file_size,
             ],
         )?;
-        let rid: i64 = tx.query_row(
-            "SELECT id FROM brain_docs WHERE path = ?1",
-            params![doc_id],
-            |row| row.get(0),
-        )?;
+        let rid: i64 = match existing {
+            Some((id, _, _, _)) => id,
+            None => tx.query_row(
+                "SELECT id FROM brain_docs WHERE path = ?1",
+                params![doc_id],
+                |row| row.get(0),
+            )?,
+        };
         tx.execute(
             "INSERT INTO brain_fts(rowid, name, content, entities)
              VALUES (?1, ?2, ?3, ?4)",
             params![rid, name, content, fts_entities_json],
+        )?;
+        tx.execute(
+            "INSERT INTO cache (key, value) VALUES (?1, '1')
+             ON CONFLICT(key) DO UPDATE SET value = '1'",
+            params![GRAPH_DIRTY_CACHE_KEY],
         )?;
         tx.commit()?;
         Ok(())
@@ -535,7 +706,7 @@ impl SuperbrainStore {
     /// Delete a document and its vector (if any).
     pub fn delete_document(&self, doc_id: &str) -> Result<()> {
         let mut conn = self.lock_conn()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Resolve FTS columns + rowid before the DELETE so we can mirror
         // the removal into `brain_fts` (external-content FTS5 does not
         // auto-sync).
@@ -561,6 +732,11 @@ impl SuperbrainStore {
                 params![rid, name, content, fts_entities],
             )?;
             tx.execute("DELETE FROM brain_vectors WHERE doc_id = ?1", params![rid])?;
+            tx.execute(
+                "INSERT INTO cache (key, value) VALUES (?1, '1')
+                 ON CONFLICT(key) DO UPDATE SET value = '1'",
+                params![GRAPH_DIRTY_CACHE_KEY],
+            )?;
         }
         tx.execute("DELETE FROM brain_docs WHERE path = ?1", params![doc_id])?;
         tx.commit()?;
@@ -726,6 +902,13 @@ impl SuperbrainStore {
         if let Some(active_model) = status.embed_model.as_deref() {
             return self.vector_search_for_model(query_vec, active_model, limit);
         }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let query_norm = vector_norm(query_vec);
+        if query_norm == 0.0 {
+            return Ok(Vec::new());
+        }
         let conn = self.lock_conn()?;
         let distinct_models: i64 = conn.query_row(
             "SELECT COUNT(DISTINCT COALESCE(model, 'unknown')) FROM brain_vectors",
@@ -735,38 +918,26 @@ impl SuperbrainStore {
         if distinct_models > 1 {
             return Ok(Vec::new());
         }
-        let mut stmt = conn.prepare(
-            "SELECT d.path, d.content, v.embedding
-             FROM brain_vectors v
-             JOIN brain_docs d ON v.doc_id = d.id",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let path: String = row.get(0)?;
-            let content: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            Ok((path, content, blob))
-        })?;
-
-        let mut scored: Vec<VectorHit> = Vec::new();
-        for row in rows {
-            let (path, content, blob) = row?;
-            let stored = unpack_vector(&blob);
-            let sim = cosine_similarity(query_vec, &stored);
+        let mut stmt = conn.prepare("SELECT doc_id, embedding FROM brain_vectors")?;
+        let mut rows = stmt.query([])?;
+        let mut scored: Vec<(i64, f32)> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let doc_id: i64 = row.get(0)?;
+            let blob = row.get_ref(1)?.as_blob().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
+            })?;
+            let sim = cosine_similarity_le_bytes(query_vec, query_norm, blob);
             if sim > 0.3 {
-                scored.push(VectorHit {
-                    doc_id: path,
-                    similarity: sim,
-                    content,
-                });
+                scored.push((doc_id, sim));
             }
         }
-        scored.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        scored.truncate(limit);
-        Ok(scored)
+        drop(rows);
+        drop(stmt);
+        fetch_top_vector_hits(&conn, scored, limit)
     }
 
     // ───────── stats ─────────
@@ -1341,5 +1512,117 @@ mod tests {
         assert_eq!(s.doc_count, 2);
         assert_eq!(s.vector_count, 1);
         assert!(s.size_bytes > 0);
+    }
+
+    #[test]
+    fn cosine_similarity_le_bytes_matches_unpacked_across_edge_cases() {
+        // High-dimensional positive + negative values (1024-dim like Qwen3-Embedding).
+        let q: Vec<f32> = (0..1024)
+            .map(|i| ((i as f32) * 0.137).sin() - 0.25)
+            .collect();
+        let b: Vec<f32> = (0..1024)
+            .map(|i| ((i as f32) * 0.293).cos() + 0.15)
+            .collect();
+        let blob = pack_vector(&b);
+        let qn = vector_norm(&q);
+        let expected = cosine_similarity(&q, &b);
+        let fast = cosine_similarity_le_bytes(&q, qn, &blob);
+        assert!(
+            (fast - expected).abs() < 1e-6,
+            "expected {expected}, got {fast}"
+        );
+
+        // Trailing non-multiple-of-4 bytes match unpack_vector truncation.
+        let mut padded = pack_vector(&[1.0_f32, -2.0, 3.0]);
+        padded.extend_from_slice(&[0xde, 0xad]);
+        let q3 = [0.5_f32, -1.0, 1.5];
+        let exp3 = cosine_similarity(&q3, &unpack_vector(&padded));
+        let fast3 = cosine_similarity_le_bytes(&q3, vector_norm(&q3), &padded);
+        assert!((fast3 - exp3).abs() < 1e-6);
+
+        // Dimension mismatch returns 0.0.
+        assert_eq!(
+            cosine_similarity_le_bytes(&[1.0, 0.0], 1.0, &pack_vector(&[1.0, 0.0, 0.0])),
+            0.0
+        );
+        // Zero-norm query or stored blob returns 0.0.
+        assert_eq!(
+            cosine_similarity_le_bytes(&[0.0, 0.0], 0.0, &pack_vector(&[1.0, 1.0])),
+            0.0
+        );
+        assert_eq!(
+            cosine_similarity_le_bytes(
+                &[1.0, 1.0],
+                vector_norm(&[1.0, 1.0]),
+                &pack_vector(&[0.0, 0.0])
+            ),
+            0.0
+        );
+        // Non-finite query or stored vector returns 0.0 (never NaN/Inf).
+        assert_eq!(
+            cosine_similarity_le_bytes(
+                &[1.0, 0.0, 0.0, 0.0],
+                1.0,
+                &pack_vector(&[f32::NAN, 1.0, 0.0, 0.0])
+            ),
+            0.0
+        );
+        assert_eq!(
+            cosine_similarity_le_bytes(
+                &[1.0, 0.0, 0.0, 0.0],
+                1.0,
+                &pack_vector(&[f32::INFINITY, 1.0, 0.0, 0.0])
+            ),
+            0.0
+        );
+        // Odd dimensions > 4 verify 4-lane SIMD loop + scalar tail equivalence.
+        let q7 = [0.2f32, -0.5, 0.8, 0.1, -0.3, 0.6, 0.4];
+        let b7 = [0.9f32, 0.2, -0.1, 0.7, 0.5, -0.4, 0.3];
+        let exp7 = cosine_similarity(&q7, &b7);
+        let fast7 = cosine_similarity_le_bytes(&q7, vector_norm(&q7), &pack_vector(&b7));
+        assert!((fast7 - exp7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn vector_search_for_model_ranks_top_k_without_reading_non_winning_content() {
+        let (_dir, store) = tmp_store();
+        for i in 0..20usize {
+            store
+                .write_document(
+                    &format!("pages/doc_{i}.md"),
+                    &format!("body for doc {i}"),
+                    "page",
+                    json!([]),
+                )
+                .unwrap();
+            let angle = (i as f32) * 0.05;
+            store
+                .store_vector_with_model(
+                    &format!("pages/doc_{i}.md"),
+                    &[angle.cos(), angle.sin(), 0.0, 0.0],
+                    "qwen3-test",
+                )
+                .unwrap();
+        }
+        store
+            .set_vectors_ready("qwen3-test", 4, "ail-embed-bulk", Some("ail-embed"))
+            .unwrap();
+
+        let hits = store
+            .vector_search_for_model(&[1.0, 0.0, 0.0, 0.0], "qwen3-test", 3)
+            .unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].doc_id, "pages/doc_0.md");
+        assert_eq!(hits[0].content, "body for doc 0");
+        assert_eq!(hits[1].doc_id, "pages/doc_1.md");
+        assert_eq!(hits[2].doc_id, "pages/doc_2.md");
+        assert!(hits[0].similarity >= hits[1].similarity);
+        assert!(hits[1].similarity >= hits[2].similarity);
+
+        // limit == 0 returns empty immediately.
+        assert!(store
+            .vector_search_for_model(&[1.0, 0.0, 0.0, 0.0], "qwen3-test", 0)
+            .unwrap()
+            .is_empty());
     }
 }

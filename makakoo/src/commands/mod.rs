@@ -117,9 +117,11 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             vendor,
             dry_run,
             json,
+            keep_awake,
         } => {
             run::run(
-                &pattern, input, vars, mascot, strategy, model, vendor, dry_run, json, ctx,
+                &pattern, input, vars, mascot, strategy, model, vendor, dry_run, json, keep_awake,
+                ctx,
             )
             .await
         }

@@ -44,6 +44,7 @@ pub async fn run(
     vendor_override: Option<String>,
     dry_run: bool,
     json: bool,
+    keep_awake: bool,
     _ctx: &CliContext,
 ) -> anyhow::Result<i32> {
     let canonical = canonical_pattern_dirname(pattern_name);
@@ -158,6 +159,9 @@ pub async fn run(
         bail!("pattern {canonical} has empty system + empty user body — nothing to send");
     }
 
+    let _sleep_guard = keep_awake
+        .then(|| makakoo_platform::SleepGuard::acquire(&format!("makakoo run {canonical}")));
+
     let client = LlmClient::new();
     let response = client
         .chat(&route.model, messages)
@@ -234,5 +238,22 @@ mod tests {
     fn resolve_input_at_missing_file_errors() {
         let err = resolve_input("@/definitely/does/not/exist/12345").unwrap_err();
         assert!(format!("{err}").contains("--input from file"));
+    }
+
+    #[test]
+    fn cli_run_parses_keep_awake_flag() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::parse_from(["makakoo", "run", "summarize", "--keep-awake"]);
+        match cli.command {
+            Some(crate::cli::Commands::Run {
+                pattern,
+                keep_awake,
+                ..
+            }) => {
+                assert_eq!(pattern, "summarize");
+                assert!(keep_awake);
+            }
+            other => panic!("expected Commands::Run, got {other:?}"),
+        }
     }
 }
