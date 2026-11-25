@@ -194,6 +194,26 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     let mut reg = ToolRegistry::new();
     register_folder_index(&mut reg, ctx);
     mgr.get_or_open("legal", 32).unwrap();
+    mgr.wait_for_model_probe("legal").await;
+
+    // A second agreeing observation confirms the new pair before corpus work
+    // starts. Reopening exercises the persisted observation used by short-lived
+    // MCP processes without waiting for the production probe interval.
+    drop(reg);
+    drop(mgr);
+    let mgr = Arc::new(
+        FolderIndexManager::new(tmp.path().join("indexes"))
+            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
+    );
+    let ctx = Arc::new(
+        ToolContext::empty(tmp.path().to_path_buf())
+            .with_embeddings(Arc::clone(&short_emb))
+            .with_bulk_embeddings(Arc::clone(&bulk_emb))
+            .with_folder_index(Arc::clone(&mgr)),
+    );
+    let mut reg = ToolRegistry::new();
+    register_folder_index(&mut reg, ctx);
+    mgr.get_or_open("legal", 32).unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while !responder.gate_entered.load(Ordering::SeqCst) {

@@ -144,6 +144,40 @@ fn legacy_index_without_fts_or_model_backfills_fts_and_marks_stale() {
     assert_eq!(fts_hits[0].file_path, "old.pdf");
     assert_eq!(fts_hits[0].anchor.value, "3");
 
+    idx.upsert_file_with_model(
+        &UpsertFileRequest {
+            file_path: "new.md".into(),
+            file_version: "v1".into(),
+            source_kind: SourceKind::File,
+            trust: TrustLevel::Trusted,
+            owner: "alice".into(),
+            chunks: vec![ChunkInput {
+                anchor: Anchor {
+                    kind: AnchorKind::Heading,
+                    value: "New".into(),
+                },
+                char_start: 0,
+                char_end: 17,
+                text: "New indexed text.".into(),
+                vector: basis(16, 1),
+            }],
+        },
+        Some(&UpsertModelMeta {
+            model: "current-model".into(),
+            embed_dim: 16,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: None,
+        }),
+    )
+    .unwrap();
+    let after_upsert = idx.model_status().unwrap();
+    assert_eq!(after_upsert.index_state, IndexModelState::Stale);
+    assert_eq!(
+        after_upsert.stale_reason.as_deref(),
+        Some("mixed_model_upsert")
+    );
+    assert_eq!(after_upsert.embed_model, None);
+
     // Verify open_folder_db directly sees fts_version='1'.
     let conn = open_folder_db(&db_path).unwrap();
     let fts_ver: String = conn

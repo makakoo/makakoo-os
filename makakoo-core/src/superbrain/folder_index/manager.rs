@@ -9,7 +9,9 @@ use std::time::Duration;
 use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
-use super::model_meta::{FolderSearchRequest, FolderSearchResponse, UpsertModelMeta};
+use super::model_meta::{
+    FolderSearchRequest, FolderSearchResponse, UpsertModelMeta, OBSERVED_BULK_UPSERT_REASON,
+};
 use super::rebuild::{self, FolderRebuildRegistry};
 use super::{
     validate_dim, validate_folder_id, FolderIndex, FolderIndexConfig, IndexSizeReport,
@@ -54,19 +56,19 @@ impl FolderIndexManager {
         self
     }
 
-    /// Configure automatic rebuild retries. Repeated identical failures are
-    /// halted after `max_identical_failures` until the bulk model changes or
+    /// Configure automatic rebuild retries. Repeated same-class failures are
+    /// halted after `max_same_class_failures` until the bulk model changes or
     /// [`Self::request_folder_rebuild`] explicitly clears the halt.
     pub fn with_model_rebuild_failure_policy(
         mut self,
         initial_backoff: Duration,
         backoff_cap: Duration,
-        max_identical_failures: u32,
+        max_same_class_failures: u32,
     ) -> Self {
         self.rebuilds = Arc::new(self.rebuilds.with_rebuild_failure_policy(
             initial_backoff,
             backoff_cap,
-            max_identical_failures,
+            max_same_class_failures,
         ));
         self
     }
@@ -78,14 +80,14 @@ impl FolderIndexManager {
         probe_failure_backoff: Duration,
         rebuild_failure_backoff: Duration,
         rebuild_failure_cap: Duration,
-        max_identical_rebuild_failures: u32,
+        max_same_class_rebuild_failures: u32,
     ) -> Self {
         self.rebuilds = Arc::new(FolderRebuildRegistry::with_timings(
             probe_interval,
             probe_failure_backoff,
             rebuild_failure_backoff,
             rebuild_failure_cap,
-            max_identical_rebuild_failures,
+            max_same_class_rebuild_failures,
         ));
         self
     }
@@ -195,15 +197,9 @@ impl FolderIndexManager {
         req: &UpsertFileRequest,
         model_meta: Option<&UpsertModelMeta>,
     ) -> Result<UpsertOutcome> {
-        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, true)?;
+        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
         let outcome = idx.upsert_file_with_model(req, model_meta)?;
-        if tokio::runtime::Handle::try_current().is_ok() {
-            self.schedule_probe(
-                &idx,
-                self.short_emb.as_ref(),
-                self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
-            );
-        }
+        self.schedule_probe_after_upsert(&idx, model_meta);
         Ok(outcome)
     }
 
@@ -215,20 +211,40 @@ impl FolderIndexManager {
         model_meta: Option<&UpsertModelMeta>,
         flush: bool,
     ) -> Result<(UpsertOutcome, IndexSizeReport)> {
-        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, true)?;
+        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
         let outcome = idx.upsert_file_with_model(req, model_meta)?;
-        if tokio::runtime::Handle::try_current().is_ok() {
-            self.schedule_probe(
-                &idx,
-                self.short_emb.as_ref(),
-                self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
-            );
-        }
+        self.schedule_probe_after_upsert(&idx, model_meta);
         if flush && !outcome.skipped_unchanged {
             idx.flush()?;
         }
         let sizes = idx.size_report()?;
         Ok((outcome, sizes))
+    }
+
+    fn schedule_probe_after_upsert(
+        &self,
+        idx: &Arc<FolderIndex>,
+        model_meta: Option<&UpsertModelMeta>,
+    ) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        if idx.model_status().ok().is_some_and(|status| {
+            model_meta.is_some_and(|meta| {
+                status.embed_model.as_deref() != Some(meta.model.as_str())
+                    || status.embed_dim != Some(meta.embed_dim)
+            }) || matches!(
+                status.stale_reason.as_deref(),
+                Some(OBSERVED_BULK_UPSERT_REASON) | Some("bulk_model_change_pending")
+            )
+        }) {
+            self.rebuilds.expedite_probe(idx.folder_id());
+        }
+        self.schedule_probe(
+            idx,
+            self.short_emb.as_ref(),
+            self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
+        );
     }
 
     pub fn is_rebuilding(&self, folder_id: &str) -> bool {
@@ -244,7 +260,7 @@ impl FolderIndexManager {
     }
 
     /// Explicitly request a full folder rebuild. This bypasses a halt caused
-    /// by repeated identical automatic failures, while active work remains
+    /// by repeated same-class automatic failures, while active work remains
     /// deduplicated.
     pub async fn request_folder_rebuild(&self, folder_id: &str, dim: usize) -> Result<()> {
         let short_emb = self.short_emb.clone();
@@ -270,7 +286,7 @@ impl FolderIndexManager {
             Some(_) => Some(observed_bulk.clone()),
             None => None,
         };
-        self.rebuilds.clear_rebuild_retry(folder_id);
+        self.rebuilds.clear_rebuild_retry(&idx);
         rebuild::spawn_folder_rebuild(
             idx,
             short_emb,

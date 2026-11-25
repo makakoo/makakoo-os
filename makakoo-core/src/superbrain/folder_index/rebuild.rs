@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::Notify;
 
@@ -11,8 +11,10 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::model_meta::{
-    read_model_status, write_model_state, write_ready_model_meta, FolderSearchRequest,
-    FolderSearchResponse, IndexModelState, SearchMode, SHORT_BULK_MISMATCH_REASON,
+    clear_persisted_rebuild_retry, read_model_status, read_persisted_rebuild_retry,
+    record_observed_bulk, truncate_utf8, write_model_state, write_persisted_rebuild_retry,
+    write_ready_model_meta, FolderSearchRequest, FolderSearchResponse, IndexModelState,
+    PersistedRebuildRetry, SearchMode, SHORT_BULK_MISMATCH_REASON,
 };
 use super::rebuild_pages::{all_chunks_parked, reembed_pages, reset_parked, swap_in_parked};
 use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
@@ -24,7 +26,9 @@ pub(crate) const DEFAULT_MODEL_REPROBE_INTERVAL: Duration = Duration::from_secs(
 const DEFAULT_PROBE_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
 const DEFAULT_REBUILD_FAILURE_BACKOFF: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_REBUILD_FAILURE_CAP: Duration = Duration::from_secs(6 * 60 * 60);
-const DEFAULT_MAX_IDENTICAL_REBUILD_FAILURES: u32 = 3;
+const DEFAULT_MAX_SAME_CLASS_REBUILD_FAILURES: u32 = 3;
+const MODEL_CHANGE_CONFIRMATIONS: u32 = 2;
+const MAX_PERSISTED_ERROR_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Copy)]
 struct RetryState {
@@ -50,7 +54,7 @@ impl RebuildKey {
 #[derive(Debug, Clone)]
 struct RebuildRetryState {
     key: RebuildKey,
-    error: String,
+    error_class: String,
     failures: u32,
     next_allowed: Instant,
     halted: bool,
@@ -78,7 +82,7 @@ pub(crate) struct FolderRebuildRegistry {
     probe_failure_backoff: Duration,
     rebuild_failure_backoff: Duration,
     rebuild_failure_cap: Duration,
-    max_identical_rebuild_failures: u32,
+    max_same_class_rebuild_failures: u32,
     #[cfg(test)]
     clock_offset: Mutex<Duration>,
     /// Test hook: runs in `wait` after the lookup, before the waiter registers.
@@ -93,7 +97,7 @@ impl FolderRebuildRegistry {
             DEFAULT_PROBE_FAILURE_BACKOFF,
             DEFAULT_REBUILD_FAILURE_BACKOFF,
             DEFAULT_REBUILD_FAILURE_CAP,
-            DEFAULT_MAX_IDENTICAL_REBUILD_FAILURES,
+            DEFAULT_MAX_SAME_CLASS_REBUILD_FAILURES,
         )
     }
 
@@ -102,7 +106,7 @@ impl FolderRebuildRegistry {
         probe_failure_backoff: Duration,
         rebuild_failure_backoff: Duration,
         rebuild_failure_cap: Duration,
-        max_identical_rebuild_failures: u32,
+        max_same_class_rebuild_failures: u32,
     ) -> Self {
         let rebuild_failure_backoff = rebuild_failure_backoff.max(probe_interval.saturating_mul(2));
         Self {
@@ -113,7 +117,7 @@ impl FolderRebuildRegistry {
             probe_failure_backoff,
             rebuild_failure_backoff,
             rebuild_failure_cap: rebuild_failure_cap.max(rebuild_failure_backoff),
-            max_identical_rebuild_failures: max_identical_rebuild_failures.max(1),
+            max_same_class_rebuild_failures: max_same_class_rebuild_failures.max(1),
             #[cfg(test)]
             clock_offset: Mutex::new(Duration::ZERO),
             #[cfg(test)]
@@ -128,7 +132,7 @@ impl FolderRebuildRegistry {
             DEFAULT_PROBE_FAILURE_BACKOFF.min(probe_interval),
             DEFAULT_REBUILD_FAILURE_BACKOFF,
             DEFAULT_REBUILD_FAILURE_CAP,
-            DEFAULT_MAX_IDENTICAL_REBUILD_FAILURES,
+            DEFAULT_MAX_SAME_CLASS_REBUILD_FAILURES,
         )
     }
 
@@ -136,14 +140,14 @@ impl FolderRebuildRegistry {
         &self,
         initial_backoff: Duration,
         backoff_cap: Duration,
-        max_identical_failures: u32,
+        max_same_class_failures: u32,
     ) -> Self {
         Self::with_timings(
             self.probe_interval,
             self.probe_failure_backoff,
             initial_backoff,
             backoff_cap,
-            max_identical_failures,
+            max_same_class_failures,
         )
     }
 
@@ -167,19 +171,48 @@ impl FolderRebuildRegistry {
         *offset = offset.saturating_add(duration);
     }
 
-    pub(crate) fn clear_rebuild_retry(&self, folder_id: &str) {
+    pub(crate) fn clear_rebuild_retry(&self, idx: &FolderIndex) {
         self.rebuild_retry
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(folder_id);
+            .remove(idx.folder_id());
+        if let Ok(conn) = idx.lock_conn() {
+            let _ = clear_persisted_rebuild_retry(&conn);
+        }
     }
 
-    fn try_acquire(&self, folder_id: &str, key: &RebuildKey) -> Option<Arc<Notify>> {
+    fn try_acquire(&self, idx: &FolderIndex, key: &RebuildKey) -> Option<Arc<Notify>> {
+        let folder_id = idx.folder_id();
         let now = self.now();
+        let persisted = idx
+            .lock_conn()
+            .ok()
+            .and_then(|conn| read_persisted_rebuild_retry(&conn).ok().flatten());
         {
             let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
+            if !retry.contains_key(folder_id) {
+                if let Some(state) = persisted {
+                    let remaining = Duration::from_millis(
+                        state.not_before_unix_ms.saturating_sub(unix_time_ms()),
+                    )
+                    .min(self.rebuild_failure_cap);
+                    retry.insert(
+                        folder_id.to_string(),
+                        RebuildRetryState {
+                            key: RebuildKey::new(state.model, state.dim),
+                            error_class: state.error_class,
+                            failures: state.failures,
+                            next_allowed: now + remaining,
+                            halted: state.halted,
+                        },
+                    );
+                }
+            }
             if retry.get(folder_id).is_some_and(|state| state.key != *key) {
                 retry.remove(folder_id);
+                if let Ok(conn) = idx.lock_conn() {
+                    let _ = clear_persisted_rebuild_retry(&conn);
+                }
             }
             if retry
                 .get(folder_id)
@@ -199,24 +232,32 @@ impl FolderRebuildRegistry {
 
     #[cfg(test)]
     pub(crate) fn try_acquire_for_test(&self, folder_id: &str) -> Option<Arc<Notify>> {
-        self.try_acquire(folder_id, &RebuildKey::new("test-model", 1))
+        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.contains_key(folder_id) {
+            return None;
+        }
+        let notify = Arc::new(Notify::new());
+        guard.insert(folder_id.to_string(), Arc::clone(&notify));
+        Some(notify)
     }
 
     fn record_failure(
         &self,
-        folder_id: &str,
+        idx: &FolderIndex,
         key: &RebuildKey,
-        error: &str,
+        error: &MakakooError,
     ) -> RebuildFailureDisposition {
+        let folder_id = idx.folder_id();
+        let error_class = rebuild_error_class(error);
         let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
         let failures = retry.get(folder_id).map_or(1, |state| {
-            if state.key == *key && state.error == error {
+            if state.key == *key && state.error_class == error_class {
                 state.failures.saturating_add(1)
             } else {
                 1
             }
         });
-        let halted = failures >= self.max_identical_rebuild_failures;
+        let halted = failures >= self.max_same_class_rebuild_failures;
         let delay = exponential_backoff(
             self.rebuild_failure_backoff,
             self.rebuild_failure_cap,
@@ -226,23 +267,35 @@ impl FolderRebuildRegistry {
             folder_id.to_string(),
             RebuildRetryState {
                 key: key.clone(),
-                error: error.to_string(),
+                error_class: error_class.clone(),
                 failures,
                 next_allowed: self.now() + delay,
                 halted,
             },
         );
+        drop(retry);
+        if let Ok(conn) = idx.lock_conn() {
+            let _ = write_persisted_rebuild_retry(
+                &conn,
+                &PersistedRebuildRetry {
+                    model: key.model.clone(),
+                    dim: key.dim,
+                    error_class,
+                    failures,
+                    halted,
+                    not_before_unix_ms: unix_time_ms()
+                        .saturating_add(delay.as_millis().min(u128::from(u64::MAX)) as u64),
+                },
+            );
+        }
         RebuildFailureDisposition { failures, halted }
     }
 
-    pub(crate) fn finish(&self, folder_id: &str, succeeded: bool) {
+    pub(crate) fn finish(&self, folder_id: &str) {
         let notify = {
             let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
             guard.remove(folder_id)
         };
-        if succeeded {
-            self.clear_rebuild_retry(folder_id);
-        }
         if let Some(n) = notify {
             n.notify_waiters();
         }
@@ -305,6 +358,13 @@ impl FolderRebuildRegistry {
             .active
             .insert(folder_id.to_string(), Arc::new(Notify::new()));
         true
+    }
+
+    pub(crate) fn expedite_probe(&self, folder_id: &str) {
+        let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+        if !probes.active.contains_key(folder_id) {
+            probes.retry.remove(folder_id);
+        }
     }
 
     pub(crate) fn finish_probe(&self, folder_id: &str, reached_bulk: bool) {
@@ -370,6 +430,37 @@ fn exponential_backoff(initial: Duration, cap: Duration, failures: u32) -> Durat
     initial.saturating_mul(1_u32 << shift).min(cap)
 }
 
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn rebuild_error_class(error: &MakakooError) -> String {
+    match error {
+        MakakooError::Http(err) => err.status().map_or_else(
+            || "http_transport".to_string(),
+            |status| format!("http_{}", status.as_u16()),
+        ),
+        MakakooError::Llm(message) => message
+            .strip_prefix("http ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|status| status.parse::<u16>().ok())
+            .map_or_else(|| "llm".to_string(), |status| format!("http_{status}")),
+        MakakooError::Io(err) => format!("io_{:?}", err.kind()),
+        MakakooError::Db(err) => format!("sqlite_{:?}", err.sqlite_error_code()),
+        MakakooError::Json(_) => "json".to_string(),
+        MakakooError::Config(_) => "config".to_string(),
+        MakakooError::NotFound(_) => "not_found".to_string(),
+        MakakooError::InvalidInput(_) => "invalid_input".to_string(),
+        MakakooError::RebuildClaimLost => "rebuild_claim_lost".to_string(),
+        MakakooError::RebuildCallTimeout => "rebuild_call_timeout".to_string(),
+        MakakooError::Internal(_) => "internal".to_string(),
+    }
+}
+
 /// Non-blocking startup/open probe: verifies configured endpoint(s) against stored
 /// model+dim. Unreachable endpoints leave `index_state` untouched.
 pub(crate) async fn probe_and_reconcile(
@@ -385,6 +476,10 @@ pub(crate) async fn probe_and_reconcile(
     let Ok((bulk_model, bulk_dim)) = bulk_emb.probe_model().await else {
         return false;
     };
+    let observed = idx
+        .lock_conn()
+        .ok()
+        .and_then(|conn| record_observed_bulk(&conn, &bulk_model, bulk_dim).ok());
 
     let short_result = match short_emb.as_ref() {
         Some(s) if s.model() != bulk_emb.model() || s.base_url() != bulk_emb.base_url() => {
@@ -467,6 +562,18 @@ pub(crate) async fn probe_and_reconcile(
         return true;
     }
 
+    if status.index_state == IndexModelState::Ready
+        || status.stale_reason.as_deref() == Some("bulk_model_change_pending")
+    {
+        let _ = idx.mark_stale_unless_rebuilding("bulk_model_change_pending");
+    }
+    if observed
+        .as_ref()
+        .is_none_or(|value| value.consecutive < MODEL_CHANGE_CONFIRMATIONS)
+    {
+        return true;
+    }
+
     spawn_folder_rebuild(
         idx,
         short_emb,
@@ -481,7 +588,10 @@ pub(crate) async fn probe_and_reconcile(
 fn is_metadata_only_stale_reason(reason: &str) -> bool {
     matches!(
         reason,
-        "embed_alias_changed" | "short_embed_alias_changed" | SHORT_BULK_MISMATCH_REASON
+        "embed_alias_changed"
+            | "short_embed_alias_changed"
+            | "bulk_model_change_pending"
+            | SHORT_BULK_MISMATCH_REASON
     ) || reason.starts_with("model_mismatch:")
         || reason.starts_with("dim_mismatch:")
 }
@@ -513,12 +623,11 @@ pub(crate) fn spawn_folder_rebuild(
     observed_bulk: Option<(String, usize)>,
     observed_short: Option<(String, usize)>,
 ) {
-    let folder_id = idx.folder_id().to_string();
     let Some((model, dim)) = observed_bulk.as_ref() else {
         return;
     };
     let rebuild_key = RebuildKey::new(model.clone(), *dim);
-    if rebuilds.try_acquire(&folder_id, &rebuild_key).is_none() {
+    if rebuilds.try_acquire(&idx, &rebuild_key).is_none() {
         return;
     }
 
@@ -545,20 +654,23 @@ pub(crate) fn spawn_folder_rebuild(
             Ok(()) => true,
             Err(err) => {
                 let error = err.to_string();
-                let disposition = rebuilds_clone.record_failure(&fid, &rebuild_key, &error);
+                let disposition = rebuilds_clone.record_failure(&idx, &rebuild_key, &err);
                 let reason = if disposition.halted {
                     format!(
-                        "rebuild_suppressed: model={} dim={} after {} identical failures: {}",
+                        "rebuild_suppressed: model={} dim={} after {} same-class failures: {}",
                         rebuild_key.model, rebuild_key.dim, disposition.failures, error
                     )
                 } else {
                     format!("rebuild_failed: {error}")
                 };
-                let _ = idx.mark_stale(&reason);
+                let _ = idx.mark_stale(&truncate_utf8(&reason, MAX_PERSISTED_ERROR_BYTES));
                 false
             }
         };
-        rebuilds_clone.finish(&fid, succeeded);
+        if succeeded {
+            rebuilds_clone.clear_rebuild_retry(&idx);
+        }
+        rebuilds_clone.finish(&fid);
     });
 }
 

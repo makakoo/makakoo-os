@@ -360,6 +360,9 @@ async fn folder_index_rebuild_and_query_enforce_16_batch_and_2000_utf8_byte_cap(
     mgr.probe_folder_model_for_test("eu-docs", 32)
         .await
         .unwrap();
+    mgr.probe_folder_model_for_test("eu-docs", 32)
+        .await
+        .unwrap();
     mgr.wait_for_rebuild("eu-docs").await;
 
     let idx = mgr.get_or_open("eu-docs", 32).unwrap();

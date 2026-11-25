@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{MakakooError, Result};
 
 use super::fts::search_chunks_fts;
-use super::sqlite_repo::read_chunk_count;
+use super::sqlite_repo::{read_chunk_count, read_generation};
 use super::{FolderIndex, Passage, SearchFilter, UpsertFileRequest, UpsertOutcome};
 
 pub(crate) const META_EMBED_MODEL: &str = "embed_model";
@@ -16,8 +16,28 @@ pub(crate) const META_EMBED_ALIAS: &str = "embed_alias";
 pub(crate) const META_SHORT_EMBED_ALIAS: &str = "short_embed_alias";
 pub(crate) const META_INDEX_STATE: &str = "index_state";
 pub(crate) const META_STALE_REASON: &str = "stale_reason";
+pub(crate) const OBSERVED_BULK_UPSERT_REASON: &str = "observed_bulk_model_upsert";
 pub(crate) const SHORT_BULK_MISMATCH_REASON: &str = "short_bulk_model_mismatch";
+const META_OBSERVED_BULK: &str = "observed_bulk";
+const META_REBUILD_RETRY: &str = "rebuild_retry";
 const MAX_QUERY_MISMATCH_REASON_BYTES: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ObservedBulkModel {
+    pub(crate) model: String,
+    pub(crate) dim: usize,
+    pub(crate) consecutive: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PersistedRebuildRetry {
+    pub(crate) model: String,
+    pub(crate) dim: usize,
+    pub(crate) error_class: String,
+    pub(crate) failures: u32,
+    pub(crate) halted: bool,
+    pub(crate) not_before_unix_ms: u64,
+}
 
 /// Lifecycle state of a folder or Brain vector index relative to the configured
 /// embedding model and dimension.
@@ -185,6 +205,63 @@ pub(crate) fn write_ready_model_meta(
     write_model_state(conn, IndexModelState::Ready, None)
 }
 
+pub(crate) fn read_observed_bulk(conn: &Connection) -> Result<Option<ObservedBulkModel>> {
+    let Some(raw) = read_meta_opt(conn, META_OBSERVED_BULK)? else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::from_str(&raw)?))
+}
+
+pub(crate) fn record_observed_bulk(
+    conn: &Connection,
+    model: &str,
+    dim: usize,
+) -> Result<ObservedBulkModel> {
+    let previous = read_observed_bulk(conn)?;
+    let consecutive = previous.as_ref().map_or(1, |observed| {
+        if observed.model == model && observed.dim == dim {
+            observed.consecutive.saturating_add(1)
+        } else {
+            1
+        }
+    });
+    let observed = ObservedBulkModel {
+        model: model.to_string(),
+        dim,
+        consecutive,
+    };
+    write_meta_opt(
+        conn,
+        META_OBSERVED_BULK,
+        Some(&serde_json::to_string(&observed)?),
+    )?;
+    Ok(observed)
+}
+
+pub(crate) fn read_persisted_rebuild_retry(
+    conn: &Connection,
+) -> Result<Option<PersistedRebuildRetry>> {
+    let Some(raw) = read_meta_opt(conn, META_REBUILD_RETRY)? else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::from_str(&raw)?))
+}
+
+pub(crate) fn write_persisted_rebuild_retry(
+    conn: &Connection,
+    retry: &PersistedRebuildRetry,
+) -> Result<()> {
+    write_meta_opt(
+        conn,
+        META_REBUILD_RETRY,
+        Some(&serde_json::to_string(retry)?),
+    )
+}
+
+pub(crate) fn clear_persisted_rebuild_retry(conn: &Connection) -> Result<()> {
+    write_meta_opt(conn, META_REBUILD_RETRY, None)
+}
+
 /// Evaluate model metadata and configured aliases on `open()`.
 pub(crate) fn init_model_meta_on_open(
     conn: &Connection,
@@ -252,7 +329,7 @@ pub(crate) fn apply_upsert_model_meta_tx(
     }
     let status = read_model_status(conn)?;
     let total_chunks = read_chunk_count(conn)?;
-    let other_chunks_exist = total_chunks > chunks_len as u64;
+    let other_chunks_exist = total_chunks > chunks_len as u64 || read_generation(conn)? > 0;
 
     let Some(m) = model_meta else {
         // The caller sent vectors without naming their model. Never record an alias
@@ -281,27 +358,45 @@ pub(crate) fn apply_upsert_model_meta_tx(
         return Ok(());
     };
 
-    // Once index metadata exists, only the bulk probe/rebuild may change it.
-    // Client-provided provenance is accepted for the first rows, but a later
-    // foreign upsert must not rewrite the index model or manufacture a stale
-    // state that the periodic probe would turn into an endless rebuild loop.
-    if status.index_state == IndexModelState::Rebuilding {
+    // Chunks written before model metadata existed have unknown provenance. A
+    // client claim cannot make those old vectors Ready; the bulk probe must
+    // rebuild the complete corpus first.
+    if status.embed_model.is_none() && status.embed_dim.is_none() && other_chunks_exist {
+        if status.index_state != IndexModelState::Rebuilding {
+            write_model_state(conn, IndexModelState::Stale, Some("mixed_model_upsert"))?;
+        }
         return Ok(());
     }
+
+    // Once index metadata exists, only the bulk probe/rebuild may change it.
+    // Accept either the stored pair or the latest pair actually observed from
+    // the bulk endpoint. Reject arbitrary client-claimed provenance.
     let metadata_exists =
         status.embed_model.is_some() || status.embed_dim.is_some() || status.stale_reason.is_some();
     if metadata_exists {
-        let model_mismatch = status
-            .embed_model
-            .as_deref()
-            .is_some_and(|stored| stored != m.model);
-        let dim_mismatch = status.embed_dim.is_some_and(|stored| stored != m.embed_dim);
-        if model_mismatch || dim_mismatch {
-            return Err(MakakooError::invalid_input(
-                "upsert model metadata does not match the folder index; rebuild with the configured bulk embedder first",
-            ));
+        let matches_stored = status.embed_dim == Some(m.embed_dim)
+            && status
+                .embed_model
+                .as_deref()
+                .is_none_or(|stored| stored == m.model);
+        if matches_stored {
+            return Ok(());
         }
-        return Ok(());
+        let matches_observed = read_observed_bulk(conn)?
+            .is_some_and(|observed| observed.model == m.model && observed.dim == m.embed_dim);
+        if matches_observed {
+            if status.index_state == IndexModelState::Ready {
+                write_model_state(
+                    conn,
+                    IndexModelState::Stale,
+                    Some(OBSERVED_BULK_UPSERT_REASON),
+                )?;
+            }
+            return Ok(());
+        }
+        return Err(MakakooError::invalid_input(
+            "upsert model metadata matches neither the folder index nor the observed bulk embedder",
+        ));
     }
 
     write_ready_model_meta(
@@ -407,7 +502,7 @@ impl FolderIndex {
     }
 }
 
-fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+pub(crate) fn truncate_utf8(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_string();
     }

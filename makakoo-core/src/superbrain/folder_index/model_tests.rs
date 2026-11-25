@@ -32,6 +32,7 @@ struct DynamicEmbedResponder {
     bulk_calls: Arc<AtomicUsize>,
     fail_bulk_probes: Arc<AtomicBool>,
     fail_bulk_embeddings: Arc<AtomicBool>,
+    vary_failure_body: Arc<AtomicBool>,
 }
 
 impl DynamicEmbedResponder {
@@ -53,6 +54,7 @@ impl DynamicEmbedResponder {
             bulk_calls: Arc::new(AtomicUsize::new(0)),
             fail_bulk_probes: Arc::new(AtomicBool::new(false)),
             fail_bulk_embeddings: Arc::new(AtomicBool::new(false)),
+            vary_failure_body: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -100,7 +102,15 @@ impl Respond for DynamicEmbedResponder {
         if !is_probe && (is_bulk || inputs > 1) {
             self.bulk_calls.fetch_add(1, Ordering::SeqCst);
             if self.fail_bulk_embeddings.load(Ordering::SeqCst) {
-                return ResponseTemplate::new(503);
+                let response = ResponseTemplate::new(503);
+                return if self.vary_failure_body.load(Ordering::SeqCst) {
+                    response.set_body_string(format!(
+                        "transient failure {}",
+                        self.bulk_calls.load(Ordering::SeqCst)
+                    ))
+                } else {
+                    response
+                };
             }
             if self.gate_bulk.load(Ordering::SeqCst) {
                 // wiremock answers on its own current-thread runtime: block with std, not tokio.
@@ -229,6 +239,8 @@ async fn model_switch_rebuilds_in_background_and_serves_fts_until_ready() {
             .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
     );
     let idx = mgr.get_or_open("docs", 32).unwrap();
+    mgr.wait_for_model_probe("docs").await;
+    mgr.probe_folder_model_for_test("docs", 32).await.unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while !responder.gate_entered.load(Ordering::SeqCst) {
@@ -437,7 +449,7 @@ async fn repeated_query_mismatch_records_fallback_without_reembedding() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn query_mismatch_reprobes_bulk_and_rebuilds_once_after_alias_switch() {
+async fn periodic_probe_rebuilds_once_after_alias_switch() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-v1", 64);
     let server = MockServer::start().await;
@@ -493,6 +505,7 @@ async fn query_mismatch_reprobes_bulk_and_rebuilds_once_after_alias_switch() {
         .unwrap();
     assert_eq!(response.mode, SearchMode::Fts);
     mgr.wait_for_model_probe("switch").await;
+    mgr.probe_folder_model_for_test("switch", 32).await.unwrap();
     mgr.wait_for_rebuild("switch").await;
 
     let status = mgr
@@ -508,7 +521,7 @@ async fn query_mismatch_reprobes_bulk_and_rebuilds_once_after_alias_switch() {
     );
     assert_eq!(
         responder.bulk_probe_calls.load(Ordering::SeqCst),
-        probes_before + 1
+        probes_before + 2
     );
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
 
@@ -689,7 +702,7 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
         .stale_reason
         .as_deref()
         .is_some_and(|reason| reason.starts_with("rebuild_suppressed:")
-            && reason.contains("after 3 identical failures")));
+            && reason.contains("after 3 same-class failures")));
 
     responder.set_both_model("newer", 64, 3);
     mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
@@ -711,6 +724,7 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
         .await
         .unwrap();
     mgr.wait_for_model_probe("failed").await;
+    mgr.probe_folder_model_for_test("failed", 32).await.unwrap();
     mgr.wait_for_rebuild("failed").await;
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 4);
 
@@ -812,6 +826,297 @@ async fn foreign_upsert_cannot_rewrite_model_or_trigger_periodic_rebuilds() {
     assert_eq!(status.index_state, IndexModelState::Ready);
     assert_eq!(status.embed_model.as_deref(), Some("bulk-model"));
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observed_bulk_switch_accepts_new_model_upsert_and_rebuilds_once() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(short, bulk)
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_secs(10 * 60),
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30 * 60),
+            std::time::Duration::from_secs(6 * 60 * 60),
+            3,
+        );
+    mgr.upsert_folder_file(
+        "observed-upsert",
+        32,
+        &one_chunk("a.md", "Original text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("observed-upsert").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("observed-upsert", 32)
+        .await
+        .unwrap();
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+
+    mgr.upsert_folder_file(
+        "observed-upsert",
+        32,
+        &one_chunk("b.md", "New-model text.", basis(64, 2)),
+        Some(&UpsertModelMeta {
+            model: "model-b".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .expect("the latest observed bulk pair must be accepted");
+    mgr.wait_for_model_probe("observed-upsert").await;
+    mgr.wait_for_rebuild("observed-upsert").await;
+
+    let status = mgr
+        .get_or_open_without_probe_for_test("observed-upsert", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("model-b"));
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+
+    let err = mgr
+        .upsert_folder_file(
+            "observed-upsert",
+            32,
+            &one_chunk("c.md", "Foreign text.", basis(64, 3)),
+            Some(&UpsertModelMeta {
+                model: "model-c".into(),
+                embed_dim: 64,
+                bulk_alias: "bulk-alias".into(),
+                short_alias: Some("short-alias".into()),
+            }),
+        )
+        .expect_err("a pair that is neither stored nor observed must be rejected");
+    assert!(matches!(err, crate::error::MakakooError::InvalidInput(_)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn flapping_bulk_pair_needs_two_consecutive_observations() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "flapping",
+        32,
+        &one_chunk("a.md", "Flapping text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("flapping").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("flapping", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("flapping").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+
+    responder.set_both_model("model-a", 64, 1);
+    mgr.probe_folder_model_for_test("flapping", 32)
+        .await
+        .unwrap();
+    assert_eq!(
+        mgr.get_or_open_without_probe_for_test("flapping", 32)
+            .unwrap()
+            .model_status()
+            .unwrap()
+            .index_state,
+        IndexModelState::Ready
+    );
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 0);
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("flapping", 32)
+        .await
+        .unwrap();
+    mgr.probe_folder_model_for_test("flapping", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("flapping").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        mgr.get_or_open_without_probe_for_test("flapping", 32)
+            .unwrap()
+            .model_status()
+            .unwrap()
+            .embed_model
+            .as_deref(),
+        Some("model-b")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn varying_failure_text_persists_backoff_and_halt_while_ingest_continues() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let make_manager = || {
+        FolderIndexManager::new(tmp.path())
+            .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
+            .with_model_recovery_timings_for_test(
+                std::time::Duration::from_millis(10),
+                std::time::Duration::from_millis(1),
+                std::time::Duration::from_millis(30),
+                std::time::Duration::from_secs(60),
+                3,
+            )
+    };
+    let mgr = make_manager();
+    mgr.upsert_folder_file(
+        "persisted-failure",
+        32,
+        &one_chunk("a.md", "Failure text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .unwrap();
+    mgr.wait_for_model_probe("persisted-failure").await;
+    responder.set_both_model("model-b", 64, 2);
+    responder.fail_bulk_embeddings.store(true, Ordering::SeqCst);
+    responder.vary_failure_body.store(true, Ordering::SeqCst);
+    mgr.probe_folder_model_for_test("persisted-failure", 32)
+        .await
+        .unwrap();
+    mgr.probe_folder_model_for_test("persisted-failure", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("persisted-failure").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
+    let idx = mgr
+        .get_or_open_without_probe_for_test("persisted-failure", 32)
+        .unwrap();
+    let mut retry = model_meta::read_persisted_rebuild_retry(&idx.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    retry.not_before_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 60_000;
+    model_meta::write_persisted_rebuild_retry(&idx.lock_conn().unwrap(), &retry).unwrap();
+    drop(idx);
+    drop(mgr);
+
+    let mgr = make_manager();
+    mgr.get_or_open("persisted-failure", 32).unwrap();
+    mgr.wait_for_model_probe("persisted-failure").await;
+    mgr.wait_for_rebuild("persisted-failure").await;
+    assert_eq!(
+        responder.bulk_calls.load(Ordering::SeqCst),
+        1,
+        "restart ignored persisted backoff"
+    );
+
+    let idx = mgr
+        .get_or_open_without_probe_for_test("persisted-failure", 32)
+        .unwrap();
+    let mut retry = model_meta::read_persisted_rebuild_retry(&idx.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    retry.not_before_unix_ms = 0;
+    model_meta::write_persisted_rebuild_retry(&idx.lock_conn().unwrap(), &retry).unwrap();
+    drop(idx);
+    drop(mgr);
+
+    let mgr = make_manager();
+    mgr.probe_folder_model_for_test("persisted-failure", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("persisted-failure").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 2);
+    tokio::time::sleep(std::time::Duration::from_millis(70)).await;
+    mgr.probe_folder_model_for_test("persisted-failure", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("persisted-failure").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 3);
+    let idx = mgr
+        .get_or_open_without_probe_for_test("persisted-failure", 32)
+        .unwrap();
+    let retry = model_meta::read_persisted_rebuild_retry(&idx.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(retry.error_class, "http_503");
+    assert_eq!(retry.failures, 3);
+    assert!(retry.halted);
+    assert!(idx
+        .model_status()
+        .unwrap()
+        .stale_reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("transient failure 3")));
+    drop(idx);
+    drop(mgr);
+
+    let mgr = make_manager();
+    mgr.upsert_folder_file(
+        "persisted-failure",
+        32,
+        &one_chunk("b.md", "Ingest after halt.", basis(64, 2)),
+        Some(&UpsertModelMeta {
+            model: "model-b".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .expect("a halted rebuild must not halt ingest from the observed bulk model");
+    mgr.wait_for_model_probe("persisted-failure").await;
+    mgr.wait_for_rebuild("persisted-failure").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 3);
+    let status = mgr
+        .get_or_open_without_probe_for_test("persisted-failure", 32)
+        .unwrap()
+        .model_status()
+        .unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert!(status
+        .stale_reason
+        .as_deref()
+        .is_some_and(|reason| reason.starts_with("rebuild_suppressed:")));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1182,6 +1487,9 @@ async fn same_model_different_dim_marks_stale_and_rebuilds() {
     mgr.probe_folder_model_for_test("dim-test", 32)
         .await
         .unwrap();
+    mgr.probe_folder_model_for_test("dim-test", 32)
+        .await
+        .unwrap();
     let res = mgr
         .search_folder(
             FolderSearchRequest {
@@ -1254,7 +1562,7 @@ async fn rebuild_wait_returns_when_finish_lands_between_lookup_and_await() {
     reg.try_acquire_for_test("f").expect("free");
     let r2 = Arc::clone(&reg);
     // The rebuild finishes exactly after wait() looked the folder up.
-    *reg.after_lookup.lock().unwrap() = Some(Box::new(move || r2.finish("f", true)));
+    *reg.after_lookup.lock().unwrap() = Some(Box::new(move || r2.finish("f")));
     tokio::time::timeout(std::time::Duration::from_secs(5), reg.wait("f"))
         .await
         .expect("wait() missed a finish between lookup and await");
@@ -1323,6 +1631,7 @@ async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
 
     responder.set_both_model("new-model", 64, 5);
     mgr.probe_folder_model_for_test("tail", 32).await.unwrap();
+    mgr.probe_folder_model_for_test("tail", 32).await.unwrap();
     mgr.wait_for_rebuild("tail").await;
     assert!(fired.load(Ordering::SeqCst), "hook never ran");
 
@@ -1381,6 +1690,7 @@ async fn rebuild_pages_across_more_than_one_page_and_leaves_nothing_parked() {
     mgr.wait_for_model_probe("paged").await;
 
     responder.set_both_model("new-model", 64, 5);
+    mgr.probe_folder_model_for_test("paged", 32).await.unwrap();
     mgr.probe_folder_model_for_test("paged", 32).await.unwrap();
     let _ = mgr
         .search_folder(
@@ -1484,6 +1794,9 @@ async fn an_untracked_text_change_is_caught_before_the_commit() {
     }));
 
     responder.set_both_model("new-model", 64, 5);
+    mgr.probe_folder_model_for_test("untracked", 32)
+        .await
+        .unwrap();
     mgr.probe_folder_model_for_test("untracked", 32)
         .await
         .unwrap();
