@@ -219,7 +219,8 @@ impl SanchoHandler for WikiLintHandler {
         let mut pages = Vec::new();
         walk_md(&pages_dir, &mut pages);
 
-        let wikilink_re = Regex::new(r"\[\[([^\]]+)\]\]").expect("regex");
+        static WIKILINK_RE: once_cell::sync::Lazy<Regex> =
+            once_cell::sync::Lazy::new(|| Regex::new(r"\[\[([^\]]+)\]\]").expect("regex"));
         let mut page_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for p in &pages {
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
@@ -238,7 +239,7 @@ impl SanchoHandler for WikiLintHandler {
             if non_blank <= 1 {
                 empty += 1;
             }
-            for cap in wikilink_re.captures_iter(&content) {
+            for cap in WIKILINK_RE.captures_iter(&content) {
                 total_links += 1;
                 let target = cap.get(1).map(|m| m.as_str()).unwrap_or("");
                 if !page_names.contains(target) {

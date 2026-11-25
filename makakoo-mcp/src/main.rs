@@ -268,7 +268,7 @@ async fn build_context_with_options(
         Arc::new(makakoo_core::superbrain::vector_model::BrainRebuildCoordinator::new());
 
     let mut ctx = ToolContext::empty(home.clone())
-        .with_llm(llm)
+        .with_llm(Arc::clone(&llm))
         .with_embeddings(Arc::clone(&emb))
         .with_bulk_embeddings(Arc::clone(&bulk_emb))
         .with_folder_index(folder_index)
@@ -371,7 +371,7 @@ async fn build_context_with_options(
     // plus an LLM client + event bus for the gateway runner. All three
     // are best-effort: a missing subsystem leaves `swarm_state = None`
     // and the Tier-C handlers return a structured "not wired" error.
-    match build_swarm_state(&data).await {
+    match build_swarm_state(&data, Arc::clone(&llm)).await {
         Ok(state) => {
             ctx = ctx.with_swarm_state(state);
         }
@@ -387,7 +387,10 @@ async fn build_context_with_options(
 /// event bus) using the standard makakoo data dir paths. Separated from
 /// `build_context` so its failure modes stay contained and the main
 /// build still returns a usable context without swarm support.
-async fn build_swarm_state(data: &std::path::Path) -> Result<Arc<makakoo_core::swarm::SwarmState>> {
+async fn build_swarm_state(
+    data: &std::path::Path,
+    llm: Arc<makakoo_core::llm::LlmClient>,
+) -> Result<Arc<makakoo_core::swarm::SwarmState>> {
     use std::sync::Mutex;
 
     let map = |e: makakoo_core::MakakooError| anyhow::anyhow!("{e}");
@@ -398,7 +401,6 @@ async fn build_swarm_state(data: &std::path::Path) -> Result<Arc<makakoo_core::s
     let artifacts =
         Arc::new(makakoo_core::swarm::ArtifactStore::open(Arc::clone(&conn_arc)).map_err(map)?);
     let coordinator = Arc::new(makakoo_core::swarm::AgentCoordinator::new());
-    let llm = Arc::new(makakoo_core::llm::LlmClient::new());
     let bus =
         makakoo_core::event_bus::PersistentEventBus::open(&data.join("events.db")).map_err(map)?;
     let gateway = Arc::new(makakoo_core::swarm::SwarmGateway::new(

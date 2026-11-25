@@ -16,10 +16,19 @@
 //!   `webhook.path` must start with `/`
 //! * `scope.allowed_paths` and `scope.forbidden_paths` — non-empty entries
 
+use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::{AgentSpec, ChannelSpec, ScopeSpec, TriggerSpec, NAME_REGEX};
 use crate::{MakakooError, Result};
+
+static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(NAME_REGEX).expect("NAME_REGEX is valid"));
+static TOOL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-z][a-z0-9_]*$").expect("tool regex valid"));
+static USER_ID_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[A-Za-z0-9_-]+$").expect("user_id regex valid"));
+static ENV_NAME_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[A-Z][A-Z0-9_]*$").expect("env_name regex valid"));
 
 pub fn validate(spec: &AgentSpec) -> Result<()> {
     validate_name(&spec.name)?;
@@ -37,8 +46,7 @@ pub fn validate(spec: &AgentSpec) -> Result<()> {
 }
 
 fn validate_name(name: &str) -> Result<()> {
-    let re = Regex::new(NAME_REGEX).expect("NAME_REGEX is valid");
-    if !re.is_match(name) {
+    if !NAME_RE.is_match(name) {
         return Err(MakakooError::InvalidInput(format!(
             "name '{}' must match {}",
             name, NAME_REGEX
@@ -64,9 +72,8 @@ fn validate_model(model: &str) -> Result<()> {
 }
 
 fn validate_tools(tools: &[String]) -> Result<()> {
-    let re = Regex::new(r"^[a-z][a-z0-9_]*$").expect("regex valid");
     for t in tools {
-        if !re.is_match(t) {
+        if !TOOL_RE.is_match(t) {
             return Err(MakakooError::InvalidInput(format!(
                 "tool '{}' must be lowercase alphanumeric + underscore (matches mcp__harvey__* convention)",
                 t
@@ -178,9 +185,8 @@ fn plain(e: &MakakooError) -> String {
 }
 
 fn validate_user_ids(ids: &[String], field: &str) -> Result<()> {
-    let re = Regex::new(r"^[A-Za-z0-9_-]+$").expect("regex valid");
     for id in ids {
-        if !re.is_match(id) {
+        if !USER_ID_RE.is_match(id) {
             return Err(MakakooError::InvalidInput(format!(
                 "{} entry '{}' contains invalid characters (allowed: alphanumeric, _, -)",
                 field, id
@@ -201,8 +207,7 @@ fn require_non_empty(s: &str, field: &str) -> Result<()> {
 }
 
 fn require_env_name(env: &str, field: &str) -> Result<()> {
-    let re = Regex::new(r"^[A-Z][A-Z0-9_]*$").expect("regex valid");
-    if !re.is_match(env) {
+    if !ENV_NAME_RE.is_match(env) {
         return Err(MakakooError::InvalidInput(format!(
             "{} '{}' must be uppercase env var name (e.g. TELEGRAM_FOO)",
             field, env

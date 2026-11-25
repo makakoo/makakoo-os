@@ -156,6 +156,76 @@ pub fn unpack_vector(blob: &[u8]) -> Vec<f32> {
     out
 }
 
+/// Compute the Euclidean (L2) norm of a vector once before scanning candidates.
+#[inline]
+pub fn vector_norm(v: &[f32]) -> f32 {
+    let mut sum: f32 = 0.0;
+    for &x in v {
+        sum += x * x;
+    }
+    sum.sqrt()
+}
+
+/// Zero-allocation cosine similarity directly between a query slice (with
+/// precomputed L2 norm) and a packed little-endian `f32` byte blob.
+///
+/// Matches `cosine_similarity(query, &unpack_vector(blob))` semantics:
+/// trailing non-multiple-of-4 bytes are ignored (`blob.len() / 4`),
+/// mismatched dimensions return `0.0`, and zero-norm inputs return `0.0`.
+#[inline]
+pub fn cosine_similarity_le_bytes(query: &[f32], query_norm: f32, blob: &[u8]) -> f32 {
+    if query_norm == 0.0 || blob.len() / 4 != query.len() {
+        return 0.0;
+    }
+    let mut dot: f32 = 0.0;
+    let mut norm_b: f32 = 0.0;
+    for (&q, chunk) in query.iter().zip(blob.chunks_exact(4)) {
+        let b = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        dot += q * b;
+        norm_b += b * b;
+    }
+    if norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (query_norm * norm_b.sqrt())
+}
+
+/// Fetch `(path, content)` from `brain_docs` only for the top `limit` scored
+/// `(doc_id, similarity)` pairs, preserving descending similarity order.
+pub(crate) fn fetch_top_vector_hits(
+    conn: &Connection,
+    mut scored: Vec<(i64, f32)>,
+    limit: usize,
+) -> Result<Vec<VectorHit>> {
+    if scored.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut out = Vec::with_capacity(limit.min(scored.len()));
+    let mut doc_stmt = conn.prepare("SELECT path, content FROM brain_docs WHERE id = ?1")?;
+    for (doc_id, similarity) in scored {
+        if let Some((path, content)) = doc_stmt
+            .query_row(params![doc_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .optional()?
+        {
+            out.push(VectorHit {
+                doc_id: path,
+                similarity,
+                content,
+            });
+            if out.len() == limit {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Cosine similarity between two vectors.
 ///
 /// Dimension-mismatched inputs return `0.0` rather than truncating to
@@ -748,6 +818,13 @@ impl SuperbrainStore {
         if let Some(active_model) = status.embed_model.as_deref() {
             return self.vector_search_for_model(query_vec, active_model, limit);
         }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let query_norm = vector_norm(query_vec);
+        if query_norm == 0.0 {
+            return Ok(Vec::new());
+        }
         let conn = self.lock_conn()?;
         let distinct_models: i64 = conn.query_row(
             "SELECT COUNT(DISTINCT COALESCE(model, 'unknown')) FROM brain_vectors",
@@ -757,38 +834,26 @@ impl SuperbrainStore {
         if distinct_models > 1 {
             return Ok(Vec::new());
         }
-        let mut stmt = conn.prepare(
-            "SELECT d.path, d.content, v.embedding
-             FROM brain_vectors v
-             JOIN brain_docs d ON v.doc_id = d.id",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let path: String = row.get(0)?;
-            let content: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            Ok((path, content, blob))
-        })?;
-
-        let mut scored: Vec<VectorHit> = Vec::new();
-        for row in rows {
-            let (path, content, blob) = row?;
-            let stored = unpack_vector(&blob);
-            let sim = cosine_similarity(query_vec, &stored);
+        let mut stmt = conn.prepare("SELECT doc_id, embedding FROM brain_vectors")?;
+        let mut rows = stmt.query([])?;
+        let mut scored: Vec<(i64, f32)> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let doc_id: i64 = row.get(0)?;
+            let blob = row.get_ref(1)?.as_blob().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
+            })?;
+            let sim = cosine_similarity_le_bytes(query_vec, query_norm, blob);
             if sim > 0.3 {
-                scored.push(VectorHit {
-                    doc_id: path,
-                    similarity: sim,
-                    content,
-                });
+                scored.push((doc_id, sim));
             }
         }
-        scored.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        scored.truncate(limit);
-        Ok(scored)
+        drop(rows);
+        drop(stmt);
+        fetch_top_vector_hits(&conn, scored, limit)
     }
 
     // ───────── stats ─────────
@@ -1363,5 +1428,90 @@ mod tests {
         assert_eq!(s.doc_count, 2);
         assert_eq!(s.vector_count, 1);
         assert!(s.size_bytes > 0);
+    }
+
+    #[test]
+    fn cosine_similarity_le_bytes_matches_unpacked_across_edge_cases() {
+        // High-dimensional positive + negative values (1024-dim like Qwen3-Embedding).
+        let q: Vec<f32> = (0..1024)
+            .map(|i| ((i as f32) * 0.137).sin() - 0.25)
+            .collect();
+        let b: Vec<f32> = (0..1024)
+            .map(|i| ((i as f32) * 0.293).cos() + 0.15)
+            .collect();
+        let blob = pack_vector(&b);
+        let qn = vector_norm(&q);
+        let expected = cosine_similarity(&q, &b);
+        let fast = cosine_similarity_le_bytes(&q, qn, &blob);
+        assert!(
+            (fast - expected).abs() < 1e-6,
+            "expected {expected}, got {fast}"
+        );
+
+        // Trailing non-multiple-of-4 bytes match unpack_vector truncation.
+        let mut padded = pack_vector(&[1.0_f32, -2.0, 3.0]);
+        padded.extend_from_slice(&[0xde, 0xad]);
+        let q3 = [0.5_f32, -1.0, 1.5];
+        let exp3 = cosine_similarity(&q3, &unpack_vector(&padded));
+        let fast3 = cosine_similarity_le_bytes(&q3, vector_norm(&q3), &padded);
+        assert!((fast3 - exp3).abs() < 1e-6);
+
+        // Dimension mismatch returns 0.0.
+        assert_eq!(
+            cosine_similarity_le_bytes(&[1.0, 0.0], 1.0, &pack_vector(&[1.0, 0.0, 0.0])),
+            0.0
+        );
+        // Zero-norm query or stored blob returns 0.0.
+        assert_eq!(
+            cosine_similarity_le_bytes(&[0.0, 0.0], 0.0, &pack_vector(&[1.0, 1.0])),
+            0.0
+        );
+        assert_eq!(
+            cosine_similarity_le_bytes(&[1.0, 1.0], vector_norm(&[1.0, 1.0]), &pack_vector(&[0.0, 0.0])),
+            0.0
+        );
+    }
+
+    #[test]
+    fn vector_search_for_model_ranks_top_k_without_reading_non_winning_content() {
+        let (_dir, store) = tmp_store();
+        for i in 0..20usize {
+            store
+                .write_document(
+                    &format!("pages/doc_{i}.md"),
+                    &format!("body for doc {i}"),
+                    "page",
+                    json!([]),
+                )
+                .unwrap();
+            let angle = (i as f32) * 0.05;
+            store
+                .store_vector_with_model(
+                    &format!("pages/doc_{i}.md"),
+                    &[angle.cos(), angle.sin(), 0.0, 0.0],
+                    "qwen3-test",
+                )
+                .unwrap();
+        }
+        store
+            .set_vectors_ready("qwen3-test", 4, "ail-embed-bulk", Some("ail-embed"))
+            .unwrap();
+
+        let hits = store
+            .vector_search_for_model(&[1.0, 0.0, 0.0, 0.0], "qwen3-test", 3)
+            .unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].doc_id, "pages/doc_0.md");
+        assert_eq!(hits[0].content, "body for doc 0");
+        assert_eq!(hits[1].doc_id, "pages/doc_1.md");
+        assert_eq!(hits[2].doc_id, "pages/doc_2.md");
+        assert!(hits[0].similarity >= hits[1].similarity);
+        assert!(hits[1].similarity >= hits[2].similarity);
+
+        // limit == 0 returns empty immediately.
+        assert!(store
+            .vector_search_for_model(&[1.0, 0.0, 0.0, 0.0], "qwen3-test", 0)
+            .unwrap()
+            .is_empty());
     }
 }

@@ -503,11 +503,13 @@ fn build_link_map(documents: &[PreparedDocument]) -> HashMap<String, String> {
 }
 
 fn convert_wikilinks(body: &str, link_map: &HashMap<String, String>) -> String {
-    let regex = Regex::new(
-        r"(?P<embed>!)?\[\[(?P<target>[^#|\]]+)(?:#(?P<heading>[^|\]]+))?(?:\|(?P<label>[^\]]+))?\]\]",
-    )
-    .expect("wikilink regex");
-    regex
+    static WIKILINK_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(
+            r"(?P<embed>!)?\[\[(?P<target>[^#|\]]+)(?:#(?P<heading>[^|\]]+))?(?:\|(?P<label>[^\]]+))?\]\]",
+        )
+        .expect("wikilink regex")
+    });
+    WIKILINK_RE
         .replace_all(body, |captures: &Captures<'_>| {
             let target = captures
                 .name("target")
@@ -677,6 +679,16 @@ fn is_public(mapping: &Mapping, logseq: &HashMap<String, String>) -> bool {
 }
 
 fn likely_secret(raw: &str) -> Option<&'static str> {
+    static TOKEN_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"(?i)\b(sk-[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9]{20,}|AKIA[0-9A-Z]{16})\b")
+            .expect("secret token regex")
+    });
+    static ASSIGNMENT_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(
+            r#"(?im)^\s*(password|secret|api[_-]?key|access[_-]?token)\s*(::|:)\s*["']?[^\s<{][^\s]{7,}"#,
+        )
+        .expect("secret assignment regex")
+    });
     let upper = raw.to_ascii_uppercase();
     if upper.contains("-----BEGIN PRIVATE KEY-----")
         || upper.contains("-----BEGIN RSA PRIVATE KEY-----")
@@ -684,17 +696,10 @@ fn likely_secret(raw: &str) -> Option<&'static str> {
     {
         return Some("private-key block");
     }
-    let token =
-        Regex::new(r"(?i)\b(sk-[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9]{20,}|AKIA[0-9A-Z]{16})\b")
-            .expect("secret token regex");
-    if token.is_match(raw) {
+    if TOKEN_RE.is_match(raw) {
         return Some("credential-shaped token");
     }
-    let assignment = Regex::new(
-        r#"(?im)^\s*(password|secret|api[_-]?key|access[_-]?token)\s*(::|:)\s*["']?[^\s<{][^\s]{7,}"#,
-    )
-    .expect("secret assignment regex");
-    if assignment.is_match(raw) {
+    if ASSIGNMENT_RE.is_match(raw) {
         return Some("credential assignment");
     }
     None
@@ -708,8 +713,9 @@ fn first_h1(body: &str) -> Option<String> {
 }
 
 fn derive_description(body: &str, title: &str) -> String {
-    let wikilink =
-        Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").expect("description wikilink regex");
+    static WIKILINK_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").expect("description wikilink regex")
+    });
     for line in body.lines() {
         let line = line
             .trim()
@@ -719,7 +725,7 @@ fn derive_description(body: &str, title: &str) -> String {
         if line.is_empty() || line == title || line.contains("::") {
             continue;
         }
-        let line = wikilink.replace_all(line, "$1");
+        let line = WIKILINK_RE.replace_all(line, "$1");
         return line.chars().take(240).collect();
     }
     format!("Knowledge about {title}.")
@@ -1834,7 +1840,9 @@ fn validate_log(bundle: &Path, path: &Path, content: &str, report: &mut Validati
             message: "log.md must not contain frontmatter".to_string(),
         });
     }
-    let date_value = Regex::new(r"^(\d{4}-\d{2}-\d{2})$").expect("date value regex");
+    static DATE_VALUE_RE: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2})$").expect("date value regex"));
+    let date_value = &*DATE_VALUE_RE;
     let mut title_seen = false;
     let mut date_sections = 0usize;
     let mut previous_date: Option<NaiveDate> = None;

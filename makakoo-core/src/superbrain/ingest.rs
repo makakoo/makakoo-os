@@ -901,11 +901,13 @@ fn expand_path(raw: &str, home: &Path) -> PathBuf {
 }
 
 fn expand_environment_variables(raw: &str, home: &Path) -> String {
-    let variables = regex::Regex::new(
-        r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
-    )
-    .expect("environment variable regex");
-    variables
+    static ENV_VAR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(
+            r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
+        )
+        .expect("environment variable regex")
+    });
+    ENV_VAR_RE
         .replace_all(raw, |captures: &regex::Captures<'_>| {
             let name = captures
                 .name("braced")

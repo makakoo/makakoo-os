@@ -8,8 +8,10 @@
 //! [`DEFAULT_EMBED_MAX_INPUT_BYTES`] (2,000, env `MAKAKOO_EMBED_MAX_INPUT_BYTES`)
 //! UTF-8 bytes per input, truncated strictly on a UTF-8 character boundary.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use once_cell::sync::OnceCell;
 use serde_json::{json, Value};
 
 use crate::error::{MakakooError, Result};
@@ -175,7 +177,7 @@ pub struct EmbeddingClient {
     timeout: Option<Duration>,
     max_batch: Option<usize>,
     max_input_bytes: Option<usize>,
-    client: reqwest::Client,
+    client: Arc<OnceCell<reqwest::Client>>,
 }
 
 impl Default for EmbeddingClient {
@@ -202,10 +204,6 @@ impl EmbeddingClient {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
         let api_key = std::env::var("AIL_API_KEY").ok().filter(|s| !s.is_empty());
-        let client = reqwest::Client::builder()
-            .timeout(DEFAULT_EMBED_TIMEOUT)
-            .build()
-            .expect("reqwest client build");
         Self {
             base_url,
             api_key,
@@ -213,8 +211,17 @@ impl EmbeddingClient {
             timeout: None,
             max_batch: None,
             max_input_bytes: None,
-            client,
+            client: Arc::new(OnceCell::new()),
         }
+    }
+
+    fn http_client(&self) -> &reqwest::Client {
+        self.client.get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(DEFAULT_EMBED_TIMEOUT)
+                .build()
+                .expect("reqwest client build")
+        })
     }
 
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
@@ -412,7 +419,7 @@ impl EmbeddingClient {
             "model": self.model,
             "input": texts,
         });
-        let mut req = self.client.post(&url).json(&body);
+        let mut req = self.http_client().post(&url).json(&body);
         if let Some(t) = timeout {
             req = req.timeout(t);
         }

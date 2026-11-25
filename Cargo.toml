@@ -60,6 +60,12 @@ opt-level = "z"
 codegen-units = 1
 panic = "abort"
 
+# Enable LLVM SIMD auto-vectorization (NEON/AVX2) in core hot paths
+# (cosine vector scoring, graph/FTS processing, blake3) while keeping
+# CLI glue size-optimized.
+[profile.release.package.makakoo-core]
+opt-level = 3
+
 [workspace.metadata.dist]
 # cargo-dist packaging config. Phase G (sprint-013) flipped ci = ["github"]
 # and expanded the target set so tag-driven releases cover every supported

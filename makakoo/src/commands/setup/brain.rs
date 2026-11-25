@@ -77,7 +77,7 @@ impl Section for BrainSection {
     }
 
     fn description(&self) -> &'static str {
-        "Connect Logseq / Obsidian / plain markdown vaults"
+        "Connect external Logseq / Obsidian / plain markdown vaults (optional — Makakoo Brain works standalone)"
     }
 
     fn status(&self) -> SectionStatus {

@@ -90,24 +90,30 @@ pub fn render_opencode_entry(body: &str) -> String {
 /// Regex that matches any prior version of the harvey infect block so
 /// upgrades are in-place regardless of which earlier version (v6 … v9)
 /// was installed last. Matches exactly what the Python version matches.
-fn block_regex() -> Regex {
-    // Match `<!-- harvey:infect-global START v{anything} --> ... <!-- harvey:infect-global END -->`
-    // including any surrounding blank lines.
-    Regex::new(
-        r"(?s)\n*<!--\s*harvey:infect-global\s+START\s+v[^\s>]+\s*-->.*?<!--\s*harvey:infect-global\s+END\s*-->\n*",
-    )
-    .expect("infect block regex is valid")
+fn block_regex() -> &'static Regex {
+    static BLOCK_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        // Match `<!-- harvey:infect-global START v{anything} --> ... <!-- harvey:infect-global END -->`
+        // including any surrounding blank lines.
+        Regex::new(
+            r"(?s)\n*<!--\s*harvey:infect-global\s+START\s+v[^\s>]+\s*-->.*?<!--\s*harvey:infect-global\s+END\s*-->\n*",
+        )
+        .expect("infect block regex is valid")
+    });
+    &BLOCK_RE
 }
 
 /// Extract the prior block version from existing text. Returns `None` if no
 /// block is present.
 fn find_prior_version(text: &str) -> Option<String> {
+    static PRIOR_VERSION_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"START\s+v(\S+?)\s*-->").expect("prior version regex is valid")
+    });
     let re = block_regex();
     let m = re.find(text)?;
     let block = m.as_str();
     // Pull the `v<version>` token out of the START marker.
-    let vre = Regex::new(r"START\s+v(\S+?)\s*-->").ok()?;
-    vre.captures(block)
+    PRIOR_VERSION_RE
+        .captures(block)
         .and_then(|c| c.get(1))
         .map(|g| g.as_str().to_string())
 }
@@ -543,8 +549,11 @@ fn write_opencode(
 }
 
 fn opencode_entry_version(entry: &str) -> Option<String> {
-    let re = Regex::new(r"\[harvey:infect-global v(\S+?)\]").ok()?;
-    re.captures(entry)
+    static OPENCODE_VERSION_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"\[harvey:infect-global v(\S+?)\]").expect("opencode version regex is valid")
+    });
+    OPENCODE_VERSION_RE
+        .captures(entry)
         .and_then(|c| c.get(1))
         .map(|g| g.as_str().to_string())
 }
