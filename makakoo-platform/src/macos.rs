@@ -152,6 +152,16 @@ impl PlatformAdapter for MacOsPlatform {
     fn can_symlink(&self) -> bool {
         true
     }
+
+    fn prevent_idle_sleep(&self, _reason: &str) -> crate::SleepGuard {
+        if crate::sleep::wake_lock_disabled() {
+            return crate::SleepGuard::noop();
+        }
+        let pid = std::process::id().to_string();
+        // `-i` prevents system idle sleep while allowing the display to sleep.
+        // `-w <pid>` binds the assertion to our process so even SIGKILL releases it.
+        crate::SleepGuard::spawn_child("caffeinate", &["-i", "-w", &pid], false, true)
+    }
 }
 
 #[cfg(test)]

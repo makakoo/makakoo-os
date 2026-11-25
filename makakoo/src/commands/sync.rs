@@ -34,6 +34,7 @@ pub async fn run(
     let mut report = engine.sync(opts)?;
 
     if embed {
+        let _sleep_guard = makakoo_platform::SleepGuard::acquire("makakoo sync --embed");
         let embedder = ctx.bulk_embeddings();
         let short = ctx.embeddings();
         match engine

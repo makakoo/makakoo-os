@@ -125,6 +125,34 @@ impl PlatformAdapter for LinuxPlatform {
     fn can_symlink(&self) -> bool {
         true
     }
+
+    fn prevent_idle_sleep(&self, reason: &str) -> crate::SleepGuard {
+        if crate::sleep::wake_lock_disabled() {
+            return crate::SleepGuard::noop();
+        }
+        let clean = reason.replace(['\r', '\n'], " ");
+        let why = if clean.trim().is_empty() {
+            "makakoo long-running job"
+        } else {
+            clean.trim()
+        };
+        let why_arg = format!("--why={why}");
+        // Hold a piped stdin to `cat` under `systemd-inhibit`: closing stdin on
+        // Drop or process crash causes immediate clean release. Missing binary
+        // or headless containers without D-Bus degrade silently.
+        crate::SleepGuard::spawn_child(
+            "systemd-inhibit",
+            &[
+                "--what=sleep:idle",
+                "--who=makakoo",
+                &why_arg,
+                "--mode=block",
+                "cat",
+            ],
+            true,
+            false,
+        )
+    }
 }
 
 #[cfg(test)]

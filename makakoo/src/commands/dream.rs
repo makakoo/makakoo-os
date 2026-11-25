@@ -13,6 +13,7 @@ use crate::context::CliContext;
 use crate::output;
 
 pub async fn run(ctx: &CliContext) -> anyhow::Result<i32> {
+    let _sleep_guard = makakoo_platform::SleepGuard::acquire("makakoo dream consolidation");
     let sancho_ctx = ctx.build_sancho_context()?;
     let llm_for_dream: Arc<dyn LlmCall> = Arc::clone(&sancho_ctx.llm) as Arc<dyn LlmCall>;
     let handler = DreamHandler::new(llm_for_dream);

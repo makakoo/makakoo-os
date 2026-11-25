@@ -94,6 +94,7 @@ async fn run_tick(ctx: &CliContext) -> anyhow::Result<(i32, bool)> {
 }
 
 async fn run_tick_detailed(ctx: &CliContext) -> anyhow::Result<TickOutcome> {
+    let _sleep_guard = makakoo_platform::SleepGuard::acquire("makakoo sancho tick");
     let engine = build_engine(ctx).await?;
     // Run the store-open probe on the same process-wide coordinator so SANCHO
     // and the open probe deduplicate in-process and wait_all covers both.
