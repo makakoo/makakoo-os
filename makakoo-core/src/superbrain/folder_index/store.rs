@@ -2,9 +2,11 @@
 //! and `vectors.usearch` (memory-mapped `i8` HNSW index).
 
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::error::{MakakooError, Result};
 
@@ -36,13 +38,19 @@ pub struct FolderIndex {
     pub(crate) db_path: PathBuf,
     pub(crate) folder_id: String,
     pub(crate) dim: usize,
-    pub(crate) default_bulk_alias: Option<String>,
-    pub(crate) default_short_alias: Option<String>,
     pub(crate) conn: Mutex<Connection>,
+    pub(crate) query_mismatch_reason: Mutex<Option<String>>,
     pub(crate) vectors: VectorStore,
     /// Test hook: runs before each rebuild commit attempt, lock not held.
     #[cfg(test)]
     pub(crate) before_rebuild_commit: Mutex<Option<RebuildCommitHook>>,
+    /// Test hook: runs after a probe snapshot, before the Ready publication tx.
+    #[cfg(test)]
+    pub(crate) before_ready_publish: Mutex<Option<RebuildCommitHook>>,
+    #[cfg(test)]
+    pub(crate) panic_in_rebuild: AtomicBool,
+    #[cfg(test)]
+    pub(crate) panic_in_probe: AtomicBool,
 }
 
 impl FolderIndex {
@@ -64,11 +72,11 @@ impl FolderIndex {
         let dir = base_dir.join(folder_id);
         std::fs::create_dir_all(&dir)?;
         let db_path = dir.join(DB_FILE_NAME);
-        let conn = open_folder_db(&db_path)?;
+        let mut conn = open_folder_db(&db_path)?;
 
         let (sqlite_gen, sqlite_count) = init_and_verify_meta(&conn, folder_id, cfg.dim)?;
         init_model_meta_on_open(
-            &conn,
+            &mut conn,
             sqlite_count,
             cfg.embed_alias.as_deref(),
             cfg.short_embed_alias.as_deref(),
@@ -93,12 +101,17 @@ impl FolderIndex {
             db_path,
             folder_id: folder_id.to_string(),
             dim: cfg.dim,
-            default_bulk_alias: cfg.embed_alias,
-            default_short_alias: cfg.short_embed_alias,
             conn: Mutex::new(conn),
+            query_mismatch_reason: Mutex::new(None),
             vectors,
             #[cfg(test)]
             before_rebuild_commit: Mutex::new(None),
+            #[cfg(test)]
+            before_ready_publish: Mutex::new(None),
+            #[cfg(test)]
+            panic_in_rebuild: AtomicBool::new(false),
+            #[cfg(test)]
+            panic_in_probe: AtomicBool::new(false),
         })
     }
 
@@ -167,7 +180,6 @@ impl FolderIndex {
             ));
         }
         let quantized = quantize_chunks(&req.chunks, self.dim)?;
-        let first_vec_len = req.chunks.first().map(|c| c.vector.len()).unwrap_or(0);
 
         let (replaced, old_ids, additions, new_gen) = {
             let mut conn = self.lock_conn()?;
@@ -189,7 +201,7 @@ impl FolderIndex {
                 }
             }
 
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let old_ids = collect_file_chunk_ids(&tx, &req.file_path)?;
             let had_old = !old_ids.is_empty() || existing.is_some();
             if !old_ids.is_empty() {
@@ -214,7 +226,7 @@ impl FolderIndex {
                 None,
                 None,
             )?;
-            self.record_upsert_model_meta_tx(&tx, req.chunks.len(), first_vec_len, model_meta)?;
+            self.authorize_vector_write_tx(&tx, req.chunks.len(), model_meta)?;
             let new_gen = bump_generation_tx(&tx)?;
             tx.commit()?;
             (had_old, old_ids, additions, new_gen)
@@ -272,16 +284,16 @@ impl FolderIndex {
         trust: TrustLevel,
         owner: &str,
         chunks: &[ChunkInput],
+        model_meta: Option<&UpsertModelMeta>,
         done: u64,
         total: u64,
     ) -> Result<usize> {
         validate_file_path(file_path)?;
         let quantized = quantize_chunks(chunks, self.dim)?;
-        let first_vec_len = chunks.first().map(|c| c.vector.len()).unwrap_or(0);
 
         let (additions, new_gen) = {
             let mut conn = self.lock_conn()?;
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let additions = insert_chunks_tx(
                 &tx,
                 file_path,
@@ -301,7 +313,7 @@ impl FolderIndex {
                 Some(total),
                 None,
             )?;
-            self.record_upsert_model_meta_tx(&tx, chunks.len(), first_vec_len, None)?;
+            self.authorize_vector_write_tx(&tx, chunks.len(), model_meta)?;
             let new_gen = bump_generation_tx(&tx)?;
             tx.commit()?;
             (additions, new_gen)

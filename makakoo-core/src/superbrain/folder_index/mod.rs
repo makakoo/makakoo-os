@@ -47,7 +47,7 @@ pub use chunker::{
     anchor_from_segment, chunk_file_engine_output, chunk_segment, ChunkOptions,
     FileEngineExtractor, FileEngineOutput, FileEngineSegment, TextChunk,
 };
-pub use manager::FolderIndexManager;
+pub use manager::{FolderIndexManager, FolderRebuildRequestOutcome};
 pub use model_meta::{
     FolderModelStatus, FolderSearchRequest, FolderSearchResponse, IndexModelState, SearchMode,
     UpsertModelMeta,

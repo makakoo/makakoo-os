@@ -38,6 +38,15 @@ fn make_chunk(anchor: Anchor, start: usize, text: &str, vec: Vec<f32>) -> ChunkI
     }
 }
 
+fn test_model_meta(embed_dim: usize) -> UpsertModelMeta {
+    UpsertModelMeta {
+        model: "test-model".into(),
+        embed_dim,
+        bulk_alias: crate::embeddings::resolve_bulk_model(),
+        short_alias: Some(crate::embeddings::resolve_short_model()),
+    }
+}
+
 #[test]
 fn rejects_path_traversal_folder_ids() {
     let tmp = TempDir::new().unwrap();
@@ -72,66 +81,75 @@ fn places_survive_add_replace_reopen_mmap_and_search_with_exact_10_keys() {
     let v2 = unit_basis_vec(1024, 19);
 
     let out = idx
-        .upsert_file(&UpsertFileRequest {
-            file_path: "legal/msa.pdf".into(),
-            file_version: "sha256:v1".into(),
-            source_kind: SourceKind::File,
-            trust: TrustLevel::Trusted,
-            owner: "owner-a".into(),
-            chunks: vec![make_chunk(
-                Anchor {
-                    kind: AnchorKind::Page,
-                    value: "4".into(),
-                },
-                120,
-                "Net 30 payment terms apply.",
-                v1.clone(),
-            )],
-        })
+        .upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: "legal/msa.pdf".into(),
+                file_version: "sha256:v1".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "owner-a".into(),
+                chunks: vec![make_chunk(
+                    Anchor {
+                        kind: AnchorKind::Page,
+                        value: "4".into(),
+                    },
+                    120,
+                    "Net 30 payment terms apply.",
+                    v1.clone(),
+                )],
+            },
+            Some(&test_model_meta(1024)),
+        )
         .unwrap();
     assert!(!out.replaced && !out.skipped_unchanged && out.chunks_written == 1);
 
     // Idempotent upsert with identical version is a no-op.
     let gen_before = idx.size_report().unwrap().generation;
     let idem = idx
-        .upsert_file(&UpsertFileRequest {
-            file_path: "legal/msa.pdf".into(),
-            file_version: "sha256:v1".into(),
-            source_kind: SourceKind::File,
-            trust: TrustLevel::Trusted,
-            owner: "owner-a".into(),
-            chunks: vec![make_chunk(
-                Anchor {
-                    kind: AnchorKind::Page,
-                    value: "99".into(),
-                },
-                0,
-                "Should not overwrite.",
-                v2.clone(),
-            )],
-        })
+        .upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: "legal/msa.pdf".into(),
+                file_version: "sha256:v1".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "owner-a".into(),
+                chunks: vec![make_chunk(
+                    Anchor {
+                        kind: AnchorKind::Page,
+                        value: "99".into(),
+                    },
+                    0,
+                    "Should not overwrite.",
+                    v2.clone(),
+                )],
+            },
+            Some(&test_model_meta(1024)),
+        )
         .unwrap();
     assert!(idem.skipped_unchanged);
     assert_eq!(idx.size_report().unwrap().generation, gen_before);
 
     // Replace with new version removes old chunk and updates place.
     let rep = idx
-        .upsert_file(&UpsertFileRequest {
-            file_path: "legal/msa.pdf".into(),
-            file_version: "sha256:v2".into(),
-            source_kind: SourceKind::File,
-            trust: TrustLevel::Trusted,
-            owner: "owner-a".into(),
-            chunks: vec![make_chunk(
-                Anchor {
-                    kind: AnchorKind::Page,
-                    value: "6".into(),
-                },
-                240,
-                "Net 45 payment terms apply.",
-                v2.clone(),
-            )],
-        })
+        .upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: "legal/msa.pdf".into(),
+                file_version: "sha256:v2".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "owner-a".into(),
+                chunks: vec![make_chunk(
+                    Anchor {
+                        kind: AnchorKind::Page,
+                        value: "6".into(),
+                    },
+                    240,
+                    "Net 45 payment terms apply.",
+                    v2.clone(),
+                )],
+            },
+            Some(&test_model_meta(1024)),
+        )
         .unwrap();
     assert!(rep.replaced && rep.chunks_written == 1);
 
@@ -206,22 +224,25 @@ fn provenance_filters_exclude_non_matching_chunks() {
         ("other.pdf", SourceKind::File, TrustLevel::Untrusted, "bob"),
     ];
     for (i, (path, sk, trust, owner)) in entries.into_iter().enumerate() {
-        idx.upsert_file(&UpsertFileRequest {
-            file_path: path.into(),
-            file_version: format!("v{i}"),
-            source_kind: sk,
-            trust,
-            owner: owner.into(),
-            chunks: vec![make_chunk(
-                Anchor {
-                    kind: AnchorKind::Heading,
-                    value: "Intro".into(),
-                },
-                0,
-                path,
-                q.clone(),
-            )],
-        })
+        idx.upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: path.into(),
+                file_version: format!("v{i}"),
+                source_kind: sk,
+                trust,
+                owner: owner.into(),
+                chunks: vec![make_chunk(
+                    Anchor {
+                        kind: AnchorKind::Heading,
+                        value: "Intro".into(),
+                    },
+                    0,
+                    path,
+                    q.clone(),
+                )],
+            },
+            Some(&test_model_meta(64)),
+        )
         .unwrap();
     }
     idx.flush().unwrap();
@@ -302,6 +323,12 @@ fn file_states_cover_indexing_indexed_skipped_and_remove() {
             "Page one",
             v.clone(),
         )],
+        Some(&UpsertModelMeta {
+            model: "test-model".into(),
+            embed_dim: 32,
+            bulk_alias: "test-model".into(),
+            short_alias: None,
+        }),
         14,
         40,
     )
@@ -373,22 +400,25 @@ fn missing_or_stale_usearch_file_rebuilds_from_sqlite_on_open() {
     {
         let idx = FolderIndex::open(tmp.path(), "recover", 64).unwrap();
         dir_path = idx.dir().to_path_buf();
-        idx.upsert_file(&UpsertFileRequest {
-            file_path: "a.pdf".into(),
-            file_version: "v1".into(),
-            source_kind: SourceKind::File,
-            trust: TrustLevel::Trusted,
-            owner: "alice".into(),
-            chunks: vec![make_chunk(
-                Anchor {
-                    kind: AnchorKind::Page,
-                    value: "1".into(),
-                },
-                0,
-                "Durable chunk in SQLite",
-                v.clone(),
-            )],
-        })
+        idx.upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: "a.pdf".into(),
+                file_version: "v1".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "alice".into(),
+                chunks: vec![make_chunk(
+                    Anchor {
+                        kind: AnchorKind::Page,
+                        value: "1".into(),
+                    },
+                    0,
+                    "Durable chunk in SQLite",
+                    v.clone(),
+                )],
+            },
+            Some(&test_model_meta(64)),
+        )
         .unwrap();
         idx.flush_and_release().unwrap();
     }
@@ -433,8 +463,37 @@ fn batched_flush_avoids_per_file_rewrites_and_uses_last_saved_view_during_batch(
     idx.begin_indexing_run().unwrap();
 
     for i in 0..2 {
-        idx.upsert_file(&UpsertFileRequest {
-            file_path: format!("f{i}.txt"),
+        idx.upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: format!("f{i}.txt"),
+                file_version: "v1".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "alice".into(),
+                chunks: vec![make_chunk(
+                    Anchor {
+                        kind: AnchorKind::Page,
+                        value: "1".into(),
+                    },
+                    0,
+                    &format!("file {i}"),
+                    unit_basis_vec(32, i),
+                )],
+            },
+            Some(&test_model_meta(32)),
+        )
+        .unwrap();
+    }
+    assert_eq!(idx.vector_disk_generation(), None);
+    assert!(idx
+        .search(&unit_basis_vec(32, 0), 5, &SearchFilter::default())
+        .unwrap()
+        .is_empty());
+
+    // 3rd file triggers atomic batch flush.
+    idx.upsert_file_with_model(
+        &UpsertFileRequest {
+            file_path: "f2.txt".into(),
             file_version: "v1".into(),
             source_kind: SourceKind::File,
             trust: TrustLevel::Trusted,
@@ -445,35 +504,12 @@ fn batched_flush_avoids_per_file_rewrites_and_uses_last_saved_view_during_batch(
                     value: "1".into(),
                 },
                 0,
-                &format!("file {i}"),
-                unit_basis_vec(32, i),
+                "file 2",
+                unit_basis_vec(32, 2),
             )],
-        })
-        .unwrap();
-    }
-    assert_eq!(idx.vector_disk_generation(), None);
-    assert!(idx
-        .search(&unit_basis_vec(32, 0), 5, &SearchFilter::default())
-        .unwrap()
-        .is_empty());
-
-    // 3rd file triggers atomic batch flush.
-    idx.upsert_file(&UpsertFileRequest {
-        file_path: "f2.txt".into(),
-        file_version: "v1".into(),
-        source_kind: SourceKind::File,
-        trust: TrustLevel::Trusted,
-        owner: "alice".into(),
-        chunks: vec![make_chunk(
-            Anchor {
-                kind: AnchorKind::Page,
-                value: "1".into(),
-            },
-            0,
-            "file 2",
-            unit_basis_vec(32, 2),
-        )],
-    })
+        },
+        Some(&test_model_meta(32)),
+    )
     .unwrap();
     assert_eq!(idx.vector_disk_generation(), Some(3));
     assert_eq!(

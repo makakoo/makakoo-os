@@ -224,6 +224,9 @@ impl ToolHandler for FolderIndexStatesHandler {
             if let Some(d) = status.embed_dim {
                 obj.insert("embed_dim".to_string(), json!(d));
             }
+            if let Some(until) = status.rebuild_deferred_until {
+                obj.insert("rebuild_deferred_until".to_string(), json!(until));
+            }
         }
         Ok(out)
     }
@@ -266,6 +269,8 @@ mod tests {
                     "trust": "trusted",
                     "owner": "alice",
                     "dim": 32,
+                    "embed_model": "test-model",
+                    "embed_dim": 32,
                     "file_engine_output": {
                         "contract": "v1",
                         "format": "pdf",
@@ -339,6 +344,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rem["removed"], true);
+    }
+
+    #[tokio::test]
+    async fn mcp_rejects_precomputed_vectors_without_model_provenance() {
+        let (_tmp, reg) = setup();
+        let err = reg
+            .call(
+                "folder_index_upsert",
+                json!({
+                    "folder_id": "no-meta",
+                    "file_path": "a.md",
+                    "file_version": "v1",
+                    "dim": 4,
+                    "chunks": [{
+                        "anchor": { "kind": "heading", "value": "A" },
+                        "char_start": 0,
+                        "char_end": 1,
+                        "text": "A",
+                        "vector": [1.0, 0.0, 0.0, 0.0]
+                    }]
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err.message.contains("embed_model"));
     }
 
     #[tokio::test]

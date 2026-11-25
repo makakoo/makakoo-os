@@ -109,7 +109,7 @@ impl Respond for McpEmbedResponder {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_folder_index_model_switch_rebuild_and_states() {
     let tmp = tempfile::tempdir().unwrap();
-    let responder = McpEmbedResponder::new("ail-embed", "ail-embed-bulk", "qwen3-v1", 64);
+    let responder = McpEmbedResponder::new("test-embed", "test-embed-bulk", "qwen3-v1", 64);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/embeddings"))
@@ -117,17 +117,18 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
         .mount(&server)
         .await;
 
-    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let bulk_emb =
-        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed-bulk"));
+        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed-bulk"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path().join("indexes"))
-            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),
+            .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb))
+            .with_model_reprobe_interval(std::time::Duration::from_secs(1)),
     );
     let ctx = Arc::new(
         ToolContext::empty(tmp.path().to_path_buf())
-            .with_embeddings(short_emb)
-            .with_bulk_embeddings(bulk_emb)
+            .with_embeddings(Arc::clone(&short_emb))
+            .with_bulk_embeddings(Arc::clone(&bulk_emb))
             .with_folder_index(Arc::clone(&mgr)),
     );
     let mut reg = ToolRegistry::new();
@@ -160,6 +161,7 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
         .await
         .unwrap();
     assert_eq!(up["chunks_written"], 1);
+    mgr.wait_for_model_probe("legal").await;
 
     let st1 = reg
         .call(
@@ -175,6 +177,23 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     // Model behind alias changes; gate bulk rebuild so mid-rebuild assertions are deterministic.
     responder.switch("bge-v2", 48, 3);
     responder.gate_bulk.store(true, Ordering::SeqCst);
+
+    // The same long-lived manager must observe and confirm the switch. Process
+    // restart is not evidence that an alias change is stable.
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    mgr.get_or_open("legal", 32).unwrap();
+    mgr.wait_for_model_probe("legal").await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    mgr.get_or_open("legal", 32).unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("bulk embed call never reached the gate");
 
     let mid_query = reg
         .call(
@@ -193,14 +212,6 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     assert_eq!(mid_query["rebuilding"], true);
     assert_eq!(mid_query["passages"].as_array().unwrap().len(), 1);
     assert_eq!(mid_query["passages"][0]["anchor"]["value"], "7");
-
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !responder.gate_entered.load(Ordering::SeqCst) {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("bulk embed call never reached the gate");
 
     // query_vector-only while stale returns empty passages and stale=true.
     let mid_vec_only = reg
@@ -277,6 +288,7 @@ impl Respond for StrictUpsertResponder {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let is_probe = arr.len() == 1 && arr.first().and_then(Value::as_str) == Some("probe");
         if arr.len() > 16 {
             return ResponseTemplate::new(400).set_body_json(json!({
                 "error": format!("batch size {} > 16", arr.len())
@@ -290,7 +302,9 @@ impl Respond for StrictUpsertResponder {
                     "error": format!("input bytes {} > 2000", text.len())
                 }));
             }
-            self.received_bytes.lock().unwrap().push(text.len());
+            if !is_probe {
+                self.received_bytes.lock().unwrap().push(text.len());
+            }
             let page_idx = text
                 .split(':')
                 .next()
@@ -300,7 +314,9 @@ impl Respond for StrictUpsertResponder {
             vec[page_idx % 32] = 1.0;
             data.push(json!({ "index": i, "embedding": vec }));
         }
-        self.batch_sizes.lock().unwrap().push(arr.len());
+        if !is_probe {
+            self.batch_sizes.lock().unwrap().push(arr.len());
+        }
         ResponseTemplate::new(200).set_body_json(json!({
             "model": "qwen3-strict",
             "data": data,
@@ -322,9 +338,9 @@ async fn mcp_folder_index_upsert_splits_over_16_chunks_and_truncates_utf8_bytes(
         .mount(&server)
         .await;
 
-    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed"));
+    let short_emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
     let bulk_emb =
-        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("ail-embed-bulk"));
+        Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed-bulk"));
     let mgr = Arc::new(
         FolderIndexManager::new(tmp.path().join("indexes"))
             .with_embedders(Arc::clone(&short_emb), Arc::clone(&bulk_emb)),

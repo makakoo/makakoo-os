@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use crate::embeddings::EmbeddingClient;
 
-use super::sqlite_repo::{open_folder_db, DB_FILE_NAME};
+use super::sqlite_repo::{open_folder_db, read_generation, DB_FILE_NAME};
 use super::*;
 
 fn basis(dim: usize, slot: usize) -> Vec<f32> {
@@ -144,6 +144,40 @@ fn legacy_index_without_fts_or_model_backfills_fts_and_marks_stale() {
     assert_eq!(fts_hits[0].file_path, "old.pdf");
     assert_eq!(fts_hits[0].anchor.value, "3");
 
+    idx.upsert_file_with_model(
+        &UpsertFileRequest {
+            file_path: "new.md".into(),
+            file_version: "v1".into(),
+            source_kind: SourceKind::File,
+            trust: TrustLevel::Trusted,
+            owner: "alice".into(),
+            chunks: vec![ChunkInput {
+                anchor: Anchor {
+                    kind: AnchorKind::Heading,
+                    value: "New".into(),
+                },
+                char_start: 0,
+                char_end: 17,
+                text: "New indexed text.".into(),
+                vector: basis(16, 1),
+            }],
+        },
+        Some(&UpsertModelMeta {
+            model: "current-model".into(),
+            embed_dim: 16,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: None,
+        }),
+    )
+    .unwrap();
+    let after_upsert = idx.model_status().unwrap();
+    assert_eq!(after_upsert.index_state, IndexModelState::Stale);
+    assert_eq!(
+        after_upsert.stale_reason.as_deref(),
+        Some("mixed_model_upsert")
+    );
+    assert_eq!(after_upsert.embed_model, None);
+
     // Verify open_folder_db directly sees fts_version='1'.
     let conn = open_folder_db(&db_path).unwrap();
     let fts_ver: String = conn
@@ -159,7 +193,7 @@ fn legacy_index_without_fts_or_model_backfills_fts_and_marks_stale() {
 #[test]
 fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
     let tmp = TempDir::new().unwrap();
-    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("ail-embed".into()), None);
+    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("test-embed".into()), None);
     let dir_path;
     {
         let idx = FolderIndex::open_with_config(tmp.path(), "inc-folder", cfg.clone()).unwrap();
@@ -167,8 +201,28 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
         // The index already knows its real model; an unnamed batch must inherit it,
         // never record the alias as the model.
         {
-            let conn = idx.lock_conn().unwrap();
-            model_meta::write_ready_model_meta(&conn, "qwen3-real", 16, "ail-embed", None).unwrap();
+            let mut conn = idx.lock_conn().unwrap();
+            let status = model_meta::read_model_status(&conn).unwrap();
+            let generation = read_generation(&conn).unwrap();
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            assert!(model_meta::publish_ready_model_meta_tx(
+                &tx,
+                &model_meta::ReadyPublication {
+                    expected_generation: generation,
+                    expected_state: status.index_state,
+                    expected_reason: status.stale_reason.as_deref(),
+                    model: Some("qwen3-real"),
+                    embed_dim: Some(16),
+                    bulk_alias: Some("test-embed"),
+                    short_alias: None,
+                    final_stale_reason: None,
+                    kind: model_meta::ReadyPublicationKind::Ordinary,
+                }
+            )
+            .unwrap());
+            tx.commit().unwrap();
         }
         idx.begin_file_indexing("doc.pdf", "v1", 1).unwrap();
         idx.put_file_chunks_batch(
@@ -187,6 +241,12 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
                 text: "Incremental batch.".into(),
                 vector: basis(16, 0),
             }],
+            Some(&UpsertModelMeta {
+                model: "qwen3-real".into(),
+                embed_dim: 16,
+                bulk_alias: "test-embed".into(),
+                short_alias: None,
+            }),
             1,
             1,
         )
@@ -232,7 +292,7 @@ fn unnamed_chunk(text: &str, slot: usize) -> ChunkInput {
 #[test]
 fn unnamed_rows_on_a_fresh_index_never_claim_the_alias_as_model() {
     let tmp = TempDir::new().unwrap();
-    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("ail-embed".into()), None);
+    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("test-embed".into()), None);
     let idx = FolderIndex::open_with_config(tmp.path(), "fresh", cfg).unwrap();
     for (file, slot) in [("a.pdf", 0), ("b.pdf", 1)] {
         idx.begin_file_indexing(file, "v1", 1).unwrap();
@@ -243,23 +303,85 @@ fn unnamed_rows_on_a_fresh_index_never_claim_the_alias_as_model() {
             TrustLevel::Trusted,
             "alice",
             &[unnamed_chunk("Unnamed rows.", slot)],
+            None,
             1,
             1,
         )
         .unwrap();
         idx.finish_file_indexing(file, "v1").unwrap();
         let st = idx.model_status().unwrap();
-        // Model left unknown (a probe names it later); a second unnamed batch must
-        // not turn this into `mixed_model_upsert`, and vector search keeps working.
+        // A metadata-free vector write has no provable model identity. The
+        // single write door keeps it unnamed, sticky and non-Ready until a
+        // complete rebuild establishes provenance.
         assert_eq!(st.embed_model, None, "{file}");
-        assert_eq!(st.embed_dim, Some(16));
-        assert_eq!(st.index_state, IndexModelState::Ready, "{file}");
-        assert_eq!(st.stale_reason, None, "{file}");
+        assert_eq!(st.embed_dim, None);
+        assert_eq!(st.index_state, IndexModelState::Stale, "{file}");
+        assert!(st.unproven_vectors_since_gen.is_some(), "{file}");
         assert!(
-            !idx.search(&basis(16, slot), 5, &SearchFilter::default())
+            idx.search(&basis(16, slot), 5, &SearchFilter::default())
                 .unwrap()
                 .is_empty(),
-            "{file}: vector search must keep working"
+            "{file}: unproven vectors must not enter the searchable sidecar"
         );
     }
+}
+
+#[test]
+fn pre_provenance_schema_database_with_chunks_migrates_fail_closed() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("alias-a".into()), None);
+    {
+        let idx = FolderIndex::open_with_config(tmp.path(), "pre-flag", cfg.clone()).unwrap();
+        idx.upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: "a.md".into(),
+                file_version: "v1".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "alice".into(),
+                chunks: vec![unnamed_chunk("Potentially mixed row.", 1)],
+            },
+            Some(&UpsertModelMeta {
+                model: "model-a".into(),
+                embed_dim: 16,
+                bulk_alias: "alias-a".into(),
+                short_alias: None,
+            }),
+        )
+        .unwrap();
+        let conn = idx.lock_conn().unwrap();
+        // Simulate main before the sticky flag: a mixed-model reason was later
+        // overwritten by what the new code classifies as metadata-only.
+        conn.execute(
+            "DELETE FROM folder_meta WHERE key = 'provenance_schema'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO folder_meta (key, value)
+             VALUES ('index_state', 'stale'),
+                    ('stale_reason', 'model_mismatch: legacy query claim')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let reopened = FolderIndex::open_with_config(tmp.path(), "pre-flag", cfg).unwrap();
+    let status = reopened.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(
+        status.stale_reason.as_deref(),
+        Some("provenance_migration_required")
+    );
+    assert!(status.unproven_vectors_since_gen.is_some());
+    let schema: String = reopened
+        .lock_conn()
+        .unwrap()
+        .query_row(
+            "SELECT value FROM folder_meta WHERE key = 'provenance_schema'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(schema, "1");
 }

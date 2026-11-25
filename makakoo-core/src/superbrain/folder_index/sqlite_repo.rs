@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
 CREATE INDEX IF NOT EXISTS idx_chunks_provenance ON chunks(source_kind, trust, owner);
+
+-- Durable parking for resumable, owner-fenced model rebuilds.  Rows are
+-- scoped to a stable claim token and the probed model pair; a replacement
+-- process can resume a stale claim without trusting another model's work.
+CREATE TABLE IF NOT EXISTS rebuild_vectors (
+    claim_token TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    chunk_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    vector_i8 BLOB NOT NULL,
+    PRIMARY KEY (claim_token, chunk_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rebuild_vectors_claim
+    ON rebuild_vectors(claim_token, model, dim);
 "#;
 
 /// Compact O(1) membership predicate passed into `usearch::Index::filtered_search`.

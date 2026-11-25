@@ -44,6 +44,11 @@ pub(super) fn require_manager(ctx: &ToolContext) -> Result<&Arc<FolderIndexManag
 pub(super) fn map_core_err(err: MakakooError) -> RpcError {
     match err {
         MakakooError::InvalidInput(msg) => RpcError::invalid_params(msg),
+        MakakooError::RetryableFolderModelMismatch(msg) => {
+            let mut error = RpcError::internal(format!("retryable folder model mismatch: {msg}"));
+            error.data = Some(json!({ "retryable": true }));
+            error
+        }
         other => RpcError::internal(other.to_string()),
     }
 }
@@ -184,6 +189,7 @@ impl ToolHandler for FolderIndexUpsertHandler {
                 model_meta.as_ref(),
                 flush,
             )
+            .await
             .map_err(map_core_err)?;
 
         Ok(json!({
@@ -261,6 +267,11 @@ impl FolderIndexUpsertHandler {
                 })
                 .collect();
             let meta = self.parse_explicit_model_meta(params, &chunks)?;
+            if !chunks.is_empty() && meta.is_none() {
+                return Err(RpcError::invalid_params(
+                    "'embed_model' is required for precomputed chunk vectors",
+                ));
+            }
             return Ok((chunks, meta));
         }
         let Some(fe_val) = params.get("file_engine_output") else {
@@ -322,6 +333,11 @@ impl FolderIndexUpsertHandler {
             .collect();
         if meta.is_none() {
             meta = self.parse_explicit_model_meta(params, &chunks)?;
+        }
+        if !chunks.is_empty() && meta.is_none() {
+            return Err(RpcError::invalid_params(
+                "'embed_model' is required when supplying precomputed vectors",
+            ));
         }
         Ok((chunks, meta))
     }

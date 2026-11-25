@@ -4,16 +4,25 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
-use super::model_meta::{FolderSearchRequest, FolderSearchResponse, UpsertModelMeta};
+use super::model_meta::{
+    claim_observed_bulk_probe_expedite, FolderSearchRequest, FolderSearchResponse, UpsertModelMeta,
+};
 use super::rebuild::{self, FolderRebuildRegistry};
 use super::{
     validate_dim, validate_folder_id, FolderIndex, FolderIndexConfig, IndexSizeReport,
     UpsertFileRequest, UpsertOutcome,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderRebuildRequestOutcome {
+    Started,
+    AlreadyRunning,
+}
 
 /// Multi-folder cache so long-lived callers reuse open `FolderIndex` instances
 /// across calls without re-opening or rewriting on every file.
@@ -43,6 +52,49 @@ impl FolderIndexManager {
     ) -> Self {
         self.short_emb = Some(short_emb);
         self.bulk_emb = Some(bulk_emb);
+        self
+    }
+
+    /// Set the successful bulk-model re-probe interval. The default is ten
+    /// minutes; endpoint failures retry sooner with capped exponential backoff.
+    pub fn with_model_reprobe_interval(mut self, interval: Duration) -> Self {
+        self.rebuilds = Arc::new(FolderRebuildRegistry::with_probe_interval(interval));
+        self
+    }
+
+    /// Configure automatic rebuild retries. Repeated same-class failures are
+    /// halted after `max_same_class_failures` until the bulk model changes or
+    /// [`Self::request_folder_rebuild`] explicitly clears the halt.
+    pub fn with_model_rebuild_failure_policy(
+        mut self,
+        initial_backoff: Duration,
+        backoff_cap: Duration,
+        max_same_class_failures: u32,
+    ) -> Self {
+        self.rebuilds = Arc::new(self.rebuilds.with_rebuild_failure_policy(
+            initial_backoff,
+            backoff_cap,
+            max_same_class_failures,
+        ));
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_model_recovery_timings_for_test(
+        mut self,
+        probe_interval: Duration,
+        probe_failure_backoff: Duration,
+        rebuild_failure_backoff: Duration,
+        rebuild_failure_cap: Duration,
+        max_same_class_rebuild_failures: u32,
+    ) -> Self {
+        self.rebuilds = Arc::new(FolderRebuildRegistry::with_timings(
+            probe_interval,
+            probe_failure_backoff,
+            rebuild_failure_backoff,
+            rebuild_failure_cap,
+            max_same_class_rebuild_failures,
+        ));
         self
     }
 
@@ -100,23 +152,32 @@ impl FolderIndexManager {
             }
         };
 
-        if allow_probe {
-            if let Some(b_emb) = bulk_ref {
-                if tokio::runtime::Handle::try_current().is_ok()
-                    && idx.chunk_count().unwrap_or(0) > 0
-                    && self.rebuilds.mark_probed(folder_id)
-                {
-                    let idx_c = Arc::clone(&idx);
-                    let short_c = short_ref.cloned();
-                    let bulk_c = Arc::clone(b_emb);
-                    let reb_c = Arc::clone(&self.rebuilds);
-                    tokio::spawn(async move {
-                        rebuild::probe_and_reconcile(idx_c, short_c, bulk_c, reb_c).await;
-                    });
-                }
-            }
+        if allow_probe && tokio::runtime::Handle::try_current().is_ok() {
+            // Per-call embedders may answer this query, but only the manager's
+            // configured bulk endpoint may establish index-side provenance.
+            self.schedule_probe(
+                &idx,
+                self.short_emb.as_ref(),
+                self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
+            );
         }
         Ok(idx)
+    }
+
+    fn schedule_probe(
+        &self,
+        idx: &Arc<FolderIndex>,
+        short_emb: Option<&Arc<EmbeddingClient>>,
+        bulk_emb: Option<&Arc<EmbeddingClient>>,
+    ) {
+        if let Some(bulk_emb) = bulk_emb {
+            rebuild::schedule_probe(
+                Arc::clone(idx),
+                short_emb.cloned(),
+                Arc::clone(bulk_emb),
+                Arc::clone(&self.rebuilds),
+            );
+        }
     }
 
     pub async fn search_folder(
@@ -135,13 +196,12 @@ impl FolderIndexManager {
             req.dim,
             short_ref.as_ref(),
             bulk_ref.as_ref(),
-            false,
+            true,
         )?;
-        rebuild::search_folder_checked(idx, short_ref, bulk_ref, Arc::clone(&self.rebuilds), req)
-            .await
+        rebuild::search_folder_checked(idx, short_ref, Arc::clone(&self.rebuilds), req).await
     }
 
-    pub fn upsert_folder_file(
+    pub async fn upsert_folder_file(
         &self,
         folder_id: &str,
         dim: usize,
@@ -149,10 +209,14 @@ impl FolderIndexManager {
         model_meta: Option<&UpsertModelMeta>,
     ) -> Result<UpsertOutcome> {
         let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
-        idx.upsert_file_with_model(req, model_meta)
+        let outcome = self
+            .upsert_with_model_recovery(&idx, req, model_meta)
+            .await?;
+        self.schedule_probe_after_upsert(&idx, model_meta).await;
+        Ok(outcome)
     }
 
-    pub fn upsert_folder_file_and_flush(
+    pub async fn upsert_folder_file_and_flush(
         &self,
         folder_id: &str,
         dim: usize,
@@ -161,12 +225,97 @@ impl FolderIndexManager {
         flush: bool,
     ) -> Result<(UpsertOutcome, IndexSizeReport)> {
         let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
-        let outcome = idx.upsert_file_with_model(req, model_meta)?;
+        let outcome = self
+            .upsert_with_model_recovery(&idx, req, model_meta)
+            .await?;
+        self.schedule_probe_after_upsert(&idx, model_meta).await;
         if flush && !outcome.skipped_unchanged {
             idx.flush()?;
         }
         let sizes = idx.size_report()?;
         Ok((outcome, sizes))
+    }
+
+    async fn upsert_with_model_recovery(
+        &self,
+        idx: &Arc<FolderIndex>,
+        req: &UpsertFileRequest,
+        model_meta: Option<&UpsertModelMeta>,
+    ) -> Result<UpsertOutcome> {
+        match idx.upsert_file_with_model(req, model_meta) {
+            Ok(outcome) => Ok(outcome),
+            Err(MakakooError::RetryableFolderModelMismatch(_)) => {
+                let Some(meta) = model_meta else {
+                    return Err(MakakooError::RetryableFolderModelMismatch(
+                        "unnamed upsert could not be reconciled with the configured bulk embedder"
+                            .to_string(),
+                    ));
+                };
+                self.probe_after_rejected_upsert(idx, meta).await;
+                idx.upsert_file_with_model(req, model_meta)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn probe_after_rejected_upsert(&self, idx: &Arc<FolderIndex>, meta: &UpsertModelMeta) {
+        let Some(bulk_emb) = self.bulk_emb.clone().or_else(|| self.short_emb.clone()) else {
+            return;
+        };
+        if !self
+            .rebuilds
+            .try_rejected_upsert_probe(idx.folder_id(), &meta.model, meta.embed_dim)
+        {
+            return;
+        }
+        rebuild::run_claimed_probe(
+            Arc::clone(idx),
+            self.short_emb.clone(),
+            bulk_emb,
+            Arc::clone(&self.rebuilds),
+        )
+        .await;
+    }
+
+    async fn schedule_probe_after_upsert(
+        &self,
+        idx: &Arc<FolderIndex>,
+        model_meta: Option<&UpsertModelMeta>,
+    ) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let should_expedite = model_meta.is_some_and(|meta| {
+            idx.model_status().ok().is_some_and(|status| {
+                (status.embed_model.as_deref() != Some(meta.model.as_str())
+                    || status.embed_dim != Some(meta.embed_dim))
+                    && idx.lock_conn().ok().is_some_and(|mut conn| {
+                        claim_observed_bulk_probe_expedite(&mut conn, &meta.model, meta.embed_dim)
+                            .unwrap_or(false)
+                    })
+            })
+        });
+        if should_expedite {
+            self.rebuilds.expedite_probe(idx.folder_id());
+        }
+        self.schedule_probe(
+            idx,
+            self.short_emb.as_ref(),
+            self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
+        );
+
+        // A provenance-flagged ingest must not rely on a detached task that a
+        // short-lived CLI/MCP process can kill at return. Await the claimed
+        // probe and any rebuild this process owns. Cross-process contenders are
+        // fenced by the DB lease and a later process can resume durable rows.
+        if idx
+            .model_status()
+            .ok()
+            .is_some_and(|status| status.unproven_vectors_since_gen.is_some())
+        {
+            self.rebuilds.wait_for_probe(idx.folder_id()).await;
+            self.rebuilds.wait(idx.folder_id()).await;
+        }
     }
 
     pub fn is_rebuilding(&self, folder_id: &str) -> bool {
@@ -175,6 +324,99 @@ impl FolderIndexManager {
 
     pub async fn wait_for_rebuild(&self, folder_id: &str) {
         self.rebuilds.wait(folder_id).await;
+    }
+
+    pub async fn wait_for_model_probe(&self, folder_id: &str) {
+        self.rebuilds.wait_for_probe(folder_id).await;
+    }
+
+    /// Explicitly request a full folder rebuild. This bypasses a halt caused
+    /// by repeated same-class automatic failures, while active work remains
+    /// deduplicated.
+    pub async fn request_folder_rebuild(
+        &self,
+        folder_id: &str,
+        dim: usize,
+    ) -> Result<FolderRebuildRequestOutcome> {
+        if self.rebuilds.is_active(folder_id) {
+            return Ok(FolderRebuildRequestOutcome::AlreadyRunning);
+        }
+        let short_emb = self.short_emb.clone();
+        let bulk_emb = self
+            .bulk_emb
+            .clone()
+            .or_else(|| short_emb.clone())
+            .ok_or_else(|| MakakooError::internal("folder rebuild requires an embedder"))?;
+        let idx = self.get_or_open_with_overrides(
+            folder_id,
+            dim,
+            short_emb.as_ref(),
+            Some(&bulk_emb),
+            false,
+        )?;
+        let observed_bulk = bulk_emb.probe_model().await?;
+        let observed_short = match short_emb.as_ref() {
+            Some(short)
+                if short.model() != bulk_emb.model() || short.base_url() != bulk_emb.base_url() =>
+            {
+                short.probe_model().await.ok()
+            }
+            Some(_) => Some(observed_bulk.clone()),
+            None => None,
+        };
+        self.rebuilds.clear_rebuild_retry(&idx);
+        let started = rebuild::spawn_folder_rebuild(
+            idx,
+            short_emb,
+            bulk_emb,
+            Arc::clone(&self.rebuilds),
+            Some(observed_bulk),
+            observed_short,
+            false,
+        );
+        Ok(if started {
+            FolderRebuildRequestOutcome::Started
+        } else {
+            FolderRebuildRequestOutcome::AlreadyRunning
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn advance_model_recovery_time_for_test(&self, duration: Duration) {
+        self.rebuilds.advance_time(duration);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_or_open_without_probe_for_test(
+        &self,
+        folder_id: &str,
+        dim: usize,
+    ) -> Result<Arc<FolderIndex>> {
+        self.get_or_open_with_overrides(folder_id, dim, None, None, false)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn probe_folder_model_for_test(
+        &self,
+        folder_id: &str,
+        dim: usize,
+    ) -> Result<()> {
+        let short_emb = self.short_emb.clone();
+        let bulk_emb = self
+            .bulk_emb
+            .clone()
+            .or_else(|| short_emb.clone())
+            .ok_or_else(|| MakakooError::internal("folder model probe requires an embedder"))?;
+        let idx = self.get_or_open_with_overrides(
+            folder_id,
+            dim,
+            short_emb.as_ref(),
+            Some(&bulk_emb),
+            false,
+        )?;
+        let _ = rebuild::probe_and_reconcile(idx, short_emb, bulk_emb, Arc::clone(&self.rebuilds))
+            .await;
+        Ok(())
     }
 
     /// Flush all currently open folder indexes to disk.

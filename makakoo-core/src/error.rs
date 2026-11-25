@@ -36,6 +36,9 @@ pub enum MakakooError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("retryable folder model mismatch: {0}")]
+    RetryableFolderModelMismatch(String),
+
     #[error("brain vector rebuild claim lost to another owner")]
     RebuildClaimLost,
 
