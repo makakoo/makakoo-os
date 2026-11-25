@@ -15,7 +15,7 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Open a SQLite database in WAL mode with sensible defaults.
 pub fn open_db(path: &Path) -> Result<Connection> {
@@ -32,6 +32,8 @@ pub fn open_db(path: &Path) -> Result<Connection> {
         "PRAGMA synchronous = NORMAL",
         "PRAGMA busy_timeout = 5000",
         "PRAGMA foreign_keys = ON",
+        "PRAGMA cache_size = -16384",
+        "PRAGMA temp_store = MEMORY",
     ] {
         let mut s = conn.prepare(stmt)?;
         let mut rows = s.query([])?;
@@ -42,9 +44,17 @@ pub fn open_db(path: &Path) -> Result<Connection> {
 }
 
 /// Run idempotent migrations. Safe to call on every boot.
+///
+/// Fast-paths immediately when `PRAGMA user_version >= SCHEMA_VERSION`
+/// (single integer read, zero DDL, zero full-table scans, zero write locks
+/// on read-only CLI/MCP commands).
 pub fn run_migrations(conn: &Connection) -> Result<()> {
+    if schema_version(conn)? >= SCHEMA_VERSION {
+        return Ok(());
+    }
     conn.execute_batch(SCHEMA_V1)?;
     heal_legacy_schema_drift(conn)?;
+    migrate_to_v2(conn)?;
     // `PRAGMA user_version = N` is a no-row PRAGMA on most builds but
     // we run it through the same drain-rows path as `open_db` for
     // forward-compat with rusqlite strictness changes.
@@ -116,6 +126,77 @@ fn heal_legacy_schema_drift(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Schema v2 additions:
+/// 1. `brain_docs.file_mtime_ns` and `brain_docs.file_size` for O(stat) sync fast-skip.
+/// 2. Deduplicate any pre-existing duplicate `(src, dst, edge_type)` rows in
+///    `brain_graph_edges` (summing weights into `MIN(id)`) and enforce uniqueness
+///    via `idx_brain_graph_edges_triple` so edge upserts are O(log N) via `ON CONFLICT`.
+fn migrate_to_v2(conn: &Connection) -> Result<()> {
+    ensure_column(conn, "brain_docs", "file_mtime_ns", "INTEGER")?;
+    ensure_column(conn, "brain_docs", "file_size", "INTEGER")?;
+
+    conn.execute_batch("SAVEPOINT migrate_to_v2")?;
+    let res: Result<()> = (|| {
+        let has_dups: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM brain_graph_edges
+                     GROUP BY src, dst, edge_type
+                     HAVING COUNT(*) > 1
+                 )",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|v| v != 0)?;
+        if has_dups {
+            conn.execute(
+                "UPDATE brain_graph_edges
+                 SET weight = (
+                     SELECT SUM(e2.weight)
+                     FROM brain_graph_edges e2
+                     WHERE e2.src = brain_graph_edges.src
+                       AND e2.dst = brain_graph_edges.dst
+                       AND e2.edge_type = brain_graph_edges.edge_type
+                 )
+                 WHERE id IN (
+                     SELECT MIN(id)
+                     FROM brain_graph_edges
+                     GROUP BY src, dst, edge_type
+                     HAVING COUNT(*) > 1
+                 )",
+                [],
+            )?;
+            conn.execute(
+                "DELETE FROM brain_graph_edges
+                 WHERE id NOT IN (
+                     SELECT MIN(id)
+                     FROM brain_graph_edges
+                     GROUP BY src, dst, edge_type
+                 )",
+                [],
+            )?;
+        }
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_brain_graph_edges_triple
+             ON brain_graph_edges(src, dst, edge_type)",
+            [],
+        )?;
+        Ok(())
+    })();
+    match res {
+        Ok(()) => {
+            conn.execute_batch("RELEASE SAVEPOINT migrate_to_v2")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO SAVEPOINT migrate_to_v2; RELEASE SAVEPOINT migrate_to_v2;",
+            );
+            Err(e)
+        }
+    }
+}
+
 fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let columns = stmt
@@ -182,6 +263,8 @@ CREATE TABLE IF NOT EXISTS brain_docs (
     source_type TEXT DEFAULT 'logseq',
     source_role TEXT DEFAULT 'canonical',
     relative_path TEXT,
+    file_mtime_ns INTEGER,
+    file_size INTEGER,
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -781,7 +864,8 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        // Force a second run of heal — migrations are idempotent.
+        // Simulate a legacy pre-v2 DB upgrading through run_migrations.
+        conn.pragma_update(None, "user_version", 1i64).unwrap();
         run_migrations(&conn).unwrap();
         let orphans_after: i64 = conn
             .query_row(
@@ -803,5 +887,97 @@ mod tests {
         );
         assert_eq!(orphans_after, 0, "heal must clear orphan vectors");
         assert_eq!(null_hashes, 0, "heal must clear NULL content_hash rows");
+    }
+
+    #[test]
+    fn run_migrations_fast_path_takes_zero_write_lock_on_current_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v2.db");
+        {
+            let conn = open_db(&path).unwrap();
+            run_migrations(&conn).unwrap();
+            assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        }
+        // Opening strictly read-only proves the v2 fast-path issues zero
+        // DDL, zero DELETE scans, and zero PRAGMA writes.
+        let ro = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+        run_migrations(&ro).unwrap();
+        assert_eq!(schema_version(&ro).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v1_to_v2_deduplicates_graph_edges_and_adds_file_stat_columns() {
+        let (_dir, path) = tmp_db_path();
+        {
+            let conn = Connection::open(&path).unwrap();
+            // Simulate a v1 DB: brain_docs without file_mtime_ns / file_size
+            // and brain_graph_edges with duplicate (src, dst, edge_type) rows.
+            conn.execute_batch(
+                "CREATE TABLE brain_docs (
+                    id INTEGER PRIMARY KEY,
+                    path TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    doc_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    entities TEXT DEFAULT '[]',
+                    char_count INTEGER DEFAULT 0,
+                    updated_at TEXT DEFAULT (datetime('now'))
+                 );
+                 CREATE TABLE brain_graph_edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    src TEXT NOT NULL,
+                    dst TEXT NOT NULL,
+                    edge_type TEXT NOT NULL DEFAULT 'mentions',
+                    weight REAL NOT NULL DEFAULT 1.0,
+                    metadata TEXT DEFAULT '{}'
+                 );
+                 INSERT INTO brain_graph_edges (src, dst, edge_type, weight)
+                     VALUES ('A', 'B', 'mentions', 2.0),
+                            ('A', 'B', 'mentions', 3.5),
+                            ('A', 'C', 'mentions', 1.0);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+
+        let conn = open_db(&path).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+
+        // Duplicates must collapse into one row with summed weight.
+        let edge_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM brain_graph_edges", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(edge_count, 2);
+        let ab_weight: f64 = conn
+            .query_row(
+                "SELECT weight FROM brain_graph_edges WHERE src = 'A' AND dst = 'B' AND edge_type = 'mentions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((ab_weight - 5.5).abs() < 1e-9);
+
+        // Unique index must reject duplicate (src, dst, edge_type) inserts.
+        let dup_err = conn.execute(
+            "INSERT INTO brain_graph_edges (src, dst, edge_type, weight) VALUES ('A', 'B', 'mentions', 1.0)",
+            [],
+        );
+        assert!(
+            dup_err.is_err(),
+            "unique index idx_brain_graph_edges_triple must reject duplicate triples"
+        );
+
+        // New file stat columns must exist on brain_docs.
+        let mut stmt = conn.prepare("PRAGMA table_info(brain_docs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(cols.iter().any(|c| c == "file_mtime_ns"));
+        assert!(cols.iter().any(|c| c == "file_size"));
     }
 }

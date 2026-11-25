@@ -129,17 +129,15 @@ pub async fn run_forever() -> Result<()> {
     // and wire the store-open probe onto the same process-wide coordinator.
     let (store, engine) = build_daemon_sancho_engine(&ctx)?;
 
-    // Post-crash integrity probe. `PRAGMA integrity_check` is O(DB) but
-    // runs once at boot and is dominated by the first WAL checkpoint
-    // anyway. We surface issues via a structured log — NOT auto-recovery
-    // — so the operator can decide whether to .recover or restore from
-    // backup. The 2026-04-22 post-reboot corruption would have surfaced
-    // here 90 seconds after boot instead of silently returning Error 11
-    // to every read path until a human noticed.
+    // Post-crash integrity probe. `PRAGMA quick_check(1)` verifies B-tree
+    // page integrity and stops on the first defect without scanning every
+    // secondary index (avoids multi-second boot stalls on large DBs). We
+    // surface issues via a structured log — NOT auto-recovery — so the
+    // operator can decide whether to .recover or restore from backup.
     {
         let arc = store.conn_arc();
         let conn = arc.lock().expect("integrity probe conn poisoned");
-        match conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)) {
+        match conn.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0)) {
             Ok(status) if status == "ok" => {
                 info!("superbrain.db integrity check: ok");
             }
@@ -268,7 +266,7 @@ pub(crate) fn headless_preflight(home: &std::path::Path) -> Result<std::path::Pa
     {
         let arc = store.conn_arc();
         let conn = arc.lock().expect("integrity probe conn poisoned");
-        match conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)) {
+        match conn.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0)) {
             Ok(status) if status == "ok" => {
                 info!("headless superbrain.db integrity check: ok");
             }
