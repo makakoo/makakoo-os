@@ -452,6 +452,20 @@ impl SuperbrainStore {
         metadata: Value,
         source: SourceMetadata,
     ) -> Result<()> {
+        self.write_document_with_source_and_stat(doc_id, content, doc_type, metadata, source, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_document_with_source_and_stat(
+        &self,
+        doc_id: &str,
+        content: &str,
+        doc_type: &str,
+        metadata: Value,
+        source: SourceMetadata,
+        file_mtime_ns: Option<i64>,
+        file_size: Option<i64>,
+    ) -> Result<()> {
         let entities = normalize_entities(&metadata, content);
         let entities_json = serde_json::to_string(&entities)?;
         let fts_entities_json = entities_for_fts_json(&entities)?;
@@ -490,8 +504,9 @@ impl SuperbrainStore {
         tx.execute(
             "INSERT INTO brain_docs
                 (path, name, doc_type, content, content_hash, entities, char_count,
-                 source_name, source_type, source_role, relative_path, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
+                 source_name, source_type, source_role, relative_path,
+                 file_mtime_ns, file_size, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
              ON CONFLICT(path) DO UPDATE SET
                  name = excluded.name,
                  doc_type = excluded.doc_type,
@@ -503,6 +518,8 @@ impl SuperbrainStore {
                  source_type = excluded.source_type,
                  source_role = excluded.source_role,
                  relative_path = excluded.relative_path,
+                 file_mtime_ns = excluded.file_mtime_ns,
+                 file_size = excluded.file_size,
                  updated_at = excluded.updated_at",
             params![
                 doc_id,
@@ -516,13 +533,18 @@ impl SuperbrainStore {
                 source.source_type,
                 source.source_role,
                 source.relative_path,
+                file_mtime_ns,
+                file_size,
             ],
         )?;
-        let rid: i64 = tx.query_row(
-            "SELECT id FROM brain_docs WHERE path = ?1",
-            params![doc_id],
-            |row| row.get(0),
-        )?;
+        let rid: i64 = match existing {
+            Some((id, _, _, _)) => id,
+            None => tx.query_row(
+                "SELECT id FROM brain_docs WHERE path = ?1",
+                params![doc_id],
+                |row| row.get(0),
+            )?,
+        };
         tx.execute(
             "INSERT INTO brain_fts(rowid, name, content, entities)
              VALUES (?1, ?2, ?3, ?4)",

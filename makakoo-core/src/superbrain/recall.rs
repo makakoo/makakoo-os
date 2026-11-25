@@ -281,9 +281,10 @@ impl RecallTracker {
     /// COUNT(DISTINCT) / SUM / MAX / MIN), then UPSERTs each aggregate row
     /// while preserving `first_recalled_at` on existing entries.
     pub fn rebuild_stats(&self) -> Result<usize> {
-        let conn = self.conn.lock().expect("recall conn mutex poisoned");
+        let mut conn = self.conn.lock().expect("recall conn mutex poisoned");
+        let tx = conn.transaction()?;
         let rows: Vec<StatsAggregate> = {
-            let mut stmt = conn.prepare(
+            let mut stmt = tx.prepare(
                 "SELECT
                     content_hash,
                     MAX(doc_id) AS doc_id,
@@ -315,20 +316,8 @@ impl RecallTracker {
             iter.collect::<std::result::Result<Vec<_>, _>>()?
         };
 
-        for (
-            content_hash,
-            doc_id,
-            doc_path,
-            recall_count,
-            unique_queries,
-            unique_days,
-            total_score,
-            max_score,
-            first_recalled_at,
-            last_recalled_at,
-        ) in rows.iter()
         {
-            conn.execute(
+            let mut upsert = tx.prepare(
                 "INSERT INTO recall_stats (
                     content_hash, doc_id, doc_path,
                     recall_count, unique_queries, unique_days,
@@ -347,7 +336,21 @@ impl RecallTracker {
                         recall_stats.first_recalled_at, excluded.first_recalled_at
                     ),
                     last_recalled_at = excluded.last_recalled_at",
-                params![
+            )?;
+            for (
+                content_hash,
+                doc_id,
+                doc_path,
+                recall_count,
+                unique_queries,
+                unique_days,
+                total_score,
+                max_score,
+                first_recalled_at,
+                last_recalled_at,
+            ) in rows.iter()
+            {
+                upsert.execute(params![
                     content_hash,
                     doc_id,
                     doc_path,
@@ -358,11 +361,12 @@ impl RecallTracker {
                     max_score,
                     first_recalled_at,
                     last_recalled_at,
-                ],
-            )?;
+                ])?;
+            }
         }
 
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM recall_stats", [], |r| r.get(0))?;
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM recall_stats", [], |r| r.get(0))?;
+        tx.commit()?;
         Ok(count as usize)
     }
 

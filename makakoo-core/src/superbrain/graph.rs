@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use petgraph::graph::{NodeIndex, UnGraph};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 
 use serde::{Deserialize, Serialize};
 
@@ -102,30 +102,13 @@ impl GraphStore {
             return Ok(());
         }
         let conn = self.conn.lock().expect("graph conn poisoned");
-        // Upsert-by-triple: look up existing edge row, if any.
-        let existing: Option<(i64, f32)> = conn
-            .query_row(
-                "SELECT id, weight FROM brain_graph_edges
-                 WHERE src = ?1 AND dst = ?2 AND edge_type = ?3",
-                params![src, dst, edge_type],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as f32)),
-            )
-            .ok();
-        match existing {
-            Some((id, w)) => {
-                conn.execute(
-                    "UPDATE brain_graph_edges SET weight = ?1 WHERE id = ?2",
-                    params![(w + weight_delta) as f64, id],
-                )?;
-            }
-            None => {
-                conn.execute(
-                    "INSERT INTO brain_graph_edges (src, dst, edge_type, weight, metadata)
-                     VALUES (?1, ?2, ?3, ?4, '{}')",
-                    params![src, dst, edge_type, weight_delta as f64],
-                )?;
-            }
-        }
+        conn.execute(
+            "INSERT INTO brain_graph_edges (src, dst, edge_type, weight, metadata)
+             VALUES (?1, ?2, ?3, ?4, '{}')
+             ON CONFLICT(src, dst, edge_type) DO UPDATE SET
+                 weight = brain_graph_edges.weight + excluded.weight",
+            params![src, dst, edge_type, weight_delta as f64],
+        )?;
         // Keep degree column fresh for `god_nodes`.
         conn.execute(
             "UPDATE brain_graph_nodes SET degree = degree + 1 WHERE id = ?1",
@@ -134,18 +117,25 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Return current `(node_count, edge_count)` in O(1) without rewriting the graph.
+    pub fn counts(&self) -> Result<(usize, usize)> {
+        let conn = self.conn.lock().expect("graph conn poisoned");
+        let nodes: i64 =
+            conn.query_row("SELECT COUNT(*) FROM brain_graph_nodes", [], |r| r.get(0))?;
+        let edges: i64 =
+            conn.query_row("SELECT COUNT(*) FROM brain_graph_edges", [], |r| r.get(0))?;
+        Ok((nodes as usize, edges as usize))
+    }
+
     /// Rebuild the materialized graph from the `entity_graph` triples
-    /// table populated by `store::write_document`. Clears and refills.
+    /// table populated by `store::write_document`. Clears and refills
+    /// atomically inside a single `BEGIN IMMEDIATE` transaction.
     pub fn rebuild_from_entity_graph(&self) -> Result<(usize, usize)> {
-        {
-            let conn = self.conn.lock().expect("graph conn poisoned");
-            conn.execute("DELETE FROM brain_graph_edges", [])?;
-            conn.execute("DELETE FROM brain_graph_nodes", [])?;
-        }
+        let mut conn = self.conn.lock().expect("graph conn poisoned");
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         let triples: Vec<(String, String, String)> = {
-            let conn = self.conn.lock().expect("graph conn poisoned");
-            let mut stmt = conn.prepare("SELECT subject, predicate, object FROM entity_graph")?;
+            let mut stmt = tx.prepare("SELECT subject, predicate, object FROM entity_graph")?;
             let rows = stmt
                 .query_map([], |r| {
                     Ok((
@@ -158,28 +148,66 @@ impl GraphStore {
             rows
         };
 
-        let mut nodes: HashSet<(String, String)> = HashSet::new();
+        // Deterministic node-type resolution: `journal` > `page` > `concept`.
+        // Filter invalid entities and self-loops before counting so returned
+        // `(nodes, edges)` match actual stored SQLite row counts exactly.
+        let mut nodes: HashMap<String, &'static str> = HashMap::new();
         let mut edges: HashMap<(String, String, String), f32> = HashMap::new();
         for (subj, pred, obj) in triples {
             if !is_valid_entity(&obj) {
                 continue;
             }
-            let subj_type = if is_journal_name(&subj) {
-                "journal"
-            } else {
-                "page"
-            };
-            nodes.insert((subj.clone(), subj_type.to_string()));
-            nodes.insert((obj.clone(), "concept".to_string()));
-            *edges.entry((subj, obj, pred)).or_insert(0.0) += 1.0;
+            let subj_valid = is_valid_entity(&subj);
+            if subj_valid {
+                let subj_type = if is_journal_name(&subj) {
+                    "journal"
+                } else {
+                    "page"
+                };
+                nodes
+                    .entry(subj.clone())
+                    .and_modify(|existing| {
+                        if *existing == "concept"
+                            || (*existing == "page" && subj_type == "journal")
+                        {
+                            *existing = subj_type;
+                        }
+                    })
+                    .or_insert(subj_type);
+            }
+            nodes.entry(obj.clone()).or_insert("concept");
+            if subj_valid && subj != obj {
+                *edges.entry((subj, obj, pred)).or_insert(0.0) += 1.0;
+            }
         }
 
-        for (name, node_type) in &nodes {
-            self.add_node(name, node_type)?;
+        let mut in_degree: HashMap<&str, i64> = HashMap::with_capacity(nodes.len());
+        for (_, dst, _) in edges.keys() {
+            *in_degree.entry(dst.as_str()).or_insert(0) += 1;
         }
-        for ((src, dst, edge_type), weight) in &edges {
-            self.add_edge(src, dst, edge_type, *weight)?;
+
+        tx.execute("DELETE FROM brain_graph_edges", [])?;
+        tx.execute("DELETE FROM brain_graph_nodes", [])?;
+        {
+            let mut node_stmt = tx.prepare(
+                "INSERT INTO brain_graph_nodes (id, label, node_type, degree, metadata)
+                 VALUES (?1, ?2, ?3, ?4, '{}')",
+            )?;
+            for (name, node_type) in &nodes {
+                let deg = in_degree.get(name.as_str()).copied().unwrap_or(0);
+                node_stmt.execute(params![name, name, node_type, deg])?;
+            }
         }
+        {
+            let mut edge_stmt = tx.prepare(
+                "INSERT INTO brain_graph_edges (src, dst, edge_type, weight, metadata)
+                 VALUES (?1, ?2, ?3, ?4, '{}')",
+            )?;
+            for ((src, dst, edge_type), weight) in &edges {
+                edge_stmt.execute(params![src, dst, edge_type, *weight as f64])?;
+            }
+        }
+        tx.commit()?;
         Ok((nodes.len(), edges.len()))
     }
 
@@ -358,13 +386,15 @@ impl GraphStore {
             }
             let names: Vec<String> = members.iter().map(|i| g[*i].clone()).collect();
             let member_set: HashSet<NodeIndex> = members.iter().copied().collect();
-            let mut internal = 0usize;
-            for e in g.edge_indices() {
-                let (u, v) = g.edge_endpoints(e).unwrap();
-                if member_set.contains(&u) && member_set.contains(&v) {
-                    internal += 1;
+            let mut internal_double = 0usize;
+            for &u in &members {
+                for v in g.neighbors(u) {
+                    if member_set.contains(&v) {
+                        internal_double += 1;
+                    }
                 }
             }
+            let internal = internal_double / 2;
             let n = names.len();
             let max_edges = n * (n - 1) / 2;
             let cohesion = if max_edges > 0 {
@@ -544,6 +574,11 @@ fn louvain_phase_one(g: &UnGraph<String, f32>) -> Vec<Vec<NodeIndex>> {
         .map(|i| (i, g.neighbors(i).count() as f32))
         .collect();
 
+    let mut tot: HashMap<usize, f32> = HashMap::with_capacity(n);
+    for (node, &c) in &comm {
+        *tot.entry(c).or_insert(0.0) += deg[node];
+    }
+
     let mut improved = true;
     let max_passes = 8;
     let mut pass = 0;
@@ -559,10 +594,6 @@ fn louvain_phase_one(g: &UnGraph<String, f32>) -> Vec<Vec<NodeIndex>> {
                 let c = *comm.get(&nb).unwrap();
                 *ki_in.entry(c).or_insert(0.0) += 1.0;
             }
-            let mut tot: HashMap<usize, f32> = HashMap::new();
-            for (node, c) in comm.iter() {
-                *tot.entry(*c).or_insert(0.0) += deg[node];
-            }
             let mut best = current;
             let mut best_gain = 0.0f32;
             for (c, &k_i_in) in ki_in.iter() {
@@ -577,6 +608,10 @@ fn louvain_phase_one(g: &UnGraph<String, f32>) -> Vec<Vec<NodeIndex>> {
                 }
             }
             if best != current {
+                if let Some(cur_tot) = tot.get_mut(&current) {
+                    *cur_tot -= my_deg;
+                }
+                *tot.entry(best).or_insert(0.0) += my_deg;
                 comm.insert(ni, best);
                 improved = true;
             }
@@ -749,5 +784,101 @@ mod tests {
             .flat_map(|c| c.members.iter().cloned())
             .collect();
         assert_eq!(all_members.len(), 6);
+    }
+
+    #[test]
+    fn rebuild_from_entity_graph_returns_exact_counts_and_resolves_node_types() {
+        let (_d, g) = make_store();
+        {
+            let conn = g.conn.lock().unwrap();
+            // Seed entity_graph with:
+            // - Shared node appearing as both page subject and concept object
+            // - Journal subject linking to page
+            // - Self-loop (should not produce an edge)
+            // - Duplicate triple (should collapse into weight 2.0)
+            // - Invalid entity object & subject (filtered out)
+            conn.execute_batch(
+                "INSERT INTO entity_graph (subject, predicate, object) VALUES
+                 ('Alpha', 'links_to', 'Beta'),
+                 ('Alpha', 'links_to', 'Beta'),
+                 ('Beta', 'links_to', 'Alpha'),
+                 ('2026_04_18', 'links_to', 'Alpha'),
+                 ('Alpha', 'links_to', 'Alpha'),
+                 ('Alpha', 'links_to', '14:52'),
+                 ('x', 'links_to', 'Gamma');",
+            )
+            .unwrap();
+        }
+
+        let (reported_nodes, reported_edges) = g.rebuild_from_entity_graph().unwrap();
+        let (actual_nodes, actual_edges) = g.counts().unwrap();
+        assert_eq!(reported_nodes, actual_nodes);
+        assert_eq!(reported_edges, actual_edges);
+        // Valid nodes: Alpha (page), Beta (page), 2026_04_18 (journal), Gamma (concept)
+        assert_eq!(actual_nodes, 4);
+        // Valid non-self edges: (Alpha->Beta w=2), (Beta->Alpha w=1), (2026_04_18->Alpha w=1)
+        assert_eq!(actual_edges, 3);
+
+        // Verify deterministic node_type precedence: page beats concept, journal beats page.
+        let conn = g.conn.lock().unwrap();
+        let alpha_type: String = conn
+            .query_row(
+                "SELECT node_type FROM brain_graph_nodes WHERE id = 'Alpha'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let journal_type: String = conn
+            .query_row(
+                "SELECT node_type FROM brain_graph_nodes WHERE id = '2026_04_18'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let gamma_type: String = conn
+            .query_row(
+                "SELECT node_type FROM brain_graph_nodes WHERE id = 'Gamma'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(alpha_type, "page");
+        assert_eq!(journal_type, "journal");
+        assert_eq!(gamma_type, "concept");
+    }
+
+    #[test]
+    fn rebuild_from_entity_graph_rolls_back_atomically_on_error() {
+        let (_d, g) = make_store();
+        g.add_node("ExistingA", "page").unwrap();
+        g.add_node("ExistingB", "concept").unwrap();
+        g.add_edge("ExistingA", "ExistingB", "links_to", 1.0)
+            .unwrap();
+
+        // Seed entity_graph + install a trigger that aborts edge inserts to
+        // simulate a mid-rebuild failure.
+        {
+            let conn = g.conn.lock().unwrap();
+            conn.execute_batch(
+                "INSERT INTO entity_graph (subject, predicate, object)
+                 VALUES ('NewSrc', 'links_to', 'NewDst');
+                 CREATE TRIGGER fail_edge_insert BEFORE INSERT ON brain_graph_edges
+                 BEGIN
+                     SELECT RAISE(ABORT, 'injected rebuild failure');
+                 END;",
+            )
+            .unwrap();
+        }
+
+        let err = g.rebuild_from_entity_graph().unwrap_err();
+        assert!(err.to_string().contains("injected rebuild failure"));
+
+        // Rollback must preserve the previous graph completely intact.
+        let (nodes, edges) = g.counts().unwrap();
+        assert_eq!(nodes, 2);
+        assert_eq!(edges, 1);
+        let (out, _) = g.neighbors("ExistingA").unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].entity, "ExistingB");
     }
 }
