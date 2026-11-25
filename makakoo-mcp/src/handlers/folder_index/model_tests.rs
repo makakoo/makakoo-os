@@ -172,6 +172,19 @@ async fn mcp_folder_index_model_switch_rebuild_and_states() {
     assert_eq!(st1["embed_model"], "qwen3-v1");
     assert_eq!(st1["embed_dim"], 64);
 
+    // The states call schedules the manager's first model probe. Let that task
+    // release its index handle before switching models or reopening the same
+    // vector files (Windows forbids replacing files held by another mmap).
+    let initial_idx = mgr.get_or_open("legal", 32).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while Arc::strong_count(&initial_idx) > 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("initial model probe did not release the index");
+    drop(initial_idx);
+
     // Model behind alias changes; gate bulk rebuild so mid-rebuild assertions are deterministic.
     responder.switch("bge-v2", 48, 3);
     responder.gate_bulk.store(true, Ordering::SeqCst);
