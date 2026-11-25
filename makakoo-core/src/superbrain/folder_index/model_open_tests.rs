@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use crate::embeddings::EmbeddingClient;
 
-use super::sqlite_repo::{open_folder_db, DB_FILE_NAME};
+use super::sqlite_repo::{open_folder_db, read_generation, DB_FILE_NAME};
 use super::*;
 
 fn basis(dim: usize, slot: usize) -> Vec<f32> {
@@ -201,9 +201,28 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
         // The index already knows its real model; an unnamed batch must inherit it,
         // never record the alias as the model.
         {
-            let conn = idx.lock_conn().unwrap();
-            model_meta::write_ready_model_meta(&conn, "qwen3-real", 16, "test-embed", None)
+            let mut conn = idx.lock_conn().unwrap();
+            let status = model_meta::read_model_status(&conn).unwrap();
+            let generation = read_generation(&conn).unwrap();
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .unwrap();
+            assert!(model_meta::publish_ready_model_meta_tx(
+                &tx,
+                &model_meta::ReadyPublication {
+                    expected_generation: generation,
+                    expected_state: status.index_state,
+                    expected_reason: status.stale_reason.as_deref(),
+                    model: Some("qwen3-real"),
+                    embed_dim: Some(16),
+                    bulk_alias: Some("test-embed"),
+                    short_alias: None,
+                    final_stale_reason: None,
+                    kind: model_meta::ReadyPublicationKind::Ordinary,
+                }
+            )
+            .unwrap());
+            tx.commit().unwrap();
         }
         idx.begin_file_indexing("doc.pdf", "v1", 1).unwrap();
         idx.put_file_chunks_batch(
@@ -284,12 +303,12 @@ fn unnamed_rows_on_a_fresh_index_never_claim_the_alias_as_model() {
         .unwrap();
         idx.finish_file_indexing(file, "v1").unwrap();
         let st = idx.model_status().unwrap();
-        // Model left unknown (a probe names it later); a second unnamed batch must
-        // not turn this into `mixed_model_upsert`, and vector search keeps working.
+        // No-metadata batches are produced by the configured bulk alias. They stay
+        // unnamed until its probe resolves the model id, while retaining dimension.
         assert_eq!(st.embed_model, None, "{file}");
         assert_eq!(st.embed_dim, Some(16));
         assert_eq!(st.index_state, IndexModelState::Ready, "{file}");
-        assert_eq!(st.stale_reason, None, "{file}");
+        assert_eq!(st.unproven_vectors_since_gen, None, "{file}");
         assert!(
             !idx.search(&basis(16, slot), 5, &SearchFilter::default())
                 .unwrap()

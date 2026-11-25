@@ -18,6 +18,12 @@ use super::{
     UpsertFileRequest, UpsertOutcome,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderRebuildRequestOutcome {
+    Started,
+    AlreadyRunning,
+}
+
 /// Multi-folder cache so long-lived callers reuse open `FolderIndex` instances
 /// across calls without re-opening or rewriting on every file.
 pub struct FolderIndexManager {
@@ -195,7 +201,7 @@ impl FolderIndexManager {
         rebuild::search_folder_checked(idx, short_ref, Arc::clone(&self.rebuilds), req).await
     }
 
-    pub fn upsert_folder_file(
+    pub async fn upsert_folder_file(
         &self,
         folder_id: &str,
         dim: usize,
@@ -203,12 +209,14 @@ impl FolderIndexManager {
         model_meta: Option<&UpsertModelMeta>,
     ) -> Result<UpsertOutcome> {
         let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
-        let outcome = idx.upsert_file_with_model(req, model_meta)?;
+        let outcome = self
+            .upsert_with_model_recovery(&idx, req, model_meta)
+            .await?;
         self.schedule_probe_after_upsert(&idx, model_meta);
         Ok(outcome)
     }
 
-    pub fn upsert_folder_file_and_flush(
+    pub async fn upsert_folder_file_and_flush(
         &self,
         folder_id: &str,
         dim: usize,
@@ -217,13 +225,56 @@ impl FolderIndexManager {
         flush: bool,
     ) -> Result<(UpsertOutcome, IndexSizeReport)> {
         let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
-        let outcome = idx.upsert_file_with_model(req, model_meta)?;
+        let outcome = self
+            .upsert_with_model_recovery(&idx, req, model_meta)
+            .await?;
         self.schedule_probe_after_upsert(&idx, model_meta);
         if flush && !outcome.skipped_unchanged {
             idx.flush()?;
         }
         let sizes = idx.size_report()?;
         Ok((outcome, sizes))
+    }
+
+    async fn upsert_with_model_recovery(
+        &self,
+        idx: &Arc<FolderIndex>,
+        req: &UpsertFileRequest,
+        model_meta: Option<&UpsertModelMeta>,
+    ) -> Result<UpsertOutcome> {
+        match idx.upsert_file_with_model(req, model_meta) {
+            Ok(outcome) => Ok(outcome),
+            Err(MakakooError::RetryableFolderModelMismatch(_)) => {
+                let Some(meta) = model_meta else {
+                    return Err(MakakooError::RetryableFolderModelMismatch(
+                        "unnamed upsert could not be reconciled with the configured bulk embedder"
+                            .to_string(),
+                    ));
+                };
+                self.probe_after_rejected_upsert(idx, meta).await;
+                idx.upsert_file_with_model(req, model_meta)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn probe_after_rejected_upsert(&self, idx: &Arc<FolderIndex>, meta: &UpsertModelMeta) {
+        let Some(bulk_emb) = self.bulk_emb.clone().or_else(|| self.short_emb.clone()) else {
+            return;
+        };
+        if !self
+            .rebuilds
+            .try_rejected_upsert_probe(idx.folder_id(), &meta.model, meta.embed_dim)
+        {
+            return;
+        }
+        rebuild::run_claimed_probe(
+            Arc::clone(idx),
+            self.short_emb.clone(),
+            bulk_emb,
+            Arc::clone(&self.rebuilds),
+        )
+        .await;
     }
 
     fn schedule_probe_after_upsert(
@@ -269,7 +320,14 @@ impl FolderIndexManager {
     /// Explicitly request a full folder rebuild. This bypasses a halt caused
     /// by repeated same-class automatic failures, while active work remains
     /// deduplicated.
-    pub async fn request_folder_rebuild(&self, folder_id: &str, dim: usize) -> Result<()> {
+    pub async fn request_folder_rebuild(
+        &self,
+        folder_id: &str,
+        dim: usize,
+    ) -> Result<FolderRebuildRequestOutcome> {
+        if self.rebuilds.is_active(folder_id) {
+            return Ok(FolderRebuildRequestOutcome::AlreadyRunning);
+        }
         let short_emb = self.short_emb.clone();
         let bulk_emb = self
             .bulk_emb
@@ -294,7 +352,7 @@ impl FolderIndexManager {
             None => None,
         };
         self.rebuilds.clear_rebuild_retry(&idx);
-        rebuild::spawn_folder_rebuild(
+        let started = rebuild::spawn_folder_rebuild(
             idx,
             short_emb,
             bulk_emb,
@@ -303,7 +361,11 @@ impl FolderIndexManager {
             observed_short,
             false,
         );
-        Ok(())
+        Ok(if started {
+            FolderRebuildRequestOutcome::Started
+        } else {
+            FolderRebuildRequestOutcome::AlreadyRunning
+        })
     }
 
     #[cfg(test)]

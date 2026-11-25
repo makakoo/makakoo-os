@@ -2,6 +2,8 @@
 //! with FTS fallback for [`super::store::FolderIndex`].
 
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -11,11 +13,12 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::model_meta::{
-    clear_persisted_rebuild_retry, read_model_status, read_persisted_automatic_rebuild_success,
-    read_persisted_rebuild_retry, record_observed_bulk, truncate_utf8, write_model_state,
-    write_persisted_automatic_rebuild_success, write_persisted_rebuild_retry,
-    write_ready_model_meta, FolderSearchRequest, FolderSearchResponse, IndexModelState,
-    PersistedAutomaticRebuildSuccess, PersistedRebuildRetry, SearchMode,
+    clear_persisted_rebuild_retry, is_metadata_only_stale_reason, publish_ready_model_meta_tx,
+    read_model_status, read_persisted_automatic_rebuild_success, read_persisted_rebuild_retry,
+    record_observed_bulk, truncate_utf8, write_model_state,
+    write_persisted_automatic_rebuild_success, write_persisted_rebuild_retry, FolderSearchRequest,
+    FolderSearchResponse, IndexModelState, PersistedAutomaticRebuildSuccess, PersistedRebuildRetry,
+    ReadyPublication, ReadyPublicationKind, SearchMode, AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS,
     SHORT_BULK_MISMATCH_REASON,
 };
 use super::rebuild_pages::{all_chunks_parked, reembed_pages, reset_parked, swap_in_parked};
@@ -30,7 +33,6 @@ const DEFAULT_REBUILD_FAILURE_BACKOFF: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_REBUILD_FAILURE_CAP: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_MAX_SAME_CLASS_REBUILD_FAILURES: u32 = 3;
 const MAX_MODEL_CHANGE_CONFIRMATION_DELAY: Duration = Duration::from_secs(60);
-const AUTOMATIC_REBUILD_SUCCESS_WINDOW: Duration = Duration::from_secs(60 * 60);
 const MAX_PERSISTED_ERROR_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Copy)]
@@ -81,6 +83,7 @@ pub(crate) struct FolderRebuildRegistry {
     active: Mutex<HashMap<String, Arc<Notify>>>,
     rebuild_retry: Mutex<HashMap<String, RebuildRetryState>>,
     probes: Mutex<ProbeState>,
+    rejected_upsert_probes: Mutex<HashMap<String, (RebuildKey, Instant)>>,
     probe_interval: Duration,
     probe_failure_backoff: Duration,
     rebuild_failure_backoff: Duration,
@@ -116,6 +119,7 @@ impl FolderRebuildRegistry {
             active: Mutex::new(HashMap::new()),
             rebuild_retry: Mutex::new(HashMap::new()),
             probes: Mutex::new(ProbeState::default()),
+            rejected_upsert_probes: Mutex::new(HashMap::new()),
             probe_interval,
             probe_failure_backoff,
             rebuild_failure_backoff,
@@ -219,12 +223,12 @@ impl FolderRebuildRegistry {
                     .flatten()
             });
             if last_success.is_some_and(|success| {
-                self.now_unix_ms()
-                    < success.last_success_unix_ms.saturating_add(
-                        AUTOMATIC_REBUILD_SUCCESS_WINDOW
-                            .as_millis()
-                            .min(u128::from(u64::MAX)) as u64,
-                    )
+                let now_unix_ms = self.now_unix_ms();
+                success.last_success_unix_ms <= now_unix_ms
+                    && now_unix_ms
+                        < success
+                            .last_success_unix_ms
+                            .saturating_add(AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS)
             }) {
                 return None;
             }
@@ -405,6 +409,40 @@ impl FolderRebuildRegistry {
         true
     }
 
+    /// Allow one synchronous liveness probe per rejected candidate pair and
+    /// normal probe window. This bypasses the ordinary success delay once, but
+    /// a repeated foreign pair cannot turn ingest into an endpoint probe storm.
+    pub(crate) fn try_rejected_upsert_probe(
+        &self,
+        folder_id: &str,
+        model: &str,
+        dim: usize,
+    ) -> bool {
+        let now = self.now();
+        let key = RebuildKey::new(model, dim);
+        {
+            let mut rejected = self
+                .rejected_upsert_probes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if rejected
+                .get(folder_id)
+                .is_some_and(|(previous, next)| previous == &key && now < *next)
+            {
+                return false;
+            }
+            rejected.insert(folder_id.to_string(), (key, now + self.probe_interval));
+        }
+        let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+        if probes.active.contains_key(folder_id) {
+            return false;
+        }
+        probes
+            .active
+            .insert(folder_id.to_string(), Arc::new(Notify::new()));
+        true
+    }
+
     pub(crate) fn expedite_probe(&self, folder_id: &str) {
         let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
         if !probes.active.contains_key(folder_id) {
@@ -505,7 +543,7 @@ impl ProbeActivityGuard {
         }
     }
 
-    fn set_reached_bulk(&mut self, reached_bulk: bool) {
+    pub(crate) fn set_reached_bulk(&mut self, reached_bulk: bool) {
         self.reached_bulk = reached_bulk;
     }
 }
@@ -547,6 +585,9 @@ fn rebuild_error_class(error: &MakakooError) -> String {
         MakakooError::Config(_) => "config".to_string(),
         MakakooError::NotFound(_) => "not_found".to_string(),
         MakakooError::InvalidInput(_) => "invalid_input".to_string(),
+        MakakooError::RetryableFolderModelMismatch(_) => {
+            "retryable_folder_model_mismatch".to_string()
+        }
         MakakooError::RebuildClaimLost => "rebuild_claim_lost".to_string(),
         MakakooError::RebuildCallTimeout => "rebuild_call_timeout".to_string(),
         MakakooError::Internal(_) => "internal".to_string(),
@@ -561,7 +602,19 @@ pub(crate) async fn probe_and_reconcile(
     bulk_emb: Arc<EmbeddingClient>,
     rebuilds: Arc<FolderRebuildRegistry>,
 ) -> bool {
-    if idx.chunk_count().unwrap_or(0) == 0 {
+    #[cfg(test)]
+    if idx.panic_in_probe.swap(false, Ordering::SeqCst) {
+        panic!("intentional probe task panic");
+    }
+
+    let Some((chunk_count, probe_generation)) = idx
+        .lock_conn()
+        .ok()
+        .and_then(|conn| Some((read_chunk_count(&conn).ok()?, read_generation(&conn).ok()?)))
+    else {
+        return true;
+    };
+    if chunk_count == 0 {
         return true;
     }
 
@@ -600,21 +653,28 @@ pub(crate) async fn probe_and_reconcile(
     };
     if status.embed_model.is_none() && status.embed_dim == Some(bulk_dim) {
         // Rows were written without a model id by the bulk alias: name it now.
-        if let Ok(conn) = idx.lock_conn() {
-            let current = read_model_status(&conn);
-            if matches!(&current, Ok(c) if c.embed_model.is_none()
-                && c.index_state == IndexModelState::Ready)
-            {
-                let _ = write_ready_model_meta(
-                    &conn,
-                    &bulk_model,
-                    bulk_dim,
-                    bulk_emb.model(),
-                    short_emb.as_deref().map(EmbeddingClient::model),
-                );
-            }
-        }
+        let published = publish_probe_ready(
+            &idx,
+            probe_generation,
+            &status,
+            &bulk_model,
+            bulk_dim,
+            bulk_emb.model(),
+            short_emb.as_deref().map(EmbeddingClient::model),
+        )
+        .unwrap_or(false);
         idx.update_sidecar_if_ready();
+        if !published {
+            spawn_folder_rebuild(
+                idx,
+                short_emb,
+                bulk_emb,
+                rebuilds,
+                Some((bulk_model, bulk_dim)),
+                short_result,
+                true,
+            );
+        }
         return true;
     }
     let matches_stored =
@@ -635,16 +695,36 @@ pub(crate) async fn probe_and_reconcile(
                 .as_deref()
                 .is_some_and(is_metadata_only_stale_reason)
         {
-            if let Ok(conn) = idx.lock_conn() {
-                let _ = write_ready_model_meta(
-                    &conn,
-                    &bulk_model,
-                    bulk_dim,
-                    bulk_emb.model(),
-                    short_emb.as_deref().map(EmbeddingClient::model),
+            let published = publish_probe_ready(
+                &idx,
+                probe_generation,
+                &status,
+                &bulk_model,
+                bulk_dim,
+                bulk_emb.model(),
+                short_emb.as_deref().map(EmbeddingClient::model),
+            )
+            .unwrap_or(false);
+            idx.update_sidecar_if_ready();
+            let current_requires_rebuild = !published
+                && idx.model_status().ok().is_some_and(|current| {
+                    current.unproven_vectors_since_gen.is_some()
+                        || current
+                            .stale_reason
+                            .as_deref()
+                            .is_some_and(|reason| !is_metadata_only_stale_reason(reason))
+                });
+            if current_requires_rebuild {
+                spawn_folder_rebuild(
+                    idx,
+                    short_emb,
+                    bulk_emb,
+                    rebuilds,
+                    Some((bulk_model, bulk_dim)),
+                    short_result,
+                    true,
                 );
             }
-            idx.update_sidecar_if_ready();
             return true;
         }
         if status.index_state == IndexModelState::Stale {
@@ -685,15 +765,42 @@ pub(crate) async fn probe_and_reconcile(
     true
 }
 
-fn is_metadata_only_stale_reason(reason: &str) -> bool {
-    matches!(
-        reason,
-        "embed_alias_changed"
-            | "short_embed_alias_changed"
-            | "bulk_model_change_pending"
-            | SHORT_BULK_MISMATCH_REASON
-    ) || reason.starts_with("model_mismatch:")
-        || reason.starts_with("dim_mismatch:")
+fn publish_probe_ready(
+    idx: &FolderIndex,
+    probe_generation: u64,
+    status: &super::model_meta::FolderModelStatus,
+    model: &str,
+    dim: usize,
+    bulk_alias: &str,
+    short_alias: Option<&str>,
+) -> Result<bool> {
+    #[cfg(test)]
+    if let Some(hook) = idx
+        .before_ready_publish
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        hook(idx);
+    }
+    let mut conn = idx.lock_conn()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let published = publish_ready_model_meta_tx(
+        &tx,
+        &ReadyPublication {
+            expected_generation: probe_generation,
+            expected_state: status.index_state,
+            expected_reason: status.stale_reason.as_deref(),
+            model: Some(model),
+            embed_dim: Some(dim),
+            bulk_alias: Some(bulk_alias),
+            short_alias,
+            final_stale_reason: None,
+            kind: ReadyPublicationKind::Ordinary,
+        },
+    )?;
+    tx.commit()?;
+    Ok(published)
 }
 
 /// Schedule one rate-limited endpoint reconciliation. Query metadata is never
@@ -708,11 +815,20 @@ pub(crate) fn schedule_probe(
         return;
     }
     tokio::spawn(async move {
-        let folder_id = idx.folder_id().to_string();
-        let mut activity = ProbeActivityGuard::new(Arc::clone(&rebuilds), folder_id);
-        let reached_bulk = probe_and_reconcile(idx, short_emb, bulk_emb, rebuilds).await;
-        activity.set_reached_bulk(reached_bulk);
+        run_claimed_probe(idx, short_emb, bulk_emb, rebuilds).await;
     });
+}
+
+pub(crate) async fn run_claimed_probe(
+    idx: Arc<FolderIndex>,
+    short_emb: Option<Arc<EmbeddingClient>>,
+    bulk_emb: Arc<EmbeddingClient>,
+    rebuilds: Arc<FolderRebuildRegistry>,
+) {
+    let folder_id = idx.folder_id().to_string();
+    let mut activity = ProbeActivityGuard::new(Arc::clone(&rebuilds), folder_id);
+    let reached_bulk = probe_and_reconcile(idx, short_emb, bulk_emb, rebuilds).await;
+    activity.set_reached_bulk(reached_bulk);
 }
 
 pub(crate) fn spawn_folder_rebuild(
@@ -723,16 +839,16 @@ pub(crate) fn spawn_folder_rebuild(
     observed_bulk: Option<(String, usize)>,
     observed_short: Option<(String, usize)>,
     automatic: bool,
-) {
+) -> bool {
     let Some((model, dim)) = observed_bulk.as_ref() else {
-        return;
+        return false;
     };
     let rebuild_key = RebuildKey::new(model.clone(), *dim);
     if rebuilds
         .try_acquire(&idx, &rebuild_key, automatic)
         .is_none()
     {
-        return;
+        return false;
     }
 
     if let Ok(conn) = idx.lock_conn() {
@@ -777,6 +893,7 @@ pub(crate) fn spawn_folder_rebuild(
             rebuilds_clone.clear_rebuild_retry(&idx);
         }
     });
+    true
 }
 
 async fn run_folder_rebuild(
@@ -787,17 +904,16 @@ async fn run_folder_rebuild(
     mut observed_short: Option<(String, usize)>,
     automatic_success_clock: Option<Arc<FolderRebuildRegistry>>,
 ) -> Result<()> {
+    #[cfg(test)]
+    if idx.panic_in_rebuild.swap(false, Ordering::SeqCst) {
+        panic!("intentional rebuild task panic");
+    }
+
     let (start_gen, chunk_count) = {
         let conn = idx.lock_conn()?;
         reset_parked(&conn)?;
         (read_generation(&conn)?, read_chunk_count(&conn)?)
     };
-
-    if chunk_count == 0 {
-        let conn = idx.lock_conn()?;
-        write_model_state(&conn, IndexModelState::Ready, None)?;
-        return Ok(());
-    }
 
     let (b_model, b_dim) = match observed_bulk {
         Some(pair) => pair,
@@ -817,7 +933,9 @@ async fn run_folder_rebuild(
         .as_ref()
         .is_some_and(|(s_model, s_dim)| s_model != &b_model || *s_dim != b_dim);
 
-    reembed_pages(&idx, &bulk_emb, &b_model, b_dim).await?;
+    if chunk_count > 0 {
+        reembed_pages(&idx, &bulk_emb, &b_model, b_dim).await?;
+    }
 
     // Upserts replace a file's chunks with new, higher ids and bump the
     // generation. Commit only while the generation is the one whose rows were
@@ -842,6 +960,7 @@ async fn run_folder_rebuild(
                 dim: b_dim,
                 bulk_emb: &bulk_emb,
                 short_emb: &short_emb,
+                short_mismatch,
                 automatic_success_unix_ms: automatic_success_clock
                     .as_ref()
                     .map(|clock| clock.now_unix_ms()),
@@ -850,9 +969,6 @@ async fn run_folder_rebuild(
                 drop(conn);
                 idx.checkpoint_wal()?;
                 idx.clear_query_mismatch();
-                if short_mismatch {
-                    idx.mark_stale(SHORT_BULK_MISMATCH_REASON)?;
-                }
                 return Ok(());
             }
             seen_gen = read_generation(&conn)?;
@@ -875,6 +991,7 @@ struct RebuildCommitMeta<'a> {
     dim: usize,
     bulk_emb: &'a EmbeddingClient,
     short_emb: &'a Option<Arc<EmbeddingClient>>,
+    short_mismatch: bool,
     automatic_success_unix_ms: Option<u64>,
 }
 
@@ -894,13 +1011,23 @@ fn commit_rebuild(
         }
         swap_in_parked(&tx)?;
         let new_gen = bump_generation_tx(&tx)?;
-        write_ready_model_meta(
+        let current = read_model_status(&tx)?;
+        if !publish_ready_model_meta_tx(
             &tx,
-            meta.model,
-            meta.dim,
-            meta.bulk_emb.model(),
-            meta.short_emb.as_deref().map(EmbeddingClient::model),
-        )?;
+            &ReadyPublication {
+                expected_generation: new_gen,
+                expected_state: current.index_state,
+                expected_reason: current.stale_reason.as_deref(),
+                model: Some(meta.model),
+                embed_dim: Some(meta.dim),
+                bulk_alias: Some(meta.bulk_emb.model()),
+                short_alias: meta.short_emb.as_deref().map(EmbeddingClient::model),
+                final_stale_reason: meta.short_mismatch.then_some(SHORT_BULK_MISMATCH_REASON),
+                kind: ReadyPublicationKind::RebuildCommit,
+            },
+        )? {
+            return Ok(false);
+        }
         if let Some(last_success_unix_ms) = meta.automatic_success_unix_ms {
             write_persisted_automatic_rebuild_success(
                 &tx,

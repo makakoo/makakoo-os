@@ -224,6 +224,9 @@ impl ToolHandler for FolderIndexStatesHandler {
             if let Some(d) = status.embed_dim {
                 obj.insert("embed_dim".to_string(), json!(d));
             }
+            if let Some(until) = status.rebuild_deferred_until {
+                obj.insert("rebuild_deferred_until".to_string(), json!(until));
+            }
         }
         Ok(out)
     }

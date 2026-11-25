@@ -1,6 +1,8 @@
 //! Metadata persistence, alias checks, and search/upsert types for tracking
 //! the active embedding model and dimension of a [`super::store::FolderIndex`].
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
@@ -18,9 +20,12 @@ pub(crate) const META_INDEX_STATE: &str = "index_state";
 pub(crate) const META_STALE_REASON: &str = "stale_reason";
 pub(crate) const OBSERVED_BULK_UPSERT_REASON: &str = "observed_bulk_model_upsert";
 pub(crate) const SHORT_BULK_MISMATCH_REASON: &str = "short_bulk_model_mismatch";
+pub(crate) const UNPROVEN_VECTOR_UPSERT_REASON: &str = "unproven_vector_upsert";
 const META_OBSERVED_BULK: &str = "observed_bulk";
 const META_REBUILD_RETRY: &str = "rebuild_retry";
 const META_AUTOMATIC_REBUILD_SUCCESS: &str = "automatic_rebuild_success";
+const META_UNPROVEN_VECTORS_SINCE_GEN: &str = "unproven_vectors_since_gen";
+pub(crate) const AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS: u64 = 60 * 60 * 1_000;
 const MAX_QUERY_MISMATCH_REASON_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +55,8 @@ impl ObservedBulkModel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct PersistedRebuildRetry {
     pub(crate) model: String,
     pub(crate) dim: usize,
@@ -115,6 +121,29 @@ pub struct FolderModelStatus {
     pub short_embed_alias: Option<String>,
     pub stale_reason: Option<String>,
     pub query_mismatch_reason: Option<String>,
+    pub unproven_vectors_since_gen: Option<u64>,
+    pub rebuild_deferred_until: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadyPublicationKind {
+    Ordinary,
+    RebuildCommit,
+}
+
+/// Complete compare-and-set input for the single model-metadata publication
+/// door. Callers must hold an IMMEDIATE transaction. The door re-reads every
+/// safety input instead of trusting an earlier snapshot.
+pub(crate) struct ReadyPublication<'a> {
+    pub(crate) expected_generation: u64,
+    pub(crate) expected_state: IndexModelState,
+    pub(crate) expected_reason: Option<&'a str>,
+    pub(crate) model: Option<&'a str>,
+    pub(crate) embed_dim: Option<usize>,
+    pub(crate) bulk_alias: Option<&'a str>,
+    pub(crate) short_alias: Option<&'a str>,
+    pub(crate) final_stale_reason: Option<&'a str>,
+    pub(crate) kind: ReadyPublicationKind,
 }
 
 /// Model provenance recorded when upserting chunks from an embedding client.
@@ -195,6 +224,16 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
     let embed_alias = read_meta_opt(conn, META_EMBED_ALIAS)?;
     let short_embed_alias = read_meta_opt(conn, META_SHORT_EMBED_ALIAS)?;
     let stale_reason = read_meta_opt(conn, META_STALE_REASON)?;
+    let unproven_vectors_since_gen = read_unproven_vectors_since_gen(conn)?;
+    let now_unix_ms = unix_time_ms();
+    let rebuild_deferred_until =
+        read_persisted_automatic_rebuild_success(conn)?.and_then(|success| {
+            let deferred_until = success
+                .last_success_unix_ms
+                .saturating_add(AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS);
+            (success.last_success_unix_ms <= now_unix_ms && now_unix_ms < deferred_until)
+                .then_some(deferred_until)
+        });
     Ok(FolderModelStatus {
         index_state,
         embed_model,
@@ -203,6 +242,8 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
         short_embed_alias,
         stale_reason,
         query_mismatch_reason: None,
+        unproven_vectors_since_gen,
+        rebuild_deferred_until,
     })
 }
 
@@ -216,20 +257,63 @@ pub(crate) fn write_model_state(
     Ok(())
 }
 
-pub(crate) fn write_ready_model_meta(
+pub(crate) fn read_unproven_vectors_since_gen(conn: &Connection) -> Result<Option<u64>> {
+    let Some(raw) = read_meta_opt(conn, META_UNPROVEN_VECTORS_SINCE_GEN)? else {
+        return Ok(None);
+    };
+    // Fail closed. Corrupt provenance metadata can never authorize Ready.
+    Ok(Some(raw.parse::<u64>().unwrap_or(0)))
+}
+
+fn mark_unproven_vectors_tx(conn: &Connection) -> Result<()> {
+    let next_generation = read_generation(conn)?.saturating_add(1);
+    write_meta_opt(
+        conn,
+        META_UNPROVEN_VECTORS_SINCE_GEN,
+        Some(&next_generation.to_string()),
+    )
+}
+
+/// Single door for publishing model metadata and, when safe, `Ready`.
+///
+/// Every caller runs this inside the same IMMEDIATE transaction as the work
+/// that justifies publication. The generation/state/reason/provenance checks
+/// are deliberately repeated here to close cross-process TOCTOU windows.
+pub(crate) fn publish_ready_model_meta_tx(
     conn: &Connection,
-    model: &str,
-    embed_dim: usize,
-    bulk_alias: &str,
-    short_alias: Option<&str>,
-) -> Result<()> {
-    write_meta_opt(conn, META_EMBED_MODEL, Some(model))?;
-    write_meta_opt(conn, META_EMBED_DIM, Some(&embed_dim.to_string()))?;
-    write_meta_opt(conn, META_EMBED_ALIAS, Some(bulk_alias))?;
-    if let Some(short) = short_alias {
-        write_meta_opt(conn, META_SHORT_EMBED_ALIAS, Some(short))?;
+    publication: &ReadyPublication<'_>,
+) -> Result<bool> {
+    let status = read_model_status(conn)?;
+    if read_generation(conn)? != publication.expected_generation
+        || status.index_state != publication.expected_state
+        || status.stale_reason.as_deref() != publication.expected_reason
+    {
+        return Ok(false);
     }
-    write_model_state(conn, IndexModelState::Ready, None)
+
+    let unproven = read_unproven_vectors_since_gen(conn)?;
+    if unproven.is_some() && publication.kind != ReadyPublicationKind::RebuildCommit {
+        return Ok(false);
+    }
+
+    if publication.kind == ReadyPublicationKind::RebuildCommit {
+        // Coverage and generation were checked by the rebuild commit before it
+        // entered this door. This is the only provenance-flag clear in code.
+        write_meta_opt(conn, META_UNPROVEN_VECTORS_SINCE_GEN, None)?;
+    }
+    write_meta_opt(conn, META_EMBED_MODEL, publication.model)?;
+    write_meta_opt(
+        conn,
+        META_EMBED_DIM,
+        publication.embed_dim.map(|dim| dim.to_string()).as_deref(),
+    )?;
+    write_meta_opt(conn, META_EMBED_ALIAS, publication.bulk_alias)?;
+    write_meta_opt(conn, META_SHORT_EMBED_ALIAS, publication.short_alias)?;
+    match publication.final_stale_reason {
+        Some(reason) => write_model_state(conn, IndexModelState::Stale, Some(reason))?,
+        None => write_model_state(conn, IndexModelState::Ready, None)?,
+    }
+    Ok(true)
 }
 
 pub(crate) fn read_observed_bulk(conn: &Connection) -> Result<Option<ObservedBulkModel>> {
@@ -353,9 +437,35 @@ pub(crate) fn write_persisted_automatic_rebuild_success(
     )
 }
 
+pub(crate) fn is_metadata_only_stale_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "embed_alias_changed"
+            | "short_embed_alias_changed"
+            | "bulk_model_change_pending"
+            | SHORT_BULK_MISMATCH_REASON
+    ) || reason.starts_with("model_mismatch:")
+        || reason.starts_with("dim_mismatch:")
+}
+
+fn write_stale_preserving_provenance_reason(conn: &Connection, reason: &str) -> Result<()> {
+    let status = read_model_status(conn)?;
+    let reason = if is_metadata_only_stale_reason(reason)
+        && status
+            .stale_reason
+            .as_deref()
+            .is_some_and(|current| !is_metadata_only_stale_reason(current))
+    {
+        status.stale_reason.as_deref().unwrap_or(reason)
+    } else {
+        reason
+    };
+    write_model_state(conn, IndexModelState::Stale, Some(reason))
+}
+
 /// Evaluate model metadata and configured aliases on `open()`.
 pub(crate) fn init_model_meta_on_open(
-    conn: &Connection,
+    conn: &mut Connection,
     chunk_count: u64,
     bulk_alias: Option<&str>,
     short_alias: Option<&str>,
@@ -363,7 +473,23 @@ pub(crate) fn init_model_meta_on_open(
     let status = read_model_status(conn)?;
     if chunk_count == 0 {
         if status.index_state != IndexModelState::Ready || status.stale_reason.is_some() {
-            write_model_state(conn, IndexModelState::Ready, None)?;
+            let expected_generation = read_generation(conn)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let _ = publish_ready_model_meta_tx(
+                &tx,
+                &ReadyPublication {
+                    expected_generation,
+                    expected_state: status.index_state,
+                    expected_reason: status.stale_reason.as_deref(),
+                    model: status.embed_model.as_deref(),
+                    embed_dim: status.embed_dim,
+                    bulk_alias: status.embed_alias.as_deref().or(bulk_alias),
+                    short_alias: status.short_embed_alias.as_deref().or(short_alias),
+                    final_stale_reason: None,
+                    kind: ReadyPublicationKind::Ordinary,
+                },
+            )?;
+            tx.commit()?;
         }
         return Ok(());
     }
@@ -371,11 +497,7 @@ pub(crate) fn init_model_meta_on_open(
     // No dimension = written before model metadata existed: rebuild once. A known
     // dimension with no model id is an unnamed index (see apply_upsert_model_meta_tx).
     if status.embed_dim.is_none() {
-        write_model_state(
-            conn,
-            IndexModelState::Stale,
-            Some("missing_embed_model_metadata"),
-        )?;
+        write_stale_preserving_provenance_reason(conn, "missing_embed_model_metadata")?;
         return Ok(());
     }
 
@@ -385,24 +507,15 @@ pub(crate) fn init_model_meta_on_open(
 
     if let (Some(prev), Some(cur)) = (status.embed_alias.as_deref(), bulk_alias) {
         if prev != cur {
-            write_model_state(conn, IndexModelState::Stale, Some("embed_alias_changed"))?;
+            write_stale_preserving_provenance_reason(conn, "embed_alias_changed")?;
             return Ok(());
         }
     }
     if let (Some(prev), Some(cur)) = (status.short_embed_alias.as_deref(), short_alias) {
         if prev != cur {
-            write_model_state(
-                conn,
-                IndexModelState::Stale,
-                Some("short_embed_alias_changed"),
-            )?;
+            write_stale_preserving_provenance_reason(conn, "short_embed_alias_changed")?;
             return Ok(());
         }
-    }
-    if status.index_state == IndexModelState::Ready
-        && read_meta_opt(conn, META_INDEX_STATE)?.is_none()
-    {
-        write_model_state(conn, IndexModelState::Ready, None)?;
     }
     Ok(())
 }
@@ -423,29 +536,58 @@ pub(crate) fn apply_upsert_model_meta_tx(
     let other_chunks_exist = total_chunks > chunks_len as u64 || read_generation(conn)? > 0;
 
     let Some(m) = model_meta else {
-        // The caller sent vectors without naming their model. Never record an alias
-        // as a model id: a later query would see the real id, call it a switch and
-        // rebuild, and the next unnamed upsert would flip it back (endless re-embed).
-        if other_chunks_exist || status.embed_model.is_some() {
-            // Same index, same dimension: the rows come from the same bulk alias.
-            if status.embed_dim != Some(first_vec_len)
-                && status.index_state != IndexModelState::Rebuilding
-            {
-                write_model_state(conn, IndexModelState::Stale, Some("mixed_model_upsert"))?;
-            }
+        if status.embed_model.is_some() && status.embed_dim == Some(first_vec_len) {
+            // Incremental batches produced by the already-recorded bulk alias
+            // do not carry model ids per page; matching the stored dimension is
+            // the legacy contract for that path.
             return Ok(());
         }
-        // First rows of a fresh index and no model: record what is known, leave the
-        // model unknown (searches compare the dimension only) and let the next bulk
-        // probe name it. Indexes without an embedder keep working.
-        write_meta_opt(conn, META_EMBED_MODEL, None)?;
-        write_meta_opt(conn, META_EMBED_DIM, Some(&first_vec_len.to_string()))?;
-        let alias = default_bulk_alias.unwrap_or(crate::embeddings::DEFAULT_EMBED_MODEL);
-        write_meta_opt(conn, META_EMBED_ALIAS, Some(alias))?;
-        if let Some(short) = default_short_alias {
-            write_meta_opt(conn, META_SHORT_EMBED_ALIAS, Some(short))?;
+        if status.embed_model.is_none() && status.embed_dim == Some(first_vec_len) {
+            // The no-metadata ingestion contract means "configured bulk alias";
+            // preserve that unnamed index until a probe gives the alias a name.
+            return Ok(());
         }
-        write_model_state(conn, IndexModelState::Ready, None)?;
+        if status.embed_model.is_none()
+            && status.embed_dim.is_none()
+            && status.stale_reason.is_none()
+            && !other_chunks_exist
+        {
+            let published = publish_ready_model_meta_tx(
+                conn,
+                &ReadyPublication {
+                    expected_generation: read_generation(conn)?,
+                    expected_state: status.index_state,
+                    expected_reason: None,
+                    model: None,
+                    embed_dim: Some(first_vec_len),
+                    bulk_alias: Some(
+                        default_bulk_alias.unwrap_or(crate::embeddings::DEFAULT_EMBED_MODEL),
+                    ),
+                    short_alias: default_short_alias,
+                    final_stale_reason: None,
+                    kind: ReadyPublicationKind::Ordinary,
+                },
+            )?;
+            return if published {
+                Ok(())
+            } else {
+                Err(MakakooError::internal(
+                    "fresh unnamed upsert lost the Ready publication compare-and-set",
+                ))
+            };
+        }
+        // Unnamed vectors have no proof that they belong to the stored pair. Keep
+        // the flag sticky even when dimensions happen to match; only a complete
+        // rebuild can establish provenance again.
+        mark_unproven_vectors_tx(conn)?;
+        if status.index_state != IndexModelState::Rebuilding {
+            let reason = if other_chunks_exist || status.embed_model.is_some() {
+                "mixed_model_upsert"
+            } else {
+                UNPROVEN_VECTOR_UPSERT_REASON
+            };
+            write_model_state(conn, IndexModelState::Stale, Some(reason))?;
+        }
         return Ok(());
     };
 
@@ -453,6 +595,7 @@ pub(crate) fn apply_upsert_model_meta_tx(
     // client claim cannot make those old vectors Ready; the bulk probe must
     // rebuild the complete corpus first.
     if status.embed_model.is_none() && status.embed_dim.is_none() && other_chunks_exist {
+        mark_unproven_vectors_tx(conn)?;
         if status.index_state != IndexModelState::Rebuilding {
             write_model_state(conn, IndexModelState::Stale, Some("mixed_model_upsert"))?;
         }
@@ -466,16 +609,14 @@ pub(crate) fn apply_upsert_model_meta_tx(
         status.embed_model.is_some() || status.embed_dim.is_some() || status.stale_reason.is_some();
     if metadata_exists {
         let matches_stored = status.embed_dim == Some(m.embed_dim)
-            && status
-                .embed_model
-                .as_deref()
-                .is_none_or(|stored| stored == m.model);
+            && status.embed_model.as_deref() == Some(m.model.as_str());
         if matches_stored {
             return Ok(());
         }
         let matches_observed = read_observed_bulk(conn)?
             .is_some_and(|observed| observed.model == m.model && observed.dim == m.embed_dim);
         if matches_observed {
+            mark_unproven_vectors_tx(conn)?;
             if status.index_state != IndexModelState::Rebuilding {
                 write_model_state(
                     conn,
@@ -485,18 +626,33 @@ pub(crate) fn apply_upsert_model_meta_tx(
             }
             return Ok(());
         }
-        return Err(MakakooError::invalid_input(
-            "upsert model metadata matches neither the folder index nor the observed bulk embedder",
+        return Err(MakakooError::RetryableFolderModelMismatch(
+            "upsert model metadata matches neither the folder index nor the observed bulk embedder"
+                .to_string(),
         ));
     }
 
-    write_ready_model_meta(
+    let published = publish_ready_model_meta_tx(
         conn,
-        &m.model,
-        m.embed_dim,
-        &m.bulk_alias,
-        m.short_alias.as_deref(),
-    )
+        &ReadyPublication {
+            expected_generation: read_generation(conn)?,
+            expected_state: status.index_state,
+            expected_reason: status.stale_reason.as_deref(),
+            model: Some(&m.model),
+            embed_dim: Some(m.embed_dim),
+            bulk_alias: Some(&m.bulk_alias),
+            short_alias: m.short_alias.as_deref(),
+            final_stale_reason: None,
+            kind: ReadyPublicationKind::Ordinary,
+        },
+    )?;
+    if published {
+        Ok(())
+    } else {
+        Err(MakakooError::internal(
+            "fresh upsert lost the Ready publication compare-and-set",
+        ))
+    }
 }
 
 impl FolderIndex {
@@ -519,7 +675,7 @@ impl FolderIndex {
 
     pub fn mark_stale(&self, reason: &str) -> Result<()> {
         let conn = self.lock_conn()?;
-        write_model_state(&conn, IndexModelState::Stale, Some(reason))
+        write_stale_preserving_provenance_reason(&conn, reason)
     }
 
     /// Probe-time stale mark: never overwrites `rebuilding`. Read and write happen
@@ -530,7 +686,7 @@ impl FolderIndex {
         if read_model_status(&conn)?.index_state == IndexModelState::Rebuilding {
             return Ok(false);
         }
-        write_model_state(&conn, IndexModelState::Stale, Some(reason))?;
+        write_stale_preserving_provenance_reason(&conn, reason)?;
         Ok(true)
     }
 
@@ -602,4 +758,12 @@ pub(crate) fn truncate_utf8(value: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     value[..end].to_string()
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
