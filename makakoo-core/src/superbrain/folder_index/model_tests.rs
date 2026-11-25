@@ -1208,6 +1208,10 @@ async fn varying_failure_text_persists_backoff_and_halt_while_ingest_continues()
     drop(mgr);
 
     let mgr = make_manager();
+    // The persisted observation was recorded on the previous manager's
+    // simulated clock. Advance the replacement manager past that confirmation
+    // window instead of relying on host scheduling latency.
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(20));
     mgr.probe_folder_model_for_test("persisted-failure", 32)
         .await
         .unwrap();
