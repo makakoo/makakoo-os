@@ -42,6 +42,12 @@ fn bench_200k_chunks_size_and_p95() {
     let tmp = TempDir::new().unwrap();
     let t_start = Instant::now();
     let idx = FolderIndex::open(tmp.path(), "bench-200k", DIM).unwrap();
+    let model_meta = UpsertModelMeta {
+        model: "bench-model".into(),
+        embed_dim: DIM,
+        bulk_alias: crate::embeddings::resolve_bulk_model(),
+        short_alias: Some(crate::embeddings::resolve_short_model()),
+    };
     idx.begin_indexing_run().unwrap();
 
     for f in 0..TOTAL_FILES {
@@ -59,14 +65,17 @@ fn bench_200k_chunks_size_and_p95() {
                 vector: seeded_vec(DIM, gid + 1),
             });
         }
-        idx.upsert_file(&UpsertFileRequest {
-            file_path: format!("docs/file_{f:04}.pdf"),
-            file_version: "v1".into(),
-            source_kind: SourceKind::File,
-            trust: TrustLevel::Trusted,
-            owner: "bench".into(),
-            chunks,
-        })
+        idx.upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: format!("docs/file_{f:04}.pdf"),
+                file_version: "v1".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "bench".into(),
+                chunks,
+            },
+            Some(&model_meta),
+        )
         .unwrap();
     }
 

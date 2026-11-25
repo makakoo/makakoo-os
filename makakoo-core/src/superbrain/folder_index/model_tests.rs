@@ -40,11 +40,13 @@ struct DynamicEmbedResponder {
     bulk_alias: String,
     short_model: Arc<std::sync::Mutex<String>>,
     bulk_model: Arc<std::sync::Mutex<String>>,
+    bulk_embedding_response_model: Arc<std::sync::Mutex<Option<String>>>,
     short_dim: Arc<AtomicUsize>,
     bulk_dim: Arc<AtomicUsize>,
     short_vec_slot: Arc<AtomicUsize>,
     bulk_vec_slot: Arc<AtomicUsize>,
     gate_bulk: Arc<AtomicBool>,
+    gate_after_bulk_calls: Arc<AtomicUsize>,
     gate_entered: Arc<AtomicBool>,
     gate_release: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
@@ -63,11 +65,13 @@ impl DynamicEmbedResponder {
             bulk_alias: bulk_alias.to_string(),
             short_model: Arc::new(std::sync::Mutex::new(model.to_string())),
             bulk_model: Arc::new(std::sync::Mutex::new(model.to_string())),
+            bulk_embedding_response_model: Arc::new(std::sync::Mutex::new(None)),
             short_dim: Arc::new(AtomicUsize::new(dim)),
             bulk_dim: Arc::new(AtomicUsize::new(dim)),
             short_vec_slot: Arc::new(AtomicUsize::new(0)),
             bulk_vec_slot: Arc::new(AtomicUsize::new(0)),
             gate_bulk: Arc::new(AtomicBool::new(false)),
+            gate_after_bulk_calls: Arc::new(AtomicUsize::new(0)),
             gate_entered: Arc::new(AtomicBool::new(false)),
             gate_release: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(AtomicUsize::new(0)),
@@ -99,6 +103,10 @@ impl DynamicEmbedResponder {
         *self.short_model.lock().unwrap() = model.to_string();
         self.short_dim.store(dim, Ordering::SeqCst);
         self.short_vec_slot.store(vec_slot, Ordering::SeqCst);
+    }
+
+    fn set_bulk_embedding_response_model(&self, model: Option<&str>) {
+        *self.bulk_embedding_response_model.lock().unwrap() = model.map(str::to_string);
     }
 }
 
@@ -135,7 +143,7 @@ impl Respond for DynamicEmbedResponder {
         }
 
         if !is_probe && (is_bulk || inputs > 1) {
-            self.bulk_calls.fetch_add(1, Ordering::SeqCst);
+            let bulk_call = self.bulk_calls.fetch_add(1, Ordering::SeqCst) + 1;
             if self.fail_bulk_embeddings.load(Ordering::SeqCst) {
                 let response = ResponseTemplate::new(503);
                 return if self.vary_failure_body.load(Ordering::SeqCst) {
@@ -147,7 +155,9 @@ impl Respond for DynamicEmbedResponder {
                     response
                 };
             }
-            if self.gate_bulk.load(Ordering::SeqCst) {
+            if self.gate_bulk.load(Ordering::SeqCst)
+                && bulk_call > self.gate_after_bulk_calls.load(Ordering::SeqCst)
+            {
                 // wiremock answers on its own current-thread runtime: block with std, not tokio.
                 self.gate_entered.store(true, Ordering::SeqCst);
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -159,7 +169,7 @@ impl Respond for DynamicEmbedResponder {
             }
         }
 
-        let (model_name, dim, slot) = if is_bulk {
+        let (mut model_name, dim, slot) = if is_bulk {
             (
                 self.bulk_model.lock().unwrap().clone(),
                 self.bulk_dim.load(Ordering::SeqCst),
@@ -172,6 +182,12 @@ impl Respond for DynamicEmbedResponder {
                 self.short_vec_slot.load(Ordering::SeqCst),
             )
         };
+        if is_bulk && !is_probe {
+            if let Some(override_model) = self.bulk_embedding_response_model.lock().unwrap().clone()
+            {
+                model_name = override_model;
+            }
+        }
 
         let mut vec = vec![0.0_f32; dim];
         vec[slot % dim] = 1.0;
@@ -935,25 +951,45 @@ async fn ingest_only_bulk_switch_probes_synchronously_and_rebuilds_once() {
     first_short_lived.wait_for_model_probe("ingest-only").await;
     drop(first_short_lived);
 
-    let second_short_lived = make_manager();
+    let second_short_lived = Arc::new(make_manager());
     second_short_lived.advance_model_recovery_time_for_test(std::time::Duration::from_secs(2));
-    second_short_lived
-        .upsert_folder_file(
-            "ingest-only",
-            32,
-            &one_chunk("b2.md", "Second B ingest.", basis(64, 2)),
-            Some(&UpsertModelMeta {
-                model: "model-b".into(),
-                embed_dim: 64,
-                bulk_alias: "test-embed".into(),
-                short_alias: Some("test-embed".into()),
-            }),
-        )
-        .await
-        .unwrap();
-    second_short_lived.wait_for_model_probe("ingest-only").await;
-    second_short_lived.wait_for_rebuild("ingest-only").await;
+    responder.gate_entered.store(false, Ordering::SeqCst);
+    responder.gate_release.store(false, Ordering::SeqCst);
+    responder.gate_bulk.store(true, Ordering::SeqCst);
+    let ingest_mgr = Arc::clone(&second_short_lived);
+    let ingest = tokio::spawn(async move {
+        ingest_mgr
+            .upsert_folder_file(
+                "ingest-only",
+                32,
+                &one_chunk("b2.md", "Second B ingest.", basis(64, 2)),
+                Some(&UpsertModelMeta {
+                    model: "model-b".into(),
+                    embed_dim: 64,
+                    bulk_alias: "test-embed".into(),
+                    short_alias: Some("test-embed".into()),
+                }),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owned repair never reached the bulk call");
+    assert!(
+        !ingest.is_finished(),
+        "short-lived ingest returned while its repair was still running"
+    );
+    responder.gate_bulk.store(false, Ordering::SeqCst);
+    responder.gate_release.store(true, Ordering::SeqCst);
+    ingest.await.unwrap().unwrap();
 
+    // No explicit wait: a short-lived caller may exit as soon as ingest
+    // returns. The ingest path itself must keep the owned repair alive through
+    // Ready publication.
     let idx = second_short_lived
         .get_or_open_without_probe_for_test("ingest-only", 32)
         .unwrap();
@@ -2985,6 +3021,204 @@ async fn rows_written_after_the_rebuild_tail_are_re_embedded_before_ready() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebuild_rejects_page_response_from_a_different_model() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "page-response-model",
+        32,
+        &one_chunk("a.md", "Original text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("page-response-model").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    responder.set_bulk_embedding_response_model(Some("model-c"));
+    assert_eq!(
+        mgr.request_folder_rebuild("page-response-model", 32)
+            .await
+            .unwrap(),
+        FolderRebuildRequestOutcome::Started
+    );
+    mgr.wait_for_rebuild("page-response-model").await;
+
+    let idx = mgr
+        .get_or_open_without_probe_for_test("page-response-model", 32)
+        .unwrap();
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(status.embed_model.as_deref(), Some("model-a"));
+    assert!(
+        status
+            .stale_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("model changed mid-rebuild")),
+        "wrong-model page response must fail the rebuild: {status:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebuild_commit_is_fenced_when_claim_owner_changes() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "commit-fence",
+        32,
+        &one_chunk("a.md", "Original text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("commit-fence").await;
+
+    let idx = mgr
+        .get_or_open_without_probe_for_test("commit-fence", 32)
+        .unwrap();
+    let fired = Arc::new(AtomicBool::new(false));
+    let fired_hook = Arc::clone(&fired);
+    *idx.before_rebuild_commit.lock().unwrap() = Some(Box::new(move |index| {
+        if !fired_hook.swap(true, Ordering::SeqCst) {
+            let conn = index.lock_conn().unwrap();
+            let raw: String = conn
+                .query_row(
+                    "SELECT value FROM folder_meta WHERE key = 'folder_rebuild_claim'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let mut claim: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            claim["owner"] = json!("replacement-owner");
+            claim["lease_expires_unix_ms"] = json!(u64::MAX);
+            conn.execute(
+                "UPDATE folder_meta SET value = ?1 WHERE key = 'folder_rebuild_claim'",
+                [serde_json::to_string(&claim).unwrap()],
+            )
+            .unwrap();
+        }
+    }));
+
+    responder.set_both_model("model-b", 64, 2);
+    assert_eq!(
+        mgr.request_folder_rebuild("commit-fence", 32)
+            .await
+            .unwrap(),
+        FolderRebuildRequestOutcome::Started
+    );
+    mgr.wait_for_rebuild("commit-fence").await;
+    assert!(fired.load(Ordering::SeqCst), "commit hook never ran");
+
+    let status = idx.model_status().unwrap();
+    assert_ne!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("model-a"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebuild_commit_requires_matching_claim_token_for_coverage_and_swap() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "token-coverage",
+        32,
+        &one_chunk("a.md", "Original text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("token-coverage").await;
+
+    let idx = mgr
+        .get_or_open_without_probe_for_test("token-coverage", 32)
+        .unwrap();
+    let fired = Arc::new(AtomicBool::new(false));
+    let fired_hook = Arc::clone(&fired);
+    let old_q =
+        crate::superbrain::folder_index::quantize::truncate_and_quantize_i8(&basis(64, 1), 32)
+            .unwrap();
+    let old_bytes = crate::superbrain::folder_index::quantize::i8_slice_to_bytes(&old_q).to_vec();
+    *idx.before_rebuild_commit.lock().unwrap() = Some(Box::new(move |index| {
+        if !fired_hook.swap(true, Ordering::SeqCst) {
+            index
+                .lock_conn()
+                .unwrap()
+                .execute(
+                    "UPDATE rebuild_vectors
+                        SET claim_token = 'foreign-claim', vector_i8 = ?1",
+                    [&old_bytes],
+                )
+                .unwrap();
+        }
+    }));
+
+    responder.set_both_model("model-b", 64, 2);
+    assert_eq!(
+        mgr.request_folder_rebuild("token-coverage", 32)
+            .await
+            .unwrap(),
+        FolderRebuildRequestOutcome::Started
+    );
+    mgr.wait_for_rebuild("token-coverage").await;
+    assert!(fired.load(Ordering::SeqCst), "commit hook never ran");
+
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Ready);
+    assert_eq!(status.embed_model.as_deref(), Some("model-b"));
+    let new_q =
+        crate::superbrain::folder_index::quantize::truncate_and_quantize_i8(&basis(64, 2), 32)
+            .unwrap();
+    let new_bytes = crate::superbrain::folder_index::quantize::i8_slice_to_bytes(&new_q);
+    let stored: Vec<u8> = idx
+        .lock_conn()
+        .unwrap()
+        .query_row("SELECT vector_i8 FROM chunks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(stored, new_bytes, "foreign-token vector was committed");
+}
+
 /// S078 C11 (review r1 HIGH): the rebuild pages through the folder, parks each
 /// page's vectors on disk and swaps them in at commit. A folder larger than one
 /// page must come out fully re-embedded, with nothing left parked.
@@ -3175,43 +3409,356 @@ async fn an_untracked_text_change_is_caught_before_the_commit() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_free_batch_during_pending_is_sticky_and_rebuilt_before_ready() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
+    let mgr =
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb));
+    mgr.upsert_folder_file(
+        "none-batch",
+        32,
+        &one_chunk("a.md", "Stored A.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("none-batch").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.probe_folder_model_for_test("none-batch", 32)
+        .await
+        .unwrap();
+    let idx = mgr
+        .get_or_open_without_probe_for_test("none-batch", 32)
+        .unwrap();
+    idx.begin_file_indexing("b.md", "v1", 1).unwrap();
+    idx.put_file_chunks_batch(
+        "b.md",
+        "v1",
+        SourceKind::File,
+        TrustLevel::Trusted,
+        "alice",
+        &one_chunk("b.md", "Foreign B.", basis(64, 2)).chunks,
+        None,
+        1,
+        1,
+    )
+    .unwrap();
+    idx.finish_file_indexing("b.md", "v1").unwrap();
+    let contaminated = idx.model_status().unwrap();
+    assert_eq!(contaminated.index_state, IndexModelState::Stale);
+    assert!(contaminated.unproven_vectors_since_gen.is_some());
+
+    responder.set_both_model("model-a", 64, 1);
+    mgr.probe_folder_model_for_test("none-batch", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("none-batch").await;
+    assert_ready_vectors_match_stored_pair(&idx);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn db_claim_excludes_second_manager_and_stale_owner_resumes_parked_rows() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr1 = Arc::new(
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&short), Arc::clone(&bulk)),
+    );
+    let mgr2 = Arc::new(
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&short), Arc::clone(&bulk)),
+    );
+
+    let chunks = (0..257)
+        .map(|i| ChunkInput {
+            anchor: Anchor {
+                kind: AnchorKind::Heading,
+                value: format!("H{i}"),
+            },
+            char_start: 0,
+            char_end: 6,
+            text: format!("Doc {i}."),
+            vector: basis(64, 1),
+        })
+        .collect();
+    mgr1.upsert_folder_file(
+        "claimed",
+        32,
+        &UpsertFileRequest {
+            file_path: "all.md".into(),
+            file_version: "v1".into(),
+            source_kind: SourceKind::File,
+            trust: TrustLevel::Trusted,
+            owner: "alice".into(),
+            chunks,
+        },
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr1.wait_for_model_probe("claimed").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    responder.gate_after_bulk_calls.store(16, Ordering::SeqCst);
+    responder.gate_bulk.store(true, Ordering::SeqCst);
+    let (first, second) = tokio::join!(
+        mgr1.request_folder_rebuild("claimed", 32),
+        mgr2.request_folder_rebuild("claimed", 32)
+    );
+    let outcomes = [first.unwrap(), second.unwrap()];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == FolderRebuildRequestOutcome::Started)
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == FolderRebuildRequestOutcome::AlreadyRunning)
+            .count(),
+        1,
+        "second process started a concurrent rebuild"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("first owner never parked its first page");
+
+    let idx1 = mgr1
+        .get_or_open_without_probe_for_test("claimed", 32)
+        .unwrap();
+    let claim1 = {
+        let conn = idx1.lock_conn().unwrap();
+        assert_eq!(super::rebuild_pages::parked_count(&conn).unwrap(), 256);
+        model_meta::read_folder_rebuild_claim(&conn)
+            .unwrap()
+            .expect("missing durable claim")
+    };
+    {
+        let mut conn = idx1.lock_conn().unwrap();
+        assert!(model_meta::expire_folder_rebuild_claim(
+            &mut conn,
+            &claim1,
+            "simulated_process_crash"
+        )
+        .unwrap());
+    }
+    // Let the dead owner return from HTTP. Its fenced park must fail, leaving
+    // the first page durable for the replacement.
+    responder.gate_release.store(true, Ordering::SeqCst);
+    mgr1.wait_for_rebuild("claimed").await;
+    mgr2.wait_for_rebuild("claimed").await;
+    responder.gate_entered.store(false, Ordering::SeqCst);
+    responder.gate_release.store(false, Ordering::SeqCst);
+    assert_eq!(
+        mgr2.request_folder_rebuild("claimed", 32).await.unwrap(),
+        FolderRebuildRequestOutcome::Started,
+        "stale lease was not reclaimable"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("replacement did not resume at the unparked tail");
+    let idx2 = mgr2
+        .get_or_open_without_probe_for_test("claimed", 32)
+        .unwrap();
+    let claim2 = model_meta::read_folder_rebuild_claim(&idx2.lock_conn().unwrap())
+        .unwrap()
+        .expect("replacement owner did not claim");
+    assert_eq!(claim2.token, claim1.token, "replacement discarded progress");
+    assert_ne!(claim2.owner, claim1.owner, "replacement was not fenced");
+
+    responder.gate_release.store(true, Ordering::SeqCst);
+    mgr2.wait_for_rebuild("claimed").await;
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 18);
+    assert_ready_vectors_match_stored_pair(&idx2);
+    assert_eq!(
+        super::rebuild_pages::parked_count(&idx2.lock_conn().unwrap()).unwrap(),
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unnamed_naming_requires_ready_and_retries_benign_generation_cas_loss() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("alias-a", "alias-a", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let cfg = FolderIndexConfig::with_dim(32).with_embed_aliases(Some("alias-a".into()), None);
+    {
+        let idx = FolderIndex::open_with_config(tmp.path(), "unnamed-cas", cfg).unwrap();
+        idx.upsert_file_with_model(
+            &one_chunk("a.md", "Stored A.", basis(64, 1)),
+            Some(&UpsertModelMeta {
+                model: "model-a".into(),
+                embed_dim: 64,
+                bulk_alias: "alias-a".into(),
+                short_alias: Some("alias-a".into()),
+            }),
+        )
+        .unwrap();
+        idx.lock_conn()
+            .unwrap()
+            .execute("DELETE FROM folder_meta WHERE key = 'embed_model'", [])
+            .unwrap();
+    }
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("alias-a"));
+    let mgr =
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb), Arc::clone(&emb));
+    let idx = mgr
+        .get_or_open_without_probe_for_test("unnamed-cas", 32)
+        .unwrap();
+    let bumped = Arc::new(AtomicBool::new(false));
+    let bumped_hook = Arc::clone(&bumped);
+    *idx.before_ready_publish.lock().unwrap() = Some(Box::new(move |index| {
+        if !bumped_hook.swap(true, Ordering::SeqCst) {
+            let conn = index.lock_conn().unwrap();
+            super::sqlite_repo::bump_generation_tx(&conn).unwrap();
+        }
+    }));
+    let calls_before_naming = responder.calls.load(Ordering::SeqCst);
+    mgr.probe_folder_model_for_test("unnamed-cas", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("unnamed-cas").await;
+    assert!(bumped.load(Ordering::SeqCst));
+    assert_eq!(
+        idx.model_status().unwrap().index_state,
+        IndexModelState::Ready
+    );
+    assert_eq!(
+        idx.model_status().unwrap().embed_model.as_deref(),
+        Some("model-a")
+    );
+    assert_eq!(
+        responder.calls.load(Ordering::SeqCst) - calls_before_naming,
+        1,
+        "benign naming CAS loss fell back to a re-embed"
+    );
+
+    // Recreate the unnamed fixture, then change the alias. Stale(alias-change)
+    // must never be promoted in place; only RebuildCommit may name it.
+    {
+        let conn = idx.lock_conn().unwrap();
+        conn.execute("DELETE FROM folder_meta WHERE key = 'embed_model'", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE folder_meta SET value = 'alias-a' WHERE key = 'embed_alias'",
+            [],
+        )
+        .unwrap();
+    }
+    drop(idx);
+    drop(mgr);
+    responder.set_both_model("model-b", 64, 2);
+    let emb_b = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("alias-b"));
+    let mgr_b =
+        FolderIndexManager::new(tmp.path()).with_embedders(Arc::clone(&emb_b), Arc::clone(&emb_b));
+    let reopened = mgr_b
+        .get_or_open_without_probe_for_test("unnamed-cas", 32)
+        .unwrap();
+    assert_eq!(
+        reopened.model_status().unwrap().index_state,
+        IndexModelState::Stale
+    );
+    let calls_before_alias_probe = responder.calls.load(Ordering::SeqCst);
+    mgr_b
+        .probe_folder_model_for_test("unnamed-cas", 32)
+        .await
+        .unwrap();
+    mgr_b.wait_for_rebuild("unnamed-cas").await;
+    assert_eq!(
+        reopened.model_status().unwrap().index_state,
+        IndexModelState::Ready
+    );
+    assert_eq!(
+        reopened.model_status().unwrap().embed_model.as_deref(),
+        Some("model-b")
+    );
+    assert_eq!(
+        responder.calls.load(Ordering::SeqCst) - calls_before_alias_probe,
+        2,
+        "stale unnamed alias change was named without a rebuild"
+    );
+}
+
 fn assert_ready_vectors_match_stored_pair(idx: &FolderIndex) {
-    let status = idx.model_status().unwrap();
+    let mut conn = idx.lock_conn().unwrap();
+    let tx = conn.transaction().unwrap();
+    let status = model_meta::read_model_status(&tx).unwrap();
     if status.index_state != IndexModelState::Ready {
+        tx.commit().unwrap();
         return;
     }
-    assert_eq!(
-        status.unproven_vectors_since_gen, None,
-        "Ready retained the unproven-vector flag"
-    );
     let slot = match status.embed_model.as_deref() {
         Some("model-a") => 1,
         Some("model-b") => 2,
         Some("model-c") => 3,
         other => panic!("unexpected Ready model in interleaving test: {other:?}"),
     };
-    assert_eq!(status.embed_dim, Some(64));
     let expected_quantized =
         crate::superbrain::folder_index::quantize::truncate_and_quantize_i8(&basis(64, slot), 32)
             .unwrap();
     let expected =
         crate::superbrain::folder_index::quantize::i8_slice_to_bytes(&expected_quantized);
-    let foreign: i64 = idx
-        .lock_conn()
-        .unwrap()
+    let foreign: i64 = tx
         .query_row(
             "SELECT COUNT(*) FROM chunks WHERE vector_i8 IS NOT ?1",
             [&expected],
             |row| row.get(0),
         )
         .unwrap();
+    tx.commit().unwrap();
+    drop(conn);
+    assert_eq!(
+        status.unproven_vectors_since_gen, None,
+        "Ready retained the unproven-vector flag"
+    );
+    assert_eq!(status.embed_dim, Some(64));
     assert_eq!(
         foreign, 0,
         "Ready vectors did not all match the stored model pair"
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn random_probe_upsert_restart_and_rebuild_interleavings_preserve_ready_invariant() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
@@ -3224,103 +3771,202 @@ async fn random_probe_upsert_restart_and_rebuild_interleavings_preserve_ready_in
     let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
     let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
     let make_manager = || {
-        FolderIndexManager::new(tmp.path())
-            .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
-            .with_model_recovery_timings_for_test(
-                std::time::Duration::from_secs(1),
-                std::time::Duration::from_millis(20),
-                std::time::Duration::from_secs(2),
-                std::time::Duration::from_secs(10),
-                3,
-            )
+        Arc::new(
+            FolderIndexManager::new(tmp.path())
+                .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
+                .with_model_recovery_timings_for_test(
+                    std::time::Duration::from_secs(1),
+                    std::time::Duration::from_millis(20),
+                    std::time::Duration::from_secs(2),
+                    std::time::Duration::from_secs(10),
+                    3,
+                ),
+        )
     };
     let models = [("model-a", 1_usize), ("model-b", 2), ("model-c", 3)];
-    let mut manager = make_manager();
-    manager
-        .upsert_folder_file(
-            "interleavings",
-            32,
-            &one_chunk("seed.md", "Seed A text.", basis(64, 1)),
-            Some(&UpsertModelMeta {
-                model: "model-a".into(),
-                embed_dim: 64,
-                bulk_alias: "bulk-alias".into(),
-                short_alias: Some("short-alias".into()),
-            }),
-        )
-        .await
-        .unwrap();
-    manager.wait_for_model_probe("interleavings").await;
 
-    let mut rng = StdRng::seed_from_u64(0x5eed_f1a5);
-    for step in 0..64 {
-        match rng.gen_range(0..5) {
-            0 => {
-                let (bulk_model, bulk_slot) = models[rng.gen_range(0..models.len())];
-                let (short_model, short_slot) = models[rng.gen_range(0..models.len())];
-                responder.set_bulk_model(bulk_model, 64, bulk_slot);
-                responder.set_short_model(short_model, 64, short_slot);
-                manager
-                    .probe_folder_model_for_test("interleavings", 32)
-                    .await
-                    .unwrap();
-            }
-            1 => {
-                let (model, slot) = models[rng.gen_range(0..models.len())];
-                let result = manager
-                    .upsert_folder_file(
-                        "interleavings",
-                        32,
-                        &one_chunk(
-                            &format!("step-{step}.md"),
-                            &format!("Random step {step}."),
-                            basis(64, slot),
-                        ),
-                        Some(&UpsertModelMeta {
-                            model: model.into(),
-                            embed_dim: 64,
-                            bulk_alias: "bulk-alias".into(),
-                            short_alias: Some("short-alias".into()),
-                        }),
-                    )
-                    .await;
-                assert!(
-                    result.is_ok()
-                        || matches!(
-                            result,
-                            Err(crate::error::MakakooError::RetryableFolderModelMismatch(_))
-                        )
-                );
-            }
-            2 => {
-                manager.flush_all().unwrap();
-                drop(manager);
-                manager = make_manager();
-            }
-            3 => {
-                let outcome = manager
-                    .request_folder_rebuild("interleavings", 32)
-                    .await
-                    .unwrap();
-                assert!(matches!(
-                    outcome,
-                    FolderRebuildRequestOutcome::Started
-                        | FolderRebuildRequestOutcome::AlreadyRunning
-                ));
-            }
-            _ => {
-                manager.advance_model_recovery_time_for_test(std::time::Duration::from_secs(2));
-                manager
-                    .probe_folder_model_for_test("interleavings", 32)
-                    .await
-                    .unwrap();
-            }
-        }
-        manager.wait_for_model_probe("interleavings").await;
-        manager.wait_for_rebuild("interleavings").await;
-        let idx = manager
-            .get_or_open_without_probe_for_test("interleavings", 32)
+    for seed in [0x5eed_f1a5_u64, 0xc0ffee, 0xdecafbad] {
+        responder.set_both_model("model-a", 64, 1);
+        responder.gate_bulk.store(false, Ordering::SeqCst);
+        responder.gate_release.store(false, Ordering::SeqCst);
+        let folder = format!("interleavings-{seed:x}");
+        let mut manager_a = make_manager();
+        let mut manager_b = make_manager();
+        manager_a
+            .upsert_folder_file(
+                &folder,
+                32,
+                &one_chunk("seed.md", "Seed A text.", basis(64, 1)),
+                Some(&UpsertModelMeta {
+                    model: "model-a".into(),
+                    embed_dim: 64,
+                    bulk_alias: "bulk-alias".into(),
+                    short_alias: Some("short-alias".into()),
+                }),
+            )
+            .await
             .unwrap();
-        assert_ready_vectors_match_stored_pair(&idx);
+        manager_a.wait_for_model_probe(&folder).await;
+
+        let reader_idx = manager_b
+            .get_or_open_without_probe_for_test(&folder, 32)
+            .unwrap();
+        let reader_stop = Arc::new(AtomicBool::new(false));
+        let stop_task = Arc::clone(&reader_stop);
+        let reader = tokio::spawn(async move {
+            while !stop_task.load(Ordering::SeqCst) {
+                assert_ready_vectors_match_stored_pair(&reader_idx);
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        for step in 0..48 {
+            match rng.gen_range(0..8) {
+                0 => {
+                    let (bulk_model, bulk_slot) = models[rng.gen_range(0..models.len())];
+                    let (short_model, short_slot) = models[rng.gen_range(0..models.len())];
+                    responder.set_bulk_model(bulk_model, 64, bulk_slot);
+                    responder.set_short_model(short_model, 64, short_slot);
+                    let (left, right) = tokio::join!(
+                        manager_a.probe_folder_model_for_test(&folder, 32),
+                        manager_b.probe_folder_model_for_test(&folder, 32)
+                    );
+                    left.unwrap();
+                    right.unwrap();
+                }
+                1 => {
+                    let (model, slot) = models[rng.gen_range(0..models.len())];
+                    let manager = if rng.gen_bool(0.5) {
+                        Arc::clone(&manager_a)
+                    } else {
+                        Arc::clone(&manager_b)
+                    };
+                    let result = manager
+                        .upsert_folder_file(
+                            &folder,
+                            32,
+                            &one_chunk(
+                                &format!("step-{step}.md"),
+                                &format!("Random step {step}."),
+                                basis(64, slot),
+                            ),
+                            Some(&UpsertModelMeta {
+                                model: model.into(),
+                                embed_dim: 64,
+                                bulk_alias: "bulk-alias".into(),
+                                short_alias: Some("short-alias".into()),
+                            }),
+                        )
+                        .await;
+                    assert!(
+                        result.is_ok()
+                            || matches!(
+                                result,
+                                Err(crate::error::MakakooError::RetryableFolderModelMismatch(_))
+                            )
+                    );
+                }
+                2 => {
+                    if rng.gen_bool(0.5) {
+                        manager_a.flush_all().unwrap();
+                        manager_a = make_manager();
+                    } else {
+                        manager_b.flush_all().unwrap();
+                        manager_b = make_manager();
+                    }
+                }
+                3 => {
+                    let (left, right) = tokio::join!(
+                        manager_a.request_folder_rebuild(&folder, 32),
+                        manager_b.request_folder_rebuild(&folder, 32)
+                    );
+                    for outcome in [left.unwrap(), right.unwrap()] {
+                        assert!(matches!(
+                            outcome,
+                            FolderRebuildRequestOutcome::Started
+                                | FolderRebuildRequestOutcome::AlreadyRunning
+                        ));
+                    }
+                }
+                4 => {
+                    manager_a
+                        .advance_model_recovery_time_for_test(std::time::Duration::from_secs(2));
+                    manager_b
+                        .advance_model_recovery_time_for_test(std::time::Duration::from_secs(2));
+                    let (left, right) = tokio::join!(
+                        manager_a.probe_folder_model_for_test(&folder, 32),
+                        manager_b.probe_folder_model_for_test(&folder, 32)
+                    );
+                    left.unwrap();
+                    right.unwrap();
+                }
+                5 => {
+                    let idx = manager_a
+                        .get_or_open_without_probe_for_test(&folder, 32)
+                        .unwrap();
+                    let _ = idx.remove_file(&format!("step-{}.md", rng.gen_range(0..=step)));
+                }
+                6 => {
+                    let idx = manager_a
+                        .get_or_open_without_probe_for_test(&folder, 32)
+                        .unwrap();
+                    let file = format!("none-{step}.md");
+                    idx.begin_file_indexing(&file, "v1", 1).unwrap();
+                    idx.put_file_chunks_batch(
+                        &file,
+                        "v1",
+                        SourceKind::File,
+                        TrustLevel::Trusted,
+                        "alice",
+                        &one_chunk(&file, "Unnamed batch.", basis(64, 3)).chunks,
+                        None,
+                        1,
+                        1,
+                    )
+                    .unwrap();
+                    idx.finish_file_indexing(&file, "v1").unwrap();
+                }
+                _ => {
+                    // Crash between claim and first page. The DB must remain
+                    // non-Ready, and a replacement process must be able to reclaim.
+                    let idx = manager_a
+                        .get_or_open_without_probe_for_test(&folder, 32)
+                        .unwrap();
+                    let model = responder.bulk_model.lock().unwrap().clone();
+                    let dim = responder.bulk_dim.load(Ordering::SeqCst);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
+                    let claim = {
+                        let mut conn = idx.lock_conn().unwrap();
+                        model_meta::try_claim_folder_rebuild(&mut conn, &model, dim, now).unwrap()
+                    };
+                    if let Some(claim) = claim {
+                        let mut conn = idx.lock_conn().unwrap();
+                        model_meta::expire_folder_rebuild_claim(
+                            &mut conn,
+                            &claim,
+                            "simulated_process_crash",
+                        )
+                        .unwrap();
+                    }
+                    manager_a = make_manager();
+                }
+            }
+
+            manager_a.wait_for_model_probe(&folder).await;
+            manager_b.wait_for_model_probe(&folder).await;
+            manager_a.wait_for_rebuild(&folder).await;
+            manager_b.wait_for_rebuild(&folder).await;
+            let idx = manager_a
+                .get_or_open_without_probe_for_test(&folder, 32)
+                .unwrap();
+            assert_ready_vectors_match_stored_pair(&idx);
+        }
+
+        reader_stop.store(true, Ordering::SeqCst);
+        reader.await.unwrap();
     }
 }

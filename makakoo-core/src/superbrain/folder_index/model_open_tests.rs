@@ -241,6 +241,12 @@ fn incremental_batch_and_usearch_recovery_preserve_model_metadata_in_sidecar() {
                 text: "Incremental batch.".into(),
                 vector: basis(16, 0),
             }],
+            Some(&UpsertModelMeta {
+                model: "qwen3-real".into(),
+                embed_dim: 16,
+                bulk_alias: "test-embed".into(),
+                short_alias: None,
+            }),
             1,
             1,
         )
@@ -297,23 +303,85 @@ fn unnamed_rows_on_a_fresh_index_never_claim_the_alias_as_model() {
             TrustLevel::Trusted,
             "alice",
             &[unnamed_chunk("Unnamed rows.", slot)],
+            None,
             1,
             1,
         )
         .unwrap();
         idx.finish_file_indexing(file, "v1").unwrap();
         let st = idx.model_status().unwrap();
-        // No-metadata batches are produced by the configured bulk alias. They stay
-        // unnamed until its probe resolves the model id, while retaining dimension.
+        // A metadata-free vector write has no provable model identity. The
+        // single write door keeps it unnamed, sticky and non-Ready until a
+        // complete rebuild establishes provenance.
         assert_eq!(st.embed_model, None, "{file}");
-        assert_eq!(st.embed_dim, Some(16));
-        assert_eq!(st.index_state, IndexModelState::Ready, "{file}");
-        assert_eq!(st.unproven_vectors_since_gen, None, "{file}");
+        assert_eq!(st.embed_dim, None);
+        assert_eq!(st.index_state, IndexModelState::Stale, "{file}");
+        assert!(st.unproven_vectors_since_gen.is_some(), "{file}");
         assert!(
-            !idx.search(&basis(16, slot), 5, &SearchFilter::default())
+            idx.search(&basis(16, slot), 5, &SearchFilter::default())
                 .unwrap()
                 .is_empty(),
-            "{file}: vector search must keep working"
+            "{file}: unproven vectors must not enter the searchable sidecar"
         );
     }
+}
+
+#[test]
+fn pre_provenance_schema_database_with_chunks_migrates_fail_closed() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = FolderIndexConfig::with_dim(16).with_embed_aliases(Some("alias-a".into()), None);
+    {
+        let idx = FolderIndex::open_with_config(tmp.path(), "pre-flag", cfg.clone()).unwrap();
+        idx.upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: "a.md".into(),
+                file_version: "v1".into(),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "alice".into(),
+                chunks: vec![unnamed_chunk("Potentially mixed row.", 1)],
+            },
+            Some(&UpsertModelMeta {
+                model: "model-a".into(),
+                embed_dim: 16,
+                bulk_alias: "alias-a".into(),
+                short_alias: None,
+            }),
+        )
+        .unwrap();
+        let conn = idx.lock_conn().unwrap();
+        // Simulate main before the sticky flag: a mixed-model reason was later
+        // overwritten by what the new code classifies as metadata-only.
+        conn.execute(
+            "DELETE FROM folder_meta WHERE key = 'provenance_schema'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO folder_meta (key, value)
+             VALUES ('index_state', 'stale'),
+                    ('stale_reason', 'model_mismatch: legacy query claim')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let reopened = FolderIndex::open_with_config(tmp.path(), "pre-flag", cfg).unwrap();
+    let status = reopened.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(
+        status.stale_reason.as_deref(),
+        Some("provenance_migration_required")
+    );
+    assert!(status.unproven_vectors_since_gen.is_some());
+    let schema: String = reopened
+        .lock_conn()
+        .unwrap()
+        .query_row(
+            "SELECT value FROM folder_meta WHERE key = 'provenance_schema'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(schema, "1");
 }

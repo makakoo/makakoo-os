@@ -38,8 +38,6 @@ pub struct FolderIndex {
     pub(crate) db_path: PathBuf,
     pub(crate) folder_id: String,
     pub(crate) dim: usize,
-    pub(crate) default_bulk_alias: Option<String>,
-    pub(crate) default_short_alias: Option<String>,
     pub(crate) conn: Mutex<Connection>,
     pub(crate) query_mismatch_reason: Mutex<Option<String>>,
     pub(crate) vectors: VectorStore,
@@ -103,8 +101,6 @@ impl FolderIndex {
             db_path,
             folder_id: folder_id.to_string(),
             dim: cfg.dim,
-            default_bulk_alias: cfg.embed_alias,
-            default_short_alias: cfg.short_embed_alias,
             conn: Mutex::new(conn),
             query_mismatch_reason: Mutex::new(None),
             vectors,
@@ -184,7 +180,6 @@ impl FolderIndex {
             ));
         }
         let quantized = quantize_chunks(&req.chunks, self.dim)?;
-        let first_vec_len = req.chunks.first().map(|c| c.vector.len()).unwrap_or(0);
 
         let (replaced, old_ids, additions, new_gen) = {
             let mut conn = self.lock_conn()?;
@@ -231,7 +226,7 @@ impl FolderIndex {
                 None,
                 None,
             )?;
-            self.record_upsert_model_meta_tx(&tx, req.chunks.len(), first_vec_len, model_meta)?;
+            self.authorize_vector_write_tx(&tx, req.chunks.len(), model_meta)?;
             let new_gen = bump_generation_tx(&tx)?;
             tx.commit()?;
             (had_old, old_ids, additions, new_gen)
@@ -289,12 +284,12 @@ impl FolderIndex {
         trust: TrustLevel,
         owner: &str,
         chunks: &[ChunkInput],
+        model_meta: Option<&UpsertModelMeta>,
         done: u64,
         total: u64,
     ) -> Result<usize> {
         validate_file_path(file_path)?;
         let quantized = quantize_chunks(chunks, self.dim)?;
-        let first_vec_len = chunks.first().map(|c| c.vector.len()).unwrap_or(0);
 
         let (additions, new_gen) = {
             let mut conn = self.lock_conn()?;
@@ -318,7 +313,7 @@ impl FolderIndex {
                 Some(total),
                 None,
             )?;
-            self.record_upsert_model_meta_tx(&tx, chunks.len(), first_vec_len, None)?;
+            self.authorize_vector_write_tx(&tx, chunks.len(), model_meta)?;
             let new_gen = bump_generation_tx(&tx)?;
             tx.commit()?;
             (additions, new_gen)

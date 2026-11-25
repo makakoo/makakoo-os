@@ -13,15 +13,16 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::model_meta::{
-    clear_persisted_rebuild_retry, is_metadata_only_stale_reason, publish_ready_model_meta_tx,
+    clear_folder_rebuild_claim_tx, clear_persisted_rebuild_retry, expire_folder_rebuild_claim,
+    folder_rebuild_claim_owned, is_metadata_only_stale_reason, publish_ready_model_meta_tx,
     read_model_status, read_persisted_automatic_rebuild_success, read_persisted_rebuild_retry,
-    record_observed_bulk, truncate_utf8, write_model_state,
-    write_persisted_automatic_rebuild_success, write_persisted_rebuild_retry, FolderSearchRequest,
-    FolderSearchResponse, IndexModelState, PersistedAutomaticRebuildSuccess, PersistedRebuildRetry,
-    ReadyPublication, ReadyPublicationKind, SearchMode, AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS,
-    SHORT_BULK_MISMATCH_REASON,
+    record_observed_bulk, touch_folder_rebuild_claim, truncate_utf8, try_claim_folder_rebuild,
+    write_persisted_automatic_rebuild_success, write_persisted_rebuild_retry, FolderRebuildClaim,
+    FolderSearchRequest, FolderSearchResponse, IndexModelState, PersistedAutomaticRebuildSuccess,
+    PersistedRebuildRetry, ReadyPublication, ReadyPublicationKind, SearchMode,
+    AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS, FOLDER_REBUILD_LEASE_MS, SHORT_BULK_MISMATCH_REASON,
 };
-use super::rebuild_pages::{all_chunks_parked, reembed_pages, reset_parked, swap_in_parked};
+use super::rebuild_pages::{all_chunks_parked, prepare_parked, reembed_pages, swap_in_parked};
 use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
 use super::FolderIndex;
 
@@ -213,7 +214,7 @@ impl FolderRebuildRegistry {
         idx: &FolderIndex,
         key: &RebuildKey,
         automatic: bool,
-    ) -> Option<Arc<Notify>> {
+    ) -> Result<Option<FolderRebuildClaim>> {
         let folder_id = idx.folder_id();
         let now = self.now();
         if automatic {
@@ -230,7 +231,7 @@ impl FolderRebuildRegistry {
                             .last_success_unix_ms
                             .saturating_add(AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS)
             }) {
-                return None;
+                return Ok(None);
             }
         }
         let persisted = idx
@@ -267,16 +268,23 @@ impl FolderRebuildRegistry {
                 .get(folder_id)
                 .is_some_and(|state| state.halted || now < state.next_allowed)
             {
-                return None;
+                return Ok(None);
             }
         }
         let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
         if guard.contains_key(folder_id) {
-            return None;
+            return Ok(None);
         }
+        let claim = {
+            let mut conn = idx.lock_conn()?;
+            try_claim_folder_rebuild(&mut conn, &key.model, key.dim, self.now_unix_ms())?
+        };
+        let Some(claim) = claim else {
+            return Ok(None);
+        };
         let notify = Arc::new(Notify::new());
         guard.insert(folder_id.to_string(), Arc::clone(&notify));
-        Some(notify)
+        Ok(Some(claim))
     }
 
     #[cfg(test)]
@@ -528,6 +536,71 @@ impl Drop for RebuildActivityGuard {
     }
 }
 
+/// Owner-scoped cleanup. Normal success clears the claim in the commit and a
+/// handled failure explicitly expires it. Panic/cancellation still expires the
+/// lease synchronously, preserving parked rows for the next process.
+struct FolderClaimGuard {
+    idx: Arc<FolderIndex>,
+    claim: FolderRebuildClaim,
+    armed: bool,
+}
+
+impl FolderClaimGuard {
+    fn new(idx: Arc<FolderIndex>, claim: FolderRebuildClaim) -> Self {
+        Self {
+            idx,
+            claim,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for FolderClaimGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Ok(mut conn) = self.idx.lock_conn() {
+                let _ = expire_folder_rebuild_claim(&mut conn, &self.claim, "interrupted_rebuild");
+            }
+        }
+    }
+}
+
+/// Refreshes the DB lease even while one embedding HTTP call is slow.
+struct FolderClaimHeartbeat {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl FolderClaimHeartbeat {
+    fn start(idx: Arc<FolderIndex>, claim: FolderRebuildClaim) -> Self {
+        let interval = Duration::from_millis((FOLDER_REBUILD_LEASE_MS / 4).max(1));
+        let handle = tokio::spawn(async move {
+            let start = tokio::time::Instant::now() + interval;
+            let mut ticker = tokio::time::interval_at(start, interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let refreshed = idx.lock_conn().ok().is_some_and(|mut conn| {
+                    touch_folder_rebuild_claim(&mut conn, &claim, unix_time_ms()).is_ok()
+                });
+                if !refreshed {
+                    break;
+                }
+            }
+        });
+        Self { handle }
+    }
+}
+
+impl Drop for FolderClaimHeartbeat {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
 pub(crate) struct ProbeActivityGuard {
     rebuilds: Arc<FolderRebuildRegistry>,
     folder_id: String,
@@ -652,13 +725,18 @@ pub(crate) async fn probe_and_reconcile(
         return true;
     };
     if status.embed_model.is_none() && status.embed_dim == Some(bulk_dim) {
-        // Rows were written without a model id by the bulk alias: name it now.
-        let published = publish_probe_ready(
+        // Naming in place is permitted only from Ready(None), and that
+        // precondition is part of the publication CAS. Any stale/flagged
+        // unnamed index must be fully rebuilt before it can be named.
+        let published = publish_probe_ready_with_retry(
             &idx,
             probe_generation,
             &status,
-            &bulk_model,
-            bulk_dim,
+            ProbeReadyTarget {
+                mode: ProbeReadyMode::NameUnnamed,
+                model: &bulk_model,
+                dim: bulk_dim,
+            },
             bulk_emb.model(),
             short_emb.as_deref().map(EmbeddingClient::model),
         )
@@ -695,12 +773,15 @@ pub(crate) async fn probe_and_reconcile(
                 .as_deref()
                 .is_some_and(is_metadata_only_stale_reason)
         {
-            let published = publish_probe_ready(
+            let published = publish_probe_ready_with_retry(
                 &idx,
                 probe_generation,
                 &status,
-                &bulk_model,
-                bulk_dim,
+                ProbeReadyTarget {
+                    mode: ProbeReadyMode::MetadataOnly,
+                    model: &bulk_model,
+                    dim: bulk_dim,
+                },
                 bulk_emb.model(),
                 short_emb.as_deref().map(EmbeddingClient::model),
             )
@@ -765,7 +846,90 @@ pub(crate) async fn probe_and_reconcile(
     true
 }
 
-fn publish_probe_ready(
+#[derive(Debug, Clone, Copy)]
+enum ProbeReadyMode {
+    NameUnnamed,
+    MetadataOnly,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProbeReadyTarget<'a> {
+    mode: ProbeReadyMode,
+    model: &'a str,
+    dim: usize,
+}
+
+fn probe_publication_eligible(
+    status: &super::model_meta::FolderModelStatus,
+    target: ProbeReadyTarget<'_>,
+) -> bool {
+    if status.unproven_vectors_since_gen.is_some() {
+        return false;
+    }
+    match target.mode {
+        ProbeReadyMode::NameUnnamed => {
+            status.index_state == IndexModelState::Ready
+                && status.stale_reason.is_none()
+                && status.embed_model.is_none()
+                && status.embed_dim == Some(target.dim)
+        }
+        ProbeReadyMode::MetadataOnly => {
+            status.index_state == IndexModelState::Stale
+                && status
+                    .stale_reason
+                    .as_deref()
+                    .is_some_and(is_metadata_only_stale_reason)
+                && status.embed_model.as_deref() == Some(target.model)
+                && status.embed_dim == Some(target.dim)
+        }
+    }
+}
+
+fn publish_probe_ready_with_retry(
+    idx: &FolderIndex,
+    probe_generation: u64,
+    status: &super::model_meta::FolderModelStatus,
+    target: ProbeReadyTarget<'_>,
+    bulk_alias: &str,
+    short_alias: Option<&str>,
+) -> Result<bool> {
+    if !probe_publication_eligible(status, target) {
+        return Ok(false);
+    }
+    if publish_probe_ready_once(
+        idx,
+        probe_generation,
+        status,
+        target.model,
+        target.dim,
+        bulk_alias,
+        short_alias,
+    )? {
+        return Ok(true);
+    }
+
+    // A normal upsert can bump generation during endpoint I/O. Retry the cheap
+    // CAS once from a fresh snapshot before a full re-embed is considered.
+    let fresh = idx.model_status()?;
+    if !probe_publication_eligible(&fresh, target) {
+        return Ok(false);
+    }
+    let fresh_generation = {
+        let conn = idx.lock_conn()?;
+        read_generation(&conn)?
+    };
+    publish_probe_ready_once(
+        idx,
+        fresh_generation,
+        &fresh,
+        target.model,
+        target.dim,
+        bulk_alias,
+        short_alias,
+    )
+}
+
+fn publish_probe_ready_once(
     idx: &FolderIndex,
     probe_generation: u64,
     status: &super::model_meta::FolderModelStatus,
@@ -844,25 +1008,16 @@ pub(crate) fn spawn_folder_rebuild(
         return false;
     };
     let rebuild_key = RebuildKey::new(model.clone(), *dim);
-    if rebuilds
-        .try_acquire(&idx, &rebuild_key, automatic)
-        .is_none()
-    {
-        return false;
-    }
-
-    if let Ok(conn) = idx.lock_conn() {
-        let prev_reason = read_model_status(&conn)
-            .ok()
-            .and_then(|s| s.stale_reason)
-            .unwrap_or_else(|| "rebuilding".to_string());
-        let _ = write_model_state(&conn, IndexModelState::Rebuilding, Some(&prev_reason));
-    }
+    let claim = match rebuilds.try_acquire(&idx, &rebuild_key, automatic) {
+        Ok(Some(claim)) => claim,
+        Ok(None) | Err(_) => return false,
+    };
 
     let rebuilds_clone = Arc::clone(&rebuilds);
     tokio::spawn(async move {
         let fid = idx.folder_id().to_string();
         let _activity = RebuildActivityGuard::new(Arc::clone(&rebuilds_clone), fid);
+        let mut claim_guard = FolderClaimGuard::new(Arc::clone(&idx), claim.clone());
         let succeeded = match run_folder_rebuild(
             Arc::clone(&idx),
             short_emb,
@@ -870,13 +1025,21 @@ pub(crate) fn spawn_folder_rebuild(
             observed_bulk,
             observed_short,
             automatic.then(|| Arc::clone(&rebuilds_clone)),
+            claim.clone(),
         )
         .await
         {
             Ok(()) => true,
             Err(err) => {
                 let error = err.to_string();
-                let disposition = rebuilds_clone.record_failure(&idx, &rebuild_key, &err);
+                let disposition = if matches!(err, MakakooError::RebuildClaimLost) {
+                    RebuildFailureDisposition {
+                        failures: 0,
+                        halted: false,
+                    }
+                } else {
+                    rebuilds_clone.record_failure(&idx, &rebuild_key, &err)
+                };
                 let reason = if disposition.halted {
                     format!(
                         "rebuild_suppressed: model={} dim={} after {} same-class failures: {}",
@@ -885,11 +1048,18 @@ pub(crate) fn spawn_folder_rebuild(
                 } else {
                     format!("rebuild_failed: {error}")
                 };
-                let _ = idx.mark_stale(&truncate_utf8(&reason, MAX_PERSISTED_ERROR_BYTES));
+                if let Ok(mut conn) = idx.lock_conn() {
+                    let _ = expire_folder_rebuild_claim(
+                        &mut conn,
+                        &claim,
+                        &truncate_utf8(&reason, MAX_PERSISTED_ERROR_BYTES),
+                    );
+                }
                 false
             }
         };
         if succeeded {
+            claim_guard.disarm();
             rebuilds_clone.clear_rebuild_retry(&idx);
         }
     });
@@ -903,15 +1073,20 @@ async fn run_folder_rebuild(
     observed_bulk: Option<(String, usize)>,
     mut observed_short: Option<(String, usize)>,
     automatic_success_clock: Option<Arc<FolderRebuildRegistry>>,
+    claim: FolderRebuildClaim,
 ) -> Result<()> {
     #[cfg(test)]
     if idx.panic_in_rebuild.swap(false, Ordering::SeqCst) {
         panic!("intentional rebuild task panic");
     }
 
+    let _heartbeat = FolderClaimHeartbeat::start(Arc::clone(&idx), claim.clone());
     let (start_gen, chunk_count) = {
         let conn = idx.lock_conn()?;
-        reset_parked(&conn)?;
+        if !folder_rebuild_claim_owned(&conn, &claim)? {
+            return Err(MakakooError::RebuildClaimLost);
+        }
+        prepare_parked(&conn, &claim)?;
         (read_generation(&conn)?, read_chunk_count(&conn)?)
     };
 
@@ -919,6 +1094,9 @@ async fn run_folder_rebuild(
         Some(pair) => pair,
         None => bulk_emb.probe_model().await?,
     };
+    if b_model != claim.model || b_dim != claim.dim {
+        return Err(MakakooError::RebuildClaimLost);
+    }
     if observed_short.is_none() {
         if let Some(ref s) = short_emb {
             if s.model() != bulk_emb.model() || s.base_url() != bulk_emb.base_url() {
@@ -934,7 +1112,7 @@ async fn run_folder_rebuild(
         .is_some_and(|(s_model, s_dim)| s_model != &b_model || *s_dim != b_dim);
 
     if chunk_count > 0 {
-        reembed_pages(&idx, &bulk_emb, &b_model, b_dim).await?;
+        reembed_pages(&idx, &bulk_emb, &b_model, b_dim, &claim).await?;
     }
 
     // Upserts replace a file's chunks with new, higher ids and bump the
@@ -961,6 +1139,7 @@ async fn run_folder_rebuild(
                 bulk_emb: &bulk_emb,
                 short_emb: &short_emb,
                 short_mismatch,
+                claim: &claim,
                 automatic_success_unix_ms: automatic_success_clock
                     .as_ref()
                     .map(|clock| clock.now_unix_ms()),
@@ -976,7 +1155,7 @@ async fn run_folder_rebuild(
         // Ids are reused once the top rows are deleted, so the tail is not
         // "ids above the last one": rescan every chunk, skipping those parked
         // with the same text.
-        reembed_pages(&idx, &bulk_emb, &b_model, b_dim).await?;
+        reembed_pages(&idx, &bulk_emb, &b_model, b_dim, &claim).await?;
     }
     Err(MakakooError::internal(
         "rebuild kept racing writers; left stale for the next probe",
@@ -992,6 +1171,7 @@ struct RebuildCommitMeta<'a> {
     bulk_emb: &'a EmbeddingClient,
     short_emb: &'a Option<Arc<EmbeddingClient>>,
     short_mismatch: bool,
+    claim: &'a FolderRebuildClaim,
     automatic_success_unix_ms: Option<u64>,
 }
 
@@ -1006,12 +1186,19 @@ fn commit_rebuild(
     let new_gen = {
         // Immediate: no other process can write between the checks and the swap.
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if read_generation(&tx)? != seen_gen || !all_chunks_parked(&tx)? {
+        if !folder_rebuild_claim_owned(&tx, meta.claim)? {
+            return Err(MakakooError::RebuildClaimLost);
+        }
+        if read_generation(&tx)? != seen_gen || !all_chunks_parked(&tx, meta.claim)? {
             return Ok(false);
         }
-        swap_in_parked(&tx)?;
+        swap_in_parked(&tx, meta.claim)?;
         let new_gen = bump_generation_tx(&tx)?;
         let current = read_model_status(&tx)?;
+        // Owner CAS must run while state is still Rebuilding. If the later
+        // Ready publication refuses, dropping this transaction restores both
+        // the claim and parked vectors.
+        clear_folder_rebuild_claim_tx(&tx, meta.claim)?;
         if !publish_ready_model_meta_tx(
             &tx,
             &ReadyPublication {

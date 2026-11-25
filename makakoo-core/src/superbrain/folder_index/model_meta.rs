@@ -3,6 +3,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rand::rngs::OsRng;
+use rand::RngCore;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +27,10 @@ const META_OBSERVED_BULK: &str = "observed_bulk";
 const META_REBUILD_RETRY: &str = "rebuild_retry";
 const META_AUTOMATIC_REBUILD_SUCCESS: &str = "automatic_rebuild_success";
 const META_UNPROVEN_VECTORS_SINCE_GEN: &str = "unproven_vectors_since_gen";
+const META_PROVENANCE_SCHEMA: &str = "provenance_schema";
+const PROVENANCE_SCHEMA_VERSION: &str = "1";
+const META_REBUILD_CLAIM: &str = "folder_rebuild_claim";
+pub(crate) const FOLDER_REBUILD_LEASE_MS: u64 = 120_000;
 pub(crate) const AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS: u64 = 60 * 60 * 1_000;
 const MAX_QUERY_MISMATCH_REASON_BYTES: usize = 256;
 
@@ -70,6 +76,18 @@ pub(crate) struct PersistedRebuildRetry {
 pub(crate) struct PersistedAutomaticRebuildSuccess {
     #[serde(default)]
     pub(crate) last_success_unix_ms: u64,
+}
+
+/// Durable, cross-process rebuild ownership. `token` identifies resumable
+/// parked rows for one model pair; `owner` fences one live process. A stale
+/// lease may replace the owner while retaining the token for the same pair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FolderRebuildClaim {
+    pub(crate) token: String,
+    pub(crate) owner: String,
+    pub(crate) model: String,
+    pub(crate) dim: usize,
+    pub(crate) lease_expires_unix_ms: u64,
 }
 
 /// Lifecycle state of a folder or Brain vector index relative to the configured
@@ -274,6 +292,144 @@ fn mark_unproven_vectors_tx(conn: &Connection) -> Result<()> {
     )
 }
 
+fn new_rebuild_token() -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+pub(crate) fn read_folder_rebuild_claim(conn: &Connection) -> Result<Option<FolderRebuildClaim>> {
+    let Some(raw) = read_meta_opt(conn, META_REBUILD_CLAIM)? else {
+        return Ok(None);
+    };
+    // A malformed claim cannot safely fence a writer. Treat it as expired;
+    // the next IMMEDIATE claimant replaces it before doing any rebuild work.
+    Ok(serde_json::from_str(&raw).ok())
+}
+
+pub(crate) fn folder_rebuild_claim_is_fresh(conn: &Connection, now_unix_ms: u64) -> Result<bool> {
+    if read_model_status(conn)?.index_state != IndexModelState::Rebuilding {
+        return Ok(false);
+    }
+    Ok(read_folder_rebuild_claim(conn)?
+        .is_some_and(|claim| now_unix_ms < claim.lease_expires_unix_ms))
+}
+
+/// Claim `Rebuilding` and its owner lease in the same IMMEDIATE transaction.
+/// A fresh claim refuses the contender. A stale same-pair claim keeps its
+/// stable token so the new owner resumes already parked rows.
+pub(crate) fn try_claim_folder_rebuild(
+    conn: &mut Connection,
+    model: &str,
+    dim: usize,
+    now_unix_ms: u64,
+) -> Result<Option<FolderRebuildClaim>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current = read_folder_rebuild_claim(&tx)?;
+    if read_model_status(&tx)?.index_state == IndexModelState::Rebuilding
+        && current
+            .as_ref()
+            .is_some_and(|claim| now_unix_ms < claim.lease_expires_unix_ms)
+    {
+        return Ok(None);
+    }
+
+    let token = current
+        .as_ref()
+        .filter(|claim| claim.model == model && claim.dim == dim)
+        .map_or_else(new_rebuild_token, |claim| claim.token.clone());
+    let claim = FolderRebuildClaim {
+        token,
+        owner: new_rebuild_token(),
+        model: model.to_string(),
+        dim,
+        lease_expires_unix_ms: now_unix_ms.saturating_add(FOLDER_REBUILD_LEASE_MS),
+    };
+    let previous_reason = read_model_status(&tx)?
+        .stale_reason
+        .unwrap_or_else(|| "rebuilding".to_string());
+    write_model_state(&tx, IndexModelState::Rebuilding, Some(&previous_reason))?;
+    write_meta_opt(
+        &tx,
+        META_REBUILD_CLAIM,
+        Some(&serde_json::to_string(&claim)?),
+    )?;
+    tx.execute(
+        "DELETE FROM rebuild_vectors WHERE claim_token <> ?1",
+        params![&claim.token],
+    )?;
+    tx.commit()?;
+    Ok(Some(claim))
+}
+
+pub(crate) fn folder_rebuild_claim_owned(
+    conn: &Connection,
+    claim: &FolderRebuildClaim,
+) -> Result<bool> {
+    Ok(
+        read_model_status(conn)?.index_state == IndexModelState::Rebuilding
+            && read_folder_rebuild_claim(conn)?.is_some_and(|current| {
+                current.token == claim.token
+                    && current.owner == claim.owner
+                    && current.model == claim.model
+                    && current.dim == claim.dim
+            }),
+    )
+}
+
+pub(crate) fn touch_folder_rebuild_claim(
+    conn: &mut Connection,
+    claim: &FolderRebuildClaim,
+    now_unix_ms: u64,
+) -> Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !folder_rebuild_claim_owned(&tx, claim)? {
+        return Err(MakakooError::RebuildClaimLost);
+    }
+    let mut refreshed = claim.clone();
+    refreshed.lease_expires_unix_ms = now_unix_ms.saturating_add(FOLDER_REBUILD_LEASE_MS);
+    write_meta_opt(
+        &tx,
+        META_REBUILD_CLAIM,
+        Some(&serde_json::to_string(&refreshed)?),
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Release one owner's live lease but retain the stable token and parked rows
+/// so a later process can resume the same model pair.
+pub(crate) fn expire_folder_rebuild_claim(
+    conn: &mut Connection,
+    claim: &FolderRebuildClaim,
+    reason: &str,
+) -> Result<bool> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !folder_rebuild_claim_owned(&tx, claim)? {
+        return Ok(false);
+    }
+    let mut expired = claim.clone();
+    expired.lease_expires_unix_ms = 0;
+    write_meta_opt(
+        &tx,
+        META_REBUILD_CLAIM,
+        Some(&serde_json::to_string(&expired)?),
+    )?;
+    write_model_state(&tx, IndexModelState::Stale, Some(reason))?;
+    tx.commit()?;
+    Ok(true)
+}
+
+pub(crate) fn clear_folder_rebuild_claim_tx(
+    conn: &Connection,
+    claim: &FolderRebuildClaim,
+) -> Result<()> {
+    if !folder_rebuild_claim_owned(conn, claim)? {
+        return Err(MakakooError::RebuildClaimLost);
+    }
+    write_meta_opt(conn, META_REBUILD_CLAIM, None)
+}
+
 /// Single door for publishing model metadata and, when safe, `Ready`.
 ///
 /// Every caller runs this inside the same IMMEDIATE transaction as the work
@@ -466,10 +622,34 @@ fn write_stale_preserving_provenance_reason(conn: &Connection, reason: &str) -> 
 /// Evaluate model metadata and configured aliases on `open()`.
 pub(crate) fn init_model_meta_on_open(
     conn: &mut Connection,
-    chunk_count: u64,
+    _chunk_count: u64,
     bulk_alias: Option<&str>,
     short_alias: Option<&str>,
 ) -> Result<()> {
+    // One-time fail-closed migration for databases created before vector-write
+    // provenance was transactional. Historical query/alias reasons could have
+    // overwritten `mixed_model_upsert`, and Ready databases could have accepted
+    // same-dimension unnamed vectors. With no proof left, rebuild once.
+    {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if read_meta_opt(&tx, META_PROVENANCE_SCHEMA)?.as_deref() != Some(PROVENANCE_SCHEMA_VERSION)
+        {
+            if read_chunk_count(&tx)? > 0 {
+                mark_unproven_vectors_tx(&tx)?;
+                if !folder_rebuild_claim_is_fresh(&tx, unix_time_ms())? {
+                    write_model_state(
+                        &tx,
+                        IndexModelState::Stale,
+                        Some("provenance_migration_required"),
+                    )?;
+                }
+            }
+            write_meta_opt(&tx, META_PROVENANCE_SCHEMA, Some(PROVENANCE_SCHEMA_VERSION))?;
+        }
+        tx.commit()?;
+    }
+
+    let chunk_count = read_chunk_count(conn)?;
     let status = read_model_status(conn)?;
     if chunk_count == 0 {
         if status.index_state != IndexModelState::Ready || status.stale_reason.is_some() {
@@ -495,13 +675,16 @@ pub(crate) fn init_model_meta_on_open(
     }
 
     // No dimension = written before model metadata existed: rebuild once. A known
-    // dimension with no model id is an unnamed index (see apply_upsert_model_meta_tx).
+    // dimension with no model id is an unnamed index (see authorize_vector_write_tx).
     if status.embed_dim.is_none() {
         write_stale_preserving_provenance_reason(conn, "missing_embed_model_metadata")?;
         return Ok(());
     }
 
     if status.index_state == IndexModelState::Rebuilding {
+        if folder_rebuild_claim_is_fresh(conn, unix_time_ms())? {
+            return Ok(());
+        }
         write_model_state(conn, IndexModelState::Stale, Some("interrupted_rebuild"))?;
     }
 
@@ -520,13 +703,13 @@ pub(crate) fn init_model_meta_on_open(
     Ok(())
 }
 
-pub(crate) fn apply_upsert_model_meta_tx(
+/// The single authorization door for every chunk-vector write. It runs inside
+/// the writer's IMMEDIATE transaction, so rejection rolls back the rows and
+/// every accepted unproven write sets the sticky flag atomically with them.
+pub(crate) fn authorize_vector_write_tx(
     conn: &Connection,
     chunks_len: usize,
-    first_vec_len: usize,
     model_meta: Option<&UpsertModelMeta>,
-    default_bulk_alias: Option<&str>,
-    default_short_alias: Option<&str>,
 ) -> Result<()> {
     if chunks_len == 0 {
         return Ok(());
@@ -536,49 +719,9 @@ pub(crate) fn apply_upsert_model_meta_tx(
     let other_chunks_exist = total_chunks > chunks_len as u64 || read_generation(conn)? > 0;
 
     let Some(m) = model_meta else {
-        if status.embed_model.is_some() && status.embed_dim == Some(first_vec_len) {
-            // Incremental batches produced by the already-recorded bulk alias
-            // do not carry model ids per page; matching the stored dimension is
-            // the legacy contract for that path.
-            return Ok(());
-        }
-        if status.embed_model.is_none() && status.embed_dim == Some(first_vec_len) {
-            // The no-metadata ingestion contract means "configured bulk alias";
-            // preserve that unnamed index until a probe gives the alias a name.
-            return Ok(());
-        }
-        if status.embed_model.is_none()
-            && status.embed_dim.is_none()
-            && status.stale_reason.is_none()
-            && !other_chunks_exist
-        {
-            let published = publish_ready_model_meta_tx(
-                conn,
-                &ReadyPublication {
-                    expected_generation: read_generation(conn)?,
-                    expected_state: status.index_state,
-                    expected_reason: None,
-                    model: None,
-                    embed_dim: Some(first_vec_len),
-                    bulk_alias: Some(
-                        default_bulk_alias.unwrap_or(crate::embeddings::DEFAULT_EMBED_MODEL),
-                    ),
-                    short_alias: default_short_alias,
-                    final_stale_reason: None,
-                    kind: ReadyPublicationKind::Ordinary,
-                },
-            )?;
-            return if published {
-                Ok(())
-            } else {
-                Err(MakakooError::internal(
-                    "fresh unnamed upsert lost the Ready publication compare-and-set",
-                ))
-            };
-        }
-        // Unnamed vectors have no proof that they belong to the stored pair. Keep
-        // the flag sticky even when dimensions happen to match; only a complete
-        // rebuild can establish provenance again.
+        // A dimension and an earlier endpoint observation cannot prove which
+        // model produced these bytes. Keep the flag sticky for every nonempty
+        // metadata-free write; only a complete rebuild establishes provenance.
         mark_unproven_vectors_tx(conn)?;
         if status.index_state != IndexModelState::Rebuilding {
             let reason = if other_chunks_exist || status.embed_model.is_some() {
@@ -657,8 +800,10 @@ pub(crate) fn apply_upsert_model_meta_tx(
 
 impl FolderIndex {
     pub fn model_status(&self) -> Result<FolderModelStatus> {
-        let conn = self.lock_conn()?;
-        let mut status = read_model_status(&conn)?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        let mut status = read_model_status(&tx)?;
+        tx.commit()?;
         drop(conn);
         status.query_mismatch_reason = self
             .query_mismatch_reason
@@ -722,21 +867,13 @@ impl FolderIndex {
         self.upsert_file_inner(req, model_meta)
     }
 
-    pub(crate) fn record_upsert_model_meta_tx(
+    pub(crate) fn authorize_vector_write_tx(
         &self,
         conn: &Connection,
         chunks_len: usize,
-        first_vec_len: usize,
         model_meta: Option<&UpsertModelMeta>,
     ) -> Result<()> {
-        apply_upsert_model_meta_tx(
-            conn,
-            chunks_len,
-            first_vec_len,
-            model_meta,
-            self.default_bulk_alias.as_deref(),
-            self.default_short_alias.as_deref(),
-        )
+        authorize_vector_write_tx(conn, chunks_len, model_meta)
     }
 
     pub(crate) fn update_sidecar_if_ready(&self) {

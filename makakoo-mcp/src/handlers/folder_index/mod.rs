@@ -267,6 +267,11 @@ impl FolderIndexUpsertHandler {
                 })
                 .collect();
             let meta = self.parse_explicit_model_meta(params, &chunks)?;
+            if !chunks.is_empty() && meta.is_none() {
+                return Err(RpcError::invalid_params(
+                    "'embed_model' is required for precomputed chunk vectors",
+                ));
+            }
             return Ok((chunks, meta));
         }
         let Some(fe_val) = params.get("file_engine_output") else {
@@ -328,6 +333,11 @@ impl FolderIndexUpsertHandler {
             .collect();
         if meta.is_none() {
             meta = self.parse_explicit_model_meta(params, &chunks)?;
+        }
+        if !chunks.is_empty() && meta.is_none() {
+            return Err(RpcError::invalid_params(
+                "'embed_model' is required when supplying precomputed vectors",
+            ));
         }
         Ok((chunks, meta))
     }

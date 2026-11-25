@@ -212,7 +212,7 @@ impl FolderIndexManager {
         let outcome = self
             .upsert_with_model_recovery(&idx, req, model_meta)
             .await?;
-        self.schedule_probe_after_upsert(&idx, model_meta);
+        self.schedule_probe_after_upsert(&idx, model_meta).await;
         Ok(outcome)
     }
 
@@ -228,7 +228,7 @@ impl FolderIndexManager {
         let outcome = self
             .upsert_with_model_recovery(&idx, req, model_meta)
             .await?;
-        self.schedule_probe_after_upsert(&idx, model_meta);
+        self.schedule_probe_after_upsert(&idx, model_meta).await;
         if flush && !outcome.skipped_unchanged {
             idx.flush()?;
         }
@@ -277,7 +277,7 @@ impl FolderIndexManager {
         .await;
     }
 
-    fn schedule_probe_after_upsert(
+    async fn schedule_probe_after_upsert(
         &self,
         idx: &Arc<FolderIndex>,
         model_meta: Option<&UpsertModelMeta>,
@@ -303,6 +303,19 @@ impl FolderIndexManager {
             self.short_emb.as_ref(),
             self.bulk_emb.as_ref().or(self.short_emb.as_ref()),
         );
+
+        // A provenance-flagged ingest must not rely on a detached task that a
+        // short-lived CLI/MCP process can kill at return. Await the claimed
+        // probe and any rebuild this process owns. Cross-process contenders are
+        // fenced by the DB lease and a later process can resume durable rows.
+        if idx
+            .model_status()
+            .ok()
+            .is_some_and(|status| status.unproven_vectors_since_gen.is_some())
+        {
+            self.rebuilds.wait_for_probe(idx.folder_id()).await;
+            self.rebuilds.wait(idx.folder_id()).await;
+        }
     }
 
     pub fn is_rebuilding(&self, folder_id: &str) -> bool {

@@ -1,34 +1,31 @@
 //! Paged re-embedding for a folder rebuild.
 //!
 //! Rows are read one page at a time by id (keyset), re-embedded, and parked in
-//! a temp table on the index's own connection (`temp_store = FILE`, so on
-//! disk). Memory stays flat however large the folder is, and the connection
+//! a durable SQLite table keyed by the fenced rebuild claim. Memory stays flat
+//! however large the folder is, interrupted processes resume parked rows, and
+//! the connection
 //! lock is held only while a page is read or parked, never across an embed
 //! call. The commit moves the parked vectors onto their chunks in one short
 //! transaction ([`swap_in_parked`]).
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
+use super::model_meta::{folder_rebuild_claim_owned, FolderRebuildClaim};
 use super::quantize::{i8_slice_to_bytes, truncate_and_quantize_i8};
 use super::FolderIndex;
 
 /// Chunks read per page.
 pub(crate) const REBUILD_PAGE_ROWS: usize = 256;
 
-/// Create (or empty) the parking table for this connection's rebuild.
-pub(crate) fn reset_parked(conn: &Connection) -> Result<()> {
-    // The parked vectors are the whole folder's worth: keep them on disk.
-    conn.execute_batch(
-        "PRAGMA temp_store = FILE;
-         CREATE TEMP TABLE IF NOT EXISTS rebuild_vectors (
-             id INTEGER PRIMARY KEY,
-             text TEXT NOT NULL,
-             vector_i8 BLOB NOT NULL
-         );
-         DELETE FROM temp.rebuild_vectors;",
+/// Retain resumable rows for this claim/model and discard incompatible rows.
+pub(crate) fn prepare_parked(conn: &Connection, claim: &FolderRebuildClaim) -> Result<()> {
+    conn.execute(
+        "DELETE FROM rebuild_vectors
+          WHERE claim_token = ?1 AND (model <> ?2 OR dim <> ?3)",
+        params![&claim.token, &claim.model, claim.dim as i64],
     )?;
     Ok(())
 }
@@ -41,10 +38,11 @@ pub(crate) async fn reembed_pages(
     bulk: &EmbeddingClient,
     b_model: &str,
     b_dim: usize,
+    claim: &FolderRebuildClaim,
 ) -> Result<()> {
     let mut after_id = 0i64;
     loop {
-        let (last_id, page) = read_page(idx, after_id)?;
+        let (last_id, page) = read_page(idx, after_id, claim)?;
         let Some(last_id) = last_id else {
             return Ok(());
         };
@@ -78,7 +76,7 @@ pub(crate) async fn reembed_pages(
                 ));
             }
         }
-        park(idx, &vectors)?;
+        park(idx, claim, &vectors)?;
     }
 }
 
@@ -87,8 +85,15 @@ pub(crate) async fn reembed_pages(
 /// A chunk row: its id and text.
 type Chunk = (i64, String);
 
-fn read_page(idx: &FolderIndex, after_id: i64) -> Result<(Option<i64>, Vec<Chunk>)> {
+fn read_page(
+    idx: &FolderIndex,
+    after_id: i64,
+    claim: &FolderRebuildClaim,
+) -> Result<(Option<i64>, Vec<Chunk>)> {
     let conn = idx.lock_conn()?;
+    if !folder_rebuild_claim_owned(&conn, claim)? {
+        return Err(MakakooError::RebuildClaimLost);
+    }
     let rows = {
         let mut stmt = conn
             .prepare_cached("SELECT id, text FROM chunks WHERE id > ?1 ORDER BY id ASC LIMIT ?2")?;
@@ -102,10 +107,19 @@ fn read_page(idx: &FolderIndex, after_id: i64) -> Result<(Option<i64>, Vec<Chunk
     let last = rows.last().map(|(id, _)| *id);
     let mut needs = Vec::new();
     {
-        let mut parked =
-            conn.prepare_cached("SELECT 1 FROM temp.rebuild_vectors WHERE id = ?1 AND text = ?2")?;
+        let mut parked = conn.prepare_cached(
+            "SELECT 1 FROM rebuild_vectors
+              WHERE claim_token = ?1 AND model = ?2 AND dim = ?3
+                AND chunk_id = ?4 AND text = ?5",
+        )?;
         for (id, text) in rows {
-            if !parked.exists(params![id, text])? {
+            if !parked.exists(params![
+                &claim.token,
+                &claim.model,
+                claim.dim as i64,
+                id,
+                &text
+            ])? {
                 needs.push((id, text));
             }
         }
@@ -113,15 +127,31 @@ fn read_page(idx: &FolderIndex, after_id: i64) -> Result<(Option<i64>, Vec<Chunk
     Ok((last, needs))
 }
 
-fn park(idx: &FolderIndex, vectors: &[(i64, String, Vec<i8>)]) -> Result<()> {
+fn park(
+    idx: &FolderIndex,
+    claim: &FolderRebuildClaim,
+    vectors: &[(i64, String, Vec<i8>)],
+) -> Result<()> {
     let mut conn = idx.lock_conn()?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !folder_rebuild_claim_owned(&tx, claim)? {
+        return Err(MakakooError::RebuildClaimLost);
+    }
     {
         let mut ins = tx.prepare_cached(
-            "INSERT OR REPLACE INTO temp.rebuild_vectors (id, text, vector_i8) VALUES (?1, ?2, ?3)",
+            "INSERT OR REPLACE INTO rebuild_vectors
+                (claim_token, model, dim, chunk_id, text, vector_i8)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
         for (id, text, q) in vectors {
-            ins.execute(params![id, text, i8_slice_to_bytes(q)])?;
+            ins.execute(params![
+                &claim.token,
+                &claim.model,
+                claim.dim as i64,
+                id,
+                text,
+                i8_slice_to_bytes(q)
+            ])?;
         }
     }
     tx.commit()?;
@@ -131,76 +161,76 @@ fn park(idx: &FolderIndex, vectors: &[(i64, String, Vec<i8>)]) -> Result<()> {
 /// Inside the commit transaction: put every parked vector on its chunk (rows
 /// deleted since are skipped) and empty the parking table.
 /// True when every chunk has a parked vector for its current text.
-pub(crate) fn all_chunks_parked(tx: &Transaction<'_>) -> Result<bool> {
+pub(crate) fn all_chunks_parked(tx: &Transaction<'_>, claim: &FolderRebuildClaim) -> Result<bool> {
     let missing: i64 = tx.query_row(
         "SELECT COUNT(*) FROM chunks c
-          WHERE NOT EXISTS (SELECT 1 FROM temp.rebuild_vectors r
-                             WHERE r.id = c.id AND r.text = c.text)",
-        [],
+          WHERE NOT EXISTS (SELECT 1 FROM rebuild_vectors r
+                             WHERE r.claim_token = ?1 AND r.model = ?2 AND r.dim = ?3
+                               AND r.chunk_id = c.id AND r.text = c.text)",
+        params![&claim.token, &claim.model, claim.dim as i64],
         |r| r.get(0),
     )?;
     Ok(missing == 0)
 }
 
-pub(crate) fn swap_in_parked(tx: &Transaction<'_>) -> Result<usize> {
+pub(crate) fn swap_in_parked(tx: &Transaction<'_>, claim: &FolderRebuildClaim) -> Result<usize> {
     // Matched on id AND text: an id reused by a new chunk never takes the old
     // chunk's vector.
     let moved = tx.execute(
         "UPDATE chunks
-            SET vector_i8 = (SELECT r.vector_i8 FROM temp.rebuild_vectors r
-                              WHERE r.id = chunks.id AND r.text = chunks.text)
-          WHERE EXISTS (SELECT 1 FROM temp.rebuild_vectors r
-                         WHERE r.id = chunks.id AND r.text = chunks.text)",
-        [],
+            SET vector_i8 = (SELECT r.vector_i8 FROM rebuild_vectors r
+                              WHERE r.claim_token = ?1 AND r.model = ?2 AND r.dim = ?3
+                                AND r.chunk_id = chunks.id AND r.text = chunks.text)
+          WHERE EXISTS (SELECT 1 FROM rebuild_vectors r
+                         WHERE r.claim_token = ?1 AND r.model = ?2 AND r.dim = ?3
+                           AND r.chunk_id = chunks.id AND r.text = chunks.text)",
+        params![&claim.token, &claim.model, claim.dim as i64],
     )?;
-    tx.execute("DELETE FROM temp.rebuild_vectors", [])?;
+    tx.execute(
+        "DELETE FROM rebuild_vectors WHERE claim_token = ?1",
+        params![&claim.token],
+    )?;
     Ok(moved)
 }
 
 /// Rows parked and not yet swapped in (tests: memory stays on disk).
 #[cfg(test)]
 pub(crate) fn parked_count(conn: &Connection) -> Result<i64> {
-    Ok(
-        conn.query_row("SELECT COUNT(*) FROM temp.rebuild_vectors", [], |r| {
-            r.get(0)
-        })?,
-    )
+    Ok(conn.query_row("SELECT COUNT(*) FROM rebuild_vectors", [], |r| r.get(0))?)
 }
 
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
 
-    use super::reset_parked;
+    use super::prepare_parked;
+    use crate::superbrain::folder_index::model_meta::FolderRebuildClaim;
     use crate::superbrain::folder_index::FolderIndex;
 
     #[test]
-    fn folder_index_temp_store_is_file_after_reset_parked() {
+    fn folder_index_durable_parking_survives_prepare() {
         let dir = TempDir::new().unwrap();
         let idx = FolderIndex::open(dir.path(), "temp-store-guard", 8).unwrap();
         let conn = idx.lock_conn().unwrap();
 
-        let initial: i64 = conn
-            .query_row("PRAGMA temp_store", [], |r| r.get(0))
+        let claim = FolderRebuildClaim {
+            token: "claim-a".into(),
+            owner: "owner-a".into(),
+            model: "model-a".into(),
+            dim: 8,
+            lease_expires_unix_ms: u64::MAX,
+        };
+        conn.execute(
+            "INSERT INTO rebuild_vectors
+                (claim_token, model, dim, chunk_id, text, vector_i8)
+             VALUES ('claim-a', 'model-a', 8, 1, 'text', X'01')",
+            [],
+        )
+        .unwrap();
+        prepare_parked(&conn, &claim).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rebuild_vectors", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(
-            initial, 1,
-            "FolderIndex must open with temp_store = FILE (1)"
-        );
-
-        conn.execute_batch("PRAGMA temp_store = MEMORY;").unwrap();
-        let flipped: i64 = conn
-            .query_row("PRAGMA temp_store", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(flipped, 2, "sanity check: switched to MEMORY (2)");
-
-        reset_parked(&conn).unwrap();
-        let after_reset: i64 = conn
-            .query_row("PRAGMA temp_store", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(
-            after_reset, 1,
-            "reset_parked must enforce PRAGMA temp_store = FILE (1)"
-        );
+        assert_eq!(count, 1, "resumable parked row was reset");
     }
 }
