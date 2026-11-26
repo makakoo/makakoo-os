@@ -310,6 +310,22 @@ async fn mcp_rebuild_requests_once_is_idempotent_and_scope_denial_changes_nothin
     let mut registry = ToolRegistry::new();
     register_folder_index(&mut registry, Arc::clone(&ctx));
 
+    let requests_before_unknown = server.received_requests().await.unwrap().len();
+    let err = registry
+        .call(
+            "folder_index_rebuild",
+            json!({"folder_id": "unknown", "dim": 32}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("not found"));
+    assert!(!tmp.path().join("indexes/unknown").exists());
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        requests_before_unknown,
+        "unknown MCP rebuild started a model probe"
+    );
+
     let md = "One rebuild surface fixture.";
     let sha = hex::encode(Sha256::digest(md.as_bytes()));
     registry
@@ -340,6 +356,7 @@ async fn mcp_rebuild_requests_once_is_idempotent_and_scope_denial_changes_nothin
     let index = mgr.get_or_open("manual", 32).unwrap();
     index.mark_stale("operator_requested_test").unwrap();
     let calls_before_rebuild = responder.bulk_calls.load(Ordering::SeqCst);
+    let starting_generation = index.model_status().unwrap().generation;
 
     responder.gate_bulk.store(true, Ordering::SeqCst);
     let first = registry
@@ -351,8 +368,8 @@ async fn mcp_rebuild_requests_once_is_idempotent_and_scope_denial_changes_nothin
         .unwrap();
     assert_eq!(first["outcome"], "started");
     assert_eq!(first["index_state"], "rebuilding");
-    assert!(first.get("halted").is_some());
-    assert!(first.get("generation").is_some());
+    assert_eq!(first["halted"], false);
+    assert_eq!(first["generation"], starting_generation);
     assert!(first.get("unproven_vectors_since_gen").is_some());
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -377,6 +394,7 @@ async fn mcp_rebuild_requests_once_is_idempotent_and_scope_denial_changes_nothin
 
     responder.gate_bulk.store(false, Ordering::SeqCst);
     mgr.wait_for_rebuild("manual").await;
+    let requests_before_current = server.received_requests().await.unwrap().len();
     let repeated_after_ready = registry
         .call(
             "folder_index_rebuild",
@@ -389,19 +407,58 @@ async fn mcp_rebuild_requests_once_is_idempotent_and_scope_denial_changes_nothin
         responder.bulk_calls.load(Ordering::SeqCst),
         calls_before_rebuild + 1
     );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        requests_before_current,
+        "AlreadyCurrent performed a model probe"
+    );
 
-    // The server's existing agent-slot allowlist is the authorization door.
-    // A caller without this new tool never reaches the handler or mutates state.
+    // Baseline inheritance never grants this operator-costly tool. It is
+    // available only when the slot names it explicitly.
     index.mark_stale("unauthorized_test").unwrap();
+    let before_seed = index.model_status().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let retry = json!({
+        "model": "model-a",
+        "dim": 64,
+        "error_class": "http_503",
+        "failures": 3,
+        "halted": true,
+        "not_before_unix_ms": now + 60_000,
+        "failure_generation": before_seed.generation,
+        "backoff_failures": 3,
+        "writer_races": 0
+    });
+    let conn = rusqlite::Connection::open(tmp.path().join("indexes/manual/chunks.sqlite")).unwrap();
+    conn.execute(
+        "INSERT INTO folder_meta (key, value) VALUES ('rebuild_retry', ?1) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [retry.to_string()],
+    )
+    .unwrap();
+    drop(conn);
     let before = index.model_status().unwrap();
+    assert!(before.halted);
+    let seeded_status = registry
+        .call(
+            "folder_index_states",
+            json!({"folder_id": "manual", "dim": 32}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(seeded_status["halted"], true);
+    assert_eq!(seeded_status["generation"], before.generation);
     let slot = AgentSlot {
         slot_id: "scoped".into(),
         name: "Scoped".into(),
         persona: None,
-        inherit_baseline: false,
+        inherit_baseline: true,
         allowed_paths: vec![],
         forbidden_paths: vec![],
-        tools: vec!["folder_index_states".into()],
+        tools: vec![],
         process_mode: "supervised_pair".into(),
         transports: vec![],
         llm: None,
@@ -436,6 +493,43 @@ async fn mcp_rebuild_requests_once_is_idempotent_and_scope_denial_changes_nothin
         responder.bulk_calls.load(Ordering::SeqCst),
         calls_before_rebuild + 1
     );
+
+    let explicit = AgentSlot {
+        slot_id: "explicit".into(),
+        name: "Explicit".into(),
+        persona: None,
+        inherit_baseline: true,
+        allowed_paths: vec![],
+        forbidden_paths: vec![],
+        tools: vec!["folder_index_rebuild".into()],
+        process_mode: "supervised_pair".into(),
+        transports: vec![],
+        llm: None,
+        runtime: None,
+        triggers: Vec::new(),
+    };
+    AgentRegistry::create(tmp.path(), &explicit).unwrap();
+    let request: RpcRequest = serde_json::from_value(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "folder_index_rebuild",
+            "arguments": {"folder_id": "manual", "dim": 32}
+        }
+    }))
+    .unwrap();
+    let allowed = crate::dispatch::AGENT_ID
+        .scope(Some("explicit".into()), mcp.handle(request))
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_ne!(allowed["isError"], true, "explicit grant was denied");
+    assert!(allowed["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("rate_limited"));
 }
 
 #[derive(Clone)]

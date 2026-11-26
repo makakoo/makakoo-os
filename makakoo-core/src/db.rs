@@ -28,6 +28,10 @@ pub fn open_db(path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)?;
     }
     let conn = Connection::open(path)?;
+    // Make the ordering test independent of rusqlite/SQLite build defaults.
+    // Production immediately installs the explicit timeout below.
+    #[cfg(test)]
+    conn.busy_timeout(std::time::Duration::ZERO)?;
     // Several PRAGMAs (notably `journal_mode`, `busy_timeout`) return
     // the applied value as a result row. rusqlite's `execute_batch` and
     // `pragma_update` both reject row-returning statements, so we step
@@ -626,6 +630,27 @@ mod tests {
     #[test]
     fn open_db_applies_wal_pragma() {
         let (_dir, conn) = tmp_db();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+    }
+
+    #[test]
+    fn open_db_waits_for_fresh_db_write_lock_before_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pragma-order.db");
+        let locker = Connection::open(&path).unwrap();
+        locker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let thread_path = path.clone();
+        let handle = std::thread::spawn(move || open_db(&thread_path));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !handle.is_finished(),
+            "WAL activation returned SQLITE_BUSY before busy_timeout was installed"
+        );
+        locker.execute_batch("COMMIT").unwrap();
+        let conn = handle.join().unwrap().unwrap();
         let mode: String = conn
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .unwrap();

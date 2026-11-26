@@ -56,6 +56,7 @@ struct DynamicEmbedResponder {
     fail_bulk_probes: Arc<AtomicBool>,
     fail_bulk_embeddings: Arc<AtomicBool>,
     vary_failure_body: Arc<AtomicBool>,
+    rotate_failure_class: Arc<AtomicBool>,
 }
 
 impl DynamicEmbedResponder {
@@ -81,6 +82,7 @@ impl DynamicEmbedResponder {
             fail_bulk_probes: Arc::new(AtomicBool::new(false)),
             fail_bulk_embeddings: Arc::new(AtomicBool::new(false)),
             vary_failure_body: Arc::new(AtomicBool::new(false)),
+            rotate_failure_class: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -144,15 +146,11 @@ impl Respond for DynamicEmbedResponder {
 
         if !is_probe && (is_bulk || inputs > 1) {
             let bulk_call = self.bulk_calls.fetch_add(1, Ordering::SeqCst) + 1;
-            if self.fail_bulk_embeddings.load(Ordering::SeqCst) {
-                let response = ResponseTemplate::new(503);
-                return if self.vary_failure_body.load(Ordering::SeqCst) {
-                    response.set_body_string(format!(
-                        "transient failure {}",
-                        self.bulk_calls.load(Ordering::SeqCst)
-                    ))
-                } else {
-                    response
+            if self.rotate_failure_class.load(Ordering::SeqCst) {
+                return match bulk_call % 3 {
+                    1 => ResponseTemplate::new(503),
+                    2 => ResponseTemplate::new(502),
+                    _ => ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(50)),
                 };
             }
             if self.gate_bulk.load(Ordering::SeqCst)
@@ -166,6 +164,17 @@ impl Respond for DynamicEmbedResponder {
                 {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
+            }
+            if self.fail_bulk_embeddings.load(Ordering::SeqCst) {
+                let response = ResponseTemplate::new(503);
+                return if self.vary_failure_body.load(Ordering::SeqCst) {
+                    response.set_body_string(format!(
+                        "transient failure {}",
+                        self.bulk_calls.load(Ordering::SeqCst)
+                    ))
+                } else {
+                    response
+                };
             }
         }
 
@@ -617,7 +626,7 @@ async fn failed_open_probe_retries_after_backoff() {
     let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
     let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
     let mgr = FolderIndexManager::new(tmp.path())
-        .with_embedders(short, bulk)
+        .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
         .with_model_recovery_timings_for_test(
             std::time::Duration::from_secs(1),
             std::time::Duration::from_millis(20),
@@ -844,7 +853,7 @@ async fn writer_race_backs_off_without_halting_and_recovers_after_writer_stops()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn writer_race_preserves_a_same_class_failure_streak() {
+async fn writer_race_preserves_history_until_newer_provenance_resets_only_failures() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
     let server = MockServer::start().await;
@@ -982,8 +991,13 @@ async fn writer_race_preserves_a_same_class_failure_streak() {
         )
     });
     assert_eq!(halted.error_class, "http_503");
-    assert_eq!(halted.failures, 3, "fail, fail, race, fail did not halt");
-    assert!(halted.halted, "preserved failure streak did not re-halt");
+    assert_eq!(
+        halted.failures, 1,
+        "newer writer provenance did not reset only the class streak"
+    );
+    assert_eq!(halted.backoff_failures, 3);
+    assert_eq!(halted.writer_races, 1);
+    assert!(!halted.halted);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1084,8 +1098,8 @@ async fn genuine_same_class_failure_halts_with_backoff() {
     assert!(status
         .stale_reason
         .as_deref()
-        .is_some_and(|reason| reason.starts_with("rebuild_suppressed:")
-            && reason.contains("after 3 same-class failures")));
+        .is_some_and(|reason| reason
+            == "rebuild_suppressed: error_class=http_503 failures=3 backoff_failures=3"));
     let index = mgr
         .get_or_open_without_probe_for_test("failed", 32)
         .unwrap();
@@ -1178,6 +1192,282 @@ async fn genuine_same_class_failure_halts_with_backoff() {
     assert_eq!(recovered.index_state, IndexModelState::Ready);
     assert_eq!(recovered.embed_model.as_deref(), Some("new"));
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 5);
+}
+
+async fn assert_failed_endpoint_simulated_day_is_bounded(rotating_classes: bool) {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(
+        EmbeddingClient::with_base_url(server.uri())
+            .with_model("bulk-alias")
+            .with_timeout(std::time::Duration::from_millis(20)),
+    );
+    let backoff = std::time::Duration::from_secs(30 * 60);
+    let cooldown_cap = std::time::Duration::from_secs(6 * 60 * 60);
+    let hourly_cap = std::time::Duration::from_secs(60 * 60);
+    let threshold = 3_u32;
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(short, bulk)
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_secs(10 * 60),
+            std::time::Duration::from_secs(5),
+            backoff,
+            cooldown_cap,
+            threshold,
+        );
+    mgr.upsert_folder_file(
+        "day-bound",
+        32,
+        &one_chunk("a.md", "Failure bound.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("day-bound").await;
+    responder.set_both_model("model-b", 64, 2);
+    if rotating_classes {
+        responder.rotate_failure_class.store(true, Ordering::SeqCst);
+    } else {
+        responder.fail_bulk_embeddings.store(true, Ordering::SeqCst);
+    }
+
+    for _ in 0..144 {
+        mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
+        mgr.probe_folder_model_for_test("day-bound", 32)
+            .await
+            .unwrap();
+        mgr.wait_for_rebuild("day-bound").await;
+    }
+
+    // Earliest possible starts: the hourly claim budget dominates the first
+    // two 30m/60m delays; exponential delays then reach 2h, 4h and the 6h
+    // cooldown cap. The threshold (3) activates halt/re-arm but never shortens
+    // those delays. Simulate that arithmetic rather than hard-coding N.
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    let mut elapsed = std::time::Duration::ZERO;
+    let mut bound = 0_usize;
+    while elapsed < day {
+        bound += 1;
+        let shift = (bound.saturating_sub(1)).min(31) as u32;
+        let multiplier = 1_u32 << shift;
+        let delay = backoff.saturating_mul(multiplier).min(cooldown_cap);
+        elapsed = elapsed.saturating_add(delay.max(hourly_cap));
+        if bound == threshold as usize {
+            // The real code enters halted cooldown here; expiry re-arms one.
+        }
+    }
+    let bulk_calls = responder.bulk_calls.load(Ordering::SeqCst);
+    assert!(
+        bulk_calls <= bound,
+        "{bulk_calls} bulk rebuilds exceeded derived simulated-day bound {bound}"
+    );
+    if rotating_classes {
+        let idx = mgr.get_existing("day-bound", 32).unwrap();
+        let retry = model_meta::read_persisted_rebuild_retry(&idx.lock_conn().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.failures, 1, "error-class change did not reset streak");
+        assert_eq!(
+            retry.backoff_failures, bulk_calls as u32,
+            "error-class change reset per-key backoff escalation"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persistent_503_for_simulated_day_has_derived_rebuild_bound() {
+    assert_failed_endpoint_simulated_day_is_bounded(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn flapping_503_502_timeout_for_simulated_day_has_same_bound() {
+    assert_failed_endpoint_simulated_day_is_bounded(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cross_process_failure_cas_preserves_a_fresher_halt() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let make_manager = || {
+        FolderIndexManager::new(tmp.path())
+            .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
+            .with_model_recovery_timings_for_test(
+                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(6 * 60 * 60),
+                3,
+            )
+    };
+    let mgr_x = make_manager();
+    let mgr_y = make_manager();
+    mgr_x
+        .upsert_folder_file(
+            "retry-cas",
+            32,
+            &one_chunk("a.md", "CAS fixture.", basis(64, 1)),
+            Some(&UpsertModelMeta {
+                model: "model-a".into(),
+                embed_dim: 64,
+                bulk_alias: "bulk-alias".into(),
+                short_alias: Some("short-alias".into()),
+            }),
+        )
+        .await
+        .unwrap();
+    mgr_x.wait_for_model_probe("retry-cas").await;
+    responder.set_both_model("model-b", 64, 2);
+    mgr_x
+        .probe_folder_model_for_test("retry-cas", 32)
+        .await
+        .unwrap();
+    mgr_x.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
+    responder.gate_bulk.store(true, Ordering::SeqCst);
+    responder.fail_bulk_embeddings.store(true, Ordering::SeqCst);
+    mgr_x
+        .probe_folder_model_for_test("retry-cas", 32)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("process X never entered the failing rebuild");
+
+    let idx_y = mgr_y.get_existing("retry-cas", 32).unwrap();
+    let generation = idx_y.model_status().unwrap().generation;
+    let fresher = model_meta::PersistedRebuildRetry {
+        model: "model-b".into(),
+        dim: 64,
+        error_class: "http_502".into(),
+        failures: 3,
+        halted: true,
+        not_before_unix_ms: u64::MAX - 1,
+        failure_generation: generation.saturating_add(1),
+        backoff_failures: 99,
+        writer_races: 7,
+    };
+    model_meta::write_persisted_rebuild_retry(&idx_y.lock_conn().unwrap(), &fresher).unwrap();
+    responder.gate_release.store(true, Ordering::SeqCst);
+    mgr_x.wait_for_rebuild("retry-cas").await;
+
+    let preserved = model_meta::read_persisted_rebuild_retry(&idx_y.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved, fresher, "process X overwrote process Y's halt");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_rebuild_limit_and_clear_are_atomic_and_preserve_escalation_history() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(Arc::clone(&short), Arc::clone(&bulk))
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(6 * 60 * 60),
+            3,
+        );
+    mgr.upsert_folder_file(
+        "manual-budget",
+        32,
+        &one_chunk("a.md", "Manual fixture.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("manual-budget").await;
+    let idx = mgr.get_existing("manual-budget", 32).unwrap();
+    idx.mark_stale("manual_test").unwrap();
+    let seeded = model_meta::PersistedRebuildRetry {
+        model: "model-a".into(),
+        dim: 64,
+        error_class: "http_503".into(),
+        failures: 3,
+        halted: true,
+        not_before_unix_ms: u64::MAX - 1,
+        failure_generation: idx.model_status().unwrap().generation,
+        backoff_failures: 5,
+        writer_races: 4,
+    };
+    model_meta::write_persisted_rebuild_retry(&idx.lock_conn().unwrap(), &seeded).unwrap();
+    responder.gate_bulk.store(true, Ordering::SeqCst);
+    assert_eq!(
+        mgr.request_folder_rebuild("manual-budget", 32)
+            .await
+            .unwrap(),
+        FolderRebuildRequestOutcome::Started
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("manual rebuild never entered bulk call");
+    let cleared = model_meta::read_persisted_rebuild_retry(&idx.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(cleared.failures, 0);
+    assert!(!cleared.halted);
+    assert_eq!(cleared.backoff_failures, 5);
+    assert_eq!(cleared.writer_races, 4);
+    let first_calls = responder.bulk_calls.load(Ordering::SeqCst);
+    responder.gate_release.store(true, Ordering::SeqCst);
+    mgr.wait_for_rebuild("manual-budget").await;
+
+    idx.mark_stale("manual_test_again").unwrap();
+    let second_process = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    let refused = second_process
+        .request_folder_rebuild("manual-budget", 32)
+        .await
+        .unwrap();
+    let FolderRebuildRequestOutcome::DeferredUntil(next_allowed) = refused else {
+        panic!("second manual rebuild was not rate-limited: {refused:?}");
+    };
+    assert!(next_allowed > 0);
+    assert_eq!(
+        responder.bulk_calls.load(Ordering::SeqCst),
+        first_calls,
+        "rate-limited manual request started another rebuild"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1393,6 +1683,74 @@ async fn legacy_retry_without_failure_generation_reads_and_auto_clears() {
             .unwrap()
             .is_none(),
         "legacy retry was not auto-cleared"
+    );
+}
+
+#[test]
+fn legacy_unbounded_retry_is_clamped_and_garbage_is_absent_from_status() {
+    let tmp = TempDir::new().unwrap();
+    let idx = FolderIndex::open(tmp.path(), "status-retry", 32).unwrap();
+    let now = 10_000_u64;
+    let retry = model_meta::PersistedRebuildRetry {
+        model: "model-a".into(),
+        dim: 64,
+        error_class: "http_503".into(),
+        failures: 3,
+        halted: true,
+        not_before_unix_ms: u64::MAX,
+        failure_generation: 0,
+        backoff_failures: 3,
+        writer_races: 0,
+    };
+    assert!(
+        !model_meta::rebuild_retry_is_halted(&retry, Some(("model-a", 64)), None, now, 100,),
+        "legacy u64::MAX not_before escaped the configured cooldown cap"
+    );
+    assert!(!model_meta::rebuild_retry_is_halted(
+        &retry,
+        Some(("other-model", 64)),
+        None,
+        now,
+        100,
+    ));
+
+    idx.lock_conn()
+        .unwrap()
+        .execute(
+            "INSERT INTO folder_meta (key, value) VALUES ('rebuild_retry', 'not-json') \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .unwrap();
+    let status = idx
+        .model_status()
+        .expect("garbage rebuild retry must be absent from model status");
+    assert!(!status.halted);
+    assert_eq!(status.rebuild_error_class, None);
+    idx.mark_stale("garbage_retry_test").unwrap();
+    let now_wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let decision = model_meta::try_claim_folder_rebuild_with_policy(
+        &mut idx.lock_conn().unwrap(),
+        "model-a",
+        64,
+        now_wall,
+        model_meta::RebuildClaimMode::Manual,
+        100,
+        3,
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        model_meta::RebuildClaimDecision::Claimed(_)
+    ));
+    assert!(
+        model_meta::read_persisted_rebuild_retry(&idx.lock_conn().unwrap())
+            .unwrap()
+            .is_none(),
+        "registry claim did not delete unparsable retry JSON"
     );
 }
 
@@ -1867,7 +2225,8 @@ async fn varying_failure_text_persists_backoff_and_halt_until_new_ingest() {
         .unwrap()
         .stale_reason
         .as_deref()
-        .is_some_and(|reason| reason.contains("transient failure 3")));
+        .is_some_and(|reason| reason
+            == "rebuild_suppressed: error_class=http_503 failures=3 backoff_failures=3"));
     drop(idx);
     drop(mgr);
 
@@ -1903,6 +2262,10 @@ async fn varying_failure_text_persists_backoff_and_halt_until_new_ingest() {
         .unwrap()
         .unwrap();
     assert_eq!(retry.failures, 1);
+    assert_eq!(
+        retry.backoff_failures, 4,
+        "newer provenance reset per-key backoff escalation"
+    );
     assert!(!retry.halted);
 }
 
@@ -3223,6 +3586,7 @@ async fn future_automatic_success_timestamp_is_expired_and_status_exposes_real_c
             &conn,
             &model_meta::PersistedAutomaticRebuildSuccess {
                 last_success_unix_ms: now,
+                last_manual_unix_ms: 0,
             },
         )
         .unwrap();
@@ -3234,6 +3598,7 @@ async fn future_automatic_success_timestamp_is_expired_and_status_exposes_real_c
             &conn,
             &model_meta::PersistedAutomaticRebuildSuccess {
                 last_success_unix_ms: u64::MAX,
+                last_manual_unix_ms: 0,
             },
         )
         .unwrap();
@@ -3404,6 +3769,10 @@ async fn explicit_rebuild_request_reports_already_running() {
     mgr.wait_for_model_probe("already-running").await;
 
     responder.set_both_model("model-b", 64, 2);
+    mgr.get_existing("already-running", 32)
+        .unwrap()
+        .mark_stale("operator_requested_test")
+        .unwrap();
     responder.gate_entered.store(false, Ordering::SeqCst);
     responder.gate_release.store(false, Ordering::SeqCst);
     responder.gate_bulk.store(true, Ordering::SeqCst);
@@ -3429,6 +3798,73 @@ async fn explicit_rebuild_request_reports_already_running() {
     responder.gate_bulk.store(false, Ordering::SeqCst);
     responder.gate_release.store(true, Ordering::SeqCst);
     mgr.wait_for_rebuild("already-running").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_an_owned_rebuild_expires_the_claim_and_marks_stale() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let short = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("short-alias"));
+    let bulk = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("bulk-alias"));
+    let mgr = FolderIndexManager::new(tmp.path()).with_embedders(short, bulk);
+    mgr.upsert_folder_file(
+        "cancel-owned",
+        32,
+        &one_chunk("a.md", "Cancel owned text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "bulk-alias".into(),
+            short_alias: Some("short-alias".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("cancel-owned").await;
+
+    responder.set_both_model("model-b", 64, 2);
+    let idx = mgr.get_existing("cancel-owned", 32).unwrap();
+    idx.mark_stale("operator_requested_test").unwrap();
+    responder.gate_entered.store(false, Ordering::SeqCst);
+    responder.gate_release.store(false, Ordering::SeqCst);
+    responder.gate_bulk.store(true, Ordering::SeqCst);
+    assert_eq!(
+        mgr.request_folder_rebuild("cancel-owned", 32)
+            .await
+            .unwrap(),
+        FolderRebuildRequestOutcome::Started
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("rebuild did not reach the bulk gate");
+
+    assert!(mgr
+        .cancel_folder_rebuild("cancel-owned", 32, "cli_timeout")
+        .unwrap());
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert_eq!(status.stale_reason.as_deref(), Some("cli_timeout"));
+    assert_eq!(
+        model_meta::read_folder_rebuild_claim(&idx.lock_conn().unwrap())
+            .unwrap()
+            .unwrap()
+            .lease_expires_unix_ms,
+        0
+    );
+
+    responder.gate_bulk.store(false, Ordering::SeqCst);
+    responder.gate_release.store(true, Ordering::SeqCst);
+    mgr.wait_for_rebuild("cancel-owned").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3659,6 +4095,10 @@ async fn rebuild_rejects_page_response_from_a_different_model() {
 
     responder.set_both_model("model-b", 64, 2);
     responder.set_bulk_embedding_response_model(Some("model-c"));
+    mgr.get_existing("page-response-model", 32)
+        .unwrap()
+        .mark_stale("operator_requested_test")
+        .unwrap();
     assert_eq!(
         mgr.request_folder_rebuild("page-response-model", 32)
             .await
@@ -3674,10 +4114,9 @@ async fn rebuild_rejects_page_response_from_a_different_model() {
     assert_eq!(status.index_state, IndexModelState::Stale);
     assert_eq!(status.embed_model.as_deref(), Some("model-a"));
     assert!(
-        status
-            .stale_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("model changed mid-rebuild")),
+        status.stale_reason.as_deref().is_some_and(
+            |reason| reason == "rebuild_failed: error_class=llm failures=1 backoff_failures=1"
+        ),
         "wrong-model page response must fail the rebuild: {status:?}"
     );
 }
@@ -3737,6 +4176,7 @@ async fn rebuild_commit_is_fenced_when_claim_owner_changes() {
     }));
 
     responder.set_both_model("model-b", 64, 2);
+    idx.mark_stale("operator_requested_test").unwrap();
     assert_eq!(
         mgr.request_folder_rebuild("commit-fence", 32)
             .await
@@ -3803,6 +4243,7 @@ async fn rebuild_commit_requires_matching_claim_token_for_coverage_and_swap() {
     }));
 
     responder.set_both_model("model-b", 64, 2);
+    idx.mark_stale("operator_requested_test").unwrap();
     assert_eq!(
         mgr.request_folder_rebuild("token-coverage", 32)
             .await
@@ -4132,6 +4573,10 @@ async fn db_claim_excludes_second_manager_and_stale_owner_resumes_parked_rows() 
     mgr1.wait_for_model_probe("claimed").await;
 
     responder.set_both_model("model-b", 64, 2);
+    mgr1.get_existing("claimed", 32)
+        .unwrap()
+        .mark_stale("operator_requested_test")
+        .unwrap();
     responder.gate_after_bulk_calls.store(16, Ordering::SeqCst);
     responder.gate_bulk.store(true, Ordering::SeqCst);
     let (first, second) = tokio::join!(
@@ -4188,6 +4633,7 @@ async fn db_claim_excludes_second_manager_and_stale_owner_resumes_parked_rows() 
     mgr2.wait_for_rebuild("claimed").await;
     responder.gate_entered.store(false, Ordering::SeqCst);
     responder.gate_release.store(false, Ordering::SeqCst);
+    mgr2.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60 * 60 + 1));
     assert_eq!(
         mgr2.request_folder_rebuild("claimed", 32).await.unwrap(),
         FolderRebuildRequestOutcome::Started,
@@ -4502,6 +4948,7 @@ async fn random_probe_upsert_restart_and_rebuild_interleavings_preserve_ready_in
                             FolderRebuildRequestOutcome::Started
                                 | FolderRebuildRequestOutcome::AlreadyRunning
                                 | FolderRebuildRequestOutcome::AlreadyCurrent
+                                | FolderRebuildRequestOutcome::DeferredUntil(_)
                         ));
                     }
                 }

@@ -309,7 +309,6 @@ mod handler_contract_tests {
             "brain_write_journal",
             "dream",
             "folder_index_mark_skipped",
-            "folder_index_rebuild",
             "folder_index_remove",
             "folder_index_search",
             "folder_index_states",

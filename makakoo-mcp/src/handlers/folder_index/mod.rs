@@ -80,9 +80,7 @@ impl ToolHandler for FolderIndexRebuildHandler {
             .await
             .map_err(map_core_err)?;
         let status = mgr
-            .get_or_open(folder_id, dim)
-            .map_err(map_core_err)?
-            .model_status()
+            .model_status_existing(folder_id, dim)
             .map_err(map_core_err)?;
         Ok(json!({
             "folder_id": folder_id,
@@ -91,6 +89,7 @@ impl ToolHandler for FolderIndexRebuildHandler {
             "halted": status.halted,
             "generation": status.generation,
             "unproven_vectors_since_gen": status.unproven_vectors_since_gen,
+            "next_allowed_unix_ms": outcome.next_allowed_unix_ms(),
         }))
     }
 }
@@ -103,6 +102,7 @@ pub(super) fn require_manager(ctx: &ToolContext) -> Result<&Arc<FolderIndexManag
 
 pub(super) fn map_core_err(err: MakakooError) -> RpcError {
     match err {
+        MakakooError::NotFound(msg) => RpcError::invalid_params(format!("not found: {msg}")),
         MakakooError::InvalidInput(msg) => RpcError::invalid_params(msg),
         MakakooError::RetryableFolderModelMismatch(msg) => {
             let mut error = RpcError::internal(format!("retryable folder model mismatch: {msg}"));

@@ -221,7 +221,7 @@ impl ToolHandler for FolderIndexStatesHandler {
             "unproven_vectors_since_gen": status.unproven_vectors_since_gen,
         });
         if let Some(obj) = out.as_object_mut() {
-            if let Some(m) = status.embed_model {
+            if let Some(ref m) = status.embed_model {
                 obj.insert("embed_model".to_string(), json!(m));
             }
             if let Some(d) = status.embed_dim {
@@ -230,7 +230,7 @@ impl ToolHandler for FolderIndexStatesHandler {
             if let Some(until) = status.rebuild_deferred_until {
                 obj.insert("rebuild_deferred_until".to_string(), json!(until));
             }
-            if let Some(reason) = status.stale_reason {
+            if let Some(reason) = status.public_stale_reason() {
                 obj.insert("stale_reason".to_string(), json!(reason));
             }
         }

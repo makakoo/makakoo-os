@@ -32,6 +32,8 @@ const PROVENANCE_SCHEMA_VERSION: &str = "1";
 const META_REBUILD_CLAIM: &str = "folder_rebuild_claim";
 pub(crate) const FOLDER_REBUILD_LEASE_MS: u64 = 120_000;
 pub(crate) const AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS: u64 = 60 * 60 * 1_000;
+pub(crate) const MANUAL_REBUILD_WINDOW_MS: u64 = 60 * 60 * 1_000;
+pub(crate) const DEFAULT_REBUILD_FAILURE_CAP_MS: u64 = 6 * 60 * 60 * 1_000;
 const MAX_QUERY_MISMATCH_REASON_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +90,23 @@ pub(crate) struct PersistedRebuildRetry {
 pub(crate) struct PersistedAutomaticRebuildSuccess {
     #[serde(default)]
     pub(crate) last_success_unix_ms: u64,
+    #[serde(default)]
+    pub(crate) last_manual_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RebuildRetryVersion {
+    pub(crate) failure_generation: u64,
+    pub(crate) not_before_unix_ms: u64,
+}
+
+impl From<&PersistedRebuildRetry> for RebuildRetryVersion {
+    fn from(value: &PersistedRebuildRetry) -> Self {
+        Self {
+            failure_generation: value.failure_generation,
+            not_before_unix_ms: value.not_before_unix_ms,
+        }
+    }
 }
 
 /// Durable, cross-process rebuild ownership. `token` identifies resumable
@@ -100,6 +119,25 @@ pub(crate) struct FolderRebuildClaim {
     pub(crate) model: String,
     pub(crate) dim: usize,
     pub(crate) lease_expires_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RebuildClaimMode {
+    Automatic,
+    Manual,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClaimedFolderRebuild {
+    pub(crate) claim: FolderRebuildClaim,
+    pub(crate) retry_version: Option<RebuildRetryVersion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RebuildClaimDecision {
+    Claimed(ClaimedFolderRebuild),
+    Busy,
+    DeferredUntil(u64),
 }
 
 /// Lifecycle state of a folder or Brain vector index relative to the configured
@@ -155,6 +193,31 @@ pub struct FolderModelStatus {
     pub unproven_vectors_since_gen: Option<u64>,
     pub halted: bool,
     pub rebuild_deferred_until: Option<u64>,
+    pub rebuild_error_class: Option<String>,
+    pub rebuild_failures: u32,
+    pub rebuild_backoff_failures: u32,
+    pub rebuild_writer_races: u32,
+}
+
+impl FolderModelStatus {
+    /// Agent/CLI-safe diagnostic. Raw provider/HTTP text remains in logs and
+    /// is never returned through public tool surfaces.
+    pub fn public_stale_reason(&self) -> Option<String> {
+        let raw = self.stale_reason.as_deref()?;
+        if raw.starts_with("rebuild_failed:")
+            || raw.starts_with("rebuild_suppressed:")
+            || raw.starts_with("rebuild_deferred:")
+        {
+            return Some(match self.rebuild_error_class.as_deref() {
+                Some(class) => format!(
+                    "error_class={class} failures={} backoff_failures={} writer_races={}",
+                    self.rebuild_failures, self.rebuild_backoff_failures, self.rebuild_writer_races
+                ),
+                None => "rebuild_error".to_string(),
+            });
+        }
+        Some(raw.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +304,15 @@ pub(crate) fn write_meta_opt(conn: &Connection, key: &str, value: Option<&str>) 
 }
 
 pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> {
+    read_model_status_at(conn, unix_time_ms(), DEFAULT_REBUILD_FAILURE_CAP_MS, None)
+}
+
+pub(crate) fn read_model_status_at(
+    conn: &Connection,
+    now_unix_ms: u64,
+    rebuild_failure_cap_ms: u64,
+    expected_retry_key: Option<(&str, usize)>,
+) -> Result<FolderModelStatus> {
     let index_state = match read_meta_opt(conn, META_INDEX_STATE)? {
         Some(raw) => IndexModelState::parse(&raw)?,
         None => IndexModelState::Ready,
@@ -258,12 +330,21 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
     let stale_reason = read_meta_opt(conn, META_STALE_REASON)?;
     let generation = read_generation(conn)?;
     let unproven_vectors_since_gen = read_unproven_vectors_since_gen(conn)?;
-    let now_unix_ms = unix_time_ms();
-    let halted = read_persisted_rebuild_retry(conn)?.is_some_and(|retry| {
-        retry.halted
-            && now_unix_ms < retry.not_before_unix_ms
-            && unproven_vectors_since_gen
-                .is_none_or(|flag_generation| flag_generation <= retry.failure_generation)
+    let observed_retry_key = read_observed_bulk(conn).ok().flatten();
+    let expected_retry_key = expected_retry_key.or_else(|| {
+        observed_retry_key
+            .as_ref()
+            .map(|observed| (observed.model.as_str(), observed.dim))
+    });
+    let retry = read_persisted_rebuild_retry_lossy(conn)?;
+    let halted = retry.as_ref().is_some_and(|retry| {
+        rebuild_retry_is_halted(
+            retry,
+            expected_retry_key,
+            unproven_vectors_since_gen,
+            now_unix_ms,
+            rebuild_failure_cap_ms,
+        )
     });
     let rebuild_deferred_until =
         read_persisted_automatic_rebuild_success(conn)?.and_then(|success| {
@@ -285,7 +366,31 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
         unproven_vectors_since_gen,
         halted,
         rebuild_deferred_until,
+        rebuild_error_class: retry.as_ref().map(|value| value.error_class.clone()),
+        rebuild_failures: retry.as_ref().map_or(0, |value| value.failures),
+        rebuild_backoff_failures: retry.as_ref().map_or(0, |value| value.backoff_failures),
+        rebuild_writer_races: retry.as_ref().map_or(0, |value| value.writer_races),
     })
+}
+
+pub(crate) fn rebuild_retry_is_halted(
+    retry: &PersistedRebuildRetry,
+    expected_key: Option<(&str, usize)>,
+    unproven_vectors_since_gen: Option<u64>,
+    now_unix_ms: u64,
+    rebuild_failure_cap_ms: u64,
+) -> bool {
+    let key_matches =
+        expected_key.is_none_or(|(model, dim)| retry.model == model && retry.dim == dim);
+    let flag_does_not_supersede = unproven_vectors_since_gen
+        .is_none_or(|flag_generation| flag_generation <= retry.failure_generation);
+    let deadline_is_bounded =
+        retry.not_before_unix_ms <= now_unix_ms.saturating_add(rebuild_failure_cap_ms);
+    retry.halted
+        && key_matches
+        && flag_does_not_supersede
+        && deadline_is_bounded
+        && now_unix_ms < retry.not_before_unix_ms
 }
 
 pub(crate) fn write_model_state(
@@ -341,6 +446,7 @@ pub(crate) fn folder_rebuild_claim_is_fresh(conn: &Connection, now_unix_ms: u64)
 /// Claim `Rebuilding` and its owner lease in the same IMMEDIATE transaction.
 /// A fresh claim refuses the contender. A stale same-pair claim keeps its
 /// stable token so the new owner resumes already parked rows.
+#[cfg(test)]
 pub(crate) fn try_claim_folder_rebuild(
     conn: &mut Connection,
     model: &str,
@@ -348,6 +454,36 @@ pub(crate) fn try_claim_folder_rebuild(
     now_unix_ms: u64,
     automatic_attempt_unix_ms: Option<u64>,
 ) -> Result<Option<FolderRebuildClaim>> {
+    let mode = if automatic_attempt_unix_ms.is_some() {
+        RebuildClaimMode::Automatic
+    } else {
+        RebuildClaimMode::Manual
+    };
+    Ok(
+        match try_claim_folder_rebuild_with_policy(
+            conn,
+            model,
+            dim,
+            now_unix_ms,
+            mode,
+            DEFAULT_REBUILD_FAILURE_CAP_MS,
+            3,
+        )? {
+            RebuildClaimDecision::Claimed(claimed) => Some(claimed.claim),
+            RebuildClaimDecision::Busy | RebuildClaimDecision::DeferredUntil(_) => None,
+        },
+    )
+}
+
+pub(crate) fn try_claim_folder_rebuild_with_policy(
+    conn: &mut Connection,
+    model: &str,
+    dim: usize,
+    now_unix_ms: u64,
+    mode: RebuildClaimMode,
+    rebuild_failure_cap_ms: u64,
+    max_same_class_failures: u32,
+) -> Result<RebuildClaimDecision> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let current = read_folder_rebuild_claim(&tx)?;
     if read_model_status(&tx)?.index_state == IndexModelState::Rebuilding
@@ -355,7 +491,81 @@ pub(crate) fn try_claim_folder_rebuild(
             .as_ref()
             .is_some_and(|claim| now_unix_ms < claim.lease_expires_unix_ms)
     {
-        return Ok(None);
+        return Ok(RebuildClaimDecision::Busy);
+    }
+
+    let flag_generation = read_unproven_vectors_since_gen(&tx)?;
+    let mut retry = match read_persisted_rebuild_retry(&tx) {
+        Ok(retry) => retry,
+        Err(_) => {
+            clear_persisted_rebuild_retry(&tx)?;
+            None
+        }
+    };
+    if retry
+        .as_ref()
+        .is_some_and(|state| state.model != model || state.dim != dim)
+    {
+        clear_persisted_rebuild_retry(&tx)?;
+        retry = None;
+    }
+    if let Some(state) = retry.as_mut() {
+        let newer_flag =
+            flag_generation.is_some_and(|generation| generation > state.failure_generation);
+        let halt_active = rebuild_retry_is_halted(
+            state,
+            Some((model, dim)),
+            flag_generation,
+            now_unix_ms,
+            rebuild_failure_cap_ms,
+        );
+        if newer_flag {
+            // New provenance invalidates only the same-class halt streak. Keep
+            // the per-key backoff and writer-collision history monotonic.
+            state.failures = 0;
+            state.halted = false;
+            state.not_before_unix_ms = now_unix_ms;
+            write_persisted_rebuild_retry(&tx, state)?;
+        } else if state.halted && !halt_active {
+            state.halted = false;
+            state.failures = max_same_class_failures.saturating_sub(1);
+            state.not_before_unix_ms = now_unix_ms;
+            write_persisted_rebuild_retry(&tx, state)?;
+        }
+        let halt_active = rebuild_retry_is_halted(
+            state,
+            Some((model, dim)),
+            flag_generation,
+            now_unix_ms,
+            rebuild_failure_cap_ms,
+        );
+        if mode == RebuildClaimMode::Automatic
+            && (halt_active || now_unix_ms < state.not_before_unix_ms)
+        {
+            let until = state.not_before_unix_ms;
+            tx.commit()?;
+            return Ok(RebuildClaimDecision::DeferredUntil(until));
+        }
+    }
+
+    let mut attempts = read_persisted_automatic_rebuild_success(&tx)?.unwrap_or(
+        PersistedAutomaticRebuildSuccess {
+            last_success_unix_ms: 0,
+            last_manual_unix_ms: 0,
+        },
+    );
+    let (last_attempt, window_ms) = match mode {
+        RebuildClaimMode::Automatic => (
+            attempts.last_success_unix_ms,
+            AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS,
+        ),
+        RebuildClaimMode::Manual => (attempts.last_manual_unix_ms, MANUAL_REBUILD_WINDOW_MS),
+    };
+    if last_attempt <= now_unix_ms && now_unix_ms < last_attempt.saturating_add(window_ms) {
+        tx.commit()?;
+        return Ok(RebuildClaimDecision::DeferredUntil(
+            last_attempt.saturating_add(window_ms),
+        ));
     }
 
     let token = current
@@ -378,23 +588,30 @@ pub(crate) fn try_claim_folder_rebuild(
         META_REBUILD_CLAIM,
         Some(&serde_json::to_string(&claim)?),
     )?;
-    if let Some(last_success_unix_ms) = automatic_attempt_unix_ms {
-        // The legacy key/field name is retained for on-disk compatibility, but
-        // the hourly cap applies to every claimed automatic attempt, not only
-        // successful commits. This write is atomic with cross-process ownership.
-        write_persisted_automatic_rebuild_success(
-            &tx,
-            &PersistedAutomaticRebuildSuccess {
-                last_success_unix_ms,
-            },
-        )?;
+    match mode {
+        RebuildClaimMode::Automatic => attempts.last_success_unix_ms = now_unix_ms,
+        RebuildClaimMode::Manual => attempts.last_manual_unix_ms = now_unix_ms,
+    }
+    // The legacy key/field name is retained for on-disk compatibility. Both
+    // budgets are checked and charged under the same IMMEDIATE claim lock.
+    write_persisted_automatic_rebuild_success(&tx, &attempts)?;
+    if mode == RebuildClaimMode::Manual {
+        if let Some(state) = retry.as_mut() {
+            state.failures = 0;
+            state.halted = false;
+            state.not_before_unix_ms = now_unix_ms;
+            write_persisted_rebuild_retry(&tx, state)?;
+        }
     }
     tx.execute(
         "DELETE FROM rebuild_vectors WHERE claim_token <> ?1",
         params![&claim.token],
     )?;
     tx.commit()?;
-    Ok(Some(claim))
+    Ok(RebuildClaimDecision::Claimed(ClaimedFolderRebuild {
+        claim,
+        retry_version: retry.as_ref().map(RebuildRetryVersion::from),
+    }))
 }
 
 pub(crate) fn folder_rebuild_claim_owned(
@@ -593,6 +810,18 @@ pub(crate) fn read_persisted_rebuild_retry(
     Ok(Some(serde_json::from_str(&raw)?))
 }
 
+/// Status/search paths must remain available when a legacy or partially
+/// written diagnostic record is corrupt. Claim paths call the strict reader
+/// and delete malformed data while holding an IMMEDIATE transaction.
+pub(crate) fn read_persisted_rebuild_retry_lossy(
+    conn: &Connection,
+) -> Result<Option<PersistedRebuildRetry>> {
+    let Some(raw) = read_meta_opt(conn, META_REBUILD_RETRY)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str(&raw).ok())
+}
+
 pub(crate) fn write_persisted_rebuild_retry(
     conn: &Connection,
     retry: &PersistedRebuildRetry,
@@ -606,6 +835,37 @@ pub(crate) fn write_persisted_rebuild_retry(
 
 pub(crate) fn clear_persisted_rebuild_retry(conn: &Connection) -> Result<()> {
     write_meta_opt(conn, META_REBUILD_RETRY, None)
+}
+
+pub(crate) fn rebuild_retry_version_matches(
+    conn: &Connection,
+    expected: Option<RebuildRetryVersion>,
+) -> Result<bool> {
+    let current = read_persisted_rebuild_retry(conn)?;
+    Ok(current.as_ref().map(RebuildRetryVersion::from) == expected)
+}
+
+pub(crate) fn write_persisted_rebuild_retry_cas(
+    conn: &Connection,
+    expected: Option<RebuildRetryVersion>,
+    retry: &PersistedRebuildRetry,
+) -> Result<bool> {
+    if !rebuild_retry_version_matches(conn, expected)? {
+        return Ok(false);
+    }
+    write_persisted_rebuild_retry(conn, retry)?;
+    Ok(true)
+}
+
+pub(crate) fn clear_persisted_rebuild_retry_cas(
+    conn: &Connection,
+    expected: Option<RebuildRetryVersion>,
+) -> Result<bool> {
+    if !rebuild_retry_version_matches(conn, expected)? {
+        return Ok(false);
+    }
+    clear_persisted_rebuild_retry(conn)?;
+    Ok(true)
 }
 
 pub(crate) fn read_persisted_automatic_rebuild_success(

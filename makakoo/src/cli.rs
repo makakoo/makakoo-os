@@ -1625,7 +1625,7 @@ pub enum FolderIndexCmd {
     /// Show model/provenance state for one folder index.
     Status {
         folder_id: String,
-        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM)]
+        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM, value_parser = parse_folder_index_dim)]
         dim: usize,
         #[arg(long)]
         json: bool,
@@ -1633,11 +1633,21 @@ pub enum FolderIndexCmd {
     /// Request one rebuild; active and already-current requests are no-ops.
     Rebuild {
         folder_id: String,
-        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM)]
+        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM, value_parser = parse_folder_index_dim)]
         dim: usize,
         #[arg(long)]
         json: bool,
     },
+}
+
+fn parse_folder_index_dim(raw: &str) -> Result<usize, String> {
+    let dim = raw
+        .parse::<usize>()
+        .map_err(|_| format!("invalid dimension {raw:?}; expected 1..=512"))?;
+    (1..=512)
+        .contains(&dim)
+        .then_some(dim)
+        .ok_or_else(|| format!("invalid dimension {dim}; expected 1..=512"))
 }
 
 #[derive(Subcommand, Debug)]
@@ -2224,6 +2234,23 @@ mod tests {
                 assert!(json);
             }
             _ => panic!("expected Brain::FolderIndex::Rebuild"),
+        }
+    }
+
+    #[test]
+    fn folder_index_dim_is_bounded_to_storage_contract() {
+        for dim in ["0", "513"] {
+            let err = Cli::try_parse_from([
+                "makakoo",
+                "brain",
+                "folder-index",
+                "status",
+                "legal",
+                "--dim",
+                dim,
+            ])
+            .unwrap_err();
+            assert!(err.to_string().contains("expected 1..=512"));
         }
     }
 

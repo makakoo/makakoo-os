@@ -165,6 +165,7 @@ pub async fn run(ctx: &CliContext, command: BrainCmd) -> anyhow::Result<i32> {
 
 async fn folder_index(ctx: &CliContext, command: FolderIndexCmd) -> anyhow::Result<i32> {
     let manager = ctx.folder_index();
+    let mut interrupted = false;
     let (folder_id, dim, json_output, outcome) = match command {
         FolderIndexCmd::Status {
             folder_id,
@@ -183,38 +184,38 @@ async fn folder_index(ctx: &CliContext, command: FolderIndexCmd) -> anyhow::Resu
             if outcome
                 == makakoo_core::superbrain::folder_index::FolderRebuildRequestOutcome::Started
             {
-                tokio::time::timeout(
-                    FOLDER_INDEX_REBUILD_TIMEOUT,
-                    manager.wait_for_rebuild(&folder_id),
-                )
-                .await
-                .context("folder index rebuild timed out before completion")?;
+                tokio::select! {
+                    _ = manager.wait_for_rebuild(&folder_id) => {}
+                    _ = tokio::time::sleep(FOLDER_INDEX_REBUILD_TIMEOUT) => {
+                        interrupted = true;
+                        manager
+                            .cancel_folder_rebuild(&folder_id, dim, "cli_timeout")
+                            .context("release timed-out folder rebuild claim")?;
+                    }
+                    signal = tokio::signal::ctrl_c() => {
+                        signal.context("install Ctrl-C handler")?;
+                        interrupted = true;
+                        manager
+                            .cancel_folder_rebuild(&folder_id, dim, "cli_interrupted")
+                            .context("release interrupted folder rebuild claim")?;
+                    }
+                }
             }
-            (folder_id, dim, json, Some(outcome.as_str()))
+            (folder_id, dim, json, Some(outcome))
         }
     };
     let status = manager
-        .get_or_open(&folder_id, dim)
-        .context("open folder index")?
-        .model_status()
+        .model_status_existing(&folder_id, dim)
         .context("read folder index status")?;
-    let value = serde_json::json!({
-        "folder_id": folder_id,
-        "outcome": outcome,
-        "index_state": status.index_state,
-        "halted": status.halted,
-        "generation": status.generation,
-        "unproven_vectors_since_gen": status.unproven_vectors_since_gen,
-        "embed_model": status.embed_model,
-        "embed_dim": status.embed_dim,
-        "stale_reason": status.stale_reason,
-        "rebuild_deferred_until": status.rebuild_deferred_until,
-    });
+    let value = folder_index_status_value(&folder_id, &status, outcome);
     if json_output {
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         if let Some(outcome) = outcome {
-            println!("rebuild: {outcome}");
+            println!("rebuild: {}", outcome.as_str());
+            if let Some(next_allowed) = outcome.next_allowed_unix_ms() {
+                println!("next_allowed_unix_ms: {next_allowed}");
+            }
         }
         println!("folder_id: {folder_id}");
         println!("index_state: {}", status.index_state.as_str());
@@ -227,7 +228,35 @@ async fn folder_index(ctx: &CliContext, command: FolderIndexCmd) -> anyhow::Resu
                 .map_or_else(|| "none".to_string(), |generation| generation.to_string())
         );
     }
-    Ok(0)
+    Ok(
+        if !interrupted
+            && status.index_state == makakoo_core::superbrain::folder_index::IndexModelState::Ready
+        {
+            0
+        } else {
+            1
+        },
+    )
+}
+
+fn folder_index_status_value(
+    folder_id: &str,
+    status: &makakoo_core::superbrain::folder_index::FolderModelStatus,
+    outcome: Option<makakoo_core::superbrain::folder_index::FolderRebuildRequestOutcome>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "folder_id": folder_id,
+        "outcome": outcome.map(|value| value.as_str()),
+        "next_allowed_unix_ms": outcome.and_then(|value| value.next_allowed_unix_ms()),
+        "index_state": status.index_state,
+        "halted": status.halted,
+        "generation": status.generation,
+        "unproven_vectors_since_gen": status.unproven_vectors_since_gen,
+        "embed_model": status.embed_model,
+        "embed_dim": status.embed_dim,
+        "stale_reason": status.public_stale_reason(),
+        "rebuild_deferred_until": status.rebuild_deferred_until,
+    })
 }
 
 fn list(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
@@ -809,6 +838,28 @@ mod tests {
             FolderIndexManager::new(home.path().join("data/folder-indexes"))
                 .with_embedders(Arc::clone(&embedder), embedder),
         );
+        let ctx = CliContext::for_home(home.path().to_path_buf())
+            .with_folder_index_for_test(Arc::clone(&manager));
+        let requests_before_unknown = server.received_requests().await.unwrap().len();
+        let err = run(
+            &ctx,
+            BrainCmd::FolderIndex {
+                cmd: FolderIndexCmd::Status {
+                    folder_id: "unknown".into(),
+                    dim: 32,
+                    json: true,
+                },
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("not found"));
+        assert!(!home.path().join("data/folder-indexes/unknown").exists());
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            requests_before_unknown,
+            "unknown CLI status started a model probe"
+        );
         let index = manager.get_or_open("cli-folder", 32).unwrap();
         index
             .upsert_file_with_model(
@@ -842,9 +893,6 @@ mod tests {
             )
             .unwrap();
         index.mark_stale("cli_rebuild_test").unwrap();
-        let ctx = CliContext::for_home(home.path().to_path_buf())
-            .with_folder_index_for_test(Arc::clone(&manager));
-
         assert_eq!(
             run(
                 &ctx,
@@ -976,6 +1024,33 @@ mod tests {
         .await
         .expect("daemon rebuild never entered its embedding call");
 
+        let generation = index.model_status().unwrap().generation;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let seeded_retry = serde_json::json!({
+            "model": "model-a",
+            "dim": 64,
+            "error_class": "http_503",
+            "failures": 3,
+            "halted": true,
+            "not_before_unix_ms": now + 60_000,
+            "failure_generation": generation,
+            "backoff_failures": 8,
+            "writer_races": 2
+        })
+        .to_string();
+        let retry_db = base.join("claimed-by-daemon/chunks.sqlite");
+        let conn = rusqlite::Connection::open(&retry_db).unwrap();
+        conn.execute(
+            "INSERT INTO folder_meta (key, value) VALUES ('rebuild_retry', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&seeded_retry],
+        )
+        .unwrap();
+        drop(conn);
+
         let ctx = CliContext::for_home(home.path().to_path_buf())
             .with_folder_index_for_test(Arc::clone(&cli_manager));
         assert_eq!(
@@ -991,7 +1066,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            0
+            1
         );
         assert_eq!(
             rebuild_calls.load(Ordering::SeqCst),
@@ -1002,6 +1077,28 @@ mod tests {
             index.model_status().unwrap().index_state.as_str(),
             "rebuilding"
         );
+        let conn = rusqlite::Connection::open(&retry_db).unwrap();
+        let retry_after: String = conn
+            .query_row(
+                "SELECT value FROM folder_meta WHERE key = 'rebuild_retry'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&retry_after).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&seeded_retry).unwrap(),
+            "refused CLI request changed the persisted halt"
+        );
+        let cli_value = folder_index_status_value(
+            "claimed-by-daemon",
+            &index.model_status().unwrap(),
+            Some(
+                makakoo_core::superbrain::folder_index::FolderRebuildRequestOutcome::AlreadyRunning,
+            ),
+        );
+        assert_eq!(cli_value["halted"], true);
+        assert_eq!(cli_value["generation"], generation);
 
         daemon_manager.wait_for_rebuild("claimed-by-daemon").await;
         assert_eq!(index.model_status().unwrap().index_state.as_str(), "ready");

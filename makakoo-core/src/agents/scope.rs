@@ -110,7 +110,10 @@ impl fmt::Display for ScopeError {
 ///   - Non-empty `tools` whitelist → tool must be a member.
 pub fn check_tool(slot: &AgentSlot, tool: &str) -> Result<(), ScopeError> {
     if slot.tools.is_empty() {
-        if slot.inherit_baseline {
+        let bare = tool.strip_prefix("mcp__harvey__").unwrap_or(tool);
+        if slot.inherit_baseline
+            && !crate::agents::tool_catalog::EXPLICIT_GRANT_ONLY_TOOLS.contains(&bare)
+        {
             return Ok(());
         }
         return Err(ScopeError::ToolNotInScope {
@@ -464,6 +467,14 @@ mod tests {
     fn empty_whitelist_with_inherit_baseline_permits_anything() {
         let s = slot_with(vec![], vec![], vec![], true);
         check_tool(&s, "run_command").unwrap();
+    }
+
+    #[test]
+    fn rebuild_requires_an_explicit_grant_even_with_baseline_inheritance() {
+        let baseline = slot_with(vec![], vec![], vec![], true);
+        assert!(check_tool(&baseline, "folder_index_rebuild").is_err());
+        let explicit = slot_with(vec!["folder_index_rebuild"], vec![], vec![], true);
+        check_tool(&explicit, "folder_index_rebuild").unwrap();
     }
 
     #[test]
