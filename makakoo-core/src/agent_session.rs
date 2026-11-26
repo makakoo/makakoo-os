@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use rand::RngCore;
@@ -265,6 +265,7 @@ impl AgentSessionStore {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        conn.busy_timeout(Duration::from_millis(5_000))?;
         let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;

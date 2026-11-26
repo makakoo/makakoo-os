@@ -1613,6 +1613,31 @@ pub enum BrainCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect or explicitly rebuild a compact knowledge-folder index.
+    FolderIndex {
+        #[command(subcommand)]
+        cmd: FolderIndexCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FolderIndexCmd {
+    /// Show model/provenance state for one folder index.
+    Status {
+        folder_id: String,
+        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM)]
+        dim: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Request one rebuild; active and already-current requests are no-ops.
+    Rebuild {
+        folder_id: String,
+        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM)]
+        dim: usize,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -2166,6 +2191,39 @@ mod tests {
                 assert!(!writable);
             }
             _ => panic!("expected Brain::Add"),
+        }
+    }
+
+    #[test]
+    fn parse_brain_folder_index_rebuild() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "brain",
+            "folder-index",
+            "rebuild",
+            "legal",
+            "--dim",
+            "32",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Commands::Brain {
+                cmd:
+                    BrainCmd::FolderIndex {
+                        cmd:
+                            FolderIndexCmd::Rebuild {
+                                folder_id,
+                                dim,
+                                json,
+                            },
+                    },
+            } => {
+                assert_eq!(folder_id, "legal");
+                assert_eq!(dim, 32);
+                assert!(json);
+            }
+            _ => panic!("expected Brain::FolderIndex::Rebuild"),
         }
     }
 

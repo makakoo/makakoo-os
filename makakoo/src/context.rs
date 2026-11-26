@@ -25,6 +25,7 @@ use makakoo_core::llm::LlmClient;
 use makakoo_core::nursery::{BuddyTracker, MascotRegistry};
 use makakoo_core::platform::makakoo_home;
 use makakoo_core::sancho::SanchoContext;
+use makakoo_core::superbrain::folder_index::FolderIndexManager;
 use makakoo_core::superbrain::graph::GraphStore;
 use makakoo_core::superbrain::memory_stack::MemoryStack;
 use makakoo_core::superbrain::promoter::MemoryPromoter;
@@ -54,6 +55,7 @@ pub struct CliContext {
     llm: OnceCell<Arc<LlmClient>>,
     emb: OnceCell<Arc<EmbeddingClient>>,
     bulk_emb: OnceCell<Arc<EmbeddingClient>>,
+    folder_index: OnceCell<Arc<FolderIndexManager>>,
     brain_rebuild: Arc<BrainRebuildCoordinator>,
     brain_probed: AtomicBool,
 }
@@ -83,6 +85,7 @@ impl CliContext {
             llm: OnceCell::new(),
             emb: OnceCell::new(),
             bulk_emb: OnceCell::new(),
+            folder_index: OnceCell::new(),
             brain_rebuild: Arc::new(BrainRebuildCoordinator::new()),
             brain_probed: AtomicBool::new(false),
         })
@@ -118,6 +121,7 @@ impl CliContext {
             llm: OnceCell::new(),
             emb: OnceCell::new(),
             bulk_emb: OnceCell::new(),
+            folder_index: OnceCell::new(),
             brain_rebuild: Arc::new(BrainRebuildCoordinator::new()),
             brain_probed: AtomicBool::new(false),
         }
@@ -250,6 +254,31 @@ impl CliContext {
         self.bulk_emb
             .get_or_init(|| Arc::new(EmbeddingClient::new_bulk()))
             .clone()
+    }
+
+    /// Per-folder compact-vector manager used by CLI folder-index status and
+    /// explicit rebuild commands. The directory matches the MCP default and
+    /// honors the same environment override.
+    pub fn folder_index(&self) -> Arc<FolderIndexManager> {
+        self.folder_index
+            .get_or_init(|| {
+                let dir = std::env::var("MAKAKOO_FOLDER_INDEX_DIR")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.data_dir.join("folder-indexes"));
+                Arc::new(
+                    FolderIndexManager::new(dir)
+                        .with_embedders(self.embeddings(), self.bulk_embeddings()),
+                )
+            })
+            .clone()
+    }
+
+    #[cfg(test)]
+    pub fn with_folder_index_for_test(self, manager: Arc<FolderIndexManager>) -> Self {
+        let _ = self.folder_index.set(manager);
+        self
     }
 
     /// The single process-wide Brain vector rebuild coordinator shared by the

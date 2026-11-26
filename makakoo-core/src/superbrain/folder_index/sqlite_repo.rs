@@ -119,9 +119,9 @@ pub(crate) struct HydratedChunkRow {
 pub(crate) fn open_folder_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     for pragma in [
+        "PRAGMA busy_timeout = 5000",
         "PRAGMA journal_mode = WAL",
         "PRAGMA synchronous = NORMAL",
-        "PRAGMA busy_timeout = 5000",
         "PRAGMA cache_size = -8000",
         "PRAGMA temp_store = FILE",
     ] {

@@ -89,7 +89,7 @@ pub async fn dispatch(cmd: Commands, ctx: &CliContext) -> anyhow::Result<i32> {
             embed_limit,
             file,
         } => sync::run(ctx, force, embed, no_auto_memory, embed_limit, file).await,
-        Commands::Brain { cmd } => brain::run(ctx, cmd),
+        Commands::Brain { cmd } => brain::run(ctx, cmd).await,
         Commands::Memory { cmd } => memory::run(ctx, cmd).await,
         Commands::Promotions { threshold, limit } => promotions::run(ctx, threshold, limit),
         Commands::Skill { name, args } => skill::run(&name, &args, ctx).await,

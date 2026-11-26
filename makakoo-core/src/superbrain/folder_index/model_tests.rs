@@ -666,7 +666,131 @@ async fn failed_open_probe_retries_after_backoff() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
+async fn writer_race_backs_off_without_halting_and_recovers_after_writer_stops() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(Arc::clone(&emb), Arc::clone(&emb))
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(25),
+            std::time::Duration::from_millis(25),
+            1,
+        );
+    mgr.upsert_folder_file(
+        "writer-race",
+        32,
+        &one_chunk("a.md", "Initial A text.", basis(64, 1)),
+        Some(&UpsertModelMeta {
+            model: "model-a".into(),
+            embed_dim: 64,
+            bulk_alias: "test-embed".into(),
+            short_alias: Some("test-embed".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    mgr.wait_for_model_probe("writer-race").await;
+    let index = mgr
+        .get_or_open_without_probe_for_test("writer-race", 32)
+        .unwrap();
+
+    responder.set_both_model("model-b", 64, 2);
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(10));
+    mgr.probe_folder_model_for_test("writer-race", 32)
+        .await
+        .unwrap();
+
+    let writes = Arc::new(AtomicUsize::new(0));
+    let hook_writes = Arc::clone(&writes);
+    *index.before_rebuild_commit.lock().unwrap() = Some(Box::new(move |idx| {
+        let attempt = hook_writes.fetch_add(1, Ordering::SeqCst) + 1;
+        let text = format!("Concurrent B write {attempt}.");
+        idx.upsert_file_with_model(
+            &UpsertFileRequest {
+                file_path: "writer.md".into(),
+                file_version: format!("v{attempt}"),
+                source_kind: SourceKind::File,
+                trust: TrustLevel::Trusted,
+                owner: "alice".into(),
+                chunks: vec![ChunkInput {
+                    anchor: Anchor {
+                        kind: AnchorKind::Heading,
+                        value: "Writer".into(),
+                    },
+                    char_start: 0,
+                    char_end: text.len(),
+                    text,
+                    vector: basis(64, 2),
+                }],
+            },
+            Some(&UpsertModelMeta {
+                model: "model-b".into(),
+                embed_dim: 64,
+                bulk_alias: "test-embed".into(),
+                short_alias: Some("test-embed".into()),
+            }),
+        )
+        .unwrap();
+    }));
+
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(10));
+    mgr.probe_folder_model_for_test("writer-race", 32)
+        .await
+        .unwrap();
+    mgr.wait_for_rebuild("writer-race").await;
+    assert_eq!(
+        writes.load(Ordering::SeqCst),
+        super::rebuild::MAX_REBUILD_COMMIT_ATTEMPTS
+    );
+    let raced = index.model_status().unwrap();
+    assert_eq!(raced.index_state, IndexModelState::Stale);
+    assert!(!raced.halted, "writer races must never count toward halt");
+    assert!(raced
+        .stale_reason
+        .as_deref()
+        .is_some_and(|reason| reason.starts_with("rebuild_deferred:")));
+
+    // Writer quiesces. A normal later query schedules recovery; no explicit
+    // rebuild request or manual metadata repair is needed.
+    *index.before_rebuild_commit.lock().unwrap() = None;
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(30));
+    let response = mgr
+        .search_folder(
+            FolderSearchRequest {
+                folder_id: "writer-race".into(),
+                dim: 32,
+                k: 1,
+                query: Some("Initial".into()),
+                query_vector: Some(basis(64, 2)),
+                query_model: Some("model-b".into()),
+                query_dim: Some(64),
+                filter: SearchFilter::default(),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.mode, SearchMode::Fts);
+    mgr.wait_for_model_probe("writer-race").await;
+    mgr.wait_for_rebuild("writer-race").await;
+    let recovered = index.model_status().unwrap();
+    assert_eq!(recovered.index_state, IndexModelState::Ready);
+    assert_eq!(recovered.embed_model.as_deref(), Some("model-b"));
+    assert_eq!(recovered.unproven_vectors_since_gen, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn genuine_same_class_failure_halts_with_backoff() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "old", 64);
     let server = MockServer::start().await;
@@ -727,7 +851,10 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
     }
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 1);
 
-    for _ in 2..(24 * 6) {
+    for _ in 0..20 {
+        if responder.bulk_calls.load(Ordering::SeqCst) == 3 {
+            break;
+        }
         mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
         let _ = mgr
             .search_folder(
@@ -756,13 +883,14 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
         .model_status()
         .unwrap();
     assert_eq!(status.index_state, IndexModelState::Stale);
+    assert!(status.halted);
     assert!(status
         .stale_reason
         .as_deref()
         .is_some_and(|reason| reason.starts_with("rebuild_suppressed:")
             && reason.contains("after 3 same-class failures")));
 
-    responder.set_both_model("newer", 64, 3);
+    // A real halt still enforces its bounded backoff window.
     mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(10 * 60));
     let _ = mgr
         .search_folder(
@@ -771,7 +899,7 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
                 dim: 32,
                 k: 1,
                 query: Some("Failure".into()),
-                query_vector: Some(basis(64, 3)),
+                query_vector: Some(basis(64, 2)),
                 query_model: Some("mismatch".into()),
                 query_dim: Some(64),
                 filter: SearchFilter::default(),
@@ -782,10 +910,8 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
         .await
         .unwrap();
     mgr.wait_for_model_probe("failed").await;
-    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60));
-    mgr.probe_folder_model_for_test("failed", 32).await.unwrap();
     mgr.wait_for_rebuild("failed").await;
-    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 4);
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 3);
 
     responder
         .fail_bulk_embeddings
@@ -798,8 +924,126 @@ async fn permanent_rebuild_failure_is_bounded_over_a_simulated_day() {
         .model_status()
         .unwrap();
     assert_eq!(recovered.index_state, IndexModelState::Ready);
-    assert_eq!(recovered.embed_model.as_deref(), Some("newer"));
-    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 5);
+    assert_eq!(recovered.embed_model.as_deref(), Some("new"));
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persisted_halt_clears_for_newer_flag_or_bounded_cooldown() {
+    let tmp = TempDir::new().unwrap();
+    let responder = DynamicEmbedResponder::new("test-embed", "test-embed", "model-a", 64);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let emb = Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
+    let mgr = FolderIndexManager::new(tmp.path())
+        .with_embedders(Arc::clone(&emb), Arc::clone(&emb))
+        .with_model_recovery_timings_for_test(
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(100),
+            3,
+        );
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+
+    for folder in ["newer-flag", "cooldown"] {
+        mgr.upsert_folder_file(
+            folder,
+            32,
+            &one_chunk("a.md", "Initial A text.", basis(64, 1)),
+            Some(&UpsertModelMeta {
+                model: "model-a".into(),
+                embed_dim: 64,
+                bulk_alias: "test-embed".into(),
+                short_alias: Some("test-embed".into()),
+            }),
+        )
+        .await
+        .unwrap();
+        mgr.wait_for_model_probe(folder).await;
+        let index = mgr.get_or_open_without_probe_for_test(folder, 32).unwrap();
+        // Metadata-free bytes are deliberately unproven and must force a full
+        // rebuild before this index can become Ready again.
+        index
+            .upsert_file_with_model(
+                &one_chunk("unproven.md", "Unproven bytes.", basis(64, 2)),
+                None,
+            )
+            .unwrap();
+        let flag_generation = index
+            .model_status()
+            .unwrap()
+            .unproven_vectors_since_gen
+            .unwrap();
+        let retry = model_meta::PersistedRebuildRetry {
+            model: "model-a".into(),
+            dim: 64,
+            error_class: "http_503".into(),
+            failures: 3,
+            halted: true,
+            not_before_unix_ms: if folder == "newer-flag" {
+                now_ms() + 60_000
+            } else {
+                now_ms() + 10
+            },
+            failure_generation: if folder == "newer-flag" {
+                flag_generation.saturating_sub(1)
+            } else {
+                flag_generation
+            },
+        };
+        model_meta::write_persisted_rebuild_retry(&index.lock_conn().unwrap(), &retry).unwrap();
+        if folder == "newer-flag" {
+            assert!(retry.not_before_unix_ms > now_ms());
+            assert!(
+                !index.model_status().unwrap().halted,
+                "a flag newer than the halt must invalidate it immediately"
+            );
+        } else {
+            assert!(index.model_status().unwrap().halted);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert!(
+                !index.model_status().unwrap().halted,
+                "halt must expire after its bounded cooldown"
+            );
+        }
+
+        mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(20));
+        let response = mgr
+            .search_folder(
+                FolderSearchRequest {
+                    folder_id: folder.into(),
+                    dim: 32,
+                    k: 1,
+                    query: Some("Initial".into()),
+                    query_vector: Some(basis(64, 1)),
+                    query_model: Some("model-a".into()),
+                    query_dim: Some(64),
+                    filter: SearchFilter::default(),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.mode, SearchMode::Fts);
+        mgr.wait_for_model_probe(folder).await;
+        mgr.wait_for_rebuild(folder).await;
+        let recovered = index.model_status().unwrap();
+        assert_eq!(recovered.index_state, IndexModelState::Ready);
+        assert_eq!(recovered.unproven_vectors_since_gen, None);
+        assert!(!recovered.halted);
+    }
+    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1158,7 +1402,7 @@ async fn bulk_change_confirmation_requires_elapsed_window() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn varying_failure_text_persists_backoff_and_halt_while_ingest_continues() {
+async fn varying_failure_text_persists_backoff_and_halt_until_new_ingest() {
     let tmp = TempDir::new().unwrap();
     let responder = DynamicEmbedResponder::new("short-alias", "bulk-alias", "model-a", 64);
     let server = MockServer::start().await;
@@ -1293,17 +1537,23 @@ async fn varying_failure_text_persists_backoff_and_halt_while_ingest_continues()
     .expect("a halted rebuild must not halt ingest from the observed bulk model");
     mgr.wait_for_model_probe("persisted-failure").await;
     mgr.wait_for_rebuild("persisted-failure").await;
-    assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 3);
-    let status = mgr
-        .get_or_open_without_probe_for_test("persisted-failure", 32)
-        .unwrap()
-        .model_status()
-        .unwrap();
-    assert_eq!(status.index_state, IndexModelState::Stale);
     assert_eq!(
-        status.stale_reason.as_deref(),
-        Some(model_meta::OBSERVED_BULK_UPSERT_REASON)
+        responder.bulk_calls.load(Ordering::SeqCst),
+        4,
+        "a newer provenance flag must clear the older halt and allow one retry"
     );
+    let idx = mgr
+        .get_or_open_without_probe_for_test("persisted-failure", 32)
+        .unwrap();
+    let status = idx.model_status().unwrap();
+    assert_eq!(status.index_state, IndexModelState::Stale);
+    assert!(!status.halted);
+    assert!(status.unproven_vectors_since_gen.is_some());
+    let retry = model_meta::read_persisted_rebuild_retry(&idx.lock_conn().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(retry.failures, 1);
+    assert!(!retry.halted);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3893,6 +4143,7 @@ async fn random_probe_upsert_restart_and_rebuild_interleavings_preserve_ready_in
                             outcome,
                             FolderRebuildRequestOutcome::Started
                                 | FolderRebuildRequestOutcome::AlreadyRunning
+                                | FolderRebuildRequestOutcome::AlreadyCurrent
                         ));
                     }
                 }

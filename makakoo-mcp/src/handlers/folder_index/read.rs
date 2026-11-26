@@ -216,6 +216,9 @@ impl ToolHandler for FolderIndexStatesHandler {
             "sqlite_bytes": sizes.sqlite_bytes,
             "chunk_count": sizes.chunk_count,
             "index_state": status.index_state,
+            "halted": status.halted,
+            "generation": status.generation,
+            "unproven_vectors_since_gen": status.unproven_vectors_since_gen,
         });
         if let Some(obj) = out.as_object_mut() {
             if let Some(m) = status.embed_model {
@@ -226,6 +229,9 @@ impl ToolHandler for FolderIndexStatesHandler {
             }
             if let Some(until) = status.rebuild_deferred_until {
                 obj.insert("rebuild_deferred_until".to_string(), json!(until));
+            }
+            if let Some(reason) = status.stale_reason {
+                obj.insert("stale_reason".to_string(), json!(reason));
             }
         }
         Ok(out)

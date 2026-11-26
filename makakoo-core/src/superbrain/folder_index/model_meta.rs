@@ -70,6 +70,9 @@ pub(crate) struct PersistedRebuildRetry {
     pub(crate) failures: u32,
     pub(crate) halted: bool,
     pub(crate) not_before_unix_ms: u64,
+    /// Index generation at which this retry record was written. A newer
+    /// provenance flag invalidates an older terminal decision.
+    pub(crate) failure_generation: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +136,7 @@ pub enum SearchMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderModelStatus {
     pub index_state: IndexModelState,
+    pub generation: u64,
     pub embed_model: Option<String>,
     pub embed_dim: Option<usize>,
     pub embed_alias: Option<String>,
@@ -140,6 +144,7 @@ pub struct FolderModelStatus {
     pub stale_reason: Option<String>,
     pub query_mismatch_reason: Option<String>,
     pub unproven_vectors_since_gen: Option<u64>,
+    pub halted: bool,
     pub rebuild_deferred_until: Option<u64>,
 }
 
@@ -242,8 +247,15 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
     let embed_alias = read_meta_opt(conn, META_EMBED_ALIAS)?;
     let short_embed_alias = read_meta_opt(conn, META_SHORT_EMBED_ALIAS)?;
     let stale_reason = read_meta_opt(conn, META_STALE_REASON)?;
+    let generation = read_generation(conn)?;
     let unproven_vectors_since_gen = read_unproven_vectors_since_gen(conn)?;
     let now_unix_ms = unix_time_ms();
+    let halted = read_persisted_rebuild_retry(conn)?.is_some_and(|retry| {
+        retry.halted
+            && now_unix_ms < retry.not_before_unix_ms
+            && unproven_vectors_since_gen
+                .is_none_or(|flag_generation| flag_generation <= retry.failure_generation)
+    });
     let rebuild_deferred_until =
         read_persisted_automatic_rebuild_success(conn)?.and_then(|success| {
             let deferred_until = success
@@ -254,6 +266,7 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
         });
     Ok(FolderModelStatus {
         index_state,
+        generation,
         embed_model,
         embed_dim,
         embed_alias,
@@ -261,6 +274,7 @@ pub(crate) fn read_model_status(conn: &Connection) -> Result<FolderModelStatus> 
         stale_reason,
         query_mismatch_reason: None,
         unproven_vectors_since_gen,
+        halted,
         rebuild_deferred_until,
     })
 }

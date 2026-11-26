@@ -15,7 +15,7 @@ use makakoo_core::brain_sources_registry::{
 #[cfg(test)]
 use std::fs;
 
-use crate::cli::BrainCmd;
+use crate::cli::{BrainCmd, FolderIndexCmd};
 use crate::context::CliContext;
 use crate::okf::{export_bundle, validate_bundle, ExportOptions};
 
@@ -117,7 +117,7 @@ impl BrainSourcesFile {
     }
 }
 
-pub fn run(ctx: &CliContext, command: BrainCmd) -> anyhow::Result<i32> {
+pub async fn run(ctx: &CliContext, command: BrainCmd) -> anyhow::Result<i32> {
     match command {
         BrainCmd::List { json } => list(ctx, json),
         BrainCmd::Add {
@@ -156,7 +156,65 @@ pub fn run(ctx: &CliContext, command: BrainCmd) -> anyhow::Result<i32> {
             force,
             json,
         } => ingest(&inputs, &out, &name, force, json),
+        BrainCmd::FolderIndex { cmd } => folder_index(ctx, cmd).await,
     }
+}
+
+async fn folder_index(ctx: &CliContext, command: FolderIndexCmd) -> anyhow::Result<i32> {
+    let manager = ctx.folder_index();
+    let (folder_id, dim, json_output, outcome) = match command {
+        FolderIndexCmd::Status {
+            folder_id,
+            dim,
+            json,
+        } => (folder_id, dim, json, None),
+        FolderIndexCmd::Rebuild {
+            folder_id,
+            dim,
+            json,
+        } => {
+            let outcome = manager
+                .request_folder_rebuild(&folder_id, dim)
+                .await
+                .context("request folder index rebuild")?;
+            (folder_id, dim, json, Some(outcome.as_str()))
+        }
+    };
+    let status = manager
+        .get_or_open(&folder_id, dim)
+        .context("open folder index")?
+        .model_status()
+        .context("read folder index status")?;
+    let value = serde_json::json!({
+        "folder_id": folder_id,
+        "outcome": outcome,
+        "index_state": status.index_state,
+        "halted": status.halted,
+        "generation": status.generation,
+        "unproven_vectors_since_gen": status.unproven_vectors_since_gen,
+        "embed_model": status.embed_model,
+        "embed_dim": status.embed_dim,
+        "stale_reason": status.stale_reason,
+        "rebuild_deferred_until": status.rebuild_deferred_until,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        if let Some(outcome) = outcome {
+            println!("rebuild: {outcome}");
+        }
+        println!("folder_id: {folder_id}");
+        println!("index_state: {}", status.index_state.as_str());
+        println!("halted: {}", status.halted);
+        println!("generation: {}", status.generation);
+        println!(
+            "unproven_vectors_since_gen: {}",
+            status
+                .unproven_vectors_since_gen
+                .map_or_else(|| "none".to_string(), |generation| generation.to_string())
+        );
+    }
+    Ok(0)
 }
 
 fn list(ctx: &CliContext, json: bool) -> anyhow::Result<i32> {
@@ -632,7 +690,159 @@ fn normalize_source_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use makakoo_core::embeddings::EmbeddingClient;
+    use makakoo_core::superbrain::folder_index::{
+        Anchor, AnchorKind, ChunkInput, FolderIndexManager, SourceKind, TrustLevel,
+        UpsertFileRequest, UpsertModelMeta,
+    };
+    use serde_json::json;
     use tempfile::tempdir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    #[derive(Clone)]
+    struct CliEmbedResponder {
+        rebuild_calls: Arc<AtomicUsize>,
+    }
+
+    impl Respond for CliEmbedResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            let inputs = body
+                .get("input")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let is_probe = inputs.len() == 1
+                && inputs.first().and_then(serde_json::Value::as_str) == Some("probe");
+            if !is_probe {
+                self.rebuild_calls.fetch_add(1, Ordering::SeqCst);
+            }
+            let data: Vec<_> = inputs
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let mut vector = vec![0.0_f32; 64];
+                    vector[index % 64] = 1.0;
+                    json!({"index": index, "embedding": vector})
+                })
+                .collect();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "model": "model-a",
+                "data": data,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_folder_index_rebuild_requests_once_and_repeats_idempotently() {
+        let home = tempdir().unwrap();
+        let server = MockServer::start().await;
+        let rebuild_calls = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .and(path("/embeddings"))
+            .respond_with(CliEmbedResponder {
+                rebuild_calls: Arc::clone(&rebuild_calls),
+            })
+            .mount(&server)
+            .await;
+        let embedder =
+            Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
+        let manager = Arc::new(
+            FolderIndexManager::new(home.path().join("data/folder-indexes"))
+                .with_embedders(Arc::clone(&embedder), embedder),
+        );
+        let index = manager.get_or_open("cli-folder", 32).unwrap();
+        index
+            .upsert_file_with_model(
+                &UpsertFileRequest {
+                    file_path: "a.md".into(),
+                    file_version: "v1".into(),
+                    source_kind: SourceKind::File,
+                    trust: TrustLevel::Trusted,
+                    owner: "test".into(),
+                    chunks: vec![ChunkInput {
+                        anchor: Anchor {
+                            kind: AnchorKind::Heading,
+                            value: "Fixture".into(),
+                        },
+                        char_start: 0,
+                        char_end: 7,
+                        text: "Fixture".into(),
+                        vector: {
+                            let mut vector = vec![0.0_f32; 64];
+                            vector[0] = 1.0;
+                            vector
+                        },
+                    }],
+                },
+                Some(&UpsertModelMeta {
+                    model: "model-a".into(),
+                    embed_dim: 64,
+                    bulk_alias: "test-embed".into(),
+                    short_alias: Some("test-embed".into()),
+                }),
+            )
+            .unwrap();
+        index.mark_stale("cli_rebuild_test").unwrap();
+        let ctx = CliContext::for_home(home.path().to_path_buf())
+            .with_folder_index_for_test(Arc::clone(&manager));
+
+        assert_eq!(
+            run(
+                &ctx,
+                BrainCmd::FolderIndex {
+                    cmd: FolderIndexCmd::Rebuild {
+                        folder_id: "cli-folder".into(),
+                        dim: 32,
+                        json: true,
+                    },
+                },
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        manager.wait_for_rebuild("cli-folder").await;
+        assert_eq!(rebuild_calls.load(Ordering::SeqCst), 1);
+
+        assert_eq!(
+            run(
+                &ctx,
+                BrainCmd::FolderIndex {
+                    cmd: FolderIndexCmd::Rebuild {
+                        folder_id: "cli-folder".into(),
+                        dim: 32,
+                        json: true,
+                    },
+                },
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(rebuild_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(index.model_status().unwrap().index_state.as_str(), "ready");
+
+        assert_eq!(
+            run(
+                &ctx,
+                BrainCmd::FolderIndex {
+                    cmd: FolderIndexCmd::Status {
+                        folder_id: "cli-folder".into(),
+                        dim: 32,
+                        json: true,
+                    },
+                },
+            )
+            .await
+            .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn add_okf_is_read_only_and_remove_never_deletes_files() {

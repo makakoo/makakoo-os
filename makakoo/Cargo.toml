@@ -52,3 +52,4 @@ rusqlite.workspace = true
 ed25519-dalek.workspace = true
 rand.workspace = true
 base64 = "0.22"
+wiremock = "0.6"

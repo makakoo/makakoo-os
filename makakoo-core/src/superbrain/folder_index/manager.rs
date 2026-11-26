@@ -22,6 +22,17 @@ use super::{
 pub enum FolderRebuildRequestOutcome {
     Started,
     AlreadyRunning,
+    AlreadyCurrent,
+}
+
+impl FolderRebuildRequestOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::AlreadyRunning => "already_running",
+            Self::AlreadyCurrent => "already_current",
+        }
+    }
 }
 
 /// Multi-folder cache so long-lived callers reuse open `FolderIndex` instances
@@ -364,6 +375,14 @@ impl FolderIndexManager {
             Some(_) => Some(observed_bulk.clone()),
             None => None,
         };
+        let status = idx.model_status()?;
+        if status.index_state == super::IndexModelState::Ready
+            && status.embed_model.as_deref() == Some(observed_bulk.0.as_str())
+            && status.embed_dim == Some(observed_bulk.1)
+            && status.unproven_vectors_since_gen.is_none()
+        {
+            return Ok(FolderRebuildRequestOutcome::AlreadyCurrent);
+        }
         self.rebuilds.clear_rebuild_retry(&idx);
         let started = rebuild::spawn_folder_rebuild(
             idx,

@@ -33,9 +33,9 @@ pub fn open_db(path: &Path) -> Result<Connection> {
     // `pragma_update` both reject row-returning statements, so we step
     // through them via `query` and drop the rows.
     for stmt in [
+        "PRAGMA busy_timeout = 5000",
         "PRAGMA journal_mode = WAL",
         "PRAGMA synchronous = NORMAL",
-        "PRAGMA busy_timeout = 5000",
         "PRAGMA foreign_keys = ON",
         "PRAGMA cache_size = -16384",
         "PRAGMA temp_store = MEMORY",
