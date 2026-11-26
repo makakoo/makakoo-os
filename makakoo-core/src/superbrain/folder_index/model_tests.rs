@@ -2660,9 +2660,18 @@ async fn ready_promotion_cas_rejects_upsert_between_probe_read_and_write() {
     }));
 
     responder.set_both_model("model-a", 64, 1);
+    responder.gate_after_bulk_calls.store(0, Ordering::SeqCst);
+    responder.gate_bulk.store(true, Ordering::SeqCst);
     mgr.probe_folder_model_for_test("promotion-cas", 32)
         .await
         .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !responder.gate_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("CAS recovery rebuild never reached the bulk responder gate");
     assert!(fired.load(Ordering::SeqCst));
     let after_race = idx.model_status().unwrap();
     assert_ne!(after_race.index_state, IndexModelState::Ready);
@@ -2672,9 +2681,8 @@ async fn ready_promotion_cas_rejects_upsert_between_probe_read_and_write() {
     );
     assert!(after_race.unproven_vectors_since_gen.is_some());
 
-    mgr.probe_folder_model_for_test("promotion-cas", 32)
-        .await
-        .unwrap();
+    responder.gate_bulk.store(false, Ordering::SeqCst);
+    responder.gate_release.store(true, Ordering::SeqCst);
     mgr.wait_for_rebuild("promotion-cas").await;
     let recovered = idx.model_status().unwrap();
     assert_eq!(recovered.index_state, IndexModelState::Ready);
