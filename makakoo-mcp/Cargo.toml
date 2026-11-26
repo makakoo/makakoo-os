@@ -37,3 +37,4 @@ tokio = { workspace = true }
 tempfile = "3"
 wiremock = "0.6"
 reqwest = { workspace = true }
+rusqlite = { workspace = true }

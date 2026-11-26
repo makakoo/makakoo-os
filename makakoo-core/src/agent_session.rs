@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use rand::RngCore;
@@ -265,6 +265,11 @@ impl AgentSessionStore {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        // Make the ordering test independent of rusqlite/SQLite build defaults.
+        // Production immediately installs the explicit timeout below.
+        #[cfg(test)]
+        conn.busy_timeout(Duration::ZERO)?;
+        conn.busy_timeout(Duration::from_millis(5_000))?;
         let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
@@ -910,6 +915,23 @@ fn row_to_gate(row: &rusqlite::Row<'_>) -> rusqlite::Result<GateRecord> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn open_waits_for_fresh_db_write_lock_before_wal() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("agent_sessions.db");
+        let locker = Connection::open(&path).unwrap();
+        locker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let thread_path = path.clone();
+        let handle = std::thread::spawn(move || AgentSessionStore::open(&thread_path, None));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !handle.is_finished(),
+            "WAL activation returned SQLITE_BUSY before busy_timeout was installed"
+        );
+        locker.execute_batch("COMMIT").unwrap();
+        handle.join().unwrap().unwrap();
+    }
 
     #[test]
     fn open_complete_read_result() {

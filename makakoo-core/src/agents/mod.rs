@@ -64,7 +64,8 @@ pub use slot::{
     AgentSlot,
 };
 pub use tool_catalog::{
-    is_known_tool, unknown_tools, HEADLESS_TOOL_ALLOWLIST, TOOL_CATALOG, WIZARD_TOOL_CHOICES,
+    is_known_tool, unknown_tools, EXPLICIT_GRANT_ONLY_TOOLS, HEADLESS_TOOL_ALLOWLIST, TOOL_CATALOG,
+    WIZARD_TOOL_CHOICES,
 };
 
 pub use lifecycle::{AgentLaunchSpec, AgentProcess, AgentSupervisor, HealthStatus};

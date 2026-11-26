@@ -118,10 +118,14 @@ pub(crate) struct HydratedChunkRow {
 
 pub(crate) fn open_folder_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
+    // Make the ordering test independent of rusqlite/SQLite build defaults.
+    // Production immediately installs the explicit timeout below.
+    #[cfg(test)]
+    conn.busy_timeout(std::time::Duration::ZERO)?;
     for pragma in [
+        "PRAGMA busy_timeout = 5000",
         "PRAGMA journal_mode = WAL",
         "PRAGMA synchronous = NORMAL",
-        "PRAGMA busy_timeout = 5000",
         "PRAGMA cache_size = -8000",
         "PRAGMA temp_store = FILE",
     ] {
@@ -506,4 +510,26 @@ pub(crate) fn clear_file_chunks_and_upsert_state(
     };
     tx.commit()?;
     Ok((old_ids, new_gen))
+}
+
+#[cfg(test)]
+mod pragma_order_tests {
+    use super::*;
+
+    #[test]
+    fn open_folder_db_waits_for_fresh_db_write_lock_before_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chunks.sqlite");
+        let locker = Connection::open(&path).unwrap();
+        locker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let thread_path = path.clone();
+        let handle = std::thread::spawn(move || open_folder_db(&thread_path));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !handle.is_finished(),
+            "WAL activation returned SQLITE_BUSY before busy_timeout was installed"
+        );
+        locker.execute_batch("COMMIT").unwrap();
+        handle.join().unwrap().unwrap();
+    }
 }

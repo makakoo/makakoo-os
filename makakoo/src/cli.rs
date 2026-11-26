@@ -1613,6 +1613,41 @@ pub enum BrainCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect or explicitly rebuild a compact knowledge-folder index.
+    FolderIndex {
+        #[command(subcommand)]
+        cmd: FolderIndexCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FolderIndexCmd {
+    /// Show model/provenance state for one folder index.
+    Status {
+        folder_id: String,
+        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM, value_parser = parse_folder_index_dim)]
+        dim: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Request one rebuild; active and already-current requests are no-ops.
+    Rebuild {
+        folder_id: String,
+        #[arg(long, default_value_t = makakoo_core::superbrain::folder_index::DEFAULT_VECTOR_DIM, value_parser = parse_folder_index_dim)]
+        dim: usize,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+fn parse_folder_index_dim(raw: &str) -> Result<usize, String> {
+    let dim = raw
+        .parse::<usize>()
+        .map_err(|_| format!("invalid dimension {raw:?}; expected 1..=512"))?;
+    (1..=512)
+        .contains(&dim)
+        .then_some(dim)
+        .ok_or_else(|| format!("invalid dimension {dim}; expected 1..=512"))
 }
 
 #[derive(Subcommand, Debug)]
@@ -2166,6 +2201,56 @@ mod tests {
                 assert!(!writable);
             }
             _ => panic!("expected Brain::Add"),
+        }
+    }
+
+    #[test]
+    fn parse_brain_folder_index_rebuild() {
+        let cli = Cli::try_parse_from([
+            "makakoo",
+            "brain",
+            "folder-index",
+            "rebuild",
+            "legal",
+            "--dim",
+            "32",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Commands::Brain {
+                cmd:
+                    BrainCmd::FolderIndex {
+                        cmd:
+                            FolderIndexCmd::Rebuild {
+                                folder_id,
+                                dim,
+                                json,
+                            },
+                    },
+            } => {
+                assert_eq!(folder_id, "legal");
+                assert_eq!(dim, 32);
+                assert!(json);
+            }
+            _ => panic!("expected Brain::FolderIndex::Rebuild"),
+        }
+    }
+
+    #[test]
+    fn folder_index_dim_is_bounded_to_storage_contract() {
+        for dim in ["0", "513"] {
+            let err = Cli::try_parse_from([
+                "makakoo",
+                "brain",
+                "folder-index",
+                "status",
+                "legal",
+                "--dim",
+                dim,
+            ])
+            .unwrap_err();
+            assert!(err.to_string().contains("expected 1..=512"));
         }
     }
 

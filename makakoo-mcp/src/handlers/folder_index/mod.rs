@@ -22,17 +22,76 @@ use serde_json::{json, Value};
 use crate::dispatch::{ToolContext, ToolHandler, ToolRegistry};
 use crate::jsonrpc::RpcError;
 
-/// Register all 5 folder-index MCP handlers.
+/// Register all 6 folder-index MCP handlers.
 pub fn register_folder_index(registry: &mut ToolRegistry, ctx: Arc<ToolContext>) {
     registry.register(Arc::new(FolderIndexUpsertHandler::new(Arc::clone(&ctx))));
     registry.register(Arc::new(FolderIndexMarkSkippedHandler::new(Arc::clone(
         &ctx,
     ))));
     registry.register(Arc::new(FolderIndexRemoveHandler::new(Arc::clone(&ctx))));
+    registry.register(Arc::new(FolderIndexRebuildHandler::new(Arc::clone(&ctx))));
     registry.register(Arc::new(read::FolderIndexSearchHandler::new(Arc::clone(
         &ctx,
     ))));
     registry.register(Arc::new(read::FolderIndexStatesHandler::new(ctx)));
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// folder_index_rebuild
+// ─────────────────────────────────────────────────────────────────────
+
+pub struct FolderIndexRebuildHandler {
+    ctx: Arc<ToolContext>,
+}
+
+impl FolderIndexRebuildHandler {
+    pub fn new(ctx: Arc<ToolContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for FolderIndexRebuildHandler {
+    fn name(&self) -> &str {
+        "folder_index_rebuild"
+    }
+
+    fn description(&self) -> &str {
+        "Request one explicit folder-index rebuild. Active work and an already-current clean index are idempotent no-ops. Agent callers require this tool in their slot allowlist."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "folder_id": { "type": "string" },
+                "dim": { "type": "integer", "default": 512, "minimum": 1, "maximum": 512 }
+            },
+            "required": ["folder_id"]
+        })
+    }
+
+    async fn call(&self, params: Value) -> Result<Value, RpcError> {
+        let mgr = require_manager(&self.ctx)?;
+        let folder_id = require_str(&params, "folder_id")?;
+        let dim = parse_dim(&params)?;
+        let outcome = mgr
+            .request_folder_rebuild(folder_id, dim)
+            .await
+            .map_err(map_core_err)?;
+        let status = mgr
+            .model_status_existing(folder_id, dim)
+            .map_err(map_core_err)?;
+        Ok(json!({
+            "folder_id": folder_id,
+            "outcome": outcome.as_str(),
+            "index_state": status.index_state,
+            "halted": status.halted,
+            "generation": status.generation,
+            "unproven_vectors_since_gen": status.unproven_vectors_since_gen,
+            "next_allowed_unix_ms": outcome.next_allowed_unix_ms(),
+        }))
+    }
 }
 
 pub(super) fn require_manager(ctx: &ToolContext) -> Result<&Arc<FolderIndexManager>, RpcError> {
@@ -43,6 +102,7 @@ pub(super) fn require_manager(ctx: &ToolContext) -> Result<&Arc<FolderIndexManag
 
 pub(super) fn map_core_err(err: MakakooError) -> RpcError {
     match err {
+        MakakooError::NotFound(msg) => RpcError::invalid_params(format!("not found: {msg}")),
         MakakooError::InvalidInput(msg) => RpcError::invalid_params(msg),
         MakakooError::RetryableFolderModelMismatch(msg) => {
             let mut error = RpcError::internal(format!("retryable folder model mismatch: {msg}"));

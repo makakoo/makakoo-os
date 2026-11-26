@@ -115,6 +115,24 @@ impl FolderIndex {
         })
     }
 
+    /// Open an already-created folder index. Unlike `open_with_config`, this
+    /// never turns a typo or untrusted folder id into a new on-disk index.
+    pub fn open_existing_with_config(
+        base_dir: &Path,
+        folder_id: &str,
+        cfg: FolderIndexConfig,
+    ) -> Result<Self> {
+        validate_folder_id(folder_id)?;
+        validate_dim(cfg.dim)?;
+        let db_path = base_dir.join(folder_id).join(DB_FILE_NAME);
+        if !db_path.is_file() {
+            return Err(MakakooError::NotFound(format!(
+                "folder index {folder_id:?}"
+            )));
+        }
+        Self::open_with_config(base_dir, folder_id, cfg)
+    }
+
     pub fn folder_id(&self) -> &str {
         &self.folder_id
     }

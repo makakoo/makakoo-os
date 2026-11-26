@@ -52,6 +52,7 @@ pub const TOOL_CATALOG: &[&str] = &[
     "costs_summary",
     "dream",
     "folder_index_mark_skipped",
+    "folder_index_rebuild",
     "folder_index_remove",
     "folder_index_search",
     "folder_index_states",
@@ -136,6 +137,10 @@ pub const HEADLESS_TOOL_ALLOWLIST: &[&str] = &[
     "wiki_lint",
     "wiki_save",
 ];
+
+/// Tools that are never inherited from an agent slot's baseline. They remain
+/// available to the operator CLI and to slots that name them explicitly.
+pub const EXPLICIT_GRANT_ONLY_TOOLS: &[&str] = &["folder_index_rebuild"];
 
 /// Is `name` a tool an AgentSpec may legitimately reference?
 ///

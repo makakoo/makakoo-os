@@ -22,6 +22,26 @@ use super::{
 pub enum FolderRebuildRequestOutcome {
     Started,
     AlreadyRunning,
+    AlreadyCurrent,
+    DeferredUntil(u64),
+}
+
+impl FolderRebuildRequestOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::AlreadyRunning => "already_running",
+            Self::AlreadyCurrent => "already_current",
+            Self::DeferredUntil(_) => "rate_limited",
+        }
+    }
+
+    pub const fn next_allowed_unix_ms(self) -> Option<u64> {
+        match self {
+            Self::DeferredUntil(value) => Some(value),
+            _ => None,
+        }
+    }
 }
 
 /// Multi-folder cache so long-lived callers reuse open `FolderIndex` instances
@@ -105,7 +125,12 @@ impl FolderIndexManager {
     /// Open (or reuse) the folder index for `folder_id` and schedule a
     /// non-blocking model probe if embedders are wired.
     pub fn get_or_open(&self, folder_id: &str, dim: usize) -> Result<Arc<FolderIndex>> {
-        self.get_or_open_with_overrides(folder_id, dim, None, None, true)
+        self.get_or_open_with_overrides(folder_id, dim, None, None, true, true)
+    }
+
+    /// Open an existing index without scheduling a model probe.
+    pub fn get_existing(&self, folder_id: &str, dim: usize) -> Result<Arc<FolderIndex>> {
+        self.get_or_open_with_overrides(folder_id, dim, None, None, false, false)
     }
 
     fn get_or_open_with_overrides(
@@ -115,6 +140,7 @@ impl FolderIndexManager {
         short_override: Option<&Arc<EmbeddingClient>>,
         bulk_override: Option<&Arc<EmbeddingClient>>,
         allow_probe: bool,
+        create: bool,
     ) -> Result<Arc<FolderIndex>> {
         validate_folder_id(folder_id)?;
         validate_dim(dim)?;
@@ -142,11 +168,11 @@ impl FolderIndexManager {
                         short_ref.map(|e| e.model().to_string()),
                     );
                 }
-                let opened = Arc::new(FolderIndex::open_with_config(
-                    &self.base_dir,
-                    folder_id,
-                    cfg,
-                )?);
+                let opened = Arc::new(if create {
+                    FolderIndex::open_with_config(&self.base_dir, folder_id, cfg)?
+                } else {
+                    FolderIndex::open_existing_with_config(&self.base_dir, folder_id, cfg)?
+                });
                 guard.insert(folder_id.to_string(), Arc::clone(&opened));
                 opened
             }
@@ -197,6 +223,7 @@ impl FolderIndexManager {
             short_ref.as_ref(),
             bulk_ref.as_ref(),
             true,
+            true,
         )?;
         rebuild::search_folder_checked(idx, short_ref, Arc::clone(&self.rebuilds), req).await
     }
@@ -208,7 +235,7 @@ impl FolderIndexManager {
         req: &UpsertFileRequest,
         model_meta: Option<&UpsertModelMeta>,
     ) -> Result<UpsertOutcome> {
-        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
+        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false, true)?;
         let outcome = self
             .upsert_with_model_recovery(&idx, req, model_meta)
             .await?;
@@ -224,7 +251,7 @@ impl FolderIndexManager {
         model_meta: Option<&UpsertModelMeta>,
         flush: bool,
     ) -> Result<(UpsertOutcome, IndexSizeReport)> {
-        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false)?;
+        let idx = self.get_or_open_with_overrides(folder_id, dim, None, None, false, true)?;
         let outcome = self
             .upsert_with_model_recovery(&idx, req, model_meta)
             .await?;
@@ -330,9 +357,25 @@ impl FolderIndexManager {
         self.rebuilds.wait_for_probe(folder_id).await;
     }
 
+    pub fn model_status_existing(
+        &self,
+        folder_id: &str,
+        dim: usize,
+    ) -> Result<super::FolderModelStatus> {
+        let idx = self.get_existing(folder_id, dim)?;
+        self.rebuilds.model_status(&idx)
+    }
+
+    /// Expire only a claim owned by this manager, preserving parked rows so a
+    /// daemon or later CLI invocation can resume safely.
+    pub fn cancel_folder_rebuild(&self, folder_id: &str, dim: usize, reason: &str) -> Result<bool> {
+        let idx = self.get_existing(folder_id, dim)?;
+        self.rebuilds.cancel(&idx, reason)
+    }
+
     /// Explicitly request a full folder rebuild. This bypasses a halt caused
-    /// by repeated same-class automatic failures, while active work remains
-    /// deduplicated.
+    /// by repeated same-class automatic failures only after winning the
+    /// persisted cross-process claim; active work remains deduplicated.
     pub async fn request_folder_rebuild(
         &self,
         folder_id: &str,
@@ -353,7 +396,15 @@ impl FolderIndexManager {
             short_emb.as_ref(),
             Some(&bulk_emb),
             false,
+            false,
         )?;
+        let status = self.rebuilds.model_status(&idx)?;
+        if status.index_state == super::IndexModelState::Ready
+            && status.unproven_vectors_since_gen.is_none()
+            && status.embed_alias.as_deref() == Some(bulk_emb.model())
+        {
+            return Ok(FolderRebuildRequestOutcome::AlreadyCurrent);
+        }
         let observed_bulk = bulk_emb.probe_model().await?;
         let observed_short = match short_emb.as_ref() {
             Some(short)
@@ -364,7 +415,14 @@ impl FolderIndexManager {
             Some(_) => Some(observed_bulk.clone()),
             None => None,
         };
-        self.rebuilds.clear_rebuild_retry(&idx);
+        let status = self.rebuilds.model_status(&idx)?;
+        if status.index_state == super::IndexModelState::Ready
+            && status.embed_model.as_deref() == Some(observed_bulk.0.as_str())
+            && status.embed_dim == Some(observed_bulk.1)
+            && status.unproven_vectors_since_gen.is_none()
+        {
+            return Ok(FolderRebuildRequestOutcome::AlreadyCurrent);
+        }
         let started = rebuild::spawn_folder_rebuild(
             idx,
             short_emb,
@@ -374,10 +432,12 @@ impl FolderIndexManager {
             observed_short,
             false,
         );
-        Ok(if started {
-            FolderRebuildRequestOutcome::Started
-        } else {
-            FolderRebuildRequestOutcome::AlreadyRunning
+        Ok(match started {
+            rebuild::SpawnFolderRebuildOutcome::Started => FolderRebuildRequestOutcome::Started,
+            rebuild::SpawnFolderRebuildOutcome::Busy => FolderRebuildRequestOutcome::AlreadyRunning,
+            rebuild::SpawnFolderRebuildOutcome::DeferredUntil(until) => {
+                FolderRebuildRequestOutcome::DeferredUntil(until)
+            }
         })
     }
 
@@ -392,7 +452,7 @@ impl FolderIndexManager {
         folder_id: &str,
         dim: usize,
     ) -> Result<Arc<FolderIndex>> {
-        self.get_or_open_with_overrides(folder_id, dim, None, None, false)
+        self.get_or_open_with_overrides(folder_id, dim, None, None, false, true)
     }
 
     #[cfg(test)]
@@ -413,6 +473,7 @@ impl FolderIndexManager {
             short_emb.as_ref(),
             Some(&bulk_emb),
             false,
+            true,
         )?;
         let _ = rebuild::probe_and_reconcile(idx, short_emb, bulk_emb, Arc::clone(&self.rebuilds))
             .await;

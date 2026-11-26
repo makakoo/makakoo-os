@@ -42,6 +42,9 @@ pub enum MakakooError {
     #[error("brain vector rebuild claim lost to another owner")]
     RebuildClaimLost,
 
+    #[error("folder index rebuild kept racing writers; left stale for automatic retry")]
+    RebuildRacedWriters,
+
     #[error("brain vector rebuild call timed out")]
     RebuildCallTimeout,
 

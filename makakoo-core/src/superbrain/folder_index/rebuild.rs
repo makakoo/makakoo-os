@@ -13,21 +13,21 @@ use crate::embeddings::EmbeddingClient;
 use crate::error::{MakakooError, Result};
 
 use super::model_meta::{
-    clear_folder_rebuild_claim_tx, clear_persisted_rebuild_retry, expire_folder_rebuild_claim,
+    clear_folder_rebuild_claim_tx, clear_persisted_rebuild_retry_cas, expire_folder_rebuild_claim,
     folder_rebuild_claim_owned, is_metadata_only_stale_reason, publish_ready_model_meta_tx,
-    read_model_status, read_persisted_automatic_rebuild_success, read_persisted_rebuild_retry,
-    record_observed_bulk, touch_folder_rebuild_claim, truncate_utf8, try_claim_folder_rebuild,
-    write_persisted_automatic_rebuild_success, write_persisted_rebuild_retry, FolderRebuildClaim,
-    FolderSearchRequest, FolderSearchResponse, IndexModelState, PersistedAutomaticRebuildSuccess,
-    PersistedRebuildRetry, ReadyPublication, ReadyPublicationKind, SearchMode,
-    AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS, FOLDER_REBUILD_LEASE_MS, SHORT_BULK_MISMATCH_REASON,
+    read_model_status, read_model_status_at, read_persisted_rebuild_retry,
+    rebuild_retry_version_matches, record_observed_bulk, touch_folder_rebuild_claim, truncate_utf8,
+    try_claim_folder_rebuild_with_policy, write_persisted_rebuild_retry_cas, FolderRebuildClaim,
+    FolderSearchRequest, FolderSearchResponse, IndexModelState, PersistedRebuildRetry,
+    ReadyPublication, ReadyPublicationKind, RebuildClaimDecision, RebuildClaimMode,
+    RebuildRetryVersion, SearchMode, FOLDER_REBUILD_LEASE_MS, SHORT_BULK_MISMATCH_REASON,
 };
 use super::rebuild_pages::{all_chunks_parked, prepare_parked, reembed_pages, swap_in_parked};
 use super::sqlite_repo::{bump_generation_tx, read_chunk_count, read_generation};
 use super::FolderIndex;
 
 /// Commit attempts before a rebuild that keeps racing writers gives up stale.
-const MAX_REBUILD_COMMIT_ATTEMPTS: usize = 8;
+pub(crate) const MAX_REBUILD_COMMIT_ATTEMPTS: usize = 8;
 pub(crate) const DEFAULT_MODEL_REPROBE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const DEFAULT_PROBE_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
 const DEFAULT_REBUILD_FAILURE_BACKOFF: Duration = Duration::from_secs(30 * 60);
@@ -57,18 +57,10 @@ impl RebuildKey {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RebuildRetryState {
-    key: RebuildKey,
-    error_class: String,
-    failures: u32,
-    next_allowed: Instant,
-    halted: bool,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct RebuildFailureDisposition {
     failures: u32,
+    backoff_failures: u32,
     halted: bool,
 }
 
@@ -82,7 +74,7 @@ struct ProbeState {
 /// re-embedding rebuilds.
 pub(crate) struct FolderRebuildRegistry {
     active: Mutex<HashMap<String, Arc<Notify>>>,
-    rebuild_retry: Mutex<HashMap<String, RebuildRetryState>>,
+    active_claims: Mutex<HashMap<String, FolderRebuildClaim>>,
     probes: Mutex<ProbeState>,
     rejected_upsert_probes: Mutex<HashMap<String, (RebuildKey, Instant)>>,
     probe_interval: Duration,
@@ -118,7 +110,7 @@ impl FolderRebuildRegistry {
         let rebuild_failure_backoff = rebuild_failure_backoff.max(probe_interval.saturating_mul(2));
         Self {
             active: Mutex::new(HashMap::new()),
-            rebuild_retry: Mutex::new(HashMap::new()),
+            active_claims: Mutex::new(HashMap::new()),
             probes: Mutex::new(ProbeState::default()),
             rejected_upsert_probes: Mutex::new(HashMap::new()),
             probe_interval,
@@ -199,92 +191,62 @@ impl FolderRebuildRegistry {
         *offset = offset.saturating_add(duration);
     }
 
-    pub(crate) fn clear_rebuild_retry(&self, idx: &FolderIndex) {
-        self.rebuild_retry
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(idx.folder_id());
-        if let Ok(conn) = idx.lock_conn() {
-            let _ = clear_persisted_rebuild_retry(&conn);
-        }
-    }
-
     fn try_acquire(
         &self,
         idx: &FolderIndex,
         key: &RebuildKey,
         automatic: bool,
-    ) -> Result<Option<FolderRebuildClaim>> {
+    ) -> Result<RebuildClaimDecision> {
         let folder_id = idx.folder_id();
-        let now = self.now();
-        if automatic {
-            let last_success = idx.lock_conn().ok().and_then(|conn| {
-                read_persisted_automatic_rebuild_success(&conn)
-                    .ok()
-                    .flatten()
-            });
-            if last_success.is_some_and(|success| {
-                let now_unix_ms = self.now_unix_ms();
-                success.last_success_unix_ms <= now_unix_ms
-                    && now_unix_ms
-                        < success
-                            .last_success_unix_ms
-                            .saturating_add(AUTOMATIC_REBUILD_SUCCESS_WINDOW_MS)
-            }) {
-                return Ok(None);
-            }
-        }
-        let persisted = idx
-            .lock_conn()
-            .ok()
-            .and_then(|conn| read_persisted_rebuild_retry(&conn).ok().flatten());
+        if self
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(folder_id)
         {
-            let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
-            if !retry.contains_key(folder_id) {
-                if let Some(state) = persisted {
-                    let remaining = Duration::from_millis(
-                        state.not_before_unix_ms.saturating_sub(unix_time_ms()),
-                    )
-                    .min(self.rebuild_failure_cap);
-                    retry.insert(
-                        folder_id.to_string(),
-                        RebuildRetryState {
-                            key: RebuildKey::new(state.model, state.dim),
-                            error_class: state.error_class,
-                            failures: state.failures,
-                            next_allowed: now + remaining,
-                            halted: state.halted,
-                        },
-                    );
-                }
-            }
-            if retry.get(folder_id).is_some_and(|state| state.key != *key) {
-                retry.remove(folder_id);
-                if let Ok(conn) = idx.lock_conn() {
-                    let _ = clear_persisted_rebuild_retry(&conn);
-                }
-            }
-            if retry
-                .get(folder_id)
-                .is_some_and(|state| state.halted || now < state.next_allowed)
-            {
-                return Ok(None);
-            }
+            return Ok(RebuildClaimDecision::Busy);
         }
-        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.contains_key(folder_id) {
-            return Ok(None);
-        }
-        let claim = {
+        let now_unix_ms = self.now_unix_ms();
+        let decision = {
             let mut conn = idx.lock_conn()?;
-            try_claim_folder_rebuild(&mut conn, &key.model, key.dim, self.now_unix_ms())?
+            try_claim_folder_rebuild_with_policy(
+                &mut conn,
+                &key.model,
+                key.dim,
+                now_unix_ms,
+                if automatic {
+                    RebuildClaimMode::Automatic
+                } else {
+                    RebuildClaimMode::Manual
+                },
+                self.rebuild_failure_cap
+                    .as_millis()
+                    .min(u128::from(u64::MAX)) as u64,
+                self.max_same_class_rebuild_failures,
+            )?
         };
-        let Some(claim) = claim else {
-            return Ok(None);
-        };
-        let notify = Arc::new(Notify::new());
-        guard.insert(folder_id.to_string(), Arc::clone(&notify));
-        Ok(Some(claim))
+        if let RebuildClaimDecision::Claimed(claimed) = &decision {
+            let notify = Arc::new(Notify::new());
+            self.active
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(folder_id.to_string(), notify);
+            self.active_claims
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(folder_id.to_string(), claimed.claim.clone());
+        }
+        Ok(decision)
+    }
+
+    fn clear_rebuild_retry(&self, idx: &FolderIndex, expected: Option<RebuildRetryVersion>) {
+        if let Ok(mut conn) = idx.lock_conn() {
+            if let Ok(tx) = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            {
+                let _ = clear_persisted_rebuild_retry_cas(&tx, expected);
+                let _ = tx.commit();
+            }
+        }
     }
 
     #[cfg(test)]
@@ -303,52 +265,188 @@ impl FolderRebuildRegistry {
         idx: &FolderIndex,
         key: &RebuildKey,
         error: &MakakooError,
+        expected: Option<RebuildRetryVersion>,
     ) -> RebuildFailureDisposition {
-        let folder_id = idx.folder_id();
         let error_class = rebuild_error_class(error);
-        let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
-        let failures = retry.get(folder_id).map_or(1, |state| {
-            if state.key == *key && state.error_class == error_class {
-                state.failures.saturating_add(1)
-            } else {
-                1
+        let now_unix_ms = self.now_unix_ms();
+        let fallback = RebuildFailureDisposition {
+            failures: 0,
+            backoff_failures: 0,
+            halted: false,
+        };
+        let Ok(mut conn) = idx.lock_conn() else {
+            return fallback;
+        };
+        let Ok(tx) = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        else {
+            return fallback;
+        };
+        let current = match read_persisted_rebuild_retry(&tx) {
+            Ok(current) => current,
+            Err(_) => {
+                let _ = super::model_meta::clear_persisted_rebuild_retry(&tx);
+                None
             }
-        });
+        };
+        if !rebuild_retry_version_matches(&tx, expected).unwrap_or(false) {
+            return current.map_or(fallback, |state| RebuildFailureDisposition {
+                failures: state.failures,
+                backoff_failures: state.backoff_failures,
+                halted: state.halted,
+            });
+        }
+        let same_key = current
+            .as_ref()
+            .is_some_and(|state| state.model == key.model && state.dim == key.dim);
+        let failures = if same_key
+            && current
+                .as_ref()
+                .is_some_and(|state| state.error_class == error_class)
+        {
+            current
+                .as_ref()
+                .map_or(1, |state| state.failures.saturating_add(1))
+        } else {
+            1
+        };
+        // Backoff escalation is per model key, not per HTTP/error class.
+        let backoff_failures = if same_key {
+            current.as_ref().map_or(1, |state| {
+                state.backoff_failures.max(state.failures).saturating_add(1)
+            })
+        } else {
+            1
+        };
+        let writer_races = if same_key {
+            current.as_ref().map_or(0, |state| state.writer_races)
+        } else {
+            0
+        };
         let halted = failures >= self.max_same_class_rebuild_failures;
         let delay = exponential_backoff(
             self.rebuild_failure_backoff,
             self.rebuild_failure_cap,
+            backoff_failures,
+        );
+        let retry = PersistedRebuildRetry {
+            model: key.model.clone(),
+            dim: key.dim,
+            error_class,
             failures,
-        );
-        retry.insert(
-            folder_id.to_string(),
-            RebuildRetryState {
-                key: key.clone(),
-                error_class: error_class.clone(),
-                failures,
-                next_allowed: self.now() + delay,
-                halted,
-            },
-        );
-        drop(retry);
-        if let Ok(conn) = idx.lock_conn() {
-            let _ = write_persisted_rebuild_retry(
-                &conn,
-                &PersistedRebuildRetry {
-                    model: key.model.clone(),
-                    dim: key.dim,
-                    error_class,
-                    failures,
-                    halted,
-                    not_before_unix_ms: unix_time_ms()
-                        .saturating_add(delay.as_millis().min(u128::from(u64::MAX)) as u64),
-                },
-            );
+            halted,
+            not_before_unix_ms: now_unix_ms
+                .saturating_add(delay.as_millis().min(u128::from(u64::MAX)) as u64),
+            failure_generation: read_generation(&tx).unwrap_or(0),
+            backoff_failures,
+            writer_races,
+        };
+        if !write_persisted_rebuild_retry_cas(&tx, expected, &retry).unwrap_or(false) {
+            return fallback;
         }
-        RebuildFailureDisposition { failures, halted }
+        if tx.commit().is_err() {
+            return fallback;
+        }
+        RebuildFailureDisposition {
+            failures,
+            backoff_failures,
+            halted,
+        }
+    }
+
+    /// Losing every commit CAS to legitimate writers is a liveness collision,
+    /// not a same-class rebuild failure. Preserve genuine failure history and
+    /// grow only the independent writer-race delay.
+    fn record_writer_race_backoff(
+        &self,
+        idx: &FolderIndex,
+        key: &RebuildKey,
+        expected: Option<RebuildRetryVersion>,
+    ) {
+        let now_unix_ms = self.now_unix_ms();
+        let Ok(mut conn) = idx.lock_conn() else {
+            return;
+        };
+        let Ok(tx) = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        else {
+            return;
+        };
+        let current = match read_persisted_rebuild_retry(&tx) {
+            Ok(current) => current,
+            Err(_) => {
+                let _ = super::model_meta::clear_persisted_rebuild_retry(&tx);
+                None
+            }
+        };
+        if !rebuild_retry_version_matches(&tx, expected).unwrap_or(false) {
+            return;
+        }
+        let same_key = current
+            .as_ref()
+            .is_some_and(|state| state.model == key.model && state.dim == key.dim);
+        let writer_races = if same_key {
+            current
+                .as_ref()
+                .map_or(1, |state| state.writer_races.saturating_add(1))
+        } else {
+            1
+        };
+        let delay = exponential_backoff(
+            self.rebuild_failure_backoff,
+            self.rebuild_failure_cap,
+            writer_races,
+        );
+        let retry = PersistedRebuildRetry {
+            model: key.model.clone(),
+            dim: key.dim,
+            error_class: current
+                .as_ref()
+                .filter(|_| same_key)
+                .map(|state| state.error_class.clone())
+                .unwrap_or_else(|| "writer_race".to_string()),
+            failures: current
+                .as_ref()
+                .filter(|_| same_key)
+                .map_or(0, |state| state.failures),
+            halted: current
+                .as_ref()
+                .filter(|_| same_key)
+                .is_some_and(|state| state.halted),
+            not_before_unix_ms: now_unix_ms
+                .saturating_add(delay.as_millis().min(u128::from(u64::MAX)) as u64),
+            failure_generation: current.as_ref().filter(|_| same_key).map_or_else(
+                || read_generation(&tx).unwrap_or(0),
+                |state| state.failure_generation,
+            ),
+            backoff_failures: current
+                .as_ref()
+                .filter(|_| same_key)
+                .map_or(0, |state| state.backoff_failures),
+            writer_races,
+        };
+        if write_persisted_rebuild_retry_cas(&tx, expected, &retry).unwrap_or(false) {
+            let _ = tx.commit();
+        }
+    }
+
+    pub(crate) fn cancel(&self, idx: &FolderIndex, reason: &str) -> Result<bool> {
+        let claim = self
+            .active_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(idx.folder_id())
+            .cloned();
+        let Some(claim) = claim else {
+            return Ok(false);
+        };
+        let mut conn = idx.lock_conn()?;
+        expire_folder_rebuild_claim(&mut conn, &claim, reason)
     }
 
     pub(crate) fn finish(&self, folder_id: &str) {
+        self.active_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(folder_id);
         let notify = {
             let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
             guard.remove(folder_id)
@@ -361,6 +459,21 @@ impl FolderRebuildRegistry {
     pub(crate) fn is_active(&self, folder_id: &str) -> bool {
         let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
         guard.contains_key(folder_id)
+    }
+
+    pub(crate) fn model_status(
+        &self,
+        idx: &FolderIndex,
+    ) -> Result<super::model_meta::FolderModelStatus> {
+        let conn = idx.lock_conn()?;
+        read_model_status_at(
+            &conn,
+            self.now_unix_ms(),
+            self.rebuild_failure_cap
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+            None,
+        )
     }
 
     pub(crate) async fn wait(&self, folder_id: &str) {
@@ -662,6 +775,7 @@ fn rebuild_error_class(error: &MakakooError) -> String {
             "retryable_folder_model_mismatch".to_string()
         }
         MakakooError::RebuildClaimLost => "rebuild_claim_lost".to_string(),
+        MakakooError::RebuildRacedWriters => "writer_race".to_string(),
         MakakooError::RebuildCallTimeout => "rebuild_call_timeout".to_string(),
         MakakooError::Internal(_) => "internal".to_string(),
     }
@@ -995,6 +1109,13 @@ pub(crate) async fn run_claimed_probe(
     activity.set_reached_bulk(reached_bulk);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpawnFolderRebuildOutcome {
+    Started,
+    Busy,
+    DeferredUntil(u64),
+}
+
 pub(crate) fn spawn_folder_rebuild(
     idx: Arc<FolderIndex>,
     short_emb: Option<Arc<EmbeddingClient>>,
@@ -1003,15 +1124,20 @@ pub(crate) fn spawn_folder_rebuild(
     observed_bulk: Option<(String, usize)>,
     observed_short: Option<(String, usize)>,
     automatic: bool,
-) -> bool {
+) -> SpawnFolderRebuildOutcome {
     let Some((model, dim)) = observed_bulk.as_ref() else {
-        return false;
+        return SpawnFolderRebuildOutcome::Busy;
     };
     let rebuild_key = RebuildKey::new(model.clone(), *dim);
-    let claim = match rebuilds.try_acquire(&idx, &rebuild_key, automatic) {
-        Ok(Some(claim)) => claim,
-        Ok(None) | Err(_) => return false,
+    let acquired = match rebuilds.try_acquire(&idx, &rebuild_key, automatic) {
+        Ok(RebuildClaimDecision::Claimed(claimed)) => claimed,
+        Ok(RebuildClaimDecision::DeferredUntil(until)) => {
+            return SpawnFolderRebuildOutcome::DeferredUntil(until)
+        }
+        Ok(RebuildClaimDecision::Busy) | Err(_) => return SpawnFolderRebuildOutcome::Busy,
     };
+    let claim = acquired.claim.clone();
+    let retry_version = acquired.retry_version;
 
     let rebuilds_clone = Arc::clone(&rebuilds);
     tokio::spawn(async move {
@@ -1024,29 +1150,53 @@ pub(crate) fn spawn_folder_rebuild(
             bulk_emb,
             observed_bulk,
             observed_short,
-            automatic.then(|| Arc::clone(&rebuilds_clone)),
             claim.clone(),
         )
         .await
         {
             Ok(()) => true,
             Err(err) => {
-                let error = err.to_string();
-                let disposition = if matches!(err, MakakooError::RebuildClaimLost) {
-                    RebuildFailureDisposition {
+                let disposition = match &err {
+                    MakakooError::RebuildClaimLost => RebuildFailureDisposition {
                         failures: 0,
+                        backoff_failures: 0,
                         halted: false,
+                    },
+                    MakakooError::RebuildRacedWriters => {
+                        rebuilds_clone.record_writer_race_backoff(
+                            &idx,
+                            &rebuild_key,
+                            retry_version,
+                        );
+                        RebuildFailureDisposition {
+                            failures: 0,
+                            backoff_failures: 0,
+                            halted: false,
+                        }
                     }
-                } else {
-                    rebuilds_clone.record_failure(&idx, &rebuild_key, &err)
+                    _ => rebuilds_clone.record_failure(&idx, &rebuild_key, &err, retry_version),
                 };
-                let reason = if disposition.halted {
+                let error_class = rebuild_error_class(&err);
+                tracing::warn!(
+                    folder_id = idx.folder_id(),
+                    model = rebuild_key.model,
+                    dim = rebuild_key.dim,
+                    error_class,
+                    error = %err,
+                    "folder index rebuild failed"
+                );
+                let reason = if matches!(err, MakakooError::RebuildRacedWriters) {
+                    "rebuild_deferred: error_class=writer_race".to_string()
+                } else if disposition.halted {
                     format!(
-                        "rebuild_suppressed: model={} dim={} after {} same-class failures: {}",
-                        rebuild_key.model, rebuild_key.dim, disposition.failures, error
+                        "rebuild_suppressed: error_class={} failures={} backoff_failures={}",
+                        error_class, disposition.failures, disposition.backoff_failures
                     )
                 } else {
-                    format!("rebuild_failed: {error}")
+                    format!(
+                        "rebuild_failed: error_class={} failures={} backoff_failures={}",
+                        error_class, disposition.failures, disposition.backoff_failures
+                    )
                 };
                 if let Ok(mut conn) = idx.lock_conn() {
                     let _ = expire_folder_rebuild_claim(
@@ -1060,10 +1210,10 @@ pub(crate) fn spawn_folder_rebuild(
         };
         if succeeded {
             claim_guard.disarm();
-            rebuilds_clone.clear_rebuild_retry(&idx);
+            rebuilds_clone.clear_rebuild_retry(&idx, retry_version);
         }
     });
-    true
+    SpawnFolderRebuildOutcome::Started
 }
 
 async fn run_folder_rebuild(
@@ -1072,7 +1222,6 @@ async fn run_folder_rebuild(
     bulk_emb: Arc<EmbeddingClient>,
     observed_bulk: Option<(String, usize)>,
     mut observed_short: Option<(String, usize)>,
-    automatic_success_clock: Option<Arc<FolderRebuildRegistry>>,
     claim: FolderRebuildClaim,
 ) -> Result<()> {
     #[cfg(test)]
@@ -1140,9 +1289,6 @@ async fn run_folder_rebuild(
                 short_emb: &short_emb,
                 short_mismatch,
                 claim: &claim,
-                automatic_success_unix_ms: automatic_success_clock
-                    .as_ref()
-                    .map(|clock| clock.now_unix_ms()),
             };
             if gen_now == seen_gen && commit_rebuild(&idx, &mut conn, seen_gen, &commit_meta)? {
                 drop(conn);
@@ -1157,9 +1303,7 @@ async fn run_folder_rebuild(
         // with the same text.
         reembed_pages(&idx, &bulk_emb, &b_model, b_dim, &claim).await?;
     }
-    Err(MakakooError::internal(
-        "rebuild kept racing writers; left stale for the next probe",
-    ))
+    Err(MakakooError::RebuildRacedWriters)
 }
 
 /// Commit the parked vectors if the index is still at `seen_gen` and every
@@ -1172,7 +1316,6 @@ struct RebuildCommitMeta<'a> {
     short_emb: &'a Option<Arc<EmbeddingClient>>,
     short_mismatch: bool,
     claim: &'a FolderRebuildClaim,
-    automatic_success_unix_ms: Option<u64>,
 }
 
 fn commit_rebuild(
@@ -1214,14 +1357,6 @@ fn commit_rebuild(
             },
         )? {
             return Ok(false);
-        }
-        if let Some(last_success_unix_ms) = meta.automatic_success_unix_ms {
-            write_persisted_automatic_rebuild_success(
-                &tx,
-                &PersistedAutomaticRebuildSuccess {
-                    last_success_unix_ms,
-                },
-            )?;
         }
         tx.commit()?;
         new_gen

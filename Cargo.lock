@@ -2137,6 +2137,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
@@ -2236,6 +2237,7 @@ dependencies = [
  "makakoo-core",
  "rand 0.8.6",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
