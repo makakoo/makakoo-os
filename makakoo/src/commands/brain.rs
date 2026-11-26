@@ -1,6 +1,7 @@
 //! Brain source registry and OKF interchange commands.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use makakoo_core::brain_sources_registry::{config_path, BrainSourcesRegistry};
@@ -18,6 +19,8 @@ use std::fs;
 use crate::cli::{BrainCmd, FolderIndexCmd};
 use crate::context::CliContext;
 use crate::okf::{export_bundle, validate_bundle, ExportOptions};
+
+const FOLDER_INDEX_REBUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BrainSourcesFile {
@@ -177,6 +180,16 @@ async fn folder_index(ctx: &CliContext, command: FolderIndexCmd) -> anyhow::Resu
                 .request_folder_rebuild(&folder_id, dim)
                 .await
                 .context("request folder index rebuild")?;
+            if outcome
+                == makakoo_core::superbrain::folder_index::FolderRebuildRequestOutcome::Started
+            {
+                tokio::time::timeout(
+                    FOLDER_INDEX_REBUILD_TIMEOUT,
+                    manager.wait_for_rebuild(&folder_id),
+                )
+                .await
+                .context("folder index rebuild timed out before completion")?;
+            }
             (folder_id, dim, json, Some(outcome.as_str()))
         }
     };
@@ -690,7 +703,7 @@ fn normalize_source_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use makakoo_core::embeddings::EmbeddingClient;
@@ -734,6 +747,47 @@ mod tests {
                 "model": "model-a",
                 "data": data,
             }))
+        }
+    }
+
+    #[derive(Clone)]
+    struct BlockingCliEmbedResponder {
+        rebuild_calls: Arc<AtomicUsize>,
+        entered: Arc<AtomicBool>,
+    }
+
+    impl Respond for BlockingCliEmbedResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            let inputs = body
+                .get("input")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let is_probe = inputs.len() == 1
+                && inputs.first().and_then(serde_json::Value::as_str) == Some("probe");
+            if !is_probe {
+                self.rebuild_calls.fetch_add(1, Ordering::SeqCst);
+                self.entered.store(true, Ordering::SeqCst);
+            }
+            let data: Vec<_> = inputs
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let mut vector = vec![0.0_f32; 64];
+                    vector[index % 64] = 1.0;
+                    json!({"index": index, "embedding": vector})
+                })
+                .collect();
+            let response = ResponseTemplate::new(200).set_body_json(json!({
+                "model": "model-a",
+                "data": data,
+            }));
+            if is_probe {
+                response
+            } else {
+                response.set_delay(Duration::from_secs(2))
+            }
         }
     }
 
@@ -806,8 +860,12 @@ mod tests {
             .unwrap(),
             0
         );
-        manager.wait_for_rebuild("cli-folder").await;
         assert_eq!(rebuild_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            index.model_status().unwrap().index_state.as_str(),
+            "ready",
+            "CLI returned before its rebuild completed"
+        );
 
         assert_eq!(
             run(
@@ -842,6 +900,111 @@ mod tests {
             .unwrap(),
             0
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cli_rebuild_refuses_a_persisted_cross_process_claim() {
+        let home = tempdir().unwrap();
+        let server = MockServer::start().await;
+        let rebuild_calls = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(AtomicBool::new(false));
+        Mock::given(method("POST"))
+            .and(path("/embeddings"))
+            .respond_with(BlockingCliEmbedResponder {
+                rebuild_calls: Arc::clone(&rebuild_calls),
+                entered: Arc::clone(&entered),
+            })
+            .mount(&server)
+            .await;
+        let embedder =
+            Arc::new(EmbeddingClient::with_base_url(server.uri()).with_model("test-embed"));
+        let base = home.path().join("data/folder-indexes");
+        let daemon_manager = Arc::new(
+            FolderIndexManager::new(&base)
+                .with_embedders(Arc::clone(&embedder), Arc::clone(&embedder)),
+        );
+        let cli_manager = Arc::new(
+            FolderIndexManager::new(&base)
+                .with_embedders(Arc::clone(&embedder), Arc::clone(&embedder)),
+        );
+        let index = daemon_manager.get_or_open("claimed-by-daemon", 32).unwrap();
+        index
+            .upsert_file_with_model(
+                &UpsertFileRequest {
+                    file_path: "a.md".into(),
+                    file_version: "v1".into(),
+                    source_kind: SourceKind::File,
+                    trust: TrustLevel::Trusted,
+                    owner: "test".into(),
+                    chunks: vec![ChunkInput {
+                        anchor: Anchor {
+                            kind: AnchorKind::Heading,
+                            value: "Fixture".into(),
+                        },
+                        char_start: 0,
+                        char_end: 7,
+                        text: "Fixture".into(),
+                        vector: {
+                            let mut vector = vec![0.0_f32; 64];
+                            vector[0] = 1.0;
+                            vector
+                        },
+                    }],
+                },
+                Some(&UpsertModelMeta {
+                    model: "model-a".into(),
+                    embed_dim: 64,
+                    bulk_alias: "test-embed".into(),
+                    short_alias: Some("test-embed".into()),
+                }),
+            )
+            .unwrap();
+        index.mark_stale("cross_process_claim_test").unwrap();
+        assert_eq!(
+            daemon_manager
+                .request_folder_rebuild("claimed-by-daemon", 32)
+                .await
+                .unwrap()
+                .as_str(),
+            "started"
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("daemon rebuild never entered its embedding call");
+
+        let ctx = CliContext::for_home(home.path().to_path_buf())
+            .with_folder_index_for_test(Arc::clone(&cli_manager));
+        assert_eq!(
+            run(
+                &ctx,
+                BrainCmd::FolderIndex {
+                    cmd: FolderIndexCmd::Rebuild {
+                        folder_id: "claimed-by-daemon".into(),
+                        dim: 32,
+                        json: true,
+                    },
+                },
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            rebuild_calls.load(Ordering::SeqCst),
+            1,
+            "CLI started a second rebuild despite the daemon's persisted claim"
+        );
+        assert_eq!(
+            index.model_status().unwrap().index_state.as_str(),
+            "rebuilding"
+        );
+
+        daemon_manager.wait_for_rebuild("claimed-by-daemon").await;
+        assert_eq!(index.model_status().unwrap().index_state.as_str(), "ready");
     }
 
     #[test]

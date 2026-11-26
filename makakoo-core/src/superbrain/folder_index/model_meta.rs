@@ -72,7 +72,16 @@ pub(crate) struct PersistedRebuildRetry {
     pub(crate) not_before_unix_ms: u64,
     /// Index generation at which this retry record was written. A newer
     /// provenance flag invalidates an older terminal decision.
+    #[serde(default)]
     pub(crate) failure_generation: u64,
+    /// Monotonic backoff exponent for repeated same-class failures. This stays
+    /// above `failures` when a cooldown temporarily re-arms the halt threshold.
+    #[serde(default)]
+    pub(crate) backoff_failures: u32,
+    /// Writer collisions have their own backoff sequence and never alter the
+    /// genuine same-class failure streak.
+    #[serde(default)]
+    pub(crate) writer_races: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,6 +346,7 @@ pub(crate) fn try_claim_folder_rebuild(
     model: &str,
     dim: usize,
     now_unix_ms: u64,
+    automatic_attempt_unix_ms: Option<u64>,
 ) -> Result<Option<FolderRebuildClaim>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let current = read_folder_rebuild_claim(&tx)?;
@@ -368,6 +378,17 @@ pub(crate) fn try_claim_folder_rebuild(
         META_REBUILD_CLAIM,
         Some(&serde_json::to_string(&claim)?),
     )?;
+    if let Some(last_success_unix_ms) = automatic_attempt_unix_ms {
+        // The legacy key/field name is retained for on-disk compatibility, but
+        // the hourly cap applies to every claimed automatic attempt, not only
+        // successful commits. This write is atomic with cross-process ownership.
+        write_persisted_automatic_rebuild_success(
+            &tx,
+            &PersistedAutomaticRebuildSuccess {
+                last_success_unix_ms,
+            },
+        )?;
+    }
     tx.execute(
         "DELETE FROM rebuild_vectors WHERE claim_token <> ?1",
         params![&claim.token],

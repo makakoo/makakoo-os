@@ -342,8 +342,8 @@ impl FolderIndexManager {
     }
 
     /// Explicitly request a full folder rebuild. This bypasses a halt caused
-    /// by repeated same-class automatic failures, while active work remains
-    /// deduplicated.
+    /// by repeated same-class automatic failures only after winning the
+    /// persisted cross-process claim; active work remains deduplicated.
     pub async fn request_folder_rebuild(
         &self,
         folder_id: &str,
@@ -383,7 +383,6 @@ impl FolderIndexManager {
         {
             return Ok(FolderRebuildRequestOutcome::AlreadyCurrent);
         }
-        self.rebuilds.clear_rebuild_retry(&idx);
         let started = rebuild::spawn_folder_rebuild(
             idx,
             short_emb,

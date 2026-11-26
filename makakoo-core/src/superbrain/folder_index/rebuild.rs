@@ -62,6 +62,8 @@ struct RebuildRetryState {
     key: RebuildKey,
     error_class: String,
     failures: u32,
+    backoff_failures: u32,
+    writer_races: u32,
     next_allowed: Instant,
     halted: bool,
     failure_generation: u64,
@@ -246,6 +248,7 @@ impl FolderRebuildRegistry {
             .and_then(|status| status.unproven_vectors_since_gen);
         let now_unix_ms = self.now_unix_ms();
         let mut clear_persisted = false;
+        let mut update_persisted = None;
         let blocked;
         {
             let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
@@ -260,6 +263,8 @@ impl FolderRebuildRegistry {
                             key: RebuildKey::new(state.model, state.dim),
                             error_class: state.error_class,
                             failures: state.failures,
+                            backoff_failures: state.backoff_failures.max(state.failures),
+                            writer_races: state.writer_races,
                             next_allowed: now + remaining,
                             halted: state.halted,
                             failure_generation: state.failure_generation,
@@ -271,14 +276,35 @@ impl FolderRebuildRegistry {
                 retry.remove(folder_id);
                 clear_persisted = true;
             }
-            if retry.get(folder_id).is_some_and(|state| {
+            let newer_flag = retry.get(folder_id).is_some_and(|state| {
                 state.halted
-                    && (now >= state.next_allowed
-                        || flag_generation
-                            .is_some_and(|generation| generation > state.failure_generation))
-            }) {
+                    && flag_generation
+                        .is_some_and(|generation| generation > state.failure_generation)
+            });
+            if newer_flag {
                 retry.remove(folder_id);
                 clear_persisted = true;
+            } else if let Some(state) = retry
+                .get_mut(folder_id)
+                .filter(|state| state.halted && now >= state.next_allowed)
+            {
+                // A cooldown re-arms exactly one attempt without erasing the
+                // same-class history. A newer provenance generation is the only
+                // path above that resets the streak.
+                state.halted = false;
+                state.failures = self.max_same_class_rebuild_failures.saturating_sub(1);
+                state.next_allowed = now;
+                update_persisted = Some(PersistedRebuildRetry {
+                    model: state.key.model.clone(),
+                    dim: state.key.dim,
+                    error_class: state.error_class.clone(),
+                    failures: state.failures,
+                    halted: false,
+                    not_before_unix_ms: now_unix_ms,
+                    failure_generation: state.failure_generation,
+                    backoff_failures: state.backoff_failures,
+                    writer_races: state.writer_races,
+                });
             }
             blocked = retry
                 .get(folder_id)
@@ -288,8 +314,12 @@ impl FolderRebuildRegistry {
             if let Ok(conn) = idx.lock_conn() {
                 let _ = clear_persisted_rebuild_retry(&conn);
             }
+        } else if let Some(state) = update_persisted {
+            if let Ok(conn) = idx.lock_conn() {
+                let _ = write_persisted_rebuild_retry(&conn, &state);
+            }
         }
-        if blocked {
+        if blocked && automatic {
             return Ok(None);
         }
         let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
@@ -298,11 +328,22 @@ impl FolderRebuildRegistry {
         }
         let claim = {
             let mut conn = idx.lock_conn()?;
-            try_claim_folder_rebuild(&mut conn, &key.model, key.dim, self.now_unix_ms())?
+            try_claim_folder_rebuild(
+                &mut conn,
+                &key.model,
+                key.dim,
+                now_unix_ms,
+                automatic.then_some(now_unix_ms),
+            )?
         };
         let Some(claim) = claim else {
             return Ok(None);
         };
+        if !automatic {
+            // Manual work may bypass retry suppression, but only the process
+            // that won the persisted claim may clear that suppression.
+            self.clear_rebuild_retry(idx);
+        }
         let notify = Arc::new(Notify::new());
         guard.insert(folder_id.to_string(), Arc::clone(&notify));
         Ok(Some(claim))
@@ -333,18 +374,23 @@ impl FolderRebuildRegistry {
             .and_then(|conn| read_generation(&conn).ok())
             .unwrap_or(0);
         let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
-        let failures = retry.get(folder_id).map_or(1, |state| {
-            if state.key == *key && state.error_class == error_class {
-                state.failures.saturating_add(1)
-            } else {
-                1
-            }
-        });
+        let (failures, backoff_failures, writer_races) =
+            retry.get(folder_id).map_or((1, 1, 0), |state| {
+                if state.key == *key && state.error_class == error_class {
+                    (
+                        state.failures.saturating_add(1),
+                        state.backoff_failures.max(state.failures).saturating_add(1),
+                        state.writer_races,
+                    )
+                } else {
+                    (1, 1, 0)
+                }
+            });
         let halted = failures >= self.max_same_class_rebuild_failures;
         let delay = exponential_backoff(
             self.rebuild_failure_backoff,
             self.rebuild_failure_cap,
-            failures,
+            backoff_failures,
         );
         retry.insert(
             folder_id.to_string(),
@@ -352,6 +398,8 @@ impl FolderRebuildRegistry {
                 key: key.clone(),
                 error_class: error_class.clone(),
                 failures,
+                backoff_failures,
+                writer_races,
                 next_allowed: self.now() + delay,
                 halted,
                 failure_generation,
@@ -371,6 +419,8 @@ impl FolderRebuildRegistry {
                         .now_unix_ms()
                         .saturating_add(delay.as_millis().min(u128::from(u64::MAX)) as u64),
                     failure_generation,
+                    backoff_failures,
+                    writer_races,
                 },
             );
         }
@@ -378,44 +428,53 @@ impl FolderRebuildRegistry {
     }
 
     /// Losing every commit CAS to legitimate writers is a liveness collision,
-    /// not a same-class rebuild failure. Persist one bounded delay so multiple
-    /// processes do not hot-loop, but never increment or halt the folder.
+    /// not a same-class rebuild failure. Preserve the existing failure class
+    /// and count, and grow only the independent writer-race delay.
     fn record_writer_race_backoff(&self, idx: &FolderIndex, key: &RebuildKey) {
-        let delay = self.rebuild_failure_backoff;
         let failure_generation = idx
             .lock_conn()
             .ok()
             .and_then(|conn| read_generation(&conn).ok())
             .unwrap_or(0);
-        self.rebuild_retry
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                idx.folder_id().to_string(),
-                RebuildRetryState {
-                    key: key.clone(),
-                    error_class: "writer_race".to_string(),
-                    failures: 0,
-                    next_allowed: self.now() + delay,
-                    halted: false,
-                    failure_generation,
-                },
-            );
+        let folder_id = idx.folder_id();
+        let mut retry = self.rebuild_retry.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = retry.get(folder_id).filter(|state| state.key == *key);
+        let writer_races = previous.map_or(1, |state| state.writer_races.saturating_add(1));
+        let delay = exponential_backoff(
+            self.rebuild_failure_backoff,
+            self.rebuild_failure_cap,
+            writer_races,
+        );
+        let state = RebuildRetryState {
+            key: key.clone(),
+            error_class: previous
+                .map(|state| state.error_class.clone())
+                .unwrap_or_else(|| "writer_race".to_string()),
+            failures: previous.map_or(0, |state| state.failures),
+            backoff_failures: previous.map_or(0, |state| state.backoff_failures),
+            writer_races,
+            next_allowed: self.now() + delay,
+            halted: previous.is_some_and(|state| state.halted),
+            failure_generation: previous
+                .map_or(failure_generation, |state| state.failure_generation),
+        };
+        let persisted = PersistedRebuildRetry {
+            model: state.key.model.clone(),
+            dim: state.key.dim,
+            error_class: state.error_class.clone(),
+            failures: state.failures,
+            halted: state.halted,
+            not_before_unix_ms: self
+                .now_unix_ms()
+                .saturating_add(delay.as_millis().min(u128::from(u64::MAX)) as u64),
+            failure_generation: state.failure_generation,
+            backoff_failures: state.backoff_failures,
+            writer_races: state.writer_races,
+        };
+        retry.insert(folder_id.to_string(), state);
+        drop(retry);
         if let Ok(conn) = idx.lock_conn() {
-            let _ = write_persisted_rebuild_retry(
-                &conn,
-                &PersistedRebuildRetry {
-                    model: key.model.clone(),
-                    dim: key.dim,
-                    error_class: "writer_race".to_string(),
-                    failures: 0,
-                    halted: false,
-                    not_before_unix_ms: self
-                        .now_unix_ms()
-                        .saturating_add(delay.as_millis().min(u128::from(u64::MAX)) as u64),
-                    failure_generation,
-                },
-            );
+            let _ = write_persisted_rebuild_retry(&conn, &persisted);
         }
     }
 
