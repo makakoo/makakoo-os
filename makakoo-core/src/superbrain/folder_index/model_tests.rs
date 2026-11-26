@@ -1841,13 +1841,13 @@ async fn varying_failure_text_persists_backoff_and_halt_until_new_ingest() {
     // The persisted observation was recorded on the previous manager's
     // simulated clock. Advance the replacement manager past that confirmation
     // window instead of relying on host scheduling latency.
-    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_millis(20));
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60 * 60 + 1));
     mgr.probe_folder_model_for_test("persisted-failure", 32)
         .await
         .unwrap();
     mgr.wait_for_rebuild("persisted-failure").await;
     assert_eq!(responder.bulk_calls.load(Ordering::SeqCst), 2);
-    tokio::time::sleep(std::time::Duration::from_millis(70)).await;
+    mgr.advance_model_recovery_time_for_test(std::time::Duration::from_secs(60 * 60 + 1));
     mgr.probe_folder_model_for_test("persisted-failure", 32)
         .await
         .unwrap();
